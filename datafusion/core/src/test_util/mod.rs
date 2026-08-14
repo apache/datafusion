@@ -245,14 +245,25 @@ impl TableProvider for TestTableProvider {
         unimplemented!("TestTableProvider is a stub for testing.")
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
+        _projection: Option<&'life2 Vec<usize>>,
+        _filters: &'life3 [Expr],
         _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!("TestTableProvider is a stub for testing.")
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        // The async block captures none of the arguments, so proving it
+        // `Send` is cheap; panics when polled, like the `async fn` it replaces.
+        Box::pin(async { unimplemented!("TestTableProvider is a stub for testing.") })
     }
 }
 

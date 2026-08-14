@@ -17,6 +17,7 @@
 
 //! [`EmptyTable`] useful for testing.
 
+use std::future::ready;
 use std::sync::Arc;
 
 use arrow::datatypes::*;
@@ -25,6 +26,7 @@ use datafusion_common::{Result, project_schema};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
+use futures::future::BoxFuture;
 
 use crate::Session;
 use crate::TableProvider;
@@ -63,12 +65,30 @@ impl TableProvider for EmptyTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
+        projection: Option<&'life2 Vec<usize>>,
+        _filters: &'life3 [Expr],
         _limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(self.scan_inner(projection)))
+    }
+}
+
+impl EmptyTable {
+    fn scan_inner(
+        &self,
+        projection: Option<&Vec<usize>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // even though there is no data, projections apply
         let projected_schema = project_schema(&self.schema, projection)?;

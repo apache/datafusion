@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::future::ready;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -26,6 +27,7 @@ use datafusion_common::{DFSchema, Result, not_impl_err};
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+use futures::future::BoxFuture;
 
 use crate::Session;
 
@@ -49,12 +51,22 @@ pub struct UnsupportedQueryPlanner;
 
 #[async_trait]
 impl QueryPlanner for UnsupportedQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        _logical_plan: &LogicalPlan,
-        _session: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("This session does not expose its query planner")
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        _logical_plan: &'life1 LogicalPlan,
+        _session: &'life2 dyn Session,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(not_impl_err!(
+            "This session does not expose its query planner"
+        )))
     }
 }
 
@@ -186,13 +198,23 @@ pub trait ExtensionPlanner {
     /// ```
     ///
     /// [`TableSource`]: datafusion_expr::TableSource
-    async fn plan_table_scan(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        _scan: &TableScan,
-        _session: &dyn Session,
-        _planning_ctx: &PhysicalPlanningContext,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(None)
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn plan_table_scan<'life0, 'life1, 'life2, 'life3, 'life4, 'async_trait>(
+        &'life0 self,
+        _planner: &'life1 dyn PhysicalPlanner,
+        _scan: &'life2 TableScan,
+        _session: &'life3 dyn Session,
+        _planning_ctx: &'life4 PhysicalPlanningContext,
+    ) -> BoxFuture<'async_trait, Result<Option<Arc<dyn ExecutionPlan>>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        'life4: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(ready(Ok(None)))
     }
 }
