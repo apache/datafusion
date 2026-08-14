@@ -2,15 +2,19 @@
 --
 -- `skey` is a fixed-width, zero-padded, monotonically increasing string, so
 -- each row group holds a disjoint, sorted range of keys. With
--- `pushdown_filters=true`, a low-selectivity range predicate (see the query)
--- leaves the first row group straddling and every later row group fully
--- matched by min/max statistics, which is exactly what the per-RG RowFilter
--- skip targets. `skey` is not projected by the query, so the skip also avoids
--- decoding it on the fully-matched run.
+-- `pushdown_filters=true` (set in init/settings.sql), a low-selectivity range
+-- predicate (see the queries) leaves the first row group straddling and every
+-- later row group fully matched by min/max statistics, which is exactly what
+-- the per-RG RowFilter skip targets.
 --
--- Knobs: PRED_ROWS (row count), RG_SIZE (parquet row-group size).
-set datafusion.execution.parquet.pushdown_filters = true;
-
+-- The ORDER BY is load-bearing: the whole benchmark rests on the file being
+-- written in key order so that row-group min/max ranges are disjoint. Without
+-- it the write order is at the mercy of the physical planner (a round-robin
+-- repartition + coalesce would silently interleave batches and destroy the
+-- clustering, leaving nothing to measure).
+--
+-- Knobs: PRED_ROWS (row count, must exceed the 100_000 predicate cutoff),
+-- RG_SIZE (parquet row-group size).
 COPY (
   SELECT
     lpad(CAST(value AS VARCHAR), 10, '0') AS skey,
@@ -29,6 +33,7 @@ COPY (
     (value * 59) % 1000000 AS p12,
     (value * 61) % 1000000 AS p13
   FROM generate_series(1, ${PRED_ROWS:-10000000})
+  ORDER BY value
 )
 TO 'sql_benchmarks/parquet_row_filter_skip/scratch/clustered.parquet'
 STORED AS PARQUET
