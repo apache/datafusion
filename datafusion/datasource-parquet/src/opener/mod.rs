@@ -1464,7 +1464,8 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
-            // #24355: a page-index row selection is carried by the decoder as one
+            // #24355: a row selection (from page-index pruning, or an externally
+            // supplied `ParquetRowSelection`) is carried by the decoder as one
             // flat selection over the concatenation of the remaining row groups.
             // The runtime pruner's `into_builder().with_row_groups(...)` rebuild
             // drops row groups without slicing that selection to match, so record
@@ -1512,10 +1513,11 @@ impl RowGroupsPrunedParquetOpen {
         // via the `DynamicFilterTracker` watch channel (#22460), so detecting
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
-        // Also disabled when a page-index row selection is live (#24355): the
-        // pruner rebuilds the decoder via `with_row_groups(...)`, which drops row
-        // groups without slicing the carried selection to match, so pruning under
-        // a live selection returns wrong results. Decline to prune in that case.
+        // Also disabled when a row selection is live (#24355) — page-index
+        // pruning is the common source: the pruner rebuilds the decoder via
+        // `with_row_groups(...)`, which drops row groups without slicing the
+        // carried selection to match, so pruning under a live selection returns
+        // wrong results. Decline to prune in that case.
         let row_group_pruner =
             match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
                 (Some(predicate), true, false)

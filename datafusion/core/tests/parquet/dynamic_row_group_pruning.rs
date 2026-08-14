@@ -297,9 +297,12 @@ fn build_five_thousand_row_rgs(schema: &Arc<Schema>) -> Vec<RecordBatch> {
         .collect()
 }
 
-/// Co-existence test for **page-index `RowSelection`** + dynamic RG
-/// pruning. Tests that the `into_builder` rebuild preserves the
-/// `RowSelection` derived from page-index pruning across RG drops.
+/// Regression test for #24355: when a page-index `RowSelection` is live,
+/// the runtime dynamic row-group pruner is intentionally **not built**, so
+/// its `into_builder` rebuild can never drop a row group without slicing the
+/// carried selection (which would silently return wrong rows). Correctness is
+/// bought at the cost of the dynamic-pruning optimization for this scan; the
+/// proper fix that keeps both is tracked upstream in arrow-rs #10624 / #24358.
 ///
 /// Layout: 5 RGs × 1000 rows, with `data_page_row_count_limit=100` so
 /// each RG has 10 pages of 100 rows.
@@ -309,17 +312,14 @@ fn build_five_thousand_row_rgs(schema: &Arc<Schema>) -> Vec<RecordBatch> {
 ///   first 5 pages (values 0..500) are pruned, the last 5 (500..1000)
 ///   are scanned. RGs 1..4 keep all their pages (every page has
 ///   `max >= 500`). The decoder receives a `RowSelection` that masks
-///   out those first 5 pages of RG 0.
-/// - `ORDER BY v DESC LIMIT 5` fills the TopK heap from RG 4
-///   (`max=4999`); the tightened threshold (≥ 4995) then proves RGs
-///   0..3 unreachable and the runtime pruner drops them in one
-///   `into_builder` rebuild.
-///
-/// If `into_builder` did **not** preserve the row selection (or
-/// truncated / shifted it incorrectly), either the result rows would
-/// drift or the count of pruned pages would drop to zero.
+///   out those first 5 pages of RG 0 — its presence is what suppresses
+///   the runtime pruner.
+/// - `ORDER BY v DESC LIMIT 5` would let the tightened TopK threshold
+///   (≥ 4995) prune RGs 0..3, but because a row selection is present the
+///   runtime pruner is never created, so `row_groups_pruned_dynamic_filter`
+///   stays 0. Results are still correct and page-index pruning still runs.
 #[tokio::test]
-async fn dynamic_rg_pruning_coexists_with_page_index_row_selection() {
+async fn dynamic_rg_pruning_disabled_when_page_index_row_selection_present() {
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
     let batches = build_five_thousand_row_rgs(&schema);
 
@@ -348,12 +348,9 @@ async fn dynamic_rg_pruning_coexists_with_page_index_row_selection() {
         );
     }
 
-    // Page-index pruning must have engaged: RG 0's first 5 pages are
-    // entirely < 500. If `into_builder` dropped the row-selection state,
-    // this metric would still report the original count (it is captured
-    // at file open). Combined with the dynamic-pruner assertion below it
-    // proves both mechanisms were active and that the rebuild left the
-    // selection coherent — otherwise the result rows above would drift.
+    // Page-index pruning still engages: RG 0's first 5 pages are entirely
+    // < 500. #24355 only suppresses the *runtime* row-group pruner, not
+    // page-index pruning, so this must remain non-zero.
     let pages_pruned = output.metric_value("page_index_pages_pruned").unwrap_or(0);
     assert!(
         pages_pruned >= 5,
@@ -362,13 +359,18 @@ async fn dynamic_rg_pruning_coexists_with_page_index_row_selection() {
         output.description(),
     );
 
+    // The runtime dynamic pruner must be disabled while a page-index row
+    // selection is live (#24355): with no pruner there is no rebuild that
+    // could misapply the carried selection. Before the fix the pruner ran
+    // and this metric was >= 1.
     let pruned = output
         .row_groups_pruned_dynamic_filter()
         .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
-    assert!(
-        pruned >= 1,
-        "with TopK + tight threshold the runtime pruner must skip at least \
-         one row group; pruned={pruned}\n{}",
+    assert_eq!(
+        pruned,
+        0,
+        "runtime row-group pruning must be skipped when a page-index row \
+         selection is present; pruned={pruned}\n{}",
         output.description(),
     );
 }
