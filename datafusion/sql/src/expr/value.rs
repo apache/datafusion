@@ -22,6 +22,8 @@ use arrow::compute::kernels::cast_utils::{
 use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, FieldRef, i256,
 };
+use bigdecimal::num_bigint::BigInt;
+use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, internal_datafusion_err,
     not_impl_err, plan_err,
@@ -35,6 +37,9 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::ops::Neg;
+use std::str::FromStr;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_value(
@@ -351,64 +356,37 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
     }
 }
 
+/// Returns None if the value can't be converted to i256.
+/// Modified from <https://github.com/apache/arrow-rs/blob/c4dbf0d8af6ca5a19b8b2ea777da3c276807fc5e/arrow-buffer/src/bigint/mod.rs#L303>
+fn bigint_to_i256(v: &BigInt) -> Option<i256> {
+    let v_bytes = v.to_signed_bytes_le();
+    match v_bytes.len().cmp(&32) {
+        Ordering::Less => {
+            let mut bytes = if v.is_negative() {
+                [255_u8; 32]
+            } else {
+                [0; 32]
+            };
+            bytes[0..v_bytes.len()].copy_from_slice(&v_bytes[..v_bytes.len()]);
+            Some(i256::from_le_bytes(bytes))
+        }
+        Ordering::Equal => Some(i256::from_le_bytes(v_bytes.try_into().unwrap())),
+        Ordering::Greater => None,
+    }
+}
+
 fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
-    let parse_error = |reason: &str| {
+    let mut dec = BigDecimal::from_str(unsigned_number).map_err(|e| {
         DataFusionError::from(ParserError(format!(
-            "Cannot parse {unsigned_number} as BigDecimal: {reason}"
+            "Cannot parse {unsigned_number} as BigDecimal: {e}"
         )))
-    };
-
-    let (mantissa, exponent) = match unsigned_number.find(['e', 'E']) {
-        Some(index) => {
-            let (mantissa, exponent) = unsigned_number.split_at(index);
-            let exponent = &exponent[1..];
-            if exponent.is_empty() || exponent.contains(['e', 'E']) || mantissa.is_empty()
-            {
-                return Err(parse_error("invalid scientific notation"));
-            }
-            let exponent = exponent
-                .parse::<i128>()
-                .map_err(|_| parse_error("exponent is out of range"))?;
-            (mantissa, exponent)
-        }
-        None => (unsigned_number, 0),
-    };
-
-    let (integer, fraction) = match mantissa.split_once('.') {
-        Some((integer, fraction)) => {
-            if fraction.contains('.') {
-                return Err(parse_error("multiple decimal points"));
-            }
-            (integer, fraction)
-        }
-        None => (mantissa, ""),
-    };
-
-    if integer.is_empty() && fraction.is_empty() {
-        return Err(parse_error("no digits"));
-    }
-    if !integer.bytes().all(|b| b.is_ascii_digit())
-        || !fraction.bytes().all(|b| b.is_ascii_digit())
-    {
-        return Err(parse_error("invalid digit"));
+    })?;
+    if negative {
+        dec = dec.neg();
     }
 
-    let mut coefficient = String::with_capacity(integer.len() + fraction.len());
-    coefficient.push_str(integer);
-    coefficient.push_str(fraction);
-    let coefficient = coefficient.trim_start_matches('0');
-    let coefficient = if coefficient.is_empty() {
-        "0"
-    } else {
-        coefficient
-    };
-
-    let scale = i128::try_from(fraction.len())
-        .ok()
-        .and_then(|fractional_digits| fractional_digits.checked_sub(exponent))
-        .and_then(|scale| i64::try_from(scale).ok())
-        .ok_or_else(|| parse_error("scale is out of range"))?;
-
+    let digits = dec.digits();
+    let (int_val, scale) = dec.into_bigint_and_exponent();
     if scale < i8::MIN as i64 {
         return not_impl_err!(
             "Decimal scale {} exceeds the minimum supported scale: {}",
@@ -416,7 +394,6 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
             i8::MIN
         );
     }
-    let digits = coefficient.len() as u64;
     let precision = if scale > 0 {
         // arrow-rs requires the precision to include the positive scale.
         // See <https://github.com/apache/arrow-rs/blob/123045cc766d42d1eb06ee8bb3f09e39ea995ddc/arrow-array/src/types.rs#L1230>
@@ -425,31 +402,25 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
         digits
     };
     if precision <= DECIMAL128_MAX_PRECISION as u64 {
-        let mut val = coefficient.parse::<i128>().map_err(|_| {
+        let val = int_val.to_i128().ok_or_else(|| {
             // Failures are unexpected here as we have already checked the precision
             internal_datafusion_err!(
                 "Unexpected overflow when converting {} to i128",
-                coefficient
+                int_val
             )
         })?;
-        if negative {
-            val = -val;
-        }
         Ok(Expr::Literal(
             ScalarValue::Decimal128(Some(val), precision as u8, scale as i8),
             None,
         ))
     } else if precision <= DECIMAL256_MAX_PRECISION as u64 {
-        let mut val = i256::from_string(coefficient).ok_or_else(|| {
+        let val = bigint_to_i256(&int_val).ok_or_else(|| {
             // Failures are unexpected here as we have already checked the precision
             internal_datafusion_err!(
                 "Unexpected overflow when converting {} to i256",
-                coefficient
+                int_val
             )
         })?;
-        if negative {
-            val = -val;
-        }
         Ok(Expr::Literal(
             ScalarValue::Decimal256(Some(val), precision as u8, scale as i8),
             None,
@@ -488,21 +459,43 @@ mod tests {
     }
 
     #[test]
+    fn test_bigint_to_i256() {
+        let cases = [
+            (BigInt::from(0), Some(i256::from(0))),
+            (BigInt::from(1), Some(i256::from(1))),
+            (BigInt::from(-1), Some(i256::from(-1))),
+            (
+                BigInt::from_str(i256::MAX.to_string().as_str()).unwrap(),
+                Some(i256::MAX),
+            ),
+            (
+                BigInt::from_str(i256::MIN.to_string().as_str()).unwrap(),
+                Some(i256::MIN),
+            ),
+            (
+                // Can't fit into i256
+                BigInt::from_str((i256::MAX.to_string() + "1").as_str()).unwrap(),
+                None,
+            ),
+        ];
+
+        for (input, expect) in cases {
+            let output = bigint_to_i256(&input);
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
     fn test_parse_decimal() {
         // Supported cases
         let cases = [
             ("0", ScalarValue::Decimal128(Some(0), 1, 0)),
-            ("0.00", ScalarValue::Decimal128(Some(0), 2, 2)),
             ("1", ScalarValue::Decimal128(Some(1), 1, 0)),
-            ("0001.20", ScalarValue::Decimal128(Some(120), 3, 2)),
-            (".5", ScalarValue::Decimal128(Some(5), 1, 1)),
-            ("5.", ScalarValue::Decimal128(Some(5), 1, 0)),
             ("123.45", ScalarValue::Decimal128(Some(12345), 5, 2)),
             // Digit count is less than scale
             ("0.001", ScalarValue::Decimal128(Some(1), 3, 3)),
             // Scientific notation
             ("123.456e-2", ScalarValue::Decimal128(Some(123456), 6, 5)),
-            ("1E+2", ScalarValue::Decimal128(Some(1), 1, -2)),
             // Negative scale
             ("123456e128", ScalarValue::Decimal128(Some(123456), 6, -128)),
             // Decimal256

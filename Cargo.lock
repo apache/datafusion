@@ -2647,6 +2647,7 @@ name = "datafusion-sql"
 version = "54.1.0"
 dependencies = [
  "arrow",
+ "bigdecimal",
  "chrono",
  "ctor",
  "datafusion-common",
