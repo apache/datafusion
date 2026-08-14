@@ -35,6 +35,8 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
+use datafusion::prelude::SessionConfig;
+
 use crate::parquet::Unit::RowGroup;
 use crate::parquet::{ContextWithParquet, Scenario};
 
@@ -655,12 +657,20 @@ async fn topk_pushdown_does_not_reread_delivered_row_group() {
 
     // `RowGroup(2048)` writes one row group per 2048-row batch (4 RGs) and
     // enables `pushdown_filters`, required for the dynamic filter to reach the
-    // parquet scan.
-    let mut ctx = ContextWithParquet::with_custom_data(
+    // parquet scan. Page-index reading is disabled: this test exercises the
+    // #24352 empty-row-group / rg_plan-sync path, which is row-filter-driven and
+    // does not need the page index. With the page index on, `search_phrase <> ''`
+    // produces an intra-row-group `RowSelection`, and #24355 disables the runtime
+    // pruner whenever a row selection is present — which would stop this test
+    // from exercising the dynamic pruner at all.
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.enable_page_index = false;
+    let mut ctx = ContextWithParquet::with_config(
         Scenario::Int,
         RowGroup(2048),
-        Arc::clone(&schema),
-        batches,
+        config,
+        Some(Arc::clone(&schema)),
+        Some(batches),
     )
     .await;
 
