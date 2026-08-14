@@ -57,7 +57,7 @@ impl QueryPlanner for TestQueryPlanner {
                 return exec_err!("library B's provider was not foreign to library C");
             }
             let library_b_plan = provider
-                .scan(session, scan.projection.as_ref(), &scan.filters, scan.fetch)
+                .scan(session, scan.projection.as_deref(), &scan.filters, scan.fetch)
                 .await?;
 
             if !library_b_plan.is::<ForeignExecutionPlan>() {
