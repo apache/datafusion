@@ -28,6 +28,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
@@ -151,6 +152,14 @@ impl ExecutionPlan for TestCombinerExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&PhysicalExprRef) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // `TestCombinerExec` owns no `PhysicalExpr`s.
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -241,6 +250,14 @@ impl ExecutionPlan for TestFetchOnlyExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&PhysicalExprRef) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // `TestFetchOnlyExec` owns no `PhysicalExpr`s.
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
