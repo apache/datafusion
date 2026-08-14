@@ -289,6 +289,115 @@ impl ExecutionPlan for TestFetchOnlyExec {
     }
 }
 
+/// Test multi-child plan with a single output partition that allows limit
+/// pushdown. Optionally absorbs a fetch via `with_fetch`.
+#[derive(Debug, Clone)]
+struct TestMultiChildExec {
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
+    properties: Arc<PlanProperties>,
+    supports_fetch: bool,
+    fetch: Option<usize>,
+}
+
+impl TestMultiChildExec {
+    fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(inputs[0].schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+        Self {
+            inputs,
+            properties: Arc::new(properties),
+            supports_fetch: false,
+            fetch: None,
+        }
+    }
+
+    /// Set whether `with_fetch()` returns `Some` (true) or `None` (false).
+    fn with_supports_fetch(mut self, supports: bool) -> Self {
+        self.supports_fetch = supports;
+        self
+    }
+}
+
+impl DisplayAs for TestMultiChildExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "TestMultiChildExec")?;
+        if let Some(fetch) = self.fetch {
+            write!(f, ": fetch={fetch}")?;
+        }
+        Ok(())
+    }
+}
+
+impl ExecutionPlan for TestMultiChildExec {
+    fn name(&self) -> &str {
+        "TestMultiChildExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&PhysicalExprRef) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // `TestMultiChildExec` owns no `PhysicalExpr`s.
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), self.inputs.len());
+        let mut new_plan = Self::new(children).with_supports_fetch(self.supports_fetch);
+        new_plan.fetch = self.fetch;
+        Ok(Arc::new(new_plan))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!("TestMultiChildExec is only used by optimizer tests")
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        if self.supports_fetch {
+            let mut new_plan = self.clone();
+            new_plan.fetch = fetch;
+            Some(Arc::new(new_plan))
+        } else {
+            None
+        }
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+}
+
 #[test]
 fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> Result<()>
 {
@@ -567,6 +676,111 @@ fn materializes_pending_global_limit_below_extension_combiner() -> Result<()> {
         UnionExec
           TestScan: fetch=5
           TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_limit_before_multi_child_extension() -> Result<()> {
+    // Regression test: a pending global limit used to be cloned to every
+    // child of a multi-child node, so each child applied the full LIMIT and
+    // the merged output exceeded it. The limit must stay above the node.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom = Arc::new(TestMultiChildExec::new(vec![left, right]));
+    let global_limit = global_limit_exec(custom, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      TestMultiChildExec
+        TestScan: fetch=5
+        TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_global_offset_limit_before_multi_child_extension() -> Result<()> {
+    // The offset stays in the GlobalLimitExec; children only get a fetch hint
+    // of skip + fetch for early stopping.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom = Arc::new(TestMultiChildExec::new(vec![left, right]));
+    let global_limit = global_limit_exec(custom, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      TestMultiChildExec
+        TestScan: fetch=7
+        TestScan: fetch=7
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn multi_child_extension_absorbs_global_limit_and_hints_children() -> Result<()> {
+    // When the multi-child node absorbs the fetch itself, no extra limit is
+    // needed; children still receive the same fetch for early stopping.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom =
+        Arc::new(TestMultiChildExec::new(vec![left, right]).with_supports_fetch(true));
+    let global_limit = global_limit_exec(custom, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    TestMultiChildExec: fetch=5
+      TestScan: fetch=5
+      TestScan: fetch=5
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn materializes_local_limit_before_multi_child_extension() -> Result<()> {
+    // A local limit also cannot be replicated to every child of a multi-child
+    // node with a single output partition.
+    let schema = create_schema();
+    let left =
+        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
+    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let custom = Arc::new(TestMultiChildExec::new(vec![left, right]));
+    let local_limit = local_limit_exec(custom, 5);
+
+    let optimized = LimitPushdown::new().optimize(local_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      TestMultiChildExec
+        TestScan: fetch=5
+        TestScan: fetch=5
     "
     );
 
