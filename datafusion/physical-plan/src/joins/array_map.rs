@@ -169,9 +169,6 @@ impl ArrayMap {
 
     /// Creates a new [`ArrayMap`] from the given array of join keys.
     ///
-    /// `min_val` and `max_val` must be the actual minimum and maximum key
-    /// values in `array`, in the wrapped-u64 key domain (see the type docs).
-    ///
     /// Note: This function processes only the non-null values in the input `array`,
     /// ignoring any rows where the key is `NULL`.
     ///
