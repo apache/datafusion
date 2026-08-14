@@ -125,12 +125,26 @@ impl LimitedBatchCoalescer {
         self.inner.is_empty()
     }
 
+    /// Complete the current buffered batch without finishing the coalescer.
+    ///
+    /// Subsequent calls to [`Self::push_batch`] are allowed.
+    pub(crate) fn flush(&mut self) -> Result<()> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot flush after finish"
+        );
+        self.inner.finish_buffered_batch()?;
+        Ok(())
+    }
+
     /// Complete the current buffered batch and finish the coalescer
     ///
     /// Any subsequent calls to `push_batch()` will return an Err
     pub fn finish(&mut self) -> Result<()> {
-        self.inner.finish_buffered_batch()?;
-        self.finished = true;
+        if !self.finished {
+            self.flush()?;
+            self.finished = true;
+        }
         Ok(())
     }
 
@@ -223,6 +237,37 @@ mod tests {
             .with_fetch(Some(7))
             .with_expected_output_sizes(vec![7])
             .run()
+    }
+
+    #[test]
+    fn test_flush_allows_subsequent_batches() {
+        let schema = uint32_batch(0..1).schema();
+        let mut coalescer = LimitedBatchCoalescer::new(schema, 10, None);
+
+        assert_eq!(
+            coalescer.push_batch(uint32_batch(0..3)).unwrap(),
+            PushBatchStatus::Continue
+        );
+        assert!(coalescer.next_completed_batch().is_none());
+        coalescer.flush().unwrap();
+        assert_eq!(
+            coalescer.next_completed_batch().unwrap(),
+            uint32_batch(0..3)
+        );
+
+        assert_eq!(
+            coalescer.push_batch(uint32_batch(3..5)).unwrap(),
+            PushBatchStatus::Continue
+        );
+        coalescer.flush().unwrap();
+        assert_eq!(
+            coalescer.next_completed_batch().unwrap(),
+            uint32_batch(3..5)
+        );
+
+        coalescer.finish().unwrap();
+        coalescer.finish().unwrap();
+        assert!(coalescer.next_completed_batch().is_none());
     }
 
     /// Test for [`LimitedBatchCoalescer`]
