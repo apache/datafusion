@@ -2269,6 +2269,8 @@ mod tests {
             None,
             StreamJoinPartitionMode::Partitioned,
         )?;
+        // This limit is intentionally at the regression boundary: accounting that
+        // omits the transformer-held batch succeeds, while corrected accounting fails.
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(2_400, 1.0)
             .build_arc()?;

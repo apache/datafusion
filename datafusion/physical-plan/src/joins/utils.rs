@@ -1955,7 +1955,10 @@ pub(crate) trait BatchTransformer: Debug + Clone {
     /// The boolean flag indicates whether the batch is the last one.
     fn next(&mut self) -> Option<(RecordBatch, bool)>;
 
-    /// Counts memory retained by this transformer.
+    /// Adds all memory retained by this transformer to `counter`.
+    ///
+    /// The stream shares this counter with its other retained batches, so
+    /// implementations must let it deduplicate shared Arrow buffers and array objects.
     fn count_memory(&self, counter: &mut RecordBatchMemoryCounter);
 }
 
