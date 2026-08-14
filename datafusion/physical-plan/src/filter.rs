@@ -1236,7 +1236,7 @@ pub fn batch_filter(
 fn filter_and_project(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
