@@ -108,9 +108,9 @@ use crate::metrics::{
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    InputDistributionRequirements, PlanProperties, SendableRecordBatchStream,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, InputDistributionRequirements, PlanProperties,
+    ReplaceChildrenOptions, SendableRecordBatchStream, validate_child_count,
 };
 
 /// Physical ordered comparison for an ASOF join.
@@ -159,8 +159,10 @@ impl AsOfJoinExec {
     ///
     /// The match operator must be `<`, `<=`, `>`, or `>=`. Equality and match
     /// expressions must be deterministic, reference only their corresponding
-    /// input, and have matching input types. Equality types must support hashing.
-    /// Projection indices refer to the full left-then-right join schema.
+    /// input, and have matching input types. Equality types must support hashing;
+    /// floating-point equality keys are not supported because Arrow sorting
+    /// distinguishes signed zero while SQL equality does not. Projection indices
+    /// refer to the full left-then-right join schema.
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -383,48 +385,57 @@ impl ExecutionPlan for AsOfJoinExec {
         )
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        match &children[..] {
-            [left, right] => Ok(Arc::new(Self::try_new(
-                Arc::clone(left),
-                Arc::clone(right),
+        validate_child_count!(self, children);
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                left,
+                right,
+                on: self.on.clone(),
+                match_condition: self.match_condition.clone(),
+                join_schema: Arc::clone(&self.join_schema),
+                column_indices: self.column_indices.clone(),
+                projection: self.projection.clone(),
+                metrics: ExecutionPlanMetricsSet::new(),
+                left_ordering: self.left_ordering.clone(),
+                right_ordering: self.right_ordering.clone(),
+                right_fut: Default::default(),
+                cache: Arc::clone(&self.cache),
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::try_new(
+                left,
+                right,
                 self.on.clone(),
                 self.match_condition.clone(),
                 self.projection.as_deref().map(<[usize]>::to_vec),
             )?)),
-            _ => internal_err!("AsOfJoinExec requires two children"),
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq_or_internal_err!(
-            children.len(),
-            2,
-            "AsOfJoinExec requires two children"
-        );
-        let left = children.remove(0);
-        let right = children.remove(0);
-        Ok(Arc::new(Self {
-            left,
-            right,
-            on: self.on.clone(),
-            match_condition: self.match_condition.clone(),
-            join_schema: Arc::clone(&self.join_schema),
-            column_indices: self.column_indices.clone(),
-            projection: self.projection.clone(),
-            metrics: ExecutionPlanMetricsSet::new(),
-            left_ordering: self.left_ordering.clone(),
-            right_ordering: self.right_ordering.clone(),
-            right_fut: Default::default(),
-            cache: Arc::clone(&self.cache),
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -1166,6 +1177,11 @@ fn validate_asof_join(
                 "AsOfJoinExec equality expressions have unsupported hash type {left_type}"
             );
         }
+        if left_type.is_floating() {
+            return plan_err!(
+                "AsOfJoinExec equality expressions do not support floating-point type {left_type}"
+            );
+        }
     }
     let left_match_type = match_condition.left.data_type(&left_schema)?;
     let right_match_type = match_condition.right.data_type(&right_schema)?;
@@ -1226,7 +1242,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::ColumnarValue;
-    use datafusion_physical_expr::expressions::BinaryExpr;
+    use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use insta::assert_snapshot;
 
@@ -1680,6 +1696,38 @@ mod tests {
         )
         .expect_err("volatile equality expression must be rejected");
         assert!(equality_error.to_string().contains("must be deterministic"));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_floating_equality_expressions() -> Result<()> {
+        let exec = test_exec()?;
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let left = Arc::new(CastExpr::new(
+                Arc::new(PhysicalColumn::new("ts", 1)),
+                data_type.clone(),
+                None,
+            ));
+            let right = Arc::new(CastExpr::new(
+                Arc::new(PhysicalColumn::new("ts", 1)),
+                data_type.clone(),
+                None,
+            ));
+            let error = AsOfJoinExec::try_new(
+                Arc::clone(&exec.left),
+                Arc::clone(&exec.right),
+                vec![(left, right)],
+                exec.match_condition.clone(),
+                Some(vec![0, 1, 2, 5]),
+            )
+            .expect_err("floating equality expressions must be rejected");
+            assert!(
+                error.to_string().contains(&format!(
+                    "equality expressions do not support floating-point type {data_type}"
+                )),
+                "unexpected error: {error}"
+            );
+        }
         Ok(())
     }
 
