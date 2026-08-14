@@ -353,6 +353,8 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` deletes all rows.
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn delete_from<'life0, 'life1, 'async_trait>(
         &'life0 self,
         _state: &'life1 dyn Session,
@@ -373,6 +375,8 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` updates all rows.
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn update<'life0, 'life1, 'async_trait>(
         &'life0 self,
         _state: &'life1 dyn Session,
@@ -409,6 +413,8 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// The `clauses` describe the WHEN MATCHED / WHEN NOT MATCHED actions.
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn merge_into<'life0, 'life1, 'async_trait>(
         &'life0 self,
         _state: &'life1 dyn Session,
