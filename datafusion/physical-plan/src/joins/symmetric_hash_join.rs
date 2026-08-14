@@ -2104,9 +2104,9 @@ mod tests {
     };
     use crate::test::TestMemoryExec;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -2192,6 +2192,51 @@ mod tests {
     fn stream_accounts_for_transformer_batches_once() {
         assert_stream_accounts_for_transformer(NoopBatchTransformer::new());
         assert_stream_accounts_for_transformer(BatchSplitter::new(3));
+    }
+
+    fn assert_stream_deduplicates_nested_transformer_batch<T: BatchTransformer>(
+        batch_transformer: T,
+    ) {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let fields =
+            Fields::from(vec![Arc::new(Field::new("value", DataType::Int32, false))]);
+        let left_batch = RecordBatch::try_from_iter(vec![(
+            "nested",
+            Arc::new(StructArray::new(
+                fields.clone(),
+                vec![Arc::clone(&shared_child)],
+                None,
+            )) as ArrayRef,
+        )])
+        .unwrap();
+        let transformer_batch = RecordBatch::try_from_iter(vec![(
+            "nested",
+            Arc::new(StructArray::new(
+                fields,
+                vec![Arc::clone(&shared_child)],
+                None,
+            )) as ArrayRef,
+        )])
+        .unwrap();
+        let mut stream = create_stream(batch_transformer, left_batch.schema());
+        stream.left.input_buffer = left_batch;
+        let size_without_transformer = stream.size();
+
+        stream
+            .batch_transformer
+            .set_batch(transformer_batch.clone());
+
+        assert_eq!(
+            stream.size() - size_without_transformer,
+            transformer_batch.get_array_memory_size()
+                - shared_child.get_array_memory_size()
+        );
+    }
+
+    #[test]
+    fn stream_deduplicates_nested_transformer_batches() {
+        assert_stream_deduplicates_nested_transformer_batch(NoopBatchTransformer::new());
+        assert_stream_deduplicates_nested_transformer_batch(BatchSplitter::new(3));
     }
 
     #[rstest]
