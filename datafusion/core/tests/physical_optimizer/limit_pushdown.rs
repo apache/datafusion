@@ -189,14 +189,8 @@ impl ExecutionPlan for TestCombinerExec {
     }
 }
 
-/// A test [`ExecutionPlan`] that reports an existing `fetch` bound on its own
-/// output but cannot absorb a new fetch: `with_fetch` uses the trait default
-/// and returns `None`. `supports_limit_pushdown` defaults to the trait default
-/// (`false`) and can be enabled via
-/// [`Self::with_supports_limit_pushdown`]. This simulates an operator whose
-/// trait-level fetch cannot be tightened, so a still-pending global limit must
-/// be enforced explicitly (either above the operator or, when pushdown is
-/// supported, at the seam between the operator and its child).
+/// Test plan that reports a fixed `fetch` but cannot change it through
+/// `with_fetch`. It can optionally allow limits to be pushed to its child.
 #[derive(Debug)]
 struct TestFetchOnlyExec {
     input: Arc<dyn ExecutionPlan>,
@@ -221,8 +215,7 @@ impl TestFetchOnlyExec {
         }
     }
 
-    /// Set whether `supports_limit_pushdown()` reports `true`, allowing a
-    /// pending limit to pass through this operator to its child.
+    /// Set whether limits may be pushed through this operator to its child.
     fn with_supports_limit_pushdown(mut self, supports: bool) -> Self {
         self.supports_limit_pushdown = supports;
         self
@@ -1370,11 +1363,8 @@ fn outer_offset_with_same_sort_key_still_pushes_limit() -> Result<()> {
 
 #[test]
 fn keeps_global_limit_when_existing_fetch_is_looser_than_owed() -> Result<()> {
-    // Regression test: an existing `fetch=10` on an operator that cannot
-    // absorb a tighter fetch (`with_fetch` returns `None`) does not satisfy an
-    // owed `fetch=5`. Before the fix, the pending global requirement was
-    // cleared solely because `skip == 0` and `fetch().is_some()`, so the
-    // `GlobalLimitExec` was removed entirely and the global `LIMIT` was lost.
+    // This operator's `fetch=10` is weaker than `LIMIT 5` and cannot be lowered.
+    // Keep `GlobalLimitExec` so the query still returns at most five rows.
     let schema = create_schema();
     let scan = Arc::new(TestScan::new(schema, vec![]));
     let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(10)));
@@ -1397,17 +1387,9 @@ fn keeps_global_limit_when_existing_fetch_is_looser_than_owed() -> Result<()> {
 #[test]
 fn pushes_owed_limit_below_fetch_only_unary_when_limit_pushdown_supported() -> Result<()>
 {
-    // Regression test for the `supports_limit_pushdown() == true` variant of
-    // `keeps_global_limit_when_existing_fetch_is_looser_than_owed`: the unary
-    // reports `supports_limit_pushdown() == true` so the rule takes the
-    // push-down-continue branch (no `GlobalLimitExec` above the unary), while
-    // `with_fetch` keeps the trait default (`None`) so the looser existing
-    // `fetch=10` cannot be tightened to the owed `fetch=5`. The owed global
-    // requirement must therefore survive the unary and be enforced at the seam
-    // between the unary and its child — the child also cannot absorb the limit
-    // (`TestScan::with_fetch` returns `None` by default), so the
-    // `GlobalLimitExec` must be materialized directly above the child instead
-    // of being dropped.
+    // This operator allows limit pushdown but cannot lower its own `fetch` from
+    // 10 to 5. Its child cannot accept a fetch either, so keep
+    // `GlobalLimitExec(fetch=5)` between them.
     let schema = create_schema();
     let scan = Arc::new(TestScan::new(schema, vec![]));
     let fetch_only = Arc::new(
@@ -1432,9 +1414,7 @@ fn pushes_owed_limit_below_fetch_only_unary_when_limit_pushdown_supported() -> R
 #[test]
 fn does_not_add_redundant_wrapper_when_existing_fetch_is_tighter_than_owed() -> Result<()>
 {
-    // An existing `fetch=3` on a single-partition operator is at least as
-    // tight as the owed `fetch=5`, so the pending requirement is satisfied
-    // without inserting a redundant `GlobalLimitExec`.
+    // `fetch=3` is stricter than `LIMIT 5`, so no additional limit is needed.
     let schema = create_schema();
     let scan = Arc::new(TestScan::new(schema, vec![]));
     let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(3)));
@@ -1455,9 +1435,8 @@ fn does_not_add_redundant_wrapper_when_existing_fetch_is_tighter_than_owed() -> 
 
 #[test]
 fn tightens_existing_sort_fetch_to_owed_limit() -> Result<()> {
-    // When an existing `fetch=10` is looser than the owed `fetch=5` and the
-    // operator can absorb a tighter fetch (`SortExec::with_fetch`), the fetch
-    // is tightened to the owed value instead of keeping the loose bound.
+    // `SortExec` can lower its `fetch` from 10 to 5, so the separate
+    // `GlobalLimitExec` is unnecessary.
     let schema = create_schema();
     let scan = Arc::new(TestScan::new(schema.clone(), vec![]));
     let ordering: LexOrdering = [PhysicalSortExpr {
@@ -1483,9 +1462,8 @@ fn tightens_existing_sort_fetch_to_owed_limit() -> Result<()> {
 
 #[test]
 fn keeps_global_offset_limit_when_existing_fetch_is_looser() -> Result<()> {
-    // An existing `fetch=10` cannot satisfy an owed `skip=2, fetch=5`: an
-    // existing fetch alone must never satisfy the offset part of a
-    // requirement, so the `GlobalLimitExec` must be preserved.
+    // An operator `fetch` cannot apply `OFFSET 2`; keep `GlobalLimitExec` to
+    // enforce both the offset and `LIMIT 5`.
     let schema = create_schema();
     let scan = Arc::new(TestScan::new(schema, vec![]));
     let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(10)));
