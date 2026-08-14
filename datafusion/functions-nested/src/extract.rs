@@ -627,12 +627,17 @@ where
     let field = match array.data_type() {
         List(field) | LargeList(field) => Arc::clone(field),
         other => {
-            return internal_err!("array_slice got unexpected data type: {other}");
+            return internal_err!(
+                "general_array_slice got unexpected data type: {other}"
+            );
         }
     };
 
+    // `use_nulls` is false because we never call `try_extend_nulls`: null rows are
+    // emitted as empty slices. Arrow still allocates a validity buffer on its own
+    // if the child array has nulls.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
     // We have the slice syntax compatible with DuckDB v0.8.1.
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
@@ -714,12 +719,15 @@ where
     let field = match array.data_type() {
         ListView(field) | LargeListView(field) => Arc::clone(field),
         other => {
-            return internal_err!("array_slice got unexpected data type: {}", other);
+            return internal_err!(
+                "general_list_view_array_slice got unexpected data type: {other}"
+            );
         }
     };
 
+    // See the note on `use_nulls` in `general_array_slice`.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
     // We must build `offsets` and `sizes` buffers manually as ListView does not enforce
     // monotonically increasing offsets.

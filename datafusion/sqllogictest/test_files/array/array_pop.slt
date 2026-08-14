@@ -341,8 +341,14 @@ select
   array_pop_back(column1),
   arrow_typeof(array_pop_front(column1)),
   arrow_typeof(array_pop_back(column1))
-from values (arrow_cast([1, 3, 5, -5], 'LargeList(non-null Int32)'));
+from values
+  (arrow_cast([], 'LargeList(non-null Int32)')),
+  (arrow_cast(NULL, 'LargeList(non-null Int32)')),
+  (arrow_cast([1, 3, 5, -5], 'LargeList(non-null Int32)'))
+;
 ----
+[] [] LargeList(non-null Int32) LargeList(non-null Int32)
+NULL NULL LargeList(non-null Int32) LargeList(non-null Int32)
 [3, 5, -5] [1, 3, 5] LargeList(non-null Int32) LargeList(non-null Int32)
 
 
