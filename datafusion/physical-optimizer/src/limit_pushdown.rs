@@ -93,7 +93,7 @@ pub struct LimitPushdown {}
 /// outstanding; a retained `fetch` is a descendant early-stop hint only.
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
-#[derive(Clone, Debug, Default)]
+#[derive(Default, Clone, Debug)]
 pub struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
