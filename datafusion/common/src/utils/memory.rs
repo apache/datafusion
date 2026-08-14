@@ -358,8 +358,12 @@ mod tests {
 #[cfg(test)]
 mod record_batch_tests {
     use super::*;
-    use arrow::array::{ArrayRef, Float64Array, Int32Array, ListArray, StructArray};
-    use arrow::datatypes::{DataType, Field, Fields, Int32Type, Schema};
+    use arrow::array::{
+        ArrayRef, DictionaryArray, Float64Array, Int32Array, ListArray, MapArray,
+        RunArray, StructArray, UnionArray,
+    };
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{DataType, Field, Fields, Int32Type, Schema, UnionFields};
     use std::sync::Arc;
 
     #[test]
@@ -497,6 +501,158 @@ mod record_batch_tests {
             counter.memory_usage(),
             batch.get_array_memory_size() - shared_child.get_array_memory_size()
         );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_recursive_shared_children() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let shared_map_key: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let map_fields = Fields::from(vec![
+            Arc::new(Field::new("key", DataType::Int32, false)),
+            Arc::new(Field::new("value", DataType::Int32, false)),
+        ]);
+        let union_fields: UnionFields =
+            [(0, Arc::new(Field::new("value", DataType::Int32, false)))]
+                .into_iter()
+                .collect();
+
+        let arrays = vec![
+            (
+                "list",
+                Arc::new(ListArray::new(
+                    Arc::clone(&list_field),
+                    OffsetBuffer::new(vec![0, 3].into()),
+                    Arc::clone(&shared_child),
+                    None,
+                )) as ArrayRef,
+                Arc::new(ListArray::new(
+                    list_field,
+                    OffsetBuffer::new(vec![0, 3].into()),
+                    Arc::clone(&shared_child),
+                    None,
+                )) as ArrayRef,
+                shared_child.get_array_memory_size(),
+            ),
+            (
+                "map",
+                Arc::new(
+                    MapArray::try_new(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(map_fields.clone()),
+                            false,
+                        )),
+                        OffsetBuffer::new(vec![0, 3].into()),
+                        StructArray::new(
+                            map_fields.clone(),
+                            vec![Arc::clone(&shared_map_key), Arc::clone(&shared_child)],
+                            None,
+                        ),
+                        None,
+                        false,
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                Arc::new(
+                    MapArray::try_new(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(map_fields.clone()),
+                            false,
+                        )),
+                        OffsetBuffer::new(vec![0, 3].into()),
+                        StructArray::new(
+                            map_fields,
+                            vec![Arc::clone(&shared_map_key), Arc::clone(&shared_child)],
+                            None,
+                        ),
+                        None,
+                        false,
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                shared_map_key.get_array_memory_size()
+                    + shared_child.get_array_memory_size(),
+            ),
+            (
+                "union",
+                Arc::new(
+                    UnionArray::try_new(
+                        union_fields.clone(),
+                        vec![0, 0, 0].into(),
+                        None,
+                        vec![Arc::clone(&shared_child)],
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                Arc::new(
+                    UnionArray::try_new(
+                        union_fields,
+                        vec![0, 0, 0].into(),
+                        None,
+                        vec![Arc::clone(&shared_child)],
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                shared_child.get_buffer_memory_size(),
+            ),
+            (
+                "dictionary",
+                Arc::new(
+                    DictionaryArray::<Int32Type>::try_new(
+                        Int32Array::from(vec![0, 1, 2]),
+                        Arc::clone(&shared_child),
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                Arc::new(
+                    DictionaryArray::<Int32Type>::try_new(
+                        Int32Array::from(vec![0, 1, 2]),
+                        Arc::clone(&shared_child),
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                shared_child.get_array_memory_size(),
+            ),
+            (
+                "run_end_encoded",
+                Arc::new(
+                    RunArray::<Int32Type>::try_new(
+                        &Int32Array::from(vec![1, 2, 3]),
+                        shared_child.as_ref(),
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                Arc::new(
+                    RunArray::<Int32Type>::try_new(
+                        &Int32Array::from(vec![1, 2, 3]),
+                        shared_child.as_ref(),
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+                shared_child.get_buffer_memory_size(),
+            ),
+        ];
+
+        for (name, first, second, shared_memory) in arrays {
+            let first_batch =
+                RecordBatch::try_from_iter(vec![(name, first.clone())]).unwrap();
+            let second_batch =
+                RecordBatch::try_from_iter(vec![(name, second.clone())]).unwrap();
+            let mut counter = RecordBatchMemoryCounter::new();
+
+            assert_eq!(
+                counter.count_batch_with_array_overhead(&first_batch),
+                first.get_array_memory_size(),
+                "{name}: first batch"
+            );
+            assert_eq!(
+                counter.count_batch_with_array_overhead(&second_batch),
+                second.get_array_memory_size() - shared_memory,
+                "{name}: shared child"
+            );
+        }
     }
 
     #[test]
