@@ -1955,7 +1955,7 @@ pub(crate) trait BatchTransformer: Debug + Clone {
     /// The boolean flag indicates whether the batch is the last one.
     fn next(&mut self) -> Option<(RecordBatch, bool)>;
 
-    /// Counts buffers retained by this transformer.
+    /// Counts memory retained by this transformer.
     fn count_memory(&self, counter: &mut RecordBatchMemoryCounter);
 }
 
@@ -1964,7 +1964,7 @@ fn count_retained_batch_memory(
     counter: &mut RecordBatchMemoryCounter,
 ) {
     if let Some(batch) = batch {
-        counter.count_batch(batch);
+        counter.count_batch_with_array_overhead(batch);
     }
 }
 
@@ -4404,7 +4404,7 @@ mod tests {
     #[test]
     fn batch_transformers_count_retained_batch_memory() {
         let batch = create_test_batch(10);
-        let expected_size = RecordBatchMemoryCounter::new().count_batch(&batch);
+        let expected_size = batch.get_array_memory_size();
 
         let mut noop = NoopBatchTransformer::new();
         noop.set_batch(batch.clone());
@@ -4419,7 +4419,7 @@ mod tests {
         assert_eq!(splitter_counter.memory_usage(), expected_size);
 
         let mut shared_buffer_counter = RecordBatchMemoryCounter::new();
-        shared_buffer_counter.count_batch(&batch);
+        shared_buffer_counter.count_batch_with_array_overhead(&batch);
         splitter.count_memory(&mut shared_buffer_counter);
         assert_eq!(shared_buffer_counter.memory_usage(), expected_size);
     }

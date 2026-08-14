@@ -19,10 +19,11 @@
 
 use crate::error::_exec_datafusion_err;
 use crate::{HashSet, Result};
-use arrow::array::ArrayData;
+use arrow::array::{Array, ArrayData};
 use arrow::record_batch::RecordBatch;
 use std::mem::size_of;
 use std::num::NonZero;
+use std::sync::Arc;
 
 /// Estimates the memory size required for a hash table prior to allocation.
 ///
@@ -152,7 +153,9 @@ pub struct RecordBatchMemoryCounter {
     /// Start addresses of `Buffer`s that have already been counted (instead of
     /// actual used data region's pointer represented by current `Array`)
     counted_buffers: HashSet<NonZero<usize>>,
-    /// Total memory of all unique buffers counted so far
+    /// Array objects already counted by [`Self::count_batch_with_array_overhead`]
+    counted_arrays: HashSet<usize>,
+    /// Total memory of all counted allocations
     memory_usage: usize,
 }
 
@@ -179,7 +182,29 @@ impl RecordBatchMemoryCounter {
         total_size
     }
 
-    /// Total memory of the unique buffers of all batches counted so far.
+    /// Counts unique buffers and Array objects retained by `batch`.
+    ///
+    /// This is useful for accounting a sequence of batches at an operator
+    /// boundary. It counts buffers once, and also avoids double-counting a
+    /// top-level Arrow array shared by multiple batches.
+    pub fn count_batch_with_array_overhead(&mut self, batch: &RecordBatch) -> usize {
+        let mut total_size = self.count_batch(batch);
+        let mut array_overhead = 0;
+
+        for array in batch.columns() {
+            let array_ptr = Arc::as_ptr(array) as *const () as usize;
+            if self.counted_arrays.insert(array_ptr) {
+                array_overhead +=
+                    array.get_array_memory_size() - array.get_buffer_memory_size();
+            }
+        }
+
+        total_size += array_overhead;
+        self.memory_usage += array_overhead;
+        total_size
+    }
+
+    /// Total memory of all counted allocations.
     pub fn memory_usage(&self) -> usize {
         self.memory_usage
     }
@@ -334,6 +359,30 @@ mod record_batch_tests {
         let size_sliced = get_record_batch_memory_size(&batch_sliced);
 
         assert_eq!(size_origin, size_sliced);
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_array_overhead_shared_across_batches() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ints", DataType::Int32, false),
+            Field::new("floats", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                Arc::new(Float64Array::from(vec![1., 2., 3., 4., 5., 6.])),
+            ],
+        )
+        .unwrap();
+
+        let mut counter = RecordBatchMemoryCounter::new();
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&batch),
+            batch.get_array_memory_size()
+        );
+        assert_eq!(counter.count_batch_with_array_overhead(&batch), 0);
+        assert_eq!(counter.memory_usage(), batch.get_array_memory_size());
     }
 
     #[test]

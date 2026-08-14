@@ -1931,8 +1931,8 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
     /// so count them as one sequence rather than summing individual batch sizes.
     fn size(&self) -> usize {
         let mut batch_memory_counter = RecordBatchMemoryCounter::new();
-        batch_memory_counter.count_batch(&self.left.input_buffer);
-        batch_memory_counter.count_batch(&self.right.input_buffer);
+        batch_memory_counter.count_batch_with_array_overhead(&self.left.input_buffer);
+        batch_memory_counter.count_batch_with_array_overhead(&self.right.input_buffer);
         self.batch_transformer
             .count_memory(&mut batch_memory_counter);
 
@@ -2102,12 +2102,14 @@ mod tests {
         join_expr_tests_fixture_temporal, partitioned_hash_join_with_filter,
         partitioned_sym_join_with_filter, split_record_batches,
     };
+    use crate::test::TestMemoryExec;
 
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -2165,7 +2167,7 @@ mod tests {
             Arc::new(Int32Array::from_iter_values(0..10)) as _,
         )])
         .unwrap();
-        let expected_size = RecordBatchMemoryCounter::new().count_batch(&batch);
+        let expected_size = batch.get_array_memory_size();
         let mut stream = create_stream(batch_transformer, batch.schema());
 
         let empty_size = stream.size();
@@ -2190,6 +2192,56 @@ mod tests {
     fn stream_accounts_for_transformer_batches_once() {
         assert_stream_accounts_for_transformer(NoopBatchTransformer::new());
         assert_stream_accounts_for_transformer(BatchSplitter::new(3));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn symmetric_hash_join_reserves_transformer_batch(
+        #[values(false, true)] enforce_batch_size_in_joins: bool,
+    ) -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?;
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let on = vec![(col("id", &schema)?, col("id", &schema)?)];
+        let join = SymmetricHashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            None,
+            None,
+            StreamJoinPartitionMode::Partitioned,
+        )?;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(2_400, 1.0)
+            .build_arc()?;
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new()
+                        .with_batch_size(1)
+                        .with_enforce_batch_size_in_joins(enforce_batch_size_in_joins),
+                )
+                .with_runtime(runtime),
+        );
+
+        let error = crate::common::collect(join.execute(0, context)?)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Additional allocation failed"));
+        Ok(())
     }
 
     fn get_or_create_table(
