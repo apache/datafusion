@@ -1959,6 +1959,15 @@ pub(crate) trait BatchTransformer: Debug + Clone {
     fn count_memory(&self, counter: &mut RecordBatchMemoryCounter);
 }
 
+fn count_retained_batch_memory(
+    batch: &Option<RecordBatch>,
+    counter: &mut RecordBatchMemoryCounter,
+) {
+    if let Some(batch) = batch {
+        counter.count_batch(batch);
+    }
+}
+
 #[derive(Debug, Clone)]
 /// A batch transformer that does nothing.
 pub(crate) struct NoopBatchTransformer {
@@ -1982,9 +1991,7 @@ impl BatchTransformer for NoopBatchTransformer {
     }
 
     fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
-        if let Some(batch) = &self.batch {
-            counter.count_batch(batch);
-        }
+        count_retained_batch_memory(&self.batch, counter);
     }
 }
 
@@ -2036,9 +2043,7 @@ impl BatchTransformer for BatchSplitter {
     }
 
     fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
-        if let Some(batch) = &self.batch {
-            counter.count_batch(batch);
-        }
+        count_retained_batch_memory(&self.batch, counter);
     }
 }
 
