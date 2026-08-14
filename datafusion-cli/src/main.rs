@@ -258,9 +258,6 @@ async fn main_inner() -> Result<()> {
         .with_default_features();
     if args.spark {
         state_builder = state_builder.with_spark_features();
-        if let Some(config) = state_builder.config() {
-            config.options_mut().sql_parser.dialect = Dialect::Spark;
-        }
     }
 
     // enable dynamic file query
@@ -367,6 +364,10 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     // in the CLI, we want to show NULL values rather the empty strings
     if env::var_os("DATAFUSION_FORMAT_NULL").is_none() {
         config_options.format.null = String::from("NULL");
+    }
+
+    if args.spark {
+        config_options.sql_parser.dialect = Dialect::Spark;
     }
 
     let mut session_config =
