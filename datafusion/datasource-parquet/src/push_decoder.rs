@@ -53,7 +53,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::ParquetMetaData;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -342,6 +342,15 @@ impl PushDecoderStreamState {
                 .as_ref()
                 .expect("decoder present")
                 .is_at_row_group_boundary();
+            // Before pruning/rebuilding, align `rg_plan` with the row group the
+            // decoder will actually emit next. arrow-rs silently finishes row
+            // groups whose post-predicate selection is empty without handing back
+            // a reader, so without this sync `rg_plan` trails the decoder by one
+            // and a later rebuild can re-read an already-delivered row group
+            // (#24352).
+            if at_boundary && let Err(e) = self.sync_rg_plan_to_decoder_frontier() {
+                return Some((Err(e), self));
+            }
             if at_boundary && !self.rg_plan.is_empty() {
                 let mut pruned_count = 0usize;
                 if let Some(pruner) = self.row_group_pruner.as_mut() {
@@ -412,6 +421,49 @@ impl PushDecoderStreamState {
                 }
             }
         }
+    }
+
+    /// Keep `rg_plan.front()` aligned with the row group the decoder will emit
+    /// next. `try_next_reader` silently finishes row groups whose post-predicate
+    /// selection is empty (no reader handed back), which would otherwise leave
+    /// `rg_plan` trailing the decoder by one — a later prune/rebuild would then
+    /// re-include an already-delivered row group (#24352).
+    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<(), DataFusionError> {
+        match self
+            .decoder
+            .as_ref()
+            .expect("decoder present")
+            .peek_next_row_group()
+            .map_err(DataFusionError::from)?
+        {
+            Some(actual) => self.advance_rg_plan_to(actual)?,
+            // Decoder has nothing left to emit — drain our plan so the stream
+            // finishes cleanly.
+            None => self.rg_plan.clear(),
+        }
+        Ok(())
+    }
+
+    /// Pop `rg_plan` entries until its front is `target`.
+    ///
+    /// `target` is the RG the decoder will emit next and must still be in our
+    /// plan. A missing `target` means the decoder's frontier and `rg_plan`
+    /// have diverged; we surface that as an internal error rather than
+    /// silently draining the plan, which would truncate the scan.
+    fn advance_rg_plan_to(&mut self, target: usize) -> Result<()> {
+        if !self.rg_plan.iter().any(|e| e.rg_index == target) {
+            return internal_err!(
+                "push decoder frontier RG {target} is not in rg_plan; \
+                 decoder and plan have diverged"
+            );
+        }
+        while let Some(front) = self.rg_plan.front() {
+            if front.rg_index == target {
+                break;
+            }
+            self.rg_plan.pop_front();
+        }
+        Ok(())
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
