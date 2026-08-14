@@ -490,6 +490,8 @@ impl TableProvider for ListingTable {
         TableType::Base
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
@@ -507,6 +509,8 @@ impl TableProvider for ListingTable {
         self.scan_boxed(state, projection, filters, limit)
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
@@ -549,6 +553,8 @@ impl TableProvider for ListingTable {
         self.definition.as_deref()
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn insert_into<'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
