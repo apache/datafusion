@@ -213,7 +213,7 @@ impl PhysicalExpr for HashExpr {
         use datafusion_proto_models::protobuf;
         let on_columns = ctx.encode_children_expressions(&self.on_columns)?;
         Ok(Some(protobuf::PhysicalExprNode {
-            expr_id: self.expression_id(),
+            expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
                 protobuf::PhysicalHashExprNode {
                     on_columns,
@@ -415,7 +415,7 @@ impl PhysicalExpr for HashTableLookupExpr {
             });
 
         Ok(Some(protobuf::PhysicalExprNode {
-            expr_id: self.expression_id(),
+            expr_id: None,
             expr_type: Some(expr),
         }))
     }
@@ -425,14 +425,6 @@ impl PhysicalExpr for HashTableLookupExpr {
 }
 
 /// Encode the map in its membership-only proto form.
-///
-/// The encoded size is deliberately uncapped: `build_hashes` grows with the
-/// number of distinct join-key hashes on the build side (8 bytes each), and
-/// an `ArrayMap` presence bitmap with its key range (1 bit per possible key).
-/// This matches the `InList` pushdown path, which serializes its full value
-/// list without a limit. If a bound is ever needed, encode `lit(true)` in
-/// place of an over-limit map — a weaker filter is always safe here because
-/// the join re-verifies matches.
 #[cfg(feature = "proto")]
 fn try_map_to_proto_membership_only(
     map: &HashTableLookupExprMap,
