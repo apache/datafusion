@@ -276,7 +276,7 @@ impl HashExpr {
 
 /// Physical expression that checks join keys in a [`Map`] (hash table or array map).
 ///
-/// Returns a [`BooleanArray`](arrow::array::BooleanArray) indicating if join keys (from `on_columns`) exist in the map.
+/// Returns a [`BooleanArray`] indicating if join keys (from `on_columns`) exist in the map.
 // TODO: rename to MapLookupExpr
 pub struct HashTableLookupExpr {
     /// Columns in the ON clause used to compute the join key for lookups
@@ -756,6 +756,7 @@ mod tests {
     #[cfg(feature = "proto")]
     mod proto_tests {
         use super::*;
+        use arrow::array::Int64Array;
         use arrow::datatypes::{DataType, Field};
         use datafusion_common::internal_datafusion_err;
         use datafusion_physical_expr_common::physical_expr::proto_decode::{
@@ -916,6 +917,352 @@ mod tests {
                     .contains("PhysicalExprNode is not a HashExpr"),
                 "{err}"
             );
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_try_to_proto_hash_map_membership() {
+            let build_hashes = [7u64, 42, 9999];
+            let map = Arc::new(Map::HashMap(Box::new(join_hash_map_with_hashes(
+                &build_hashes,
+            ))));
+            let expr = HashTableLookupExpr::new(
+                vec![Arc::new(Column::new("a", 0))],
+                SeededRandomState::with_seed(42),
+                map,
+                "hash_lookup".to_string(),
+            );
+            let encoder = TestEncoder;
+            let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+            let proto = expr.try_to_proto(&ctx).unwrap().unwrap();
+
+            assert_eq!(proto.expr_id, None);
+            let node = match proto.expr_type.unwrap() {
+                protobuf::physical_expr_node::ExprType::HashTableLookupExpr(node) => node,
+                other => panic!("expected HashTableLookupExpr, got {other:?}"),
+            };
+            assert_eq!(node.seed0, 42);
+            assert_eq!(node.description, "hash_lookup");
+            assert_eq!(node.on_columns.len(), 1);
+            let membership = match node.map.unwrap() {
+                protobuf::physical_hash_table_lookup_expr_node::Map::HashMapMembership(
+                    m,
+                ) => m,
+                other => panic!("expected HashMapMembership, got {other:?}"),
+            };
+            // Hash table iteration order is arbitrary; compare as a sorted set.
+            let mut got = membership.build_hashes;
+            got.sort_unstable();
+            assert_eq!(got, build_hashes);
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_try_to_proto_array_map_membership() {
+            let build: ArrayRef = Arc::new(Int64Array::from(vec![10i64, 12, 10, 15]));
+            let array_map = ArrayMap::try_new(&build, 10, 15).unwrap();
+            let expr = HashTableLookupExpr::new(
+                vec![Arc::new(Column::new("a", 0))],
+                SeededRandomState::with_seed(42),
+                Arc::new(Map::ArrayMap(array_map)),
+                "hash_lookup".to_string(),
+            );
+            let encoder = TestEncoder;
+            let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+            let proto = expr.try_to_proto(&ctx).unwrap().unwrap();
+
+            let node = match proto.expr_type.unwrap() {
+                protobuf::physical_expr_node::ExprType::HashTableLookupExpr(node) => node,
+                other => panic!("expected HashTableLookupExpr, got {other:?}"),
+            };
+            let membership = match node.map.unwrap() {
+                protobuf::physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(
+                    m,
+                ) => m,
+                other => panic!("expected ArrayMapMembership, got {other:?}"),
+            };
+            assert_eq!(membership.offset, 10);
+            assert_eq!(membership.num_slots, 6);
+            // Keys 10, 12, 15 occupy slots 0, 2, 5 (LSB-first bit order).
+            assert_eq!(membership.presence, vec![0b0010_0101u8]);
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_try_from_proto_hash_map_membership() {
+            let schema = lookup_schema();
+            let decoder = TestDecoder;
+            let ctx = test_decode_ctx(&schema, &decoder);
+            let proto = lookup_expr_proto(
+                protobuf::physical_hash_table_lookup_expr_node::Map::HashMapMembership(
+                    protobuf::HashMapMembership {
+                        build_hashes: hashes_for(&[1, 3], 42),
+                    },
+                ),
+            );
+
+            let expr = HashTableLookupExpr::try_from_proto(&proto, &ctx).unwrap();
+            let expr = expr.downcast_ref::<HashTableLookupExpr>().unwrap();
+
+            assert_eq!(expr.random_state.seed(), 42);
+            assert_eq!(expr.description, "hash_lookup");
+            assert_eq!(expr.on_columns.len(), 1);
+            assert!(matches!(
+                expr.map,
+                HashTableLookupExprMap::MembershipOnlyHashMap(_)
+            ));
+            // Probe keys are hashed with the deserialized seed, so 1 and 3
+            // (whose hashes were serialized) match and 2 and 4 do not.
+            assert_eq!(
+                eval_lookup(expr, &probe_batch(&[1, 2, 3, 4])),
+                [true, false, true, false]
+            );
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_try_from_proto_array_map_membership() {
+            let schema = lookup_schema();
+            let decoder = TestDecoder;
+            let ctx = test_decode_ctx(&schema, &decoder);
+            let proto = lookup_expr_proto(
+                protobuf::physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(
+                    protobuf::ArrayMapMembership {
+                        offset: 10,
+                        num_slots: 6,
+                        presence: vec![0b0010_0101u8],
+                    },
+                ),
+            );
+
+            let expr = HashTableLookupExpr::try_from_proto(&proto, &ctx).unwrap();
+            let expr = expr.downcast_ref::<HashTableLookupExpr>().unwrap();
+
+            assert!(matches!(
+                expr.map,
+                HashTableLookupExprMap::MembershipOnlyArrayMap(_)
+            ));
+            // In-range hits (10, 12, 15), in-range misses (11, 14), and
+            // out-of-range probes on both sides (9, 16).
+            assert_eq!(
+                eval_lookup(expr, &probe_batch(&[9, 10, 11, 12, 14, 15, 16])),
+                [false, true, false, true, false, true, false]
+            );
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_try_from_proto_rejects_wrong_node_type() {
+            let schema = Schema::empty();
+            let decoder = TestDecoder;
+            let ctx = test_decode_ctx(&schema, &decoder);
+            let proto = column_node("a", 0);
+
+            let err = HashTableLookupExpr::try_from_proto(&proto, &ctx).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("PhysicalExprNode is not a HashTableLookupExpr"),
+                "{err}"
+            );
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_try_from_proto_rejects_missing_map() {
+            let schema = lookup_schema();
+            let decoder = TestDecoder;
+            let ctx = test_decode_ctx(&schema, &decoder);
+            let proto = protobuf::PhysicalExprNode {
+                expr_id: None,
+                expr_type: Some(
+                    protobuf::physical_expr_node::ExprType::HashTableLookupExpr(
+                        protobuf::PhysicalHashTableLookupExprNode {
+                            on_columns: vec![column_node("a", 0)],
+                            seed0: 42,
+                            description: "hash_lookup".to_string(),
+                            map: None,
+                        },
+                    ),
+                ),
+            };
+
+            let err = HashTableLookupExpr::try_from_proto(&proto, &ctx).unwrap_err();
+            assert!(
+                err.to_string().contains("HashTableLookupExpr has no map"),
+                "{err}"
+            );
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_try_from_proto_rejects_bad_presence_length() {
+            let schema = lookup_schema();
+            let decoder = TestDecoder;
+            let ctx = test_decode_ctx(&schema, &decoder);
+            // 6 slots need exactly 1 presence byte; send 2.
+            let proto = lookup_expr_proto(
+                protobuf::physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(
+                    protobuf::ArrayMapMembership {
+                        offset: 10,
+                        num_slots: 6,
+                        presence: vec![0b0010_0101u8, 0],
+                    },
+                ),
+            );
+
+            assert!(HashTableLookupExpr::try_from_proto(&proto, &ctx).is_err());
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_roundtrip_hash_map() {
+            let build_hashes = hashes_for(&[1, 3, 5], 42);
+            let map = Arc::new(Map::HashMap(Box::new(join_hash_map_with_hashes(
+                &build_hashes,
+            ))));
+            let expr = HashTableLookupExpr::new(
+                vec![Arc::new(Column::new("a", 0))],
+                SeededRandomState::with_seed(42),
+                map,
+                "hash_lookup".to_string(),
+            );
+
+            let encoder = TestEncoder;
+            let proto = expr
+                .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+                .unwrap()
+                .unwrap();
+            let schema = lookup_schema();
+            let decoder = TestDecoder;
+            let decoded = HashTableLookupExpr::try_from_proto(
+                &proto,
+                &test_decode_ctx(&schema, &decoder),
+            )
+            .unwrap();
+
+            let batch = probe_batch(&[0, 1, 2, 3, 4, 5, 6]);
+            assert_eq!(
+                eval_lookup(&expr, &batch),
+                [false, true, false, true, false, true, false]
+            );
+            assert_eq!(
+                eval_lookup(&expr, &batch),
+                eval_lookup(decoded.as_ref(), &batch)
+            );
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_roundtrip_array_map_sign_crossing_range() {
+            // A build-side range that crosses zero wraps mid-range in the
+            // u64 key domain (-5 maps to a slot below 0's slot); roundtrip
+            // must preserve membership across the wrap.
+            let build: ArrayRef = Arc::new(Int64Array::from(vec![-5i64, 0, 5]));
+            let array_map = ArrayMap::try_new(&build, (-5i64) as u64, 5).unwrap();
+            let expr = HashTableLookupExpr::new(
+                vec![Arc::new(Column::new("a", 0))],
+                SeededRandomState::with_seed(42),
+                Arc::new(Map::ArrayMap(array_map)),
+                "hash_lookup".to_string(),
+            );
+
+            let encoder = TestEncoder;
+            let proto = expr
+                .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+                .unwrap()
+                .unwrap();
+            let schema = lookup_schema();
+            let decoder = TestDecoder;
+            let decoded = HashTableLookupExpr::try_from_proto(
+                &proto,
+                &test_decode_ctx(&schema, &decoder),
+            )
+            .unwrap();
+
+            let batch = probe_batch(&[-6, -5, -1, 0, 1, 5, 6]);
+            assert_eq!(
+                eval_lookup(&expr, &batch),
+                [false, true, false, true, false, true, false]
+            );
+            assert_eq!(
+                eval_lookup(&expr, &batch),
+                eval_lookup(decoded.as_ref(), &batch)
+            );
+
+            // Re-encoding the membership-only map is byte-identical.
+            let reencoded = decoded
+                .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+                .unwrap()
+                .unwrap();
+            assert_eq!(proto, reencoded);
+        }
+
+        fn lookup_schema() -> Schema {
+            Schema::new(vec![Field::new("a", DataType::Int64, false)])
+        }
+
+        fn probe_batch(values: &[i64]) -> RecordBatch {
+            RecordBatch::try_new(
+                Arc::new(lookup_schema()),
+                vec![Arc::new(Int64Array::from(values.to_vec()))],
+            )
+            .unwrap()
+        }
+
+        fn eval_lookup(expr: &dyn PhysicalExpr, batch: &RecordBatch) -> Vec<bool> {
+            let array = expr
+                .evaluate(batch)
+                .unwrap()
+                .into_array(batch.num_rows())
+                .unwrap();
+            let bools = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+            bools.iter().map(|v| v.unwrap()).collect()
+        }
+
+        /// Build a `JoinHashMapU32` containing exactly the given distinct hashes.
+        fn join_hash_map_with_hashes(hashes: &[u64]) -> JoinHashMapU32 {
+            let mut table = HashTable::with_capacity(hashes.len());
+            for (i, h) in hashes.iter().enumerate() {
+                table.insert_unique(*h, (*h, i as u32 + 1), |(h, _)| *h);
+            }
+            JoinHashMapU32::new(table, vec![0; hashes.len()])
+        }
+
+        /// Hash `values` the same way `HashTableLookupExpr::evaluate` hashes
+        /// probe keys, so tests can construct build hashes that match.
+        fn hashes_for(values: &[i64], seed: u64) -> Vec<u64> {
+            let array: ArrayRef = Arc::new(Int64Array::from(values.to_vec()));
+            let mut buf = vec![0u64; values.len()];
+            create_hashes(
+                &[array],
+                SeededRandomState::with_seed(seed).random_state(),
+                &mut buf,
+            )
+            .unwrap();
+            buf
+        }
+
+        fn column_node(name: &str, index: u32) -> protobuf::PhysicalExprNode {
+            protobuf::PhysicalExprNode {
+                expr_id: None,
+                expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                    protobuf::PhysicalColumn {
+                        name: name.to_string(),
+                        index,
+                    },
+                )),
+            }
+        }
+
+        fn lookup_expr_proto(
+            map: protobuf::physical_hash_table_lookup_expr_node::Map,
+        ) -> protobuf::PhysicalExprNode {
+            protobuf::PhysicalExprNode {
+                expr_id: None,
+                expr_type: Some(
+                    protobuf::physical_expr_node::ExprType::HashTableLookupExpr(
+                        protobuf::PhysicalHashTableLookupExprNode {
+                            on_columns: vec![column_node("a", 0)],
+                            seed0: 42,
+                            description: "hash_lookup".to_string(),
+                            map: Some(map),
+                        },
+                    ),
+                ),
+            }
         }
     }
 
