@@ -140,6 +140,14 @@ pub trait JoinHashMapType: Send + Sync {
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
 
+    /// Returns the distinct join-key hashes stored in this map, one per
+    /// entry, in unspecified order.
+    ///
+    /// Used to serialize [`HashTableLookupExpr`] dynamic filters: the
+    /// returned set must contain exactly the hashes that
+    /// [`contain_hashes`](Self::contain_hashes) would report as present.
+    ///
+    /// [`HashTableLookupExpr`]: crate::joins::HashTableLookupExpr
     fn hashes(&self) -> Vec<u64>;
 }
 

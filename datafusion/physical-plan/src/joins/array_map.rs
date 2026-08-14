@@ -169,10 +169,16 @@ impl ArrayMap {
 
     /// Creates a new [`ArrayMap`] from the given array of join keys.
     ///
+    /// `min_val` and `max_val` must be the actual minimum and maximum key
+    /// values in `array`, in the wrapped-u64 key domain (see the type docs).
+    ///
     /// Note: This function processes only the non-null values in the input `array`,
     /// ignoring any rows where the key is `NULL`.
     ///
-    pub(crate) fn try_new(array: &ArrayRef, min_val: u64, max_val: u64) -> Result<Self> {
+    /// # Note
+    /// This is public for internal testing purposes only and is not
+    /// guaranteed to be stable across versions.
+    pub fn try_new(array: &ArrayRef, min_val: u64, max_val: u64) -> Result<Self> {
         let range = Self::calculate_range(min_val, max_val);
         if range >= usize::MAX as u64 {
             return internal_err!("ArrayMap key range is too large to be allocated.");
@@ -417,7 +423,7 @@ impl ArrayMap {
     }
 
     #[cfg(feature = "proto")]
-    pub fn to_proto_membership_only(
+    pub(crate) fn to_proto_membership_only(
         &self,
     ) -> datafusion_proto_models::protobuf::ArrayMapMembership {
         use datafusion_proto_models::protobuf;
@@ -432,10 +438,10 @@ impl ArrayMap {
     }
 
     #[cfg(feature = "proto")]
-    pub fn try_from_proto_membership_only(
+    pub(crate) fn try_from_proto_membership_only(
         node: &datafusion_proto_models::protobuf::ArrayMapMembership,
     ) -> Result<Self> {
-        use arrow_data::bit_iterator::BitIndexIterator;
+        use arrow::util::bit_iterator::BitIndexIterator;
 
         // Assert that i < num_slots is a valid index into node.presence
         assert_eq_or_internal_err!(
