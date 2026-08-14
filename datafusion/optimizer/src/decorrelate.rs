@@ -351,7 +351,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
 
-                let new_plan = if alias.input.schema().fields().len() != alias.schema.fields().len() {
+                let new_plan = if alias.input.schema().fields().len()
+                    != alias.schema.fields().len()
+                {
                     LogicalPlanBuilder::from((*alias.input).clone())
                         .alias(alias.alias.clone())?
                         .build()?
@@ -367,7 +369,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     self.collected_count_expr_map
                         .insert(new_plan.clone(), input_map.clone());
                 }
-                
+
                 if new_plan != plan {
                     Ok(Transformed::yes(new_plan))
                 } else {
