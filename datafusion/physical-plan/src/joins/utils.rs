@@ -64,6 +64,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
@@ -1953,6 +1954,9 @@ pub(crate) trait BatchTransformer: Debug + Clone {
     /// Returns `None` if all batches have been produced.
     /// The boolean flag indicates whether the batch is the last one.
     fn next(&mut self) -> Option<(RecordBatch, bool)>;
+
+    /// Counts buffers retained by this transformer.
+    fn count_memory(&self, counter: &mut RecordBatchMemoryCounter);
 }
 
 #[derive(Debug, Clone)]
@@ -1975,6 +1979,12 @@ impl BatchTransformer for NoopBatchTransformer {
 
     fn next(&mut self) -> Option<(RecordBatch, bool)> {
         self.batch.take().map(|batch| (batch, true))
+    }
+
+    fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
+        if let Some(batch) = &self.batch {
+            counter.count_batch(batch);
+        }
     }
 }
 
@@ -2023,6 +2033,12 @@ impl BatchTransformer for BatchSplitter {
         }
 
         Some((sliced_batch, last))
+    }
+
+    fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
+        if let Some(batch) = &self.batch {
+            counter.count_batch(batch);
+        }
     }
 }
 
@@ -4378,6 +4394,29 @@ mod tests {
             row_count += batch.num_rows();
             assert_eq!(last, row_count == num_rows);
         }
+    }
+
+    #[test]
+    fn batch_transformers_count_retained_batch_memory() {
+        let batch = create_test_batch(10);
+        let expected_size = RecordBatchMemoryCounter::new().count_batch(&batch);
+
+        let mut noop = NoopBatchTransformer::new();
+        noop.set_batch(batch.clone());
+        let mut noop_counter = RecordBatchMemoryCounter::new();
+        noop.count_memory(&mut noop_counter);
+        assert_eq!(noop_counter.memory_usage(), expected_size);
+
+        let mut splitter = BatchSplitter::new(3);
+        splitter.set_batch(batch.clone());
+        let mut splitter_counter = RecordBatchMemoryCounter::new();
+        splitter.count_memory(&mut splitter_counter);
+        assert_eq!(splitter_counter.memory_usage(), expected_size);
+
+        let mut shared_buffer_counter = RecordBatchMemoryCounter::new();
+        shared_buffer_counter.count_batch(&batch);
+        splitter.count_memory(&mut shared_buffer_counter);
+        assert_eq!(shared_buffer_counter.memory_usage(), expected_size);
     }
 
     #[rstest]

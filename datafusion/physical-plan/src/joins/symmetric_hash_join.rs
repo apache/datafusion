@@ -68,6 +68,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
     plan_err,
@@ -1665,11 +1666,14 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                         }
                         StatefulStreamResult::Ready(Some(batch)) => {
                             self.batch_transformer.set_batch(batch);
+                            self.update_reservation()?;
                         }
                         _ => {}
                     }
                 }
                 Some((batch, _)) => {
+                    // The transformer released this batch before it is emitted.
+                    self.update_reservation()?;
                     return self
                         .metrics
                         .baseline_metrics
@@ -1921,13 +1925,23 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         self.state.clone()
     }
 
+    /// Returns the memory retained by this stream at its reservation boundary.
+    ///
+    /// Input buffers and a transformer-held output batch can share Arrow buffers,
+    /// so count them as one sequence rather than summing individual batch sizes.
     fn size(&self) -> usize {
-        let mut size = 0;
+        let mut batch_memory_counter = RecordBatchMemoryCounter::new();
+        batch_memory_counter.count_batch(&self.left.input_buffer);
+        batch_memory_counter.count_batch(&self.right.input_buffer);
+        self.batch_transformer
+            .count_memory(&mut batch_memory_counter);
+
+        let mut size = batch_memory_counter.memory_usage();
         size += size_of_val(&self.schema);
         size += size_of_val(&self.filter);
         size += size_of_val(&self.join_type);
-        size += self.left.size();
-        size += self.right.size();
+        size += self.left.size() - self.left.input_buffer.get_array_memory_size();
+        size += self.right.size() - self.right.input_buffer.get_array_memory_size();
         size += size_of_val(&self.column_indices);
         size += self.graph.as_ref().map(|g| g.size()).unwrap_or(0);
         size += size_of_val(&self.left_sorted_filter_expr);
@@ -1936,6 +1950,14 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         size += size_of_val(&self.null_equality);
         size += size_of_val(&self.metrics);
         size
+    }
+
+    /// Resizes the stream reservation to match all memory retained by the stream.
+    fn update_reservation(&mut self) -> Result<()> {
+        let capacity = self.size();
+        self.metrics.stream_memory_usage.set(capacity);
+        self.reservation.try_resize(capacity)?;
+        Ok(())
     }
 
     /// Performs a join operation for the specified `probe_side` (either left or right).
@@ -2035,9 +2057,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
 
         // Combine results:
         let result = combine_two_batches(&self.schema, equal_result, anti_result)?;
-        let capacity = self.size();
-        self.metrics.stream_memory_usage.set(capacity);
-        self.reservation.try_resize(capacity)?;
+        self.update_reservation()?;
         Ok(result)
     }
 }
@@ -2083,6 +2103,7 @@ mod tests {
         partitioned_sym_join_with_filter, split_record_batches,
     };
 
+    use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use datafusion_common::ScalarValue;
@@ -2101,6 +2122,75 @@ mod tests {
     // Cache for storing tables
     static TABLE_CACHE: LazyLock<Mutex<HashMap<TableKey, TableValue>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    fn create_stream<T: BatchTransformer>(
+        batch_transformer: T,
+        input_schema: SchemaRef,
+    ) -> SymmetricHashJoinStream<T> {
+        let context = TaskContext::default();
+        let metrics = ExecutionPlanMetricsSet::new();
+        SymmetricHashJoinStream {
+            left_stream: Box::pin(EmptyRecordBatchStream::new(Arc::clone(&input_schema))),
+            right_stream: Box::pin(EmptyRecordBatchStream::new(Arc::clone(
+                &input_schema,
+            ))),
+            schema: Arc::clone(&input_schema),
+            filter: None,
+            join_type: JoinType::Inner,
+            left: OneSideHashJoiner::new(
+                JoinSide::Left,
+                vec![],
+                Arc::clone(&input_schema),
+            ),
+            right: OneSideHashJoiner::new(JoinSide::Right, vec![], input_schema),
+            column_indices: vec![],
+            graph: None,
+            left_sorted_filter_expr: None,
+            right_sorted_filter_expr: None,
+            random_state: RandomState::default(),
+            null_equality: NullEquality::NullEqualsNothing,
+            metrics: StreamJoinMetrics::new(0, &metrics),
+            reservation: Arc::new(
+                MemoryConsumer::new("SymmetricHashJoinStream[test]")
+                    .register(context.memory_pool()),
+            ),
+            state: SHJStreamState::PullRight,
+            batch_transformer,
+        }
+    }
+
+    fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from_iter_values(0..10)) as _,
+        )])
+        .unwrap();
+        let expected_size = RecordBatchMemoryCounter::new().count_batch(&batch);
+        let mut stream = create_stream(batch_transformer, batch.schema());
+
+        let empty_size = stream.size();
+        stream.batch_transformer.set_batch(batch.clone());
+        stream.update_reservation().unwrap();
+        assert_eq!(stream.size() - empty_size, expected_size);
+        assert_eq!(stream.reservation.size(), stream.size());
+
+        while stream.batch_transformer.next().is_some() {}
+        stream.update_reservation().unwrap();
+        assert_eq!(stream.reservation.size(), empty_size);
+
+        stream.left.input_buffer = batch;
+        let size_with_shared_batch = stream.size();
+        stream
+            .batch_transformer
+            .set_batch(stream.left.input_buffer.clone());
+        assert_eq!(stream.size(), size_with_shared_batch);
+    }
+
+    #[test]
+    fn stream_accounts_for_transformer_batches_once() {
+        assert_stream_accounts_for_transformer(NoopBatchTransformer::new());
+        assert_stream_accounts_for_transformer(BatchSplitter::new(3));
+    }
 
     fn get_or_create_table(
         cardinality: (i32, i32),
