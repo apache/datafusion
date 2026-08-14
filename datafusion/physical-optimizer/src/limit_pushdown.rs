@@ -87,27 +87,36 @@ pub struct LimitPushdown {}
 /// State carried through [`LimitPushdown`] while it pushes limits down the plan.
 ///
 /// `pending` keeps the semantic requirement's scope separate from its numeric
-/// payload. `Some(PendingScope::Local)` means a per-output-partition cap is
-/// still owed, and `Some(PendingScope::Global)` means a subtree-wide cap is
+/// payload. `Some(LimitScope::Local)` means a per-output-partition cap is
+/// still owed, and `Some(LimitScope::Global)` means a subtree-wide cap is
 /// still owed. When `pending` is `None`, no semantic enforcement remains
 /// outstanding; a retained `fetch` is a descendant early-stop hint only.
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
     preserve_order: bool,
-    pending: Option<PendingScope>,
+    pending: Option<LimitScope>,
 }
 
 /// Scope of a semantic cap that remains pending independently of its numeric
 /// `skip` and `fetch` payload.
+///
+/// `LimitScope::Local` scopes the requirement to a single operator's own
+/// output partitions (its internal scope) with no cross-partition aggregation
+/// implied. `LimitScope::Global` carries the global `LIMIT`/`FETCH` semantics
+/// that must still be enforced when multiple partitions are merged (e.g., at
+/// a `CoalescePartitionsExec` or `SortPreservingMergeExec`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingScope {
-    /// A per-output-partition cap is still owed.
+enum LimitScope {
+    /// The cap applies only within this operator's internal scope: a
+    /// per-output-partition cap is still owed, with no cross-partition
+    /// aggregation implied.
     Local,
-    /// A subtree-wide cap is still owed.
+    /// A subtree-wide cap is still owed: the global limit/fetch semantics
+    /// must still be enforced at a multi-partition merge point.
     Global,
 }
 
@@ -153,21 +162,37 @@ pub fn pushdown_limit_helper(
     mut pushdown_plan: Arc<dyn ExecutionPlan>,
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
-    if global_state.pending == Some(PendingScope::Local)
+    if global_state.pending == Some(LimitScope::Local)
         && pushdown_plan.output_partitioning().partition_count() == 1
     {
         // Local and global scope are equivalent with one output partition, but
         // retain the global scope in case recursion later exposes multi-partition
         // children, including through extension combiners.
-        global_state.pending = Some(PendingScope::Global);
+        global_state.pending = Some(LimitScope::Global);
     }
 
     if let Some(global_limit) = pushdown_plan.downcast_ref::<GlobalLimitExec>()
         && global_limit.skip() == 0
         && global_limit.fetch().is_none()
     {
-        // Remove this no-op wrapper without clearing inherited state, which may
-        // have been promoted from local to global scope at a one-output boundary.
+        // A `GlobalLimitExec` with `skip == 0` and `fetch == None` is a pure
+        // pass-through: it skips no rows and emits every input row, so the node
+        // itself carries no semantics and removing it cannot change the result.
+        //
+        // The inherited `pending` state must be preserved, not cleared: the
+        // still-owed requirement (which may have been promoted from
+        // `LimitScope::Local` to `LimitScope::Global` at a one-output-partition
+        // boundary) must continue to be enforced further down. The point of this
+        // short-circuit is to keep peeling such wrappers while carrying that
+        // state unchanged.
+        //
+        // We deliberately do not fall through to the generic `GlobalLimitExec`
+        // handling below: that branch exists to absorb a real `skip`/`fetch`
+        // payload into the carried state, whereas this node has no payload to
+        // absorb. It would also unconditionally re-assert
+        // `pending = Some(LimitScope::Global)` (and fold in
+        // `required_ordering()`), which could turn an already-satisfied or
+        // absent requirement into a forced global materialization further down.
         return Ok((
             Transformed {
                 data: Arc::clone(global_limit.input()),
@@ -178,7 +203,7 @@ pub fn pushdown_limit_helper(
         ));
     }
 
-    if global_state.pending == Some(PendingScope::Global)
+    if global_state.pending == Some(LimitScope::Global)
         && pushdown_plan.output_partitioning().partition_count() > 1
     {
         // This must precede generic `plan.fetch()` handling: a fetch on multiple
@@ -215,7 +240,7 @@ pub fn pushdown_limit_helper(
         (global_state.skip, global_state.fetch) =
             combine_limit(global_state.skip, global_state.fetch, skip, fetch);
         global_state.preserve_order |= global_limit.required_ordering().is_some();
-        global_state.pending = Some(PendingScope::Global);
+        global_state.pending = Some(LimitScope::Global);
         if let Some(fetch) = global_state.fetch
             && limit_satisfied_by_input(&input, global_state.skip, fetch)?
         {
@@ -241,9 +266,9 @@ pub fn pushdown_limit_helper(
         );
         global_state.preserve_order |= local_limit.required_ordering().is_some();
         global_state.pending = if input.output_partitioning().partition_count() == 1 {
-            Some(PendingScope::Global)
+            Some(LimitScope::Global)
         } else {
-            Some(PendingScope::Local)
+            Some(LimitScope::Local)
         };
         if let Some(fetch) = global_state.fetch
             && limit_satisfied_by_input(&input, global_state.skip, fetch)?
@@ -261,15 +286,28 @@ pub fn pushdown_limit_helper(
     }
 
     // Merge a fetch already present on a non-limit operator into global state.
-    if pushdown_plan.fetch().is_some() {
-        if global_state.skip == 0 {
+    //
+    // A `fetch` on a non-limit operator is an early-stop bound on the
+    // operator's own output, and the `ExecutionPlan` trait exposes it without
+    // formally encoding scope, so it can only ever prove a per-partition cap.
+    // It can therefore satisfy a still-pending requirement only when no skip
+    // is owed and the existing bound is at least as tight as the owed fetch:
+    // an existing `fetch = 10` does not satisfy an owed `fetch = 5`, and if
+    // the operator cannot absorb a tighter fetch via `with_fetch`, dropping
+    // the pending requirement here would silently lose the global `LIMIT`.
+    // The numeric early-stop bound is still merged unconditionally below.
+    if let Some(existing_fetch) = pushdown_plan.fetch() {
+        if global_state.skip == 0
+            && let Some(required_fetch) = global_state.fetch
+            && existing_fetch <= required_fetch
+        {
             global_state.pending = None;
         }
         (global_state.skip, global_state.fetch) = combine_limit(
             global_state.skip,
             global_state.fetch,
             0,
-            pushdown_plan.fetch(),
+            Some(existing_fetch),
         );
     }
 
