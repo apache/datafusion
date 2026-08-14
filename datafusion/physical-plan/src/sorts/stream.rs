@@ -93,7 +93,7 @@ impl FusedStreams {
     }
 }
 
-/// A pair of `Arc<Rows>` that can be reused
+/// An `Arc<Rows>` that can be reused
 #[derive(Debug)]
 struct ReusableRows {
     inner: Vec<Option<Arc<Rows>>>,
