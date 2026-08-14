@@ -126,6 +126,14 @@ set datafusion.execution.parquet.pushdown_filters = true;
 statement ok
 set datafusion.execution.target_partitions = 1;
 
+# Both dynamic-filter switches are on by default; set them explicitly so this
+# test keeps exercising the prune/rebuild path even if the defaults change.
+statement ok
+set datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+statement ok
+set datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
 statement ok
 CREATE TABLE q26_src AS
 SELECT
@@ -177,3 +185,9 @@ RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 RESET datafusion.execution.target_partitions;
+
+statement ok
+RESET datafusion.optimizer.enable_dynamic_filter_pushdown;
+
+statement ok
+RESET datafusion.optimizer.enable_topk_dynamic_filter_pushdown;

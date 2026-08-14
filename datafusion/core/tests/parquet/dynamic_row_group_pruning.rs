@@ -667,6 +667,20 @@ async fn topk_pushdown_does_not_reread_delivered_row_group() {
     // source row emitted twice. The correct answer is the 10 smallest-
     // `event_time` non-empty phrases, matching DuckDB / pushdown-off.
     assert_eq!(output.result_rows, 10, "{}", output.description());
+
+    // The test must actually exercise the runtime prune/rebuild path that
+    // caused #24352 (not just a happy-path scan), otherwise a future default or
+    // optimizer change could let it pass without the bug's precondition. Assert
+    // the dynamic filter pruned at least one row group.
+    let pruned = output
+        .row_groups_pruned_dynamic_filter()
+        .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
+    assert!(
+        pruned >= 1,
+        "test must exercise dynamic RG pruning (the #24352 path); pruned={pruned}\n{}",
+        output.description(),
+    );
+
     let formatted = output.pretty_results();
     for p in [
         "p0", "p4096", "p4097", "p4098", "p4099", "p4100", "p4101", "p4102", "p4103",

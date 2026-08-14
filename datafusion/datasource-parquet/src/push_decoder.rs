@@ -342,13 +342,18 @@ impl PushDecoderStreamState {
                 .as_ref()
                 .expect("decoder present")
                 .is_at_row_group_boundary();
-            // Before pruning/rebuilding, align `rg_plan` with the row group the
-            // decoder will actually emit next. arrow-rs silently finishes row
-            // groups whose post-predicate selection is empty without handing back
-            // a reader, so without this sync `rg_plan` trails the decoder by one
-            // and a later rebuild can re-read an already-delivered row group
-            // (#24352).
-            if at_boundary && let Err(e) = self.sync_rg_plan_to_decoder_frontier() {
+            // Only the runtime pruner rebuilds the decoder from `rg_plan`, so
+            // only it needs `rg_plan` kept in sync with the decoder frontier.
+            // arrow-rs silently finishes row groups whose post-predicate
+            // selection is empty without handing back a reader, so without this
+            // sync `rg_plan` trails the decoder by one and a rebuild re-reads an
+            // already-delivered row group (#24352). Gating on the pruner also
+            // avoids the O(remaining row groups) cost of `peek_next_row_group()`
+            // on ordinary scans that never rebuild.
+            if at_boundary
+                && self.row_group_pruner.is_some()
+                && let Err(e) = self.sync_rg_plan_to_decoder_frontier()
+            {
                 return Some((Err(e), self));
             }
             if at_boundary && !self.rg_plan.is_empty() {
