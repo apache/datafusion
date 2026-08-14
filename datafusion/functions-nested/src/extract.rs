@@ -47,7 +47,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
-use crate::utils::make_scalar_function;
+use crate::utils::{list_inner_field, make_scalar_function};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -624,14 +624,7 @@ where
     // Carry the input's list field through to the output so that the returned
     // type matches the one promised by `return_type` / `return_field_from_args`,
     // including the field name, nullability and metadata.
-    let field = match array.data_type() {
-        List(field) | LargeList(field) => Arc::clone(field),
-        other => {
-            return internal_err!(
-                "general_array_slice got unexpected data type: {other}"
-            );
-        }
-    };
+    let field = list_inner_field("general_array_slice", array.data_type())?;
 
     // `use_nulls` is false because we never call `try_extend_nulls`: null rows are
     // emitted as empty slices. Arrow still allocates a validity buffer on its own
