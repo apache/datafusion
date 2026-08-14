@@ -183,8 +183,11 @@ drop table q26;
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# restore it explicitly rather than RESET (which would revert to the system
+# default = num_cpus and leak modified config out of this file).
 statement ok
-RESET datafusion.execution.target_partitions;
+set datafusion.execution.target_partitions = 4;
 
 statement ok
 RESET datafusion.optimizer.enable_dynamic_filter_pushdown;
