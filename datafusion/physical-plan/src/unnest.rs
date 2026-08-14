@@ -2237,24 +2237,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_unnest_stream_respects_batch_size() -> Result<()> {
-        // 10 input rows x 10 elements = 100 output rows, all from ONE input batch.
-        let input = list_batch(&[Some(10); 10]);
+        // 10 input rows x 3 elements = 30 output rows, all from ONE input batch, which
+        // before this was fixed came back as a single 30-row batch.
+        //
+        // The list length is deliberately smaller than batch_size so that chunks pack
+        // *several* input rows (2 rows -> 6 rows out; a third would overshoot 8). Lists
+        // longer than batch_size would send every row down the oversized-build path
+        // instead, which `test_unnest_stream_single_row_exceeds_batch_size` already covers.
+        let input = list_batch(&[Some(3); 10]);
         let batches = unnest_with_batch_size(vec![input], 8, UnnestOptions::default())
             .await
             .unwrap();
 
-        // Before this was fixed the whole thing came back as a single 100-row batch.
         let sizes: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
-        assert!(
-            sizes.iter().all(|size| *size <= 8),
-            "every output batch must respect batch_size=8, got {sizes:?}"
-        );
-        assert_eq!(sizes.iter().sum::<usize>(), 100);
+        assert_eq!(sizes, vec![6, 6, 6, 6, 6]);
 
         // Splitting must not perturb the values or their order.
         assert_eq!(
             output_values(&batches),
-            (0..100).map(Some).collect::<Vec<_>>()
+            (0..30).map(Some).collect::<Vec<_>>()
         );
         Ok(())
     }
