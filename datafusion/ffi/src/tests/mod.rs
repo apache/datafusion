@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{RecordBatch, record_batch};
 use arrow_schema::{DataType, Field, Schema};
@@ -26,8 +27,8 @@ use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{Expr, TableType};
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{Expr, TableType, col, lit};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
@@ -113,6 +114,8 @@ pub struct ForeignLibraryModule {
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_exec_with_expressions: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub create_exec_with_dynamic_expressions: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
@@ -180,6 +183,13 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     FFI_ExecutionPlan::new(plan, None)
 }
 
+pub(crate) extern "C" fn create_exec_with_expressions() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::empty());
+    let expression: Arc<dyn PhysicalExpr> = create_dynamic_filter();
+    let plan = Arc::new(EmptyExec::new(schema).with_expressions(vec![expression]));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
 pub(crate) extern "C" fn create_exec_with_dynamic_expressions() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::empty());
     let expression: Arc<dyn PhysicalExpr> = create_dynamic_filter();
@@ -228,6 +238,8 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
 struct TableWithStats {
     inner: Arc<dyn TableProvider>,
     stats: Statistics,
+    delete_calls: AtomicUsize,
+    update_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -253,6 +265,56 @@ impl TableProvider for TableWithStats {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.inner.scan(session, projection, filters, limit).await
     }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+        if !valid {
+            return exec_err!("Unexpected DELETE filters for call {call}");
+        }
+        Ok(dml_count_plan())
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if assignments
+            != vec![
+                ("b".to_string(), lit(42_f64)),
+                ("a".to_string(), lit(7_i32)),
+            ]
+        {
+            return exec_err!("Unexpected UPDATE assignments");
+        }
+
+        let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+
+        if !valid {
+            return exec_err!("Unexpected UPDATE filters for call {call}");
+        }
+
+        Ok(dml_count_plan())
+    }
+
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(dml_count_plan())
+    }
 }
 
 pub(crate) extern "C" fn create_table_with_statistics(
@@ -264,8 +326,19 @@ pub(crate) extern "C" fn create_table_with_statistics(
     let provider = Arc::new(TableWithStats {
         inner,
         stats: make_test_statistics(),
+        delete_calls: AtomicUsize::new(0),
+        update_calls: AtomicUsize::new(0),
     });
     FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
+}
+
+fn dml_count_plan() -> Arc<dyn ExecutionPlan> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "count",
+        DataType::UInt64,
+        false,
+    )]));
+    Arc::new(EmptyExec::new(schema))
 }
 
 /// This defines the entry point for using the module.
@@ -286,6 +359,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_exec_with_expressions,
         create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
         create_table_with_statistics,

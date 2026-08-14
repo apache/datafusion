@@ -28,6 +28,7 @@ use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
+    internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
@@ -952,10 +953,15 @@ impl FileMetadata for CachedParquetMetaData {
 
 /// Convert a [`PhysicalSortExpr`] to a Parquet [`SortingColumn`].
 ///
-/// Returns `Err` if the expression is not a simple column reference.
+/// Returns `Ok(None)` if the referenced column is not in `writer_schema`, such as a
+/// hive partition column that is removed before writing the Parquet file. Returns
+/// `Err` if the expression is not a simple column reference or references a column
+/// outside `input_schema`.
 pub(crate) fn sort_expr_to_sorting_column(
     sort_expr: &PhysicalSortExpr,
-) -> Result<SortingColumn> {
+    input_schema: &Schema,
+    writer_schema: &Schema,
+) -> Result<Option<SortingColumn>> {
     let column = sort_expr.expr.downcast_ref::<Column>().ok_or_else(|| {
         DataFusionError::Plan(format!(
             "Parquet sorting_columns only supports simple column references, \
@@ -964,27 +970,49 @@ pub(crate) fn sort_expr_to_sorting_column(
         ))
     })?;
 
-    let column_idx: i32 = column.index().try_into().map_err(|_| {
+    let input_field = input_schema.fields().get(column.index()).ok_or_else(|| {
+        internal_datafusion_err!(
+            "Parquet sorting column '{}' references index {} but the input schema has {} columns",
+            column.name(),
+            column.index(),
+            input_schema.fields().len()
+        )
+    })?;
+    let Some((writer_index, _)) = writer_schema.column_with_name(input_field.name())
+    else {
+        return Ok(None);
+    };
+
+    let column_idx: i32 = writer_index.try_into().map_err(|_| {
         DataFusionError::Plan(format!(
-            "Column index {} is too large to be represented as i32",
-            column.index()
+            "Column index {writer_index} is too large to be represented as i32"
         ))
     })?;
 
-    Ok(SortingColumn {
+    Ok(Some(SortingColumn {
         column_idx,
         descending: sort_expr.options.descending,
         nulls_first: sort_expr.options.nulls_first,
-    })
+    }))
 }
 
 /// Convert a [`LexOrdering`] to `Vec<SortingColumn>` for Parquet.
 ///
-/// Returns `Err` if any expression is not a simple column reference.
+/// Columns that are not present in `writer_schema` are omitted from the resulting
+/// metadata. Returns `Err` if any expression is not a simple column reference or
+/// references a column outside `input_schema`.
 pub(crate) fn lex_ordering_to_sorting_columns(
     ordering: &LexOrdering,
+    input_schema: &Schema,
+    writer_schema: &Schema,
 ) -> Result<Vec<SortingColumn>> {
-    ordering.iter().map(sort_expr_to_sorting_column).collect()
+    ordering
+        .iter()
+        .filter_map(|sort_expr| {
+            sort_expr_to_sorting_column(sort_expr, input_schema, writer_schema)
+                .transpose()
+        })
+        .collect()
 }
 
 /// Extracts ordering information from Parquet metadata.
@@ -1058,6 +1086,57 @@ fn sorting_columns_to_physical_exprs(
 mod tests {
     use super::*;
     use arrow::array::Int32Array;
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::Field;
+
+    #[test]
+    fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {
+        let input_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("part", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let writer_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new(
+                Arc::new(Column::new("part", 1)),
+                SortOptions::default(),
+            ),
+            PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), SortOptions::default()),
+            PhysicalSortExpr::new(
+                Arc::new(Column::new("b", 2)),
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ])
+        .unwrap();
+
+        let sorting_columns =
+            lex_ordering_to_sorting_columns(&ordering, &input_schema, &writer_schema)?;
+
+        assert_eq!(
+            sorting_columns,
+            vec![
+                SortingColumn {
+                    column_idx: 0,
+                    descending: false,
+                    nulls_first: true,
+                },
+                SortingColumn {
+                    column_idx: 1,
+                    descending: true,
+                    nulls_first: false,
+                },
+            ]
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_has_any_exact_match() {
@@ -1557,8 +1636,8 @@ mod tests {
         #[test]
         fn test_distinct_count_from_real_parquet_file() {
             // Path to test file created by DuckDB with distinct_count statistics
-            let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            path.push("src/test_data/ndv_test.parquet");
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("src/test_data/ndv_test.parquet");
 
             let file = File::open(&path).expect("Failed to open test parquet file");
             let reader =

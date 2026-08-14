@@ -25,9 +25,12 @@ use datafusion::{
 };
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::config::Dialect;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_expr::{Expr, TableType, dml::InsertOp};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::execution_plan::SchedulingType;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ReplaceChildrenOptions, execution_plan::SchedulingType,
+};
 use datafusion_physical_plan::{
     DisplayAs, ExecutionPlan, PlanProperties,
     execution_plan::{Boundedness, EmissionType},
@@ -161,12 +164,23 @@ impl ExecutionPlan for TestInsertExec {
         vec![]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.is_empty());
+        Ok(self)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.is_empty());
-        Ok(self)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -175,6 +189,15 @@ impl ExecutionPlan for TestInsertExec {
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

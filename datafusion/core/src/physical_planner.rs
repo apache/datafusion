@@ -112,6 +112,7 @@ use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Sessio
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
+use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexSet;
 use itertools::{Itertools, multiunzip};
@@ -153,22 +154,18 @@ pub struct DefaultPhysicalPlanner {
 #[async_trait]
 impl PhysicalPlanner for DefaultPhysicalPlanner {
     /// Create a physical plan from a logical plan
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(plan) = self
-            .handle_explain_or_analyze(logical_plan, session_state)
-            .await?
-        {
-            return Ok(plan);
-        }
-        let plan = self
-            .create_initial_plan(logical_plan, session_state)
-            .await?;
-
-        self.optimize_physical_plan(plan, session_state, |_, _| {})
+    fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        logical_plan: &'life1 LogicalPlan,
+        session_state: &'life2 dyn Session,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_physical_plan_boxed(logical_plan, session_state)
     }
 
     /// Create a physical expression from a logical expression
@@ -190,6 +187,34 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
             session_state.execution_props(),
             planning_ctx,
         )
+    }
+}
+
+impl DefaultPhysicalPlanner {
+    fn create_physical_plan_boxed<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.create_physical_plan_inner(logical_plan, session_state))
+    }
+
+    async fn create_physical_plan_inner(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if let Some(plan) = self
+            .handle_explain_or_analyze(logical_plan, session_state)
+            .await?
+        {
+            return Ok(plan);
+        }
+        let plan = self
+            .create_initial_plan(logical_plan, session_state)
+            .await?;
+
+        self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
 }
 
@@ -329,7 +354,7 @@ impl DefaultPhysicalPlanner {
         &'a self,
         logical_plan: &'a LogicalPlan,
         session_state: &'a dyn Session,
-    ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
             // When `enable_physical_uncorrelated_scalar_subquery` is disabled, the
             // `ScalarSubqueryToJoin` optimizer rule rewrites all uncorrelated
@@ -3323,6 +3348,7 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
 
     #[derive(Debug)]
@@ -4932,9 +4958,10 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             if children.is_empty() {
                 Ok(self)
@@ -4943,12 +4970,29 @@ mod tests {
             }
         }
 
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        }
+
         fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 
@@ -5095,11 +5139,21 @@ digraph {
         fn name(&self) -> &str {
             "always ok"
         }
+        fn replace_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(Self(children)))
+        }
         fn with_new_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(Self(children)))
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
@@ -5116,6 +5170,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for OkExtensionNode {
@@ -5144,11 +5204,21 @@ digraph {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
         }
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
-            _children: Vec<Arc<dyn ExecutionPlan>>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             unimplemented!()
@@ -5162,6 +5232,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for InvariantFailsExtensionNode {
@@ -5197,10 +5273,16 @@ digraph {
         // ok plan
         let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
         let child = Arc::clone(&ok_node);
-        let ok_plan = Arc::clone(&ok_node).with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&child)])?,
-            Arc::clone(&child),
-        ])?;
+        let ok_plan = Arc::clone(&ok_node).replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&child)],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )?,
+                Arc::clone(&child),
+            ],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
 
         // Test: check should pass with same schema
         let equal_schema = ok_plan.schema();
@@ -5232,10 +5314,16 @@ digraph {
 
         // Test: should fail when descendent extension node fails
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
-        let invalid_plan = ok_node.with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
-            Arc::clone(&child),
-        ])?;
+        let invalid_plan = ok_node.replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&failing_node)],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )?,
+                Arc::clone(&child),
+            ],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let result = OptimizationInvariantChecker::new(&rule)
             .check(&invalid_plan, &ok_plan.schema());
         if cfg!(debug_assertions) {
@@ -5268,11 +5356,21 @@ digraph {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
         }
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
-            _children: Vec<Arc<dyn ExecutionPlan>>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
@@ -5286,6 +5384,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for ExecutableInvariantFails {
@@ -5314,10 +5418,16 @@ digraph {
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(ExecutableInvariantFails);
         let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
         let child = Arc::clone(&ok_node);
-        let plan = ok_node.with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
-            Arc::clone(&child),
-        ])?;
+        let plan = ok_node.replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&failing_node)],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )?,
+                Arc::clone(&child),
+            ],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let expected_err = InvariantChecker(InvariantLevel::Executable)
             .check(&plan)
             .unwrap_err();

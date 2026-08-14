@@ -40,6 +40,7 @@ use crate::aggregates::{
     group_values::GroupByMetrics,
 };
 
+use super::common::HashAggregateAccumulator;
 use super::common_ordered::OrderedAggregateTable;
 
 /// Implementation specific to partial aggregation, where the table stores
@@ -81,7 +82,10 @@ impl OrderedAggregateTable<PartialMarker> {
         batch: &RecordBatch,
     ) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
-        self.aggregate_evaluated_batch(&evaluated_batch, false)
+        self.aggregate_evaluated_batch(
+            &evaluated_batch,
+            HashAggregateAccumulator::update_batch,
+        )
     }
 
     /// Emits the next batch of partial state rows for groups proven complete by
@@ -101,6 +105,6 @@ impl OrderedAggregateTable<PartialMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_for_mode(false)
+        self.next_output_batch_inner(HashAggregateAccumulator::state)
     }
 }

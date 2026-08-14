@@ -69,6 +69,14 @@ impl PartialEq for ProjectionExpr {
 
 impl Eq for ProjectionExpr {}
 
+/// Enables [`ProjectionExpr`] to be treated as a reference to its wrapped
+/// [`Arc<dyn PhysicalExpr>`] using [`AsRef::as_ref`].
+impl AsRef<Arc<dyn PhysicalExpr>> for ProjectionExpr {
+    fn as_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+}
+
 impl std::fmt::Display for ProjectionExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.expr.to_string() == self.alias {
@@ -848,6 +856,22 @@ fn project_column_statistics_through_expr(
     let inner_stats =
         project_column_statistics_through_expr(cast_expr.expr.as_ref(), column_stats);
     let target_type = cast_expr.cast_type();
+
+    // A cast whose source values are already of the target `DataType` never
+    // changes any value -- see `cast_array_by_name`'s same-type fast path in
+    // `ColumnarValue::cast_to`. In that case every statistic, not just
+    // min/max, carries over unchanged (this is what a cast that only
+    // re-stamps a column's nullability, as `UnionExec`/`InterleaveExec`
+    // insert, looks like here).
+    let already_target_type = matches!(
+        (inner_stats.min_value.get_value(), inner_stats.max_value.get_value()),
+        (Some(min), Some(max))
+            if min.data_type() == *target_type && max.data_type() == *target_type
+    );
+    if already_target_type {
+        return inner_stats;
+    }
+
     ColumnStatistics {
         min_value: inner_stats
             .min_value
@@ -2930,6 +2954,35 @@ pub(crate) mod tests {
             output_stats.column_statistics[1].distinct_count,
             Precision::Exact(1)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_same_type_cast_is_exact_passthrough() -> Result<()> {
+        // A cast to the column's own `DataType` (e.g. one that only re-stamps
+        // nullability via `CastExpr::new_with_target_field`, as `UnionExec`/
+        // `InterleaveExec` insert) never changes any value, so every
+        // statistic -- not just min/max -- should carry over unchanged.
+        let input_stats = get_stats();
+        let col0_stats = input_stats.column_statistics[0].clone();
+        let input_schema = get_schema();
+
+        let projection = ProjectionExprs::new(vec![ProjectionExpr {
+            expr: Arc::new(CastExpr::new(
+                Arc::new(Column::new("col0", 0)),
+                DataType::Int64,
+                None,
+            )),
+            alias: "casted".to_string(),
+        }]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        assert_eq!(output_stats.column_statistics[0], col0_stats);
 
         Ok(())
     }

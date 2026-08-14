@@ -342,5 +342,50 @@ ORDER BY 1,2;
 1 3
 2 3
 
+# RIGHT JOIN: every right row must be emitted, including one whose join key is
+# NULL. A NULL key never matches (NullEqualsNothing), so t2.id = NULL is
+# unmatched and must appear as (NULL, NULL). Regression test: the streamed-side
+# NULL rows are skipped by the match scan and were previously dropped instead of
+# being reported as unmatched.
+query II
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM null_join_t1 t1
+RIGHT JOIN null_join_t2 t2
+  ON t1.id < t2.id
+ORDER BY 1,2;
+----
+1 3
+2 3
+NULL 1
+NULL NULL
+
+# FULL JOIN: the same fix applies to the FULL path. An unmatched right row with
+# a NULL key must still be emitted as (NULL, NULL). This uses data where every
+# left row matches, so only the right-side NULL emission fixed here is
+# exercised (the separate left-side unmatched-row drop, tracked elsewhere, is
+# not).
+statement ok
+CREATE TABLE full_null_t1 (id INT);
+
+statement ok
+CREATE TABLE full_null_t2 (id INT);
+
+statement ok
+INSERT INTO full_null_t1 VALUES (10), (20);
+
+statement ok
+INSERT INTO full_null_t2 VALUES (100), (NULL);
+
+query II
+SELECT t1.id AS left_id, t2.id AS right_id
+FROM full_null_t1 t1
+FULL JOIN full_null_t2 t2
+  ON t1.id < t2.id
+ORDER BY 1,2;
+----
+10 100
+20 100
+NULL NULL
+
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = false;
