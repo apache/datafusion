@@ -20,7 +20,7 @@ use crate::helpers::{
     expr_applicable_for_cols, filter_partitioned_file, pruned_partition_list,
 };
 use crate::{ListingOptions, ListingTableConfig};
-use arrow::datatypes::{Field, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
@@ -1035,7 +1035,7 @@ impl ListingTable {
                 .iter()
                 .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
                 .collect(),
-            Default::default(),
+            Metadata::new(),
         )?;
 
         file_groups

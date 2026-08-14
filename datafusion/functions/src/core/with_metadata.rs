@@ -157,7 +157,7 @@ impl ScalarUDFImpl for WithMetadataFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, Metadata};
     use datafusion_common::ScalarValue;
     use std::sync::Arc;
 
@@ -197,14 +197,7 @@ mod tests {
     fn merges_existing_metadata_and_overwrites_on_collision() {
         let udf = WithMetadataFunc::new();
         let mut existing = Field::new("x", DataType::Float64, false);
-        existing.set_metadata(
-            [
-                ("keep".to_string(), "yes".to_string()),
-                ("unit".to_string(), "old".to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        existing.set_metadata(Metadata::new().with("keep", "yes").with("unit", "old"));
         let input: FieldRef = Arc::new(existing);
         let k = str_lit("unit");
         let v = str_lit("new");

@@ -71,7 +71,7 @@ mod test {
 
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Metadata};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -201,7 +201,7 @@ mod test {
         Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![Field::new("x", DataType::Int32, true)].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         )
@@ -215,7 +215,7 @@ mod test {
                     Field::new("y", DataType::Int32, false),
                 ]
                 .into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         )
