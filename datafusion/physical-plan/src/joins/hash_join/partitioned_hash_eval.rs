@@ -1017,6 +1017,9 @@ mod tests {
             ));
             // Probe keys are hashed with the deserialized seed, so 1 and 3
             // (whose hashes were serialized) match and 2 and 4 do not.
+            // Under force_hash_collisions every value hashes identically,
+            // so the filter degenerates to all-true and this doesn't hold.
+            #[cfg(not(feature = "force_hash_collisions"))]
             assert_eq!(
                 eval_lookup(expr, &probe_batch(&[1, 2, 3, 4])),
                 [true, false, true, false]
@@ -1140,6 +1143,7 @@ mod tests {
             .unwrap();
 
             let batch = probe_batch(&[0, 1, 2, 3, 4, 5, 6]);
+            #[cfg(not(feature = "force_hash_collisions"))]
             assert_eq!(
                 eval_lookup(&expr, &batch),
                 [false, true, false, true, false, true, false]
@@ -1222,6 +1226,7 @@ mod tests {
             .unwrap();
 
             let batch = probe_batch(&[1, 2, 3, 4, 5]);
+            #[cfg(not(feature = "force_hash_collisions"))]
             assert_eq!(
                 eval_lookup(&expr, &batch),
                 [false, true, false, true, false]
@@ -1286,6 +1291,7 @@ mod tests {
                 ],
             )
             .unwrap();
+            #[cfg(not(feature = "force_hash_collisions"))]
             assert_eq!(eval_lookup(&expr, &batch), [true, false, false, true]);
             assert_eq!(
                 eval_lookup(&expr, &batch),
