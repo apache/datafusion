@@ -2113,6 +2113,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use std::task::Context as PollContext;
 
     use rstest::*;
 
@@ -2161,7 +2162,9 @@ mod tests {
         }
     }
 
-    fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {
+    fn assert_stream_accounts_for_transformer<T: BatchTransformer + Unpin + Send>(
+        batch_transformer: T,
+    ) {
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
             Arc::new(Int32Array::from_iter_values(0..10)) as _,
@@ -2175,10 +2178,24 @@ mod tests {
         stream.update_reservation().unwrap();
         assert_eq!(stream.size() - empty_size, expected_size);
         assert_eq!(stream.reservation.size(), stream.size());
+        assert_eq!(stream.metrics.stream_memory_usage.value(), stream.size());
 
-        while stream.batch_transformer.next().is_some() {}
-        stream.update_reservation().unwrap();
+        loop {
+            let poll = stream.poll_next_unpin(&mut PollContext::from_waker(
+                futures::task::noop_waker_ref(),
+            ));
+            match poll {
+                Poll::Ready(Some(Ok(_))) => {}
+                Poll::Ready(None) => break,
+                Poll::Ready(Some(Err(error))) => {
+                    panic!("unexpected stream error: {error}")
+                }
+                Poll::Pending => panic!("empty input streams must not pend"),
+            }
+        }
+        assert_eq!(stream.size(), empty_size);
         assert_eq!(stream.reservation.size(), empty_size);
+        assert_eq!(stream.metrics.stream_memory_usage.value(), empty_size);
 
         stream.left.input_buffer = batch;
         let size_with_shared_batch = stream.size();
