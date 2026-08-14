@@ -154,6 +154,8 @@ pub struct DefaultPhysicalPlanner {
 #[async_trait]
 impl PhysicalPlanner for DefaultPhysicalPlanner {
     /// Create a physical plan from a logical plan
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
         &'life0 self,
         logical_plan: &'life1 LogicalPlan,

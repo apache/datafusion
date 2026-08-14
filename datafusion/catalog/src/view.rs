@@ -96,6 +96,8 @@ impl TableProvider for ViewTable {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
