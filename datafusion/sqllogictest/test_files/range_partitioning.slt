@@ -1882,7 +1882,7 @@ JOIN range_partitioned p ON b.range_key = p.range_key;
 Plan with Metrics
 01)HashJoinExec: mode=Partitioned<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
 02)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=range_key@0 = 5 OR range_key@0 = 20<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
-03)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN range_key@0 >= 5 AND range_key@0 <= 5 AND range_key@0 IN (SET) ([5]) WHEN 1 THEN false WHEN 2 THEN range_key@0 >= 20 AND range_key@0 <= 20 AND range_key@0 IN (SET) ([20]) ELSE false END ]<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
+03)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN range_key@0 >= 5 AND range_key@0 <= 5 WHEN 1 THEN false WHEN 2 THEN range_key@0 >= 20 AND range_key@0 <= 20 ELSE false END ]<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
 
 query III
 SELECT b.range_key, b.value, p.value

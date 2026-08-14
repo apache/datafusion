@@ -469,22 +469,22 @@ pub fn build_row_filter(
 /// A [`RowFilter`] is owned by a decoder. The first filter is built eagerly
 /// during construction so the caller can attach it to the decoder via
 /// [`next_filter`](Self::next_filter) without a redundant build call.
-pub(crate) struct RowFilterGenerator<'a> {
-    predicate: Option<&'a Arc<dyn PhysicalExpr>>,
-    physical_file_schema: &'a SchemaRef,
-    file_metadata: &'a ParquetMetaData,
+pub(crate) struct RowFilterGenerator {
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    physical_file_schema: SchemaRef,
+    file_metadata: Arc<ParquetMetaData>,
     reorder_predicates: bool,
-    file_metrics: &'a ParquetFileMetrics,
+    file_metrics: ParquetFileMetrics,
     first_row_filter: Option<RowFilter>,
 }
 
-impl<'a> RowFilterGenerator<'a> {
+impl RowFilterGenerator {
     pub(crate) fn new(
-        predicate: Option<&'a Arc<dyn PhysicalExpr>>,
-        physical_file_schema: &'a SchemaRef,
-        file_metadata: &'a ParquetMetaData,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        physical_file_schema: SchemaRef,
+        file_metadata: Arc<ParquetMetaData>,
         reorder_predicates: bool,
-        file_metrics: &'a ParquetFileMetrics,
+        file_metrics: ParquetFileMetrics,
     ) -> Self {
         let mut generator = Self {
             predicate,
@@ -498,18 +498,22 @@ impl<'a> RowFilterGenerator<'a> {
         generator
     }
 
+    pub(crate) fn has_row_filter(&self) -> bool {
+        self.first_row_filter.is_some()
+    }
+
     pub(crate) fn next_filter(&mut self) -> Option<RowFilter> {
         self.first_row_filter.take().or_else(|| self.build())
     }
 
     fn build(&self) -> Option<RowFilter> {
-        let predicate = self.predicate?;
+        let predicate = self.predicate.as_ref()?;
         match build_row_filter(
             predicate,
-            self.physical_file_schema,
-            self.file_metadata,
+            &self.physical_file_schema,
+            self.file_metadata.as_ref(),
             self.reorder_predicates,
-            self.file_metrics,
+            &self.file_metrics,
         ) {
             Ok(Some(filter)) => Some(filter),
             Ok(None) => None,

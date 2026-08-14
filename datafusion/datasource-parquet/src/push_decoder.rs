@@ -47,7 +47,7 @@ use parquet::DecodeResult;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ParquetRecordBatchReader, RowSelectionPolicy,
+    ArrowReaderMetadata, ParquetRecordBatchReader, RowFilter, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
@@ -61,6 +61,7 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::RowGroupPruningStatistics;
 
 /// Shared options applied to the [`ParquetPushDecoderBuilder`] for a file
@@ -81,7 +82,7 @@ impl DecoderBuilderConfig<'_> {
     /// Build a [`ParquetPushDecoderBuilder`] from a prepared access plan.
     ///
     /// The caller is expected to attach the
-    /// [`RowFilter`](parquet::arrow::arrow_reader::RowFilter) and predicate
+    /// [`RowFilter`] and predicate
     /// cache size on the returned builder.
     pub(crate) fn build(
         &self,
@@ -109,6 +110,7 @@ impl DecoderBuilderConfig<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
     pub(crate) rg_index: usize,
+    pub(crate) needs_row_filter: bool,
 }
 
 /// Runtime row-group pruner driven by a dynamic predicate (e.g. the
@@ -258,6 +260,12 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) predicate_cache_inner_records: Gauge,
     pub(crate) predicate_cache_records: Gauge,
     pub(crate) baseline_metrics: BaselineMetrics,
+    /// Rebuilds the row filter when the scan crosses between partially and
+    /// fully matched row groups. `None` when every row group uses the same
+    /// filter configuration.
+    pub(crate) row_filter_generator: Option<RowFilterGenerator>,
+    /// Whether the decoder currently has the real row filter installed.
+    pub(crate) row_filter_active: bool,
     /// Dynamic row-group pruner consulted at every row-group boundary.
     ///
     /// When the file scan was opened with a still-watching dynamic predicate
@@ -356,19 +364,61 @@ impl PushDecoderStreamState {
                     }
                     self.rg_plan = kept;
                 }
-                if pruned_count > 0 {
-                    if self.rg_plan.is_empty() {
-                        return None;
-                    }
+                if self.rg_plan.is_empty() {
+                    return None;
+                }
+
+                let next_needs_row_filter = self
+                    .rg_plan
+                    .front()
+                    .is_some_and(|entry| entry.needs_row_filter);
+                let row_filter_changed = next_needs_row_filter != self.row_filter_active;
+
+                if pruned_count > 0 || row_filter_changed {
                     let decoder = self.decoder.take().expect("decoder present");
-                    let new_indices: Vec<usize> =
-                        self.rg_plan.iter().map(|e| e.rg_index).collect();
-                    let rebuilt = match decoder.into_builder() {
-                        Ok(b) => b.with_row_groups(new_indices).build(),
-                        Err(e) => Err(e),
+                    let mut builder = match decoder.into_builder() {
+                        Ok(builder) => builder,
+                        Err(e) => {
+                            return Some((Err(DataFusionError::from(e)), self));
+                        }
                     };
-                    match rebuilt {
-                        Ok(d) => self.decoder = Some(d),
+
+                    if pruned_count > 0 {
+                        let new_indices =
+                            self.rg_plan.iter().map(|entry| entry.rg_index).collect();
+                        builder = builder.with_row_groups(new_indices);
+                    }
+
+                    if row_filter_changed {
+                        if next_needs_row_filter {
+                            let Some(row_filter) = self
+                                .row_filter_generator
+                                .as_mut()
+                                .and_then(RowFilterGenerator::next_filter)
+                            else {
+                                return Some((
+                                    Err(DataFusionError::Internal(
+                                        "failed to rebuild Parquet row filter"
+                                            .to_string(),
+                                    )),
+                                    self,
+                                ));
+                            };
+                            builder = builder.with_row_filter(row_filter);
+                        } else {
+                            // Arrow's builder setter replaces, rather than appends to,
+                            // the previous filter. An empty RowFilter therefore turns
+                            // row-level evaluation off while preserving every other
+                            // decoder option and buffered byte range.
+                            builder = builder.with_row_filter(RowFilter::new(vec![]));
+                        }
+                    }
+
+                    match builder.build() {
+                        Ok(decoder) => {
+                            self.decoder = Some(decoder);
+                            self.row_filter_active = next_needs_row_filter;
+                        }
                         Err(e) => {
                             return Some((Err(DataFusionError::from(e)), self));
                         }
