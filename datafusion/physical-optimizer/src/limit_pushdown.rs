@@ -104,19 +104,19 @@ pub struct GlobalRequirements {
 /// Scope of a semantic cap that remains pending independently of its numeric
 /// `skip` and `fetch` payload.
 ///
-/// `LimitScope::Local` scopes the requirement to a single operator's own
-/// output partitions (its internal scope) with no cross-partition aggregation
-/// implied. `LimitScope::Global` carries the global `LIMIT`/`FETCH` semantics
-/// that must still be enforced when multiple partitions are merged (e.g., at
-/// a `CoalescePartitionsExec` or `SortPreservingMergeExec`).
+/// Mirrors the two physical limit operators: [`LimitScope::Local`] corresponds
+/// to a [`LocalLimitExec`] (a cap on each output partition), and
+/// [`LimitScope::Global`] corresponds to a [`GlobalLimitExec`] (a cap on the
+/// merged output across all partitions of the subtree).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LimitScope {
-    /// The cap applies only within this operator's internal scope: a
-    /// per-output-partition cap is still owed, with no cross-partition
-    /// aggregation implied.
+    /// A per-output-partition cap is still owed, as with a [`LocalLimitExec`]:
+    /// each output partition may emit at most the owed number of rows,
+    /// independently of the other partitions.
     Local,
-    /// A subtree-wide cap is still owed: the global limit/fetch semantics
-    /// must still be enforced at a multi-partition merge point.
+    /// A subtree-wide cap is still owed, as with a [`GlobalLimitExec`]: the
+    /// cap applies to the merged output across all partitions of the subtree
+    /// (e.g., at a `CoalescePartitionsExec` or `SortPreservingMergeExec`).
     Global,
 }
 
