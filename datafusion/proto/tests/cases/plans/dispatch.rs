@@ -27,8 +27,8 @@ use datafusion::physical_plan::expressions::{PhysicalSortExpr, col};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
-    SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -81,12 +81,26 @@ impl ExecutionPlan for DowncastDelegatingExec {
         self.inner.apply_expressions(f)
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let inner = Arc::clone(&self.inner).replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        Ok(Arc::new(Self::new(inner)))
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let inner = Arc::clone(&self.inner).with_new_children(children)?;
-        Ok(Arc::new(Self::new(inner)))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {

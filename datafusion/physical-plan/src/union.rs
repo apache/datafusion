@@ -31,7 +31,6 @@ use super::{
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
-use crate::check_if_same_properties;
 use crate::execution_plan::{
     CardinalityEffect, InvariantLevel, boundedness_from_children,
     check_default_invariants, emission_type_from_children,
@@ -45,6 +44,7 @@ use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, ProjectionExpr, make_with_child};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ObservedStream;
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -330,23 +330,40 @@ impl ExecutionPlan for UnionExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                inputs: children,
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => UnionExec::try_new(children),
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        UnionExec::try_new(children)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -716,28 +733,47 @@ impl ExecutionPlan for InterleaveExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                inputs: children,
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                // New children are no longer interleavable, which might be a bug of optimization rewrite.
+                assert_or_internal_err!(
+                    can_interleave(children.iter()),
+                    "Can not create InterleaveExec: new children can not be interleaved"
+                );
+                Ok(Arc::new(InterleaveExec::try_new(children)?))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // New children are no longer interleavable, which might be a bug of optimization rewrite.
-        assert_or_internal_err!(
-            can_interleave(children.iter()),
-            "Can not create InterleaveExec: new children can not be interleaved"
-        );
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(InterleaveExec::try_new(children)?))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
