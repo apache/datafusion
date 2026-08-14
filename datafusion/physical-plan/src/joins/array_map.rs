@@ -423,9 +423,7 @@ impl ArrayMap {
         use datafusion_proto_models::protobuf;
 
         let bits = BooleanBuffer::collect_bool(self.data.len(), |i| self.data[i] != 0);
-        // SAFETY: This always succeeds. None of the 3 error conditions of
-        // into_vec() are present.
-        let presence = bits.sliced().into_vec().unwrap();
+        let presence = bits.sliced().as_slice().to_vec();
         protobuf::ArrayMapMembership {
             offset: self.offset,
             num_slots: self.data.len() as u64,
@@ -440,14 +438,10 @@ impl ArrayMap {
         use arrow_data::bit_iterator::BitIndexIterator;
 
         // Assert that i < num_slots is a valid index into node.presence
-        if node.num_slots.is_multiple_of(8) {
-            assert_eq_or_internal_err!(node.presence.len() as u64, node.num_slots / 8);
-        } else {
-            assert_eq_or_internal_err!(
-                node.presence.len() as u64,
-                (node.num_slots / 8) + 1
-            );
-        }
+        assert_eq_or_internal_err!(
+            node.presence.len() as u64,
+            node.num_slots.div_ceil(8)
+        );
 
         let mut data = vec![0u32; node.num_slots as usize];
         let mut num_of_distinct_key = 0;
