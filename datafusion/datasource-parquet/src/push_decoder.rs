@@ -441,7 +441,7 @@ impl PushDecoderStreamState {
             .peek_next_row_group()
             .map_err(DataFusionError::from)?
         {
-            Some(actual) => self.advance_rg_plan_to(actual)?,
+            Some(actual) => Self::advance_rg_plan_to(&mut self.rg_plan, actual)?,
             // Decoder has nothing left to emit — drain our plan so the stream
             // finishes cleanly.
             None => self.rg_plan.clear(),
@@ -449,22 +449,24 @@ impl PushDecoderStreamState {
         Ok(())
     }
 
-    /// Pop `rg_plan` entries until its front is `target`.
+    /// Pop entries off `rg_plan` until its front is `target`.
     ///
-    /// `target` is the RG the decoder will emit next and must still be in our
-    /// plan. A missing `target` means the decoder's frontier and `rg_plan`
-    /// have diverged; we surface that as an internal error rather than
-    /// silently draining the plan, which would truncate the scan.
-    fn advance_rg_plan_to(&mut self, target: usize) -> Result<()> {
-        while let Some(front) = self.rg_plan.front() {
+    /// `target` is the RG the decoder will emit next and must still be in the
+    /// plan. A missing `target` means the decoder's frontier and `rg_plan` have
+    /// diverged; we surface that as an internal error rather than silently
+    /// draining the plan, which would truncate the scan. Kept free-standing on
+    /// `rg_plan` (rather than `&mut self`) so the pop/guard logic is
+    /// unit-testable without constructing a full stream state.
+    fn advance_rg_plan_to(
+        rg_plan: &mut VecDeque<RgPlanEntry>,
+        target: usize,
+    ) -> Result<()> {
+        while let Some(front) = rg_plan.front() {
             if front.rg_index == target {
                 return Ok(());
             }
-            self.rg_plan.pop_front();
+            rg_plan.pop_front();
         }
-        // Drained without finding `target`: the decoder frontier names an RG
-        // our plan does not know, so decoder and plan have diverged. Surface it
-        // rather than continuing on with a truncated (now empty) plan.
         internal_err!(
             "push decoder frontier RG {target} is not in rg_plan; \
              decoder and plan have diverged"
@@ -663,5 +665,33 @@ mod tests {
         assert!(!pruner.should_prune(&[0]));
         assert!(!pruner.should_prune(&[1]));
         assert!(!pruner.should_prune(&[2]));
+    }
+
+    #[test]
+    fn advance_rg_plan_to_pops_up_to_target() {
+        let mut plan: VecDeque<RgPlanEntry> = [0usize, 1, 2, 3]
+            .into_iter()
+            .map(|rg_index| RgPlanEntry { rg_index })
+            .collect();
+        PushDecoderStreamState::advance_rg_plan_to(&mut plan, 2).unwrap();
+        assert_eq!(
+            plan.iter().map(|e| e.rg_index).collect::<Vec<_>>(),
+            vec![2, 3],
+            "must pop the entries before `target` and stop at it",
+        );
+    }
+
+    #[test]
+    fn advance_rg_plan_to_errors_when_target_absent() {
+        let mut plan: VecDeque<RgPlanEntry> = [0usize, 1, 2]
+            .into_iter()
+            .map(|rg_index| RgPlanEntry { rg_index })
+            .collect();
+        let err = PushDecoderStreamState::advance_rg_plan_to(&mut plan, 5)
+            .expect_err("a target absent from the plan must be an internal error");
+        assert!(
+            err.to_string().contains("diverged"),
+            "expected a divergence internal error, got: {err}",
+        );
     }
 }
