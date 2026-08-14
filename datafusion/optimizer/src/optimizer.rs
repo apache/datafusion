@@ -783,6 +783,8 @@ fn assert_valid_optimization(
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use arrow::datatypes::Metadata;
+
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
@@ -962,8 +964,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, (qualifier, field))| {
-                let metadata =
-                    [("key".into(), format!("value {i}"))].into_iter().collect();
+                let metadata = Metadata::new().with("key", format!("value {i}"));
 
                 let new_arrow_field = field.as_ref().clone().with_metadata(metadata);
                 (qualifier.cloned(), Arc::new(new_arrow_field))

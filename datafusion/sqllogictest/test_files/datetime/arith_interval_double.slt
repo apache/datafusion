@@ -18,7 +18,7 @@ query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* I
 SELECT interval '1 day' * 21
 
 
-query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+query error DataFusion error: Arrow error: Invalid argument error: Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Float64
 SELECT interval '1 hour' * 3.5
 
 
@@ -33,9 +33,13 @@ SELECT arrow_typeof(interval '1 second' * 900)
 # Divide an interval by a scalar
 # interval '1 hour' / 1.5 → 00:40:00
 
-query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) / Interval\(MonthDayNano\)
+query ?
 SELECT interval '1 hour' / 1.5
+----
+40 mins
 
 
-query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) / Interval\(MonthDayNano\)
+query T
 SELECT arrow_typeof(interval '1 hour' / 1.5)
+----
+Interval(MonthDayNano)

@@ -219,7 +219,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::record_batch;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Metadata, Schema};
     use datafusion::error::Result;
     use datafusion::execution::SendableRecordBatchStream;
     use datafusion::test_util::bounded_stream;
@@ -274,7 +274,7 @@ mod tests {
             .schema()
             .as_ref()
             .clone()
-            .with_metadata([("some_key".to_owned(), "some_value".to_owned())].into())
+            .with_metadata(Metadata::new().with("some_key", "some_value"))
             .into();
 
         let rb = rb.with_schema(schema)?;
