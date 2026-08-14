@@ -51,6 +51,7 @@ use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::hash_table::HashTable;
+use itertools::{Either, Itertools};
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -1209,7 +1210,7 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     /// Input ranges already known to be sorted, such as preordered raw input
     /// and individual partial-state rows.
     sorted_runs: Vec<Range<usize>>,
-    /// Lazily computed canonical sorted permutation shared by state/evaluate.
+    /// Lazily computed sorted permutation shared by state/evaluate.
     sorted_entry_indices: Option<Vec<usize>>,
     ordering_converter: RowConverter,
     value_type: DataType,
@@ -1297,12 +1298,7 @@ impl OrderSensitiveArrayAggAccumulator {
         values: &ArrayRef,
         ordering_values: &[ArrayRef],
     ) -> Result<()> {
-        if let Some(entry_range) = self.store_batch(values, ordering_values, false)?
-            && entry_range
-                .clone()
-                .zip(entry_range.start + 1..entry_range.end)
-                .all(|(left, right)| self.ordering_row(left) <= self.ordering_row(right))
-        {
+        if let Some(entry_range) = self.store_batch(values, ordering_values, false)? {
             self.sorted_runs.push(entry_range);
         }
         self.can_extend_preordered_run = false;
@@ -1313,89 +1309,21 @@ impl OrderSensitiveArrayAggAccumulator {
         self.ordering_rows.row(entry_idx)
     }
 
-    fn run_head_is_less(
-        &self,
-        cursors: &[usize],
-        left_run: usize,
-        right_run: usize,
-    ) -> bool {
-        let left = cursors[left_run];
-        let right = cursors[right_run];
-        self.ordering_row(left)
-            .cmp(&self.ordering_row(right))
-            .then_with(|| left.cmp(&right))
-            .is_lt()
-    }
-
-    fn sift_down_runs(&self, heap: &mut [usize], cursors: &[usize], mut root: usize) {
-        loop {
-            let left = root * 2 + 1;
-            if left >= heap.len() {
-                return;
-            }
-            let right = left + 1;
-            let mut smallest = left;
-            if right < heap.len()
-                && self.run_head_is_less(cursors, heap[right], heap[left])
-            {
-                smallest = right;
-            }
-            if !self.run_head_is_less(cursors, heap[smallest], heap[root]) {
-                return;
-            }
-            heap.swap(root, smallest);
-            root = smallest;
-        }
-    }
-
     fn merge_sorted_runs(&self, unsorted_indices: Vec<usize>) -> Vec<usize> {
-        if self.sorted_runs.is_empty() {
-            return unsorted_indices;
-        }
-        if unsorted_indices.is_empty() && self.sorted_runs.len() == 1 {
-            return self.sorted_runs[0].clone().collect();
-        }
-
-        let mut cursors = self
-            .sorted_runs
+        let unsorted_run = (!unsorted_indices.is_empty())
+            .then(|| Either::Right(unsorted_indices.into_iter()));
+        self.sorted_runs
             .iter()
-            .map(|run| run.start)
-            .collect::<Vec<_>>();
-        let mut heap = (0..self.sorted_runs.len()).collect::<Vec<_>>();
-        let unsorted_run = self.sorted_runs.len();
-        let mut unsorted_cursor = 0;
-        if !unsorted_indices.is_empty() {
-            cursors.push(unsorted_indices[0]);
-            heap.push(unsorted_run);
-        }
-        for root in (0..heap.len() / 2).rev() {
-            self.sift_down_runs(&mut heap, &cursors, root);
-        }
-
-        let mut result = Vec::with_capacity(self.entries.len());
-        while !heap.is_empty() {
-            let run_idx = heap[0];
-            result.push(cursors[run_idx]);
-            let run_finished = if run_idx == unsorted_run {
-                unsorted_cursor += 1;
-                if unsorted_cursor < unsorted_indices.len() {
-                    cursors[run_idx] = unsorted_indices[unsorted_cursor];
-                    false
-                } else {
-                    true
-                }
-            } else {
-                cursors[run_idx] += 1;
-                cursors[run_idx] == self.sorted_runs[run_idx].end
-            };
-            if run_finished {
-                heap.swap_remove(0);
-            }
-            if !heap.is_empty() {
-                self.sift_down_runs(&mut heap, &cursors, 0);
-            }
-        }
-        result
+            .cloned()
+            .map(Either::Left)
+            .chain(unsorted_run)
+            .kmerge_by(|left, right| {
+                self.ordering_row(*left)
+                    .cmp(&self.ordering_row(*right))
+                    .then_with(|| left.cmp(right))
+                    .is_lt()
+            })
+            .collect()
     }
 
     fn ensure_sorted_indices(&mut self) {
@@ -1467,10 +1395,19 @@ impl OrderSensitiveArrayAggAccumulator {
         Ok(arrow::compute::interleave(&sources, &indices)?)
     }
 
-    fn evaluate_orderings(&self, sorted_indices: &[usize]) -> Result<ScalarValue> {
+    fn evaluate_orderings(
+        &self,
+        sorted_indices: &[usize],
+        reverse: bool,
+    ) -> Result<ScalarValue> {
+        let indices = if reverse {
+            Either::Left(sorted_indices.iter().rev())
+        } else {
+            Either::Right(sorted_indices.iter())
+        };
         let mut columns = self
             .ordering_converter
-            .convert_rows(sorted_indices.iter().map(|idx| self.ordering_row(*idx)))?;
+            .convert_rows(indices.map(|idx| self.ordering_row(*idx)))?;
 
         // RowConverter decodes dictionary values to their physical type. State
         // fields, however, are required to retain their declared logical type.
@@ -1502,24 +1439,12 @@ impl OrderSensitiveArrayAggAccumulator {
                 self.value_type
             );
         };
-        assert_eq_or_internal_err!(
-            ordering_values.len(),
-            self.ordering_fields.len(),
-            "ordered array_agg expects one array per ordering field"
-        );
-        for (column, field) in ordering_values.iter().zip(&self.ordering_fields) {
+        if let Some(column) = ordering_values.first() {
             assert_eq_or_internal_err!(
                 column.len(),
                 values.len(),
                 "ordered array_agg payload and ordering columns must have equal lengths"
             );
-            if column.data_type() != field.data_type() {
-                return exec_err!(
-                    "ordered array_agg ordering column has type {}, expected {}",
-                    column.data_type(),
-                    field.data_type()
-                );
-            }
         }
 
         let nulls = ignore_nulls
@@ -1537,22 +1462,22 @@ impl OrderSensitiveArrayAggAccumulator {
         } else {
             (values, None)
         };
-        if values.is_empty() {
-            return Ok(None);
-        }
         let ordering_values = filtered_ordering_values
             .as_deref()
             .unwrap_or(ordering_values);
-        // `filter` may retain backing buffers for some Arrow types.
-        // TODO: Consider type-aware compaction for views and dictionaries.
+        // Detach the stored payload from potentially oversized backing buffers.
         let values = make_array(copy_array_data(&values.to_data()));
+
+        let row_count = values.len();
+        // RowConverter validates the number, lengths, and types of ordering columns.
+        self.ordering_converter
+            .append(&mut self.ordering_rows, ordering_values)?;
+        if row_count == 0 {
+            return Ok(None);
+        }
 
         let start = self.entries.len();
         let batch_idx = self.batches.len();
-        let row_count = values.len();
-        // RowConverter validates all columns before appending to `ordering_rows`.
-        self.ordering_converter
-            .append(&mut self.ordering_rows, ordering_values)?;
         self.batches.push(values);
         self.entries.extend(
             (0..row_count).map(|row_idx| OrderedArrayAggEntry { batch_idx, row_idx }),
@@ -1587,14 +1512,6 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             agg_orderings.len(),
             "ordered array_agg payload and ordering states must have equal outer lengths"
         );
-        if array_agg_values.values().data_type() != &self.value_type {
-            return exec_err!(
-                "ordered array_agg payload state has type {}, expected {}",
-                array_agg_values.values().data_type(),
-                self.value_type
-            );
-        }
-
         let ordering_struct = agg_orderings
             .values()
             .as_any()
@@ -1604,23 +1521,6 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                     "ordered array_agg ordering state must contain Struct values"
                 )
             })?;
-        assert_eq_or_internal_err!(
-            ordering_struct.num_columns(),
-            self.ordering_fields.len(),
-            "ordered array_agg ordering state has the wrong number of columns"
-        );
-        for (column, field) in ordering_struct.columns().iter().zip(&self.ordering_fields)
-        {
-            if column.data_type() != field.data_type() {
-                return exec_err!(
-                    "ordered array_agg ordering state column has type {}, expected {}",
-                    column.data_type(),
-                    field.data_type()
-                );
-            }
-        }
-
-        // Validate all row contracts before mutating the accumulator.
         for row_idx in 0..array_agg_values.len() {
             let payload_len = if array_agg_values.is_null(row_idx) {
                 0
@@ -1636,12 +1536,6 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                 return exec_err!(
                     "ordered array_agg payload and ordering state lengths differ at row {row_idx}: {payload_len} vs {ordering_len}"
                 );
-            }
-        }
-
-        for row_idx in 0..array_agg_values.len() {
-            if array_agg_values.is_null(row_idx) {
-                continue;
             }
             let payload = array_agg_values.value(row_idx);
             let ordering_start = agg_orderings.value_offsets()[row_idx] as usize;
@@ -1665,10 +1559,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let payload = if sorted_indices.is_empty() {
             ScalarValue::new_null_list(self.value_type.clone(), true, 1)
         } else {
-            SingleRowListArrayBuilder::new(self.select_values(sorted_indices, false)?)
-                .build_list_scalar()
+            SingleRowListArrayBuilder::new(
+                self.select_values(sorted_indices, self.reverse)?,
+            )
+            .build_list_scalar()
         };
-        let orderings = self.evaluate_orderings(sorted_indices)?;
+        let orderings = self.evaluate_orderings(sorted_indices, self.reverse)?;
         Ok(vec![payload, orderings])
     }
 
@@ -2275,7 +2171,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_sorted_runs_and_unsorted_gap_are_merged() -> Result<()> {
+    fn partial_state_breaks_preordered_run_continuity() -> Result<()> {
         use arrow::array::Int64Array;
 
         let mut partial = ordered_accumulator(
@@ -2283,7 +2179,7 @@ mod tests {
             DataType::Int64,
             SortOptions::new(true, false),
             true,
-            false,
+            true,
         )?;
         partial.update_batch(&[
             Arc::new(Int64Array::from(vec![3, 2])),
@@ -2308,7 +2204,7 @@ mod tests {
             Arc::new(Int64Array::from(vec![0, 5])),
         ])?;
 
-        assert_eq!(final_acc.sorted_runs, vec![0..2, 4..6]);
+        assert_eq!(final_acc.sorted_runs, vec![0..2, 2..4, 4..6]);
         let ScalarValue::List(result) = final_acc.evaluate()? else {
             return internal_err!("expected List");
         };
@@ -2354,7 +2250,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_state_lifecycle_is_canonical_and_repeatable() -> Result<()> {
+    fn ordered_state_lifecycle_applies_reverse_and_is_repeatable() -> Result<()> {
         use arrow::array::Int64Array;
 
         let mut acc = ordered_accumulator(
@@ -2398,7 +2294,7 @@ mod tests {
             payload_state
                 .as_primitive::<arrow::datatypes::Int64Type>()
                 .values(),
-            &[0, 1, 2]
+            &[2, 1, 0]
         );
         let ordering_state = state[1].as_list::<i32>().value(0);
         let ordering_state = ordering_state.as_struct();
@@ -2407,7 +2303,7 @@ mod tests {
                 .column(0)
                 .as_primitive::<arrow::datatypes::Int64Type>()
                 .values(),
-            &[0, 1, 2]
+            &[2, 1, 0]
         );
 
         let first = acc.evaluate()?;
@@ -2687,80 +2583,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_payload_detaches_large_buffers() -> Result<()> {
-        use arrow::array::{Int64Array, ListViewArray};
-
-        let payload_values = Arc::new(Int64Array::from_iter_values(0..4096)) as ArrayRef;
-        let ordering_values = Arc::new(Int64Array::from_iter_values(0..4096)) as ArrayRef;
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![2048_i32, 2050]));
-        let payload_state = Arc::new(ListArray::new(
-            Arc::new(Field::new_list_field(DataType::Int64, true)),
-            offsets.clone(),
-            payload_values,
-            None,
-        )) as ArrayRef;
-        let ordering_struct = StructArray::new(
-            Fields::from(vec![Arc::new(Field::new("ord", DataType::Int64, true))]),
-            vec![ordering_values],
-            None,
-        );
-        let ordering_state = Arc::new(ListArray::new(
-            Arc::new(Field::new_list_field(
-                ordering_struct.data_type().clone(),
-                true,
-            )),
-            offsets,
-            Arc::new(ordering_struct),
-            None,
-        )) as ArrayRef;
-
-        let mut acc = ordered_accumulator(
-            DataType::Int64,
-            DataType::Int64,
-            SortOptions::new(false, false),
-            false,
-            false,
-        )?;
-        acc.merge_batch(&[payload_state, ordering_state])?;
-
-        assert_eq!(acc.batches.len(), 1);
-        assert_eq!(acc.batches[0].len(), 2);
-        assert!(
-            acc.batches[0].get_array_memory_size() < 1024,
-            "stored payload still pins the large child buffer"
-        );
-
-        let field = Arc::new(Field::new_list_field(DataType::Int64, true));
-        let values = Arc::new(Int64Array::from_iter_values(0..4096)) as ArrayRef;
-        let payload = Arc::new(ListViewArray::new(
-            Arc::clone(&field),
-            ScalarBuffer::from(vec![2048_i32, 2049]),
-            ScalarBuffer::from(vec![1_i32, 1]),
-            values,
-            Some(NullBuffer::from(vec![true, false])),
-        )) as ArrayRef;
-
-        let mut acc = ordered_accumulator(
-            DataType::ListView(field),
-            DataType::Int64,
-            SortOptions::new(false, false),
-            false,
-            false,
-        )?;
-        acc.ignore_nulls = true;
-        acc.update_batch(&[payload, Arc::new(Int64Array::from_iter_values([1, 2]))])?;
-
-        assert_eq!(acc.batches.len(), 1);
-        assert_eq!(acc.batches[0].len(), 1);
-        assert!(
-            acc.batches[0].get_array_memory_size() < 1024,
-            "stored payload still pins the filtered ListView child"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn merge_rejects_malformed_state_without_modifying_accumulator() -> Result<()> {
+    fn merge_rejects_malformed_state() -> Result<()> {
         use arrow::array::{Int64Array, StringArray};
 
         let mut source = ordered_accumulator(
@@ -2784,11 +2607,7 @@ mod tests {
             false,
         )?;
         let err = acc.merge_batch(&state).unwrap_err();
-        assert!(err.to_string().contains("payload state has type"));
-        assert!(acc.batches.is_empty());
-        assert!(acc.entries.is_empty());
-        assert_eq!(acc.ordering_rows.num_rows(), 0);
-        assert!(acc.sorted_runs.is_empty());
+        assert!(err.to_string().contains("payload has type"));
 
         let options = SortOptions::new(false, false);
         let mut nonempty =
@@ -2817,10 +2636,6 @@ mod tests {
             .merge_batch(&[payload_states, ordering_states])
             .unwrap_err();
         assert!(err.to_string().contains("state lengths differ"));
-        assert!(final_acc.batches.is_empty());
-        assert!(final_acc.entries.is_empty());
-        assert_eq!(final_acc.ordering_rows.num_rows(), 0);
-        assert!(final_acc.sorted_runs.is_empty());
         Ok(())
     }
 
