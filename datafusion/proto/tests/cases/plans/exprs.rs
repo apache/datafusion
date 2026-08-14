@@ -98,7 +98,9 @@ fn roundtrip_like() -> Result<()> {
 /// on deserialization as a map that supports only membership checks.
 #[test]
 fn roundtrip_hash_table_lookup_expr() -> Result<()> {
-    use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
+    use datafusion::physical_plan::joins::join_hash_map::{
+        JoinHashMapType, JoinHashMapU32,
+    };
     use datafusion::physical_plan::joins::{HashTableLookupExpr, Map};
 
     // Create a simple schema and input plan
@@ -106,8 +108,11 @@ fn roundtrip_hash_table_lookup_expr() -> Result<()> {
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     let on_columns = vec![col("col", &schema)?];
-    // Create a HashTableLookupExpr with a HashMap
-    let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
+    // Populate the map so the roundtrip carries a real membership payload
+    let build_hashes: Vec<u64> = vec![100, 200, 300];
+    let mut join_map = JoinHashMapU32::with_capacity(build_hashes.len());
+    join_map.update_from_iter(Box::new(build_hashes.iter().enumerate()), 0);
+    let hash_map = Arc::new(Map::HashMap(Box::new(join_map)));
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
         datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
@@ -116,6 +121,32 @@ fn roundtrip_hash_table_lookup_expr() -> Result<()> {
     ));
 
     // Create a filter with the lookup expression
+    let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
+    roundtrip_test(filter)
+}
+
+/// Roundtrip a plan whose HashTableLookupExpr carries the ArrayMap
+/// membership encoding (dense integer keys within a bounded range).
+#[test]
+fn roundtrip_hash_table_lookup_expr_array_map() -> Result<()> {
+    use datafusion::arrow::array::{ArrayRef, Int64Array};
+    use datafusion::physical_plan::joins::{ArrayMap, HashTableLookupExpr, Map};
+
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    // Keys {10, 12, 15} over the range [10, 15], with a duplicate key
+    let build_keys: ArrayRef = Arc::new(Int64Array::from(vec![10i64, 12, 10, 15]));
+    let array_map = ArrayMap::try_new(&build_keys, 10, 15)?;
+
+    let on_columns = vec![col("col", &schema)?];
+    let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
+        Arc::new(Map::ArrayMap(array_map)),
+        "test_lookup".to_string(),
+    ));
+
     let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
     roundtrip_test(filter)
 }

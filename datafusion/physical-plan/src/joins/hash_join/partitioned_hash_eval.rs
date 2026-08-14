@@ -221,7 +221,7 @@ impl PhysicalExpr for HashExpr {
 
         let on_columns = ctx.encode_children_expressions(on_columns)?;
         Ok(Some(protobuf::PhysicalExprNode {
-            expr_id: None,
+            expr_id: self.expression_id(),
             expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
                 protobuf::PhysicalHashExprNode {
                     on_columns,
@@ -283,9 +283,9 @@ pub struct HashTableLookupExpr {
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing (with seeds preserved for serialization)
     random_state: SeededRandomState,
-    /// Map to check against (hash table or array map)
-    /// Safety: Post-deserialization, this is only safe for membership checks and
-    /// should not be modified further.
+    /// Map to check against. Deserialized expressions hold a membership-only
+    /// variant of [`HashTableLookupExprMap`], which supports nothing beyond
+    /// membership checks.
     map: HashTableLookupExprMap,
     /// Description for display
     description: String,
@@ -455,6 +455,15 @@ impl PhysicalExpr for HashTableLookupExpr {
     }
 }
 
+/// Encode the map in its membership-only proto form.
+///
+/// The encoded size is deliberately uncapped: `build_hashes` grows with the
+/// number of distinct join-key hashes on the build side (8 bytes each), and
+/// an `ArrayMap` presence bitmap with its key range (1 bit per possible key).
+/// This matches the `InList` pushdown path, which serializes its full value
+/// list without a limit. If a bound is ever needed, encode `lit(true)` in
+/// place of an over-limit map — a weaker filter is always safe here because
+/// the join re-verifies matches.
 #[cfg(feature = "proto")]
 fn try_map_to_proto_membership_only(
     map: &HashTableLookupExprMap,
@@ -613,6 +622,9 @@ impl JoinHashMembershipMap {
     fn new(hashes: &[u64]) -> Self {
         let mut map = HashTable::with_capacity(hashes.len());
 
+        // Wire input is trusted to contain distinct hashes. A duplicate would
+        // insert a duplicate entry, which wastes memory and skews `len()` but
+        // cannot affect membership results.
         for h in hashes {
             map.insert_unique(*h, (*h, ()), |(h, _)| *h);
         }
@@ -756,6 +768,7 @@ mod tests {
     #[cfg(feature = "proto")]
     mod proto_tests {
         use super::*;
+        use crate::joins::join_hash_map::JoinHashMapU64;
         use arrow::array::Int64Array;
         use arrow::datatypes::{DataType, Field};
         use datafusion_common::internal_datafusion_err;
@@ -1190,6 +1203,104 @@ mod tests {
             assert_eq!(proto, reencoded);
         }
 
+        #[test]
+        fn hash_table_lookup_expr_roundtrip_hash_map_u64() {
+            let build_hashes = hashes_for(&[2, 4], 42);
+            let map = Arc::new(Map::HashMap(Box::new(join_hash_map_u64_with_hashes(
+                &build_hashes,
+            ))));
+            let expr = HashTableLookupExpr::new(
+                vec![Arc::new(Column::new("a", 0))],
+                SeededRandomState::with_seed(42),
+                map,
+                "hash_lookup".to_string(),
+            );
+
+            let encoder = TestEncoder;
+            let proto = expr
+                .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+                .unwrap()
+                .unwrap();
+            let schema = lookup_schema();
+            let decoder = TestDecoder;
+            let decoded = HashTableLookupExpr::try_from_proto(
+                &proto,
+                &test_decode_ctx(&schema, &decoder),
+            )
+            .unwrap();
+
+            let batch = probe_batch(&[1, 2, 3, 4, 5]);
+            assert_eq!(
+                eval_lookup(&expr, &batch),
+                [false, true, false, true, false]
+            );
+            assert_eq!(
+                eval_lookup(&expr, &batch),
+                eval_lookup(decoded.as_ref(), &batch)
+            );
+        }
+
+        #[test]
+        fn hash_table_lookup_expr_roundtrip_multi_column() {
+            let schema = Schema::new(vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Int64, false),
+            ]);
+            // Build side has key pairs (1, 10) and (7, 70)
+            let build_a: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 7]));
+            let build_b: ArrayRef = Arc::new(Int64Array::from(vec![10i64, 70]));
+            let mut build_hashes = vec![0u64; 2];
+            create_hashes(
+                &[build_a, build_b],
+                SeededRandomState::with_seed(42).random_state(),
+                &mut build_hashes,
+            )
+            .unwrap();
+            let map = Arc::new(Map::HashMap(Box::new(join_hash_map_with_hashes(
+                &build_hashes,
+            ))));
+            let expr = HashTableLookupExpr::new(
+                vec![Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 1))],
+                SeededRandomState::with_seed(42),
+                map,
+                "hash_lookup".to_string(),
+            );
+
+            let encoder = TestEncoder;
+            let proto = expr
+                .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+                .unwrap()
+                .unwrap();
+            match proto.expr_type.as_ref().unwrap() {
+                protobuf::physical_expr_node::ExprType::HashTableLookupExpr(node) => {
+                    assert_eq!(node.on_columns.len(), 2)
+                }
+                other => panic!("expected HashTableLookupExpr, got {other:?}"),
+            }
+            let decoder = TestDecoder;
+            let decoded = HashTableLookupExpr::try_from_proto(
+                &proto,
+                &test_decode_ctx(&schema, &decoder),
+            )
+            .unwrap();
+
+            // Present pairs (1, 10) and (7, 70) match; the cross-pairings
+            // (1, 70) and (7, 10) must not.
+            let batch = RecordBatch::try_new(
+                Arc::new(schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![1i64, 1, 7, 7])),
+                    Arc::new(Int64Array::from(vec![10i64, 70, 10, 70])),
+                ],
+            )
+            .unwrap();
+            assert_eq!(eval_lookup(&expr, &batch), [true, false, false, true]);
+            assert_eq!(
+                eval_lookup(&expr, &batch),
+                eval_lookup(decoded.as_ref(), &batch)
+            );
+        }
+
         fn lookup_schema() -> Schema {
             Schema::new(vec![Field::new("a", DataType::Int64, false)])
         }
@@ -1219,6 +1330,15 @@ mod tests {
                 table.insert_unique(*h, (*h, i as u32 + 1), |(h, _)| *h);
             }
             JoinHashMapU32::new(table, vec![0; hashes.len()])
+        }
+
+        /// Build a `JoinHashMapU64` containing exactly the given distinct hashes.
+        fn join_hash_map_u64_with_hashes(hashes: &[u64]) -> JoinHashMapU64 {
+            let mut table = HashTable::with_capacity(hashes.len());
+            for (i, h) in hashes.iter().enumerate() {
+                table.insert_unique(*h, (*h, i as u64 + 1), |(h, _)| *h);
+            }
+            JoinHashMapU64::new(table, vec![0; hashes.len()])
         }
 
         /// Hash `values` the same way `HashTableLookupExpr::evaluate` hashes
