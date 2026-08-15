@@ -1162,6 +1162,26 @@ select
 ----
 39.0625 Float64
 
+# log(0::float8) - issue #22261
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(0.0::float8)
+
+# two-arg form: logarithm of zero value
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(10.0::float8, 0.0::float8)
+
+# negative zero is still zero
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log((-0.0)::float8)
+
+# column / non-literal path
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(x) FROM (VALUES (0.0::float8)) AS t(x)
+
+# decimal zero
+query error DataFusion error: Arrow error: Compute error: cannot take logarithm of zero
+SELECT log(0::decimal(10, 2))
+
 # factorial negative (PostgreSQL-compatible domain error)
 query error DataFusion error: Execution error: factorial of a negative number is undefined
 select factorial(-1);
