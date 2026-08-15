@@ -2284,10 +2284,16 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Clone, Debug)]
+    struct RecordedReservationChange {
+        change: isize,
+        reserved: usize,
+    }
+
     #[derive(Debug, Default)]
     struct RecordingMemoryPool {
         inner: UnboundedMemoryPool,
-        symmetric_join_changes: Mutex<Vec<isize>>,
+        symmetric_join_changes: Mutex<Vec<RecordedReservationChange>>,
     }
 
     impl fmt::Display for RecordingMemoryPool {
@@ -2306,11 +2312,14 @@ mod tests {
                 self.symmetric_join_changes
                     .lock()
                     .expect("recording pool mutex is not poisoned")
-                    .push(change);
+                    .push(RecordedReservationChange {
+                        change,
+                        reserved: self.inner.reserved(),
+                    });
             }
         }
 
-        fn changes(&self) -> Vec<isize> {
+        fn changes(&self) -> Vec<RecordedReservationChange> {
             self.symmetric_join_changes
                 .lock()
                 .expect("recording pool mutex is not poisoned")
@@ -2412,6 +2421,10 @@ mod tests {
         let first_batch = stream.next().await.transpose()?.unwrap();
         let retained_batch_size = first_batch.get_array_memory_size() as isize;
         let changes_after_first_batch = pool.changes();
+        let changes_after_first_batch: Vec<_> = changes_after_first_batch
+            .iter()
+            .map(|change| change.change)
+            .collect();
         assert!(
             changes_after_first_batch.contains(&retained_batch_size),
             "expected transformer retain reservation update: {changes_after_first_batch:?}"
@@ -2431,7 +2444,11 @@ mod tests {
         }
 
         let remaining_batches = crate::common::collect(stream).await?;
-        let changes_after_completion = pool.changes();
+        let changes_after_completion: Vec<_> = pool
+            .changes()
+            .into_iter()
+            .map(|change| change.change)
+            .collect();
         if enforce_batch_size_in_joins {
             assert!(
                 changes_after_completion.contains(&-retained_batch_size),
@@ -2444,6 +2461,64 @@ mod tests {
                 .map(RecordBatch::num_rows)
                 .sum::<usize>();
         assert_eq!(output_rows, 10);
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn symmetric_hash_join_transformer_retention_exhausts_bounded_pool(
+        #[values(false, true)] enforce_batch_size_in_joins: bool,
+    ) -> Result<()> {
+        let calibration_pool = Arc::new(RecordingMemoryPool::default());
+        let calibration_runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&calibration_pool) as Arc<dyn MemoryPool>)
+            .build_arc()?;
+        let mut calibration_stream = transformer_lifecycle_test_join()?.execute(
+            0,
+            transformer_lifecycle_test_context(
+                calibration_runtime,
+                enforce_batch_size_in_joins,
+            ),
+        )?;
+
+        let first_batch = calibration_stream.next().await.transpose()?.unwrap();
+        let retained_batch_size = first_batch.get_array_memory_size() as isize;
+        let changes = calibration_pool.changes();
+        // `poll_next_impl` has no reservation operation after transformer `next()`.
+        // Therefore the retain operation is last for a splitter and penultimate
+        // for Noop, whose `next()` immediately releases the retained batch.
+        let retain_index = changes
+            .len()
+            .checked_sub(if enforce_batch_size_in_joins { 1 } else { 2 })
+            .expect("transformer retain must update the stream reservation");
+        let retain_change = &changes[retain_index];
+        assert_eq!(
+            retain_change.change, retained_batch_size,
+            "expected transformer retain reservation update: {changes:?}"
+        );
+        if !enforce_batch_size_in_joins {
+            assert_eq!(
+                changes.last().map(|change| change.change),
+                Some(-retained_batch_size),
+                "Noop must release the retained batch before emitting it: {changes:?}"
+            );
+        }
+
+        // This limit is between the reservation immediately before transformer
+        // retention and the reservation immediately after it. The old accounting
+        // omitted this growth and would emit the first batch instead of failing.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(retain_change.reserved - 1, 1.0)
+            .build_arc()?;
+        let mut stream = transformer_lifecycle_test_join()?.execute(
+            0,
+            transformer_lifecycle_test_context(runtime, enforce_batch_size_in_joins),
+        )?;
+        let error = stream.next().await.transpose().unwrap_err();
+        assert!(
+            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "expected transformer retention to exhaust the pool, got: {error}"
+        );
         Ok(())
     }
 
