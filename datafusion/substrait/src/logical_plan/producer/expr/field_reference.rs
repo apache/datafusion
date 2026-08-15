@@ -118,7 +118,11 @@ pub fn from_outer_reference_column(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::common::Result;
+    use crate::logical_plan::producer::DefaultSubstraitProducer;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::{DFSchema, Result};
+    use datafusion::execution::SessionStateBuilder;
+    use std::sync::Arc;
 
     #[test]
     fn to_field_reference() -> Result<()> {
@@ -137,6 +141,28 @@ mod tests {
 
             _ => panic!("Should not be anything other than field reference"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn unresolvable_outer_reference_column() -> Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+        let col = Column::from_qualified_name("data.a");
+
+        // Empty outer schema stack: nothing to resolve against.
+        let err = from_outer_reference_column(&mut producer, &col).unwrap_err();
+        assert!(err.to_string().contains("could not be resolved"));
+
+        // Non-empty stack whose schemas don't contain the column.
+        let outer_schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+            "unrelated",
+            DataType::Int64,
+            true,
+        )]))?);
+        producer.push_outer_schema(outer_schema);
+        let err = from_outer_reference_column(&mut producer, &col).unwrap_err();
+        assert!(err.to_string().contains("could not be resolved"));
         Ok(())
     }
 }

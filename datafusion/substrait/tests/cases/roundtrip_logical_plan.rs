@@ -751,15 +751,41 @@ async fn roundtrip_not_exists_substrait() -> Result<()> {
     Ok(())
 }
 
-/// Assert that the Substrait plan contains a field reference with an
-/// `OuterReference` root type at the given `steps_out` depth.
-fn assert_contains_outer_reference(proto: &Plan, steps_out: u32) {
-    let proto_str = format!("{proto:?}");
-    let expected = format!("OuterReference {{ steps_out: {steps_out} }}");
-    assert!(
-        proto_str.contains(&expected),
-        "expected Substrait plan to contain an outer reference with steps_out={steps_out}"
+/// `(steps_out, field index)` of every `OuterReference` field reference in the
+/// plan, collected by walking its JSON serialization.
+fn outer_references(plan: &Plan) -> Vec<(u32, u32)> {
+    fn walk(value: &serde_json::Value, out: &mut Vec<(u32, u32)>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                // A FieldReference serializes its root type and direct reference
+                // as sibling keys, e.g.:
+                //   { "directReference": { "structField": { "field": 3 } },
+                //     "outerReference":  { "stepsOut": 1 } }
+                // proto3 JSON omits zero-valued fields, hence the unwrap_or(0)s.
+                if let Some(outer) = map.get("outerReference") {
+                    let steps =
+                        outer.get("stepsOut").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let field = map
+                        .get("directReference")
+                        .and_then(|d| d.get("structField"))
+                        .and_then(|s| s.get("field"))
+                        .and_then(|f| f.as_u64())
+                        .unwrap_or(0);
+                    out.push((steps as u32, field as u32));
+                }
+                map.values().for_each(|v| walk(v, out));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut refs = vec![];
+    walk(
+        &serde_json::to_value(plan).expect("Plan serializes to JSON"),
+        &mut refs,
     );
+    refs.sort_unstable(); // key order in the JSON walk isn't proto field order
+    refs
 }
 
 #[tokio::test]
@@ -771,7 +797,7 @@ async fn roundtrip_correlated_exists() -> Result<()> {
         .into_unoptimized_plan();
 
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    assert_contains_outer_reference(&proto, 1);
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     assert_eq!(plan.schema(), plan2.schema());
@@ -799,7 +825,7 @@ async fn roundtrip_correlated_in_subquery() -> Result<()> {
         .into_unoptimized_plan();
 
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    assert_contains_outer_reference(&proto, 1);
+    assert_eq!(outer_references(&proto), vec![(1, 3)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     assert_eq!(plan.schema(), plan2.schema());
@@ -827,7 +853,7 @@ async fn roundtrip_correlated_scalar_subquery() -> Result<()> {
         .into_unoptimized_plan();
 
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    assert_contains_outer_reference(&proto, 1);
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     assert_eq!(plan.schema(), plan2.schema());
@@ -862,8 +888,7 @@ async fn roundtrip_nested_correlated_subquery() -> Result<()> {
         .into_unoptimized_plan();
 
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    assert_contains_outer_reference(&proto, 1);
-    assert_contains_outer_reference(&proto, 2);
+    assert_eq!(outer_references(&proto), vec![(1, 0), (2, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     assert_eq!(plan.schema(), plan2.schema());
@@ -904,12 +929,7 @@ async fn roundtrip_correlated_subquery_shadowed_outer_column() -> Result<()> {
         .into_unoptimized_plan();
 
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    assert_contains_outer_reference(&proto, 1);
-    let proto_str = format!("{proto:?}");
-    assert!(
-        !proto_str.contains("OuterReference { steps_out: 2 }"),
-        "shadowed column must resolve to the nearest enclosing scope, not skip to an outer one"
-    );
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     assert_eq!(plan.schema(), plan2.schema());
