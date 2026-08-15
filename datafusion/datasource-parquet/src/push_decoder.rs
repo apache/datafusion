@@ -35,7 +35,8 @@
 //! The opener constructs both halves and hands the state off to
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
@@ -109,6 +110,46 @@ impl DecoderBuilderConfig<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
     pub(crate) rg_index: usize,
+}
+
+/// Compute, for each row group in `rg_plan`, the byte ranges of all column
+/// chunks included in `mask`.
+///
+/// Fetching these ranges in a single request provides all the data needed to
+/// decode the row group, including evaluating any pushed down filters whose
+/// columns are included in `mask`. Used when
+/// [`progressive_io`](datafusion_common::config::ParquetOptions::progressive_io)
+/// is disabled to keep the I/O pattern the same as when `pushdown_filters`
+/// is disabled (one request per row group).
+///
+/// The ranges are whole column chunks (one range per column). This is the
+/// coarsest granularity the decoder can request, so any byte range the
+/// decoder asks for during filter evaluation or output decoding is
+/// contained within one of these ranges — a requirement for the pushed
+/// bytes to satisfy the decoder's requests, since the decoder's buffered
+/// range lookup is a per-range containment check that does not coalesce
+/// adjacent ranges.
+pub(crate) fn one_shot_row_group_ranges(
+    metadata: &ParquetMetaData,
+    rg_plan: &VecDeque<RgPlanEntry>,
+    mask: &ProjectionMask,
+) -> HashMap<usize, Vec<Range<u64>>> {
+    rg_plan
+        .iter()
+        .map(|entry| {
+            let rg = metadata.row_group(entry.rg_index);
+            let ranges = (0..rg.columns().len())
+                .filter(|leaf_idx| mask.leaf_included(*leaf_idx))
+                .map(|leaf_idx| {
+                    // `byte_range` covers the dictionary page (if any) and
+                    // all data pages of the column chunk
+                    let (start, length) = rg.column(leaf_idx).byte_range();
+                    start..start + length
+                })
+                .collect();
+            (entry.rg_index, ranges)
+        })
+        .collect()
 }
 
 /// Runtime row-group pruner driven by a dynamic predicate (e.g. the
@@ -272,6 +313,18 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
     /// Count of row groups skipped at runtime by [`Self::row_group_pruner`].
     pub(crate) row_groups_pruned_dynamic: Count,
+    /// When `Some`, use "one shot" I/O: the first data request for each row
+    /// group is expanded to the precomputed byte ranges covering every
+    /// column chunk that could be needed to evaluate pushed down filters
+    /// and decode the output projection, so each row group is fetched with
+    /// a single I/O request (the same I/O pattern as when
+    /// `pushdown_filters` is disabled). Keyed by row group index; entries
+    /// are removed as they are used.
+    ///
+    /// `None` means data is fetched progressively, exactly as requested by
+    /// the decoder. See
+    /// [`progressive_io`](datafusion_common::config::ParquetOptions::progressive_io).
+    pub(crate) one_shot_ranges: Option<HashMap<usize, Vec<Range<u64>>>>,
 }
 
 impl PushDecoderStreamState {
@@ -392,8 +445,25 @@ impl PushDecoderStreamState {
 
             // Step 3: drive the decoder.
             let decoder = self.decoder.as_mut().expect("decoder present");
+            // When one-shot I/O is enabled and the decoder is about to start
+            // a new row group, note which row group so that its first data
+            // request can be expanded to cover the entire row group. This
+            // must be peeked *before* `try_next_reader` plans the row group:
+            // once planning starts, `peek_next_row_group` reports the row
+            // group after the in-flight one.
+            let starting_rg_index = if at_boundary && self.one_shot_ranges.is_some() {
+                match decoder.peek_next_row_group() {
+                    Ok(rg_index) => rg_index,
+                    Err(e) => {
+                        return Some((Err(DataFusionError::from(e)), self));
+                    }
+                }
+            } else {
+                None
+            };
             match decoder.try_next_reader() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
+                    let ranges = self.expand_one_shot_ranges(starting_rg_index, ranges);
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())
@@ -426,6 +496,33 @@ impl PushDecoderStreamState {
                 }
             }
         }
+    }
+
+    /// When one-shot I/O is enabled ([`Self::one_shot_ranges`] is `Some`),
+    /// expand the first data request for the row group `rg_index` to the
+    /// precomputed ranges covering everything the row group could need
+    /// (filter and projection columns), so the row group is fetched in a
+    /// single request.
+    ///
+    /// The ranges the decoder requested are always contained within the
+    /// expanded ranges (the decoder requests, at most, the same
+    /// selection-pruned pages for a subset of the columns in the mask the
+    /// expanded ranges were computed from), so the pushed data satisfies the
+    /// original request. Follow-up requests for the same row group (its
+    /// entry has already been removed, and `rg_index` is `None` because the
+    /// decoder is no longer at a row group boundary) are passed through
+    /// unchanged.
+    fn expand_one_shot_ranges(
+        &mut self,
+        rg_index: Option<usize>,
+        ranges: Vec<Range<u64>>,
+    ) -> Vec<Range<u64>> {
+        let (Some(one_shot_ranges), Some(rg_index)) =
+            (self.one_shot_ranges.as_mut(), rg_index)
+        else {
+            return ranges;
+        };
+        one_shot_ranges.remove(&rg_index).unwrap_or(ranges)
     }
 
     /// Keep `rg_plan.front()` aligned with the row group the decoder will emit

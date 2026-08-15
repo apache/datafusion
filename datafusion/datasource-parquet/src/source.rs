@@ -445,6 +445,21 @@ impl ParquetSource {
         self.table_parquet_options.global.force_filter_selections
     }
 
+    /// If true and `pushdown_filters` is enabled, fetch the data needed to
+    /// evaluate filters progressively (filter columns first, then the
+    /// remaining projected columns after filtering). If false (the default),
+    /// all data pages needed for a row group are fetched in a single request.
+    /// See [`datafusion_common::config::ParquetOptions::progressive_io`].
+    pub fn with_progressive_io(mut self, progressive_io: bool) -> Self {
+        self.table_parquet_options.global.progressive_io = progressive_io;
+        self
+    }
+
+    /// Return the value described in [`Self::with_progressive_io`]
+    pub(crate) fn progressive_io(&self) -> bool {
+        self.table_parquet_options.global.progressive_io
+    }
+
     /// If enabled, the reader will read the page index
     /// This is used to optimize filter pushdown
     /// via `RowSelector` and `RowFilter` by
@@ -645,6 +660,7 @@ impl FileSource for ParquetSource {
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
             force_filter_selections: self.force_filter_selections(),
+            progressive_io: self.progressive_io(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
@@ -876,6 +892,11 @@ impl FileSource for ParquetSource {
         };
         source.predicate = Some(predicate);
         source = source.with_pushdown_filters(pushdown_filters);
+        // `progressive_io` resolves table-or-session, the same way as
+        // `pushdown_filters` above
+        source = source.with_progressive_io(
+            self.progressive_io() || config.execution.parquet.progressive_io,
+        );
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).

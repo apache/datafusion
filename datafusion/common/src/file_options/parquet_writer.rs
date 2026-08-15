@@ -238,6 +238,7 @@ impl ParquetOptions {
             pushdown_filters: _,
             reorder_filters: _,
             force_filter_selections: _, // not used for writer props
+            progressive_io: _,          // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
@@ -496,6 +497,7 @@ mod tests {
             pushdown_filters: defaults.pushdown_filters,
             reorder_filters: defaults.reorder_filters,
             force_filter_selections: defaults.force_filter_selections,
+            progressive_io: defaults.progressive_io,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: defaults
                 .maximum_parallel_row_group_writers,
@@ -616,6 +618,7 @@ mod tests {
                 pushdown_filters: global_options_defaults.pushdown_filters,
                 reorder_filters: global_options_defaults.reorder_filters,
                 force_filter_selections: global_options_defaults.force_filter_selections,
+                progressive_io: global_options_defaults.progressive_io,
                 allow_single_file_parallelism: global_options_defaults
                     .allow_single_file_parallelism,
                 maximum_parallel_row_group_writers: global_options_defaults

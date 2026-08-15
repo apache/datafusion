@@ -28,6 +28,7 @@ use crate::decoder_projection::DecoderProjection;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
+    one_shot_row_group_ranges,
 };
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
@@ -263,6 +264,11 @@ pub(super) struct ParquetMorselizer {
     pub reorder_filters: bool,
     /// Should we force the reader to use RowSelections for filtering
     pub force_filter_selections: bool,
+    /// If true (and filters are pushed down), fetch column data
+    /// progressively as filters are evaluated. If false, fetch all data
+    /// pages needed for a row group in a single request. See
+    /// [`ParquetOptions::progressive_io`](datafusion_common::config::ParquetOptions::progressive_io)
+    pub progressive_io: bool,
     /// Should the page index be read from parquet files, if present, to skip
     /// data pages
     pub enable_page_index: bool,
@@ -447,6 +453,7 @@ struct PreparedParquetOpen {
     reorder_predicates: bool,
     pushdown_filters: bool,
     force_filter_selections: bool,
+    progressive_io: bool,
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
@@ -844,6 +851,7 @@ impl ParquetMorselizer {
             reorder_predicates: self.reorder_filters,
             pushdown_filters: self.pushdown_filters,
             force_filter_selections: self.force_filter_selections,
+            progressive_io: self.progressive_io,
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
@@ -1435,7 +1443,7 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, rg_plan) = {
+        let (decoder, rg_plan, one_shot_ranges) = {
             let pushdown_predicate = prepared
                 .pushdown_filters
                 .then_some(prepared.predicate.as_ref())
@@ -1470,6 +1478,7 @@ impl RowGroupsPrunedParquetOpen {
                 .copied()
                 .map(|rg_index| RgPlanEntry { rg_index })
                 .collect();
+            let row_selection = prepared_access_plan.row_selection.clone();
 
             let mut builder =
                 decoder_config.build(prepared_access_plan, reader_metadata.clone());
@@ -1482,7 +1491,48 @@ impl RowGroupsPrunedParquetOpen {
                 }
             }
 
-            (builder.build()?, rg_plan)
+            // When filters are pushed down, the decoder normally fetches
+            // data progressively: the columns for each filter first, then,
+            // once the filters have been evaluated, the remaining projected
+            // columns for the rows that passed. Progressive fetching can only
+            // reduce the bytes read when the file has an offset index
+            // (without one, whole column chunks are fetched either way and
+            // the extra requests are pure overhead).
+            //
+            // When `progressive_io` is disabled (the default) or the file has
+            // no offset index, instead fetch each row group's data (all
+            // column chunks needed by the pushed down filters or the output
+            // projection) with a single I/O request: the same I/O pattern
+            // used when `pushdown_filters` is disabled. Filters are still
+            // evaluated progressively against the buffered bytes.
+            //
+            // When page-index pruning produced a row selection that actually
+            // prunes rows, keep progressive I/O: the selection prunes data
+            // pages from each request, which whole-column-chunk one-shot
+            // ranges would defeat (a selection implies the offset index is
+            // present, so progressive I/O can help). Note page-index pruning
+            // can also produce a selection that selects all rows; such a
+            // selection prunes nothing, so one-shot I/O is still used.
+            let selection_prunes_rows = row_selection.as_ref().is_some_and(|s| {
+                let plan_rows: usize = rg_plan
+                    .iter()
+                    .map(|e| file_metadata.row_group(e.rg_index).num_rows() as usize)
+                    .sum();
+                s.row_count() < plan_rows
+            });
+            let filter_mask = row_filter_generator.filter_mask();
+            let use_one_shot_io = filter_mask.is_some()
+                && !selection_prunes_rows
+                && (!prepared.progressive_io || file_metadata.offset_index().is_none());
+            let one_shot_ranges = use_one_shot_io.then(|| {
+                let mut mask = decoder_projection.projection_mask().clone();
+                if let Some(filter_mask) = filter_mask {
+                    mask.union(filter_mask);
+                }
+                one_shot_row_group_ranges(&file_metadata, &rg_plan, &mask)
+            });
+
+            (builder.build()?, rg_plan, one_shot_ranges)
         };
 
         let predicate_cache_inner_records =
@@ -1539,6 +1589,7 @@ impl RowGroupsPrunedParquetOpen {
             baseline_metrics: prepared.baseline_metrics,
             row_group_pruner,
             row_groups_pruned_dynamic,
+            one_shot_ranges,
         }
         .into_stream();
 
@@ -1783,6 +1834,7 @@ mod test {
         pushdown_filters: bool,
         reorder_filters: bool,
         force_filter_selections: bool,
+        progressive_io: bool,
         enable_page_index: bool,
         enable_bloom_filter: bool,
         enable_row_group_stats_pruning: bool,
@@ -1994,6 +2046,7 @@ mod test {
                 pushdown_filters: false,
                 reorder_filters: false,
                 force_filter_selections: false,
+                progressive_io: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
                 enable_row_group_stats_pruning: false,
@@ -2163,6 +2216,7 @@ mod test {
                 pushdown_filters: self.pushdown_filters,
                 reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
+                progressive_io: self.progressive_io,
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,

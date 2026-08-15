@@ -1241,6 +1241,19 @@ config_namespace! {
         /// pattern of selected rows.
         pub force_filter_selections: bool, default = false
 
+        /// (reading) Controls the I/O pattern used when `pushdown_filters` is
+        /// enabled. If false (the default), all data pages needed to read a row
+        /// group (for both filter evaluation and output projection) are fetched
+        /// in a single request, the same I/O pattern used when
+        /// `pushdown_filters` is disabled. If true, data is fetched
+        /// progressively: first the columns needed by each filter, then, after
+        /// the filters are evaluated, the remaining projected columns for the
+        /// rows that passed. Progressive fetching can reduce the total bytes
+        /// read when the file has a Parquet offset index, at the cost of
+        /// additional I/O requests per row group; files without an offset index
+        /// are always read with a single request per row group.
+        pub progressive_io: bool, default = false
+
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
         pub schema_force_view_types: bool, default = true

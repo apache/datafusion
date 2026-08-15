@@ -718,6 +718,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             pushdown_filters: global_options.global.pushdown_filters,
             reorder_filters: global_options.global.reorder_filters,
             force_filter_selections: global_options.global.force_filter_selections,
+            progressive_io: global_options.global.progressive_io,
             data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
             write_batch_size: global_options.global.write_batch_size as u64,
             writer_version: global_options.global.writer_version.to_string(),

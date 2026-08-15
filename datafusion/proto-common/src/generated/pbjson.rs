@@ -6367,6 +6367,9 @@ impl serde::Serialize for ParquetOptions {
         if self.force_filter_selections {
             len += 1;
         }
+        if self.progressive_io {
+            len += 1;
+        }
         if self.data_pagesize_limit != 0 {
             len += 1;
         }
@@ -6475,6 +6478,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.force_filter_selections {
             struct_ser.serialize_field("forceFilterSelections", &self.force_filter_selections)?;
+        }
+        if self.progressive_io {
+            struct_ser.serialize_field("progressiveIo", &self.progressive_io)?;
         }
         if self.data_pagesize_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -6667,6 +6673,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "reorderFilters",
             "force_filter_selections",
             "forceFilterSelections",
+            "progressive_io",
+            "progressiveIo",
             "data_pagesize_limit",
             "dataPagesizeLimit",
             "write_batch_size",
@@ -6735,6 +6743,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             PushdownFilters,
             ReorderFilters,
             ForceFilterSelections,
+            ProgressiveIo,
             DataPagesizeLimit,
             WriteBatchSize,
             WriterVersion,
@@ -6792,6 +6801,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
                             "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
                             "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
+                            "progressiveIo" | "progressive_io" => Ok(GeneratedField::ProgressiveIo),
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
                             "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
                             "writerVersion" | "writer_version" => Ok(GeneratedField::WriterVersion),
@@ -6847,6 +6857,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut pushdown_filters__ = None;
                 let mut reorder_filters__ = None;
                 let mut force_filter_selections__ = None;
+                let mut progressive_io__ = None;
                 let mut data_pagesize_limit__ = None;
                 let mut write_batch_size__ = None;
                 let mut writer_version__ = None;
@@ -6914,6 +6925,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("forceFilterSelections"));
                             }
                             force_filter_selections__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ProgressiveIo => {
+                            if progressive_io__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("progressiveIo"));
+                            }
+                            progressive_io__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DataPagesizeLimit => {
                             if data_pagesize_limit__.is_some() {
@@ -7120,6 +7137,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
                     reorder_filters: reorder_filters__.unwrap_or_default(),
                     force_filter_selections: force_filter_selections__.unwrap_or_default(),
+                    progressive_io: progressive_io__.unwrap_or_default(),
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
                     write_batch_size: write_batch_size__.unwrap_or_default(),
                     writer_version: writer_version__.unwrap_or_default(),
