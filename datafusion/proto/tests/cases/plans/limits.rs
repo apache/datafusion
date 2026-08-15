@@ -38,6 +38,7 @@ use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{PhysicalSortExpr, col};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -148,7 +149,10 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
             roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
 
         // Child replacement must not erase the decoded ordering before pushdown.
-        let rebuilt = decoded.with_new_children(vec![make_scan()])?;
+        let rebuilt = decoded.replace_children(
+            vec![make_scan()],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
 
         let optimized =
             LimitPushdown::new().optimize(rebuilt, &ConfigOptions::default())?;

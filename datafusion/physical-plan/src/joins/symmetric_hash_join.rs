@@ -31,7 +31,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use crate::check_if_same_properties;
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::stream_join_utils::{
@@ -50,6 +49,7 @@ use crate::projection::{
     JoinData, ProjectionExec, try_pushdown_through_join_with_column_indices,
 };
 use crate::stream::EmptyRecordBatchStream;
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     InputDistributionRequirements, PlanProperties, RecordBatchStream,
@@ -462,36 +462,57 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         crate::apply_expression_roots(join_keys.chain(filter), f)
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                let left = children.swap_remove(0);
+                let right = children.swap_remove(0);
+                Ok(Arc::new(Self {
+                    left,
+                    right,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    ..Self::clone(&*self)
+                }))
+            }
+            ChildrenPropertiesMode::Recompute => {
+                Ok(Arc::new(SymmetricHashJoinExec::try_new(
+                    Arc::clone(&children[0]),
+                    Arc::clone(&children[1]),
+                    self.on.clone(),
+                    self.filter.clone(),
+                    &self.join_type,
+                    self.null_equality,
+                    self.left_sort_exprs.clone(),
+                    self.right_sort_exprs.clone(),
+                    self.mode,
+                )?))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(SymmetricHashJoinExec::try_new(
-            Arc::clone(&children[0]),
-            Arc::clone(&children[1]),
-            self.on.clone(),
-            self.filter.clone(),
-            &self.join_type,
-            self.null_equality,
-            self.left_sort_exprs.clone(),
-            self.right_sort_exprs.clone(),
-            self.mode,
-        )?))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-        Ok(Arc::new(Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

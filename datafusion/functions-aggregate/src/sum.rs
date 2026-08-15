@@ -264,14 +264,14 @@ impl AggregateUDFImpl for Sum {
         if args.is_distinct {
             macro_rules! helper {
                 ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctSumAccumulator::<$t>::new(&$dt)))
+                    Ok(Box::new(DistinctSumAccumulator::<$t>::new($dt)))
                 };
             }
             downcast_sum!(args, helper)
         } else {
             macro_rules! helper {
                 ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
+                    Ok(Box::new(SumAccumulator::<$t>::new($dt)))
                 };
             }
             downcast_sum!(args, helper)

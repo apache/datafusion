@@ -444,11 +444,19 @@ impl PushDecoderStreamState {
                 .as_ref()
                 .expect("decoder present")
                 .is_at_row_group_boundary();
-            // Keep `rg_plan.front()` aligned with the row group the decoder
-            // will actually emit next: `try_next_reader` can silently advance
-            // past row groups whose row selection is empty, so without this
-            // sync the per-RG toggle below would target the wrong row group.
-            if at_boundary && let Err(e) = self.sync_rg_plan_to_decoder_frontier() {
+            // Keep `rg_plan.front()` aligned with the row group the decoder will
+            // actually emit next: arrow-rs silently finishes row groups whose
+            // post-predicate selection is empty without handing back a reader, so
+            // without this sync `rg_plan` trails the decoder by one and a rebuild
+            // either re-reads an already-delivered row group (#24352) or toggles
+            // the per-RG filter for the wrong row group. Both the runtime pruner
+            // and the per-RG `RowFilter` toggle consume `rg_plan`, so sync when
+            // either is active; gating avoids the O(remaining row groups) cost of
+            // `peek_next_row_group()` on ordinary scans that never rebuild.
+            if at_boundary
+                && (self.row_group_pruner.is_some() || self.row_filter_context.is_some())
+                && let Err(e) = self.sync_rg_plan_to_decoder_frontier()
+            {
                 return Some((Err(e), self));
             }
             if at_boundary && !self.rg_plan.is_empty() {
@@ -499,10 +507,12 @@ impl PushDecoderStreamState {
     }
 
     /// Keep `rg_plan.front()` aligned with the row group the decoder will emit
-    /// next. `try_next_reader` silently skips row groups whose row selection is
-    /// empty (e.g. page-index pruning removed every page), which would otherwise
-    /// leave `rg_plan` off-by-one from the decoder's frontier.
-    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<(), DataFusionError> {
+    /// next. `try_next_reader` silently finishes row groups whose post-predicate
+    /// selection is empty (no reader handed back) — e.g. page-index pruning
+    /// removed every page — which would otherwise leave `rg_plan` trailing the
+    /// decoder by one: a later prune/rebuild would then re-include an
+    /// already-delivered row group (#24352) or toggle the filter for the wrong RG.
+    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<()> {
         match self
             .decoder
             .as_ref()
@@ -510,7 +520,7 @@ impl PushDecoderStreamState {
             .peek_next_row_group()
             .map_err(DataFusionError::from)?
         {
-            Some(actual) => self.advance_rg_plan_to(actual)?,
+            Some(actual) => Self::advance_rg_plan_to(&mut self.rg_plan, actual)?,
             // Decoder has nothing left to emit — drain our plan so the stream
             // finishes cleanly.
             None => self.rg_plan.clear(),
@@ -518,26 +528,28 @@ impl PushDecoderStreamState {
         Ok(())
     }
 
-    /// Pop `rg_plan` entries until its front is `target`.
+    /// Pop entries off `rg_plan` until its front is `target`.
     ///
-    /// `target` is the RG the decoder will emit next and must still be in our
-    /// plan. A missing `target` means the decoder's frontier and `rg_plan`
-    /// have diverged; we surface that as an internal error rather than
-    /// silently draining the plan, which would truncate the scan.
-    fn advance_rg_plan_to(&mut self, target: usize) -> Result<()> {
-        if !self.rg_plan.iter().any(|e| e.rg_index == target) {
-            return internal_err!(
-                "push decoder frontier RG {target} is not in rg_plan; \
-                 decoder and plan have diverged"
-            );
-        }
-        while let Some(front) = self.rg_plan.front() {
+    /// `target` is the RG the decoder will emit next and must still be in the
+    /// plan. A missing `target` means the decoder's frontier and `rg_plan` have
+    /// diverged; we surface that as an internal error rather than silently
+    /// draining the plan, which would truncate the scan. Kept free-standing on
+    /// `rg_plan` (rather than `&mut self`) so the pop/guard logic is
+    /// unit-testable without constructing a full stream state.
+    fn advance_rg_plan_to(
+        rg_plan: &mut VecDeque<RgPlanEntry>,
+        target: usize,
+    ) -> Result<()> {
+        while let Some(front) = rg_plan.front() {
             if front.rg_index == target {
-                break;
+                return Ok(());
             }
-            self.rg_plan.pop_front();
+            rg_plan.pop_front();
         }
-        Ok(())
+        internal_err!(
+            "push decoder frontier RG {target} is not in rg_plan; \
+             decoder and plan have diverged"
+        )
     }
 
     /// Drop every `rg_plan` entry the dynamic pruner proves cannot contribute,
@@ -819,5 +831,39 @@ mod tests {
         assert!(!pruner.should_prune(&[0]));
         assert!(!pruner.should_prune(&[1]));
         assert!(!pruner.should_prune(&[2]));
+    }
+
+    #[test]
+    fn advance_rg_plan_to_pops_up_to_target() {
+        let mut plan: VecDeque<RgPlanEntry> = [0usize, 1, 2, 3]
+            .into_iter()
+            .map(|rg_index| RgPlanEntry {
+                rg_index,
+                fully_matched: false,
+            })
+            .collect();
+        PushDecoderStreamState::advance_rg_plan_to(&mut plan, 2).unwrap();
+        assert_eq!(
+            plan.iter().map(|e| e.rg_index).collect::<Vec<_>>(),
+            vec![2, 3],
+            "must pop the entries before `target` and stop at it",
+        );
+    }
+
+    #[test]
+    fn advance_rg_plan_to_errors_when_target_absent() {
+        let mut plan: VecDeque<RgPlanEntry> = [0usize, 1, 2]
+            .into_iter()
+            .map(|rg_index| RgPlanEntry {
+                rg_index,
+                fully_matched: false,
+            })
+            .collect();
+        let err = PushDecoderStreamState::advance_rg_plan_to(&mut plan, 5)
+            .expect_err("a target absent from the plan must be an internal error");
+        assert!(
+            err.to_string().contains("diverged"),
+            "expected a divergence internal error, got: {err}",
+        );
     }
 }

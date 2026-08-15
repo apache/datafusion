@@ -808,7 +808,7 @@ mod test {
         ) -> HashSet<u64> {
             id_array
                 .iter_mut()
-                .flat_map(|(_, id_option)| {
+                .filter_map(|(_, id_option)| {
                     id_option.as_mut().map(|node_id| {
                         let hash = node_id.hash;
                         node_id.hash = 0;
