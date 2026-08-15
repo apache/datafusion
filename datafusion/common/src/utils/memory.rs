@@ -19,8 +19,11 @@
 
 use crate::error::_exec_datafusion_err;
 use crate::{HashSet, Result};
-use arrow::array::types::ByteArrayType;
-use arrow::array::{Array, AsArray, downcast_run_array};
+use arrow::array::types::{ByteArrayType, ByteViewType, RunEndIndexType};
+use arrow::array::{
+    Array, AsArray, GenericByteArray, GenericByteViewArray, GenericListArray,
+    GenericListViewArray, RunArray,
+};
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 use arrow::downcast_primitive_array;
@@ -174,23 +177,186 @@ impl RecordBatchMemoryCounter {
     /// Count `batch`, returning the memory used by its buffers that have not
     /// been counted before.
     pub fn count_batch(&mut self, batch: &RecordBatch) -> usize {
-        let mut total_size = 0;
+        let previous_memory_usage = self.memory_usage;
 
         for array in batch.columns() {
-            count_array_memory_size(
-                array.as_ref(),
-                &mut self.counted_buffers,
-                &mut total_size,
-            );
+            self.count_array_memory_size(array.as_ref());
         }
 
-        self.memory_usage += total_size;
-        total_size
+        self.memory_usage - previous_memory_usage
     }
 
     /// Total memory of the unique buffers of all batches counted so far.
     pub fn memory_usage(&self) -> usize {
         self.memory_usage
+    }
+
+    fn count_buffer_memory_size(&mut self, buffer: &Buffer) {
+        if self.counted_buffers.insert(buffer.data_ptr().addr()) {
+            self.memory_usage += buffer.capacity();
+        }
+    }
+
+    /// Count the memory usage of `array` and its children recursively.
+    fn count_array_memory_size(&mut self, array: &dyn Array) {
+        if let Some(nulls) = array.nulls() {
+            self.count_buffer_memory_size(nulls.buffer());
+        }
+
+        downcast_primitive_array! {
+            array => self.count_buffer_memory_size(array.values().inner()),
+            DataType::Null => {}
+            DataType::Boolean => {
+                self.count_buffer_memory_size(array.as_boolean().values().inner());
+            }
+            DataType::Binary => {
+                self.count_byte_array_memory_size(array.as_binary::<i32>());
+            }
+            DataType::LargeBinary => {
+                self.count_byte_array_memory_size(array.as_binary::<i64>());
+            }
+            DataType::Utf8 => {
+                self.count_byte_array_memory_size(array.as_string::<i32>());
+            }
+            DataType::LargeUtf8 => {
+                self.count_byte_array_memory_size(array.as_string::<i64>());
+            }
+            DataType::BinaryView => {
+                self.count_byte_view_array_memory_size(array.as_binary_view());
+            }
+            DataType::Utf8View => {
+                self.count_byte_view_array_memory_size(array.as_string_view());
+            }
+            DataType::FixedSizeBinary(_) => {
+                self.count_buffer_memory_size(array.as_fixed_size_binary().values());
+            }
+            DataType::List(_) => {
+                self.count_list_array_memory_size(array.as_list::<i32>());
+            }
+            DataType::LargeList(_) => {
+                self.count_list_array_memory_size(array.as_list::<i64>());
+            }
+            DataType::ListView(_) => {
+                self.count_list_view_array_memory_size(array.as_list_view::<i32>());
+            }
+            DataType::LargeListView(_) => {
+                self.count_list_view_array_memory_size(array.as_list_view::<i64>());
+            }
+            DataType::FixedSizeList(_, _) => {
+                self.count_array_memory_size(
+                    array.as_fixed_size_list().values().as_ref(),
+                );
+            }
+            DataType::Struct(_) => {
+                for child in array.as_struct().columns() {
+                    self.count_array_memory_size(child.as_ref());
+                }
+            }
+            DataType::Union(_, _) => {
+                let array = array.as_union();
+                self.count_buffer_memory_size(array.type_ids().inner());
+                if let Some(offsets) = array.offsets() {
+                    self.count_buffer_memory_size(offsets.inner());
+                }
+                for (type_id, _) in array.fields().iter() {
+                    self.count_array_memory_size(array.child(type_id).as_ref());
+                }
+            }
+            DataType::Dictionary(_, _) => {
+                let array = array.as_any_dictionary();
+                self.count_array_memory_size(array.keys());
+                self.count_array_memory_size(array.values().as_ref());
+            }
+            DataType::Map(_, _) => {
+                let array = array.as_map();
+                self.count_buffer_memory_size(array.offsets().inner().inner());
+                self.count_array_memory_size(array.entries());
+            }
+            DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+                DataType::Int16 => {
+                    self.count_run_array_memory_size::<arrow::datatypes::Int16Type>(
+                        array,
+                    );
+                }
+                DataType::Int32 => {
+                    self.count_run_array_memory_size::<arrow::datatypes::Int32Type>(
+                        array,
+                    );
+                }
+                DataType::Int64 => {
+                    self.count_run_array_memory_size::<arrow::datatypes::Int64Type>(
+                        array,
+                    );
+                }
+                // Arrow only permits Int16, Int32, and Int64 run-end indexes. A
+                // custom Array implementation may still expose malformed data;
+                // retain correct accounting for it without panicking.
+                _ => self.count_array_data_memory_size(&array.to_data()),
+            },
+            // All currently supported non-primitive layouts are handled above.
+            // The Arrow macro requires a final arm for primitive variants that
+            // its nested dispatch has already consumed. Keep a safe generic
+            // fallback for custom or future Array implementations.
+            _ => self.count_array_data_memory_size(&array.to_data()),
+        }
+    }
+
+    fn count_byte_array_memory_size<T: ByteArrayType>(
+        &mut self,
+        array: &GenericByteArray<T>,
+    ) {
+        self.count_buffer_memory_size(array.offsets().inner().inner());
+        self.count_buffer_memory_size(array.values());
+    }
+
+    fn count_byte_view_array_memory_size<T: ByteViewType>(
+        &mut self,
+        array: &GenericByteViewArray<T>,
+    ) {
+        self.count_buffer_memory_size(array.views().inner());
+        for buffer in array.data_buffers() {
+            self.count_buffer_memory_size(buffer);
+        }
+    }
+
+    fn count_list_array_memory_size<O: arrow::array::OffsetSizeTrait>(
+        &mut self,
+        array: &GenericListArray<O>,
+    ) {
+        self.count_buffer_memory_size(array.offsets().inner().inner());
+        self.count_array_memory_size(array.values().as_ref());
+    }
+
+    fn count_list_view_array_memory_size<O: arrow::array::OffsetSizeTrait>(
+        &mut self,
+        array: &GenericListViewArray<O>,
+    ) {
+        self.count_buffer_memory_size(array.offsets().inner());
+        self.count_buffer_memory_size(array.sizes().inner());
+        self.count_array_memory_size(array.values().as_ref());
+    }
+
+    fn count_run_array_memory_size<R: RunEndIndexType>(&mut self, array: &dyn Array) {
+        if let Some(array) = array.as_any().downcast_ref::<RunArray<R>>() {
+            self.count_buffer_memory_size(array.run_ends().inner().inner());
+            self.count_array_memory_size(array.values().as_ref());
+        } else {
+            // The DataType and concrete array implementation disagree. Use the
+            // generic representation rather than panic while accounting memory.
+            self.count_array_data_memory_size(&array.to_data());
+        }
+    }
+
+    fn count_array_data_memory_size(&mut self, array_data: &arrow::array::ArrayData) {
+        for buffer in array_data.buffers() {
+            self.count_buffer_memory_size(buffer);
+        }
+        if let Some(nulls) = array_data.nulls() {
+            self.count_buffer_memory_size(nulls.buffer());
+        }
+        for child in array_data.child_data() {
+            self.count_array_data_memory_size(child);
+        }
     }
 }
 
@@ -237,182 +403,6 @@ impl BufferIdSet {
     }
 }
 
-fn count_buffer_memory_size(
-    buffer: &Buffer,
-    counted_buffers: &mut BufferIdSet,
-    total_size: &mut usize,
-) {
-    if counted_buffers.insert(buffer.data_ptr().addr()) {
-        *total_size += buffer.capacity();
-    }
-}
-
-/// Count the memory usage of `array` and its children recursively.
-fn count_array_memory_size(
-    array: &dyn Array,
-    counted_buffers: &mut BufferIdSet,
-    total_size: &mut usize,
-) {
-    if let Some(nulls) = array.nulls() {
-        count_buffer_memory_size(nulls.buffer(), counted_buffers, total_size);
-    }
-
-    downcast_primitive_array! {
-        array => count_buffer_memory_size(
-            array.values().inner(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::Null => {}
-        DataType::Boolean => count_buffer_memory_size(
-            array.as_boolean().values().inner(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::Binary => count_byte_array_memory_size(
-            array.as_binary::<i32>(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::LargeBinary => count_byte_array_memory_size(
-            array.as_binary::<i64>(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::Utf8 => count_byte_array_memory_size(
-            array.as_string::<i32>(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::LargeUtf8 => count_byte_array_memory_size(
-            array.as_string::<i64>(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::BinaryView => {
-            let array = array.as_binary_view();
-            count_buffer_memory_size(array.views().inner(), counted_buffers, total_size);
-            for buffer in array.data_buffers() {
-                count_buffer_memory_size(buffer, counted_buffers, total_size);
-            }
-        }
-        DataType::Utf8View => {
-            let array = array.as_string_view();
-            count_buffer_memory_size(array.views().inner(), counted_buffers, total_size);
-            for buffer in array.data_buffers() {
-                count_buffer_memory_size(buffer, counted_buffers, total_size);
-            }
-        }
-        DataType::FixedSizeBinary(_) => count_buffer_memory_size(
-            array.as_fixed_size_binary().values(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::List(_) => count_list_array_memory_size(
-            array.as_list::<i32>(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::LargeList(_) => count_list_array_memory_size(
-            array.as_list::<i64>(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::ListView(_) => {
-            let array = array.as_list_view::<i32>();
-            count_buffer_memory_size(array.offsets().inner(), counted_buffers, total_size);
-            count_buffer_memory_size(array.sizes().inner(), counted_buffers, total_size);
-            count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
-        }
-        DataType::LargeListView(_) => {
-            let array = array.as_list_view::<i64>();
-            count_buffer_memory_size(array.offsets().inner(), counted_buffers, total_size);
-            count_buffer_memory_size(array.sizes().inner(), counted_buffers, total_size);
-            count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
-        }
-        DataType::FixedSizeList(_, _) => count_array_memory_size(
-            array.as_fixed_size_list().values().as_ref(),
-            counted_buffers,
-            total_size,
-        ),
-        DataType::Struct(_) => {
-            for child in array.as_struct().columns() {
-                count_array_memory_size(child.as_ref(), counted_buffers, total_size);
-            }
-        }
-        DataType::Union(_, _) => {
-            let array = array.as_union();
-            count_buffer_memory_size(array.type_ids().inner(), counted_buffers, total_size);
-            if let Some(offsets) = array.offsets() {
-                count_buffer_memory_size(offsets.inner(), counted_buffers, total_size);
-            }
-            for (type_id, _) in array.fields().iter() {
-                count_array_memory_size(
-                    array.child(type_id).as_ref(),
-                    counted_buffers,
-                    total_size,
-                );
-            }
-        }
-        DataType::Dictionary(_, _) => {
-            let array = array.as_any_dictionary();
-            count_array_memory_size(array.keys(), counted_buffers, total_size);
-            count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
-        }
-        DataType::Map(_, _) => {
-            let array = array.as_map();
-            count_buffer_memory_size(
-                array.offsets().inner().inner(),
-                counted_buffers,
-                total_size,
-            );
-            count_array_memory_size(array.entries(), counted_buffers, total_size);
-        }
-        DataType::RunEndEncoded(_, _) => downcast_run_array! {
-            array => {
-                count_buffer_memory_size(
-                    array.run_ends().inner().inner(),
-                    counted_buffers,
-                    total_size,
-                );
-                count_array_memory_size(
-                    array.values().as_ref(),
-                    counted_buffers,
-                    total_size,
-                );
-            },
-            _ => unreachable!(),
-        }
-        _ => unreachable!("unsupported array type: {}", array.data_type()),
-    }
-}
-
-fn count_byte_array_memory_size<T: ByteArrayType>(
-    array: &arrow::array::GenericByteArray<T>,
-    counted_buffers: &mut BufferIdSet,
-    total_size: &mut usize,
-) {
-    count_buffer_memory_size(
-        array.offsets().inner().inner(),
-        counted_buffers,
-        total_size,
-    );
-    count_buffer_memory_size(array.values(), counted_buffers, total_size);
-}
-
-fn count_list_array_memory_size<O: arrow::array::OffsetSizeTrait>(
-    array: &arrow::array::GenericListArray<O>,
-    counted_buffers: &mut BufferIdSet,
-    total_size: &mut usize,
-) {
-    count_buffer_memory_size(
-        array.offsets().inner().inner(),
-        counted_buffers,
-        total_size,
-    );
-    count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
-}
-
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, mem::size_of};
@@ -451,8 +441,9 @@ mod tests {
 mod record_batch_tests {
     use super::*;
     use arrow::array::{
-        ArrayData, ArrayRef, Float64Array, Int16Array, Int32Array, Int64Array, ListArray,
-        RunArray, StringArray, new_null_array,
+        ArrayData, ArrayRef, BinaryViewArray, Float64Array, Int16Array, Int32Array,
+        Int64Array, LargeListViewArray, ListArray, ListViewArray, RunArray, StringArray,
+        StringViewArray, new_null_array,
     };
     use arrow::datatypes::{
         DataType, Field, Int16Type, Int32Type, Int64Type, Schema, UnionFields, UnionMode,
@@ -484,6 +475,12 @@ mod record_batch_tests {
         let mut total_size = 0;
         count(&array.to_data(), &mut HashSet::default(), &mut total_size);
         total_size
+    }
+
+    fn assert_array_memory_size_matches(array: &dyn Array) {
+        let mut counter = RecordBatchMemoryCounter::new();
+        counter.count_array_memory_size(array);
+        assert_eq!(counter.memory_usage(), array_data_memory_size(array));
     }
 
     #[test]
@@ -656,17 +653,31 @@ mod record_batch_tests {
 
         for data_type in data_types {
             let array = new_null_array(&data_type, 3);
-            let mut total_size = 0;
-            count_array_memory_size(
-                array.as_ref(),
-                &mut BufferIdSet::default(),
-                &mut total_size,
-            );
-            assert_eq!(
-                total_size,
-                array_data_memory_size(array.as_ref()),
-                "{data_type}"
-            );
+            assert_array_memory_size_matches(array.as_ref());
+        }
+
+        // Exercise the view-specific buffers with concrete, non-empty values.
+        let view_arrays = [
+            Arc::new(BinaryViewArray::from_iter_values([
+                b"short".as_slice(),
+                b"a payload longer than twelve bytes".as_slice(),
+            ])) as ArrayRef,
+            Arc::new(StringViewArray::from_iter_values([
+                "short",
+                "a payload longer than twelve bytes",
+            ])) as ArrayRef,
+            Arc::new(ListViewArray::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3)]),
+            ])) as ArrayRef,
+            Arc::new(LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(
+                [Some(vec![Some(1), Some(2)]), None, Some(vec![Some(3)])],
+            )) as ArrayRef,
+        ];
+
+        for array in view_arrays {
+            assert_array_memory_size_matches(array.as_ref());
         }
 
         let run_values = StringArray::from(vec!["alpha", "beta"]);
@@ -695,13 +706,7 @@ mod record_batch_tests {
         ];
 
         for array in run_arrays {
-            let mut total_size = 0;
-            count_array_memory_size(
-                array.as_ref(),
-                &mut BufferIdSet::default(),
-                &mut total_size,
-            );
-            assert_eq!(total_size, array_data_memory_size(array.as_ref()));
+            assert_array_memory_size_matches(array.as_ref());
         }
     }
 
