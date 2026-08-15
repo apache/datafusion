@@ -528,140 +528,143 @@ mod record_batch_tests {
     }
 
     #[test]
-    fn test_record_batch_memory_counter_deduplicates_recursive_shared_children() {
+    fn test_record_batch_memory_counter_deduplicates_shared_list_child() {
         let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let shared_map_key: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
-        let map_fields = Fields::from(vec![
+
+        let first = Arc::new(ListArray::new(
+            Arc::clone(&list_field),
+            OffsetBuffer::new(vec![0, 3].into()),
+            Arc::clone(&shared_child),
+            None,
+        ));
+        let second = Arc::new(ListArray::new(
+            list_field,
+            OffsetBuffer::new(vec![0, 3].into()),
+            Arc::clone(&shared_child),
+            None,
+        ));
+
+        assert_recursive_shared_child_memory(
+            "list",
+            first,
+            second,
+            shared_child.get_array_memory_size(),
+        );
+    }
+
+    fn map_with_shared_children(
+        fields: &Fields,
+        shared_key: &ArrayRef,
+        shared_value: &ArrayRef,
+    ) -> ArrayRef {
+        Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(fields.clone()),
+                    false,
+                )),
+                OffsetBuffer::new(vec![0, 3].into()),
+                StructArray::new(
+                    fields.clone(),
+                    vec![Arc::clone(shared_key), Arc::clone(shared_value)],
+                    None,
+                ),
+                None,
+                false,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_map_children() {
+        let shared_key: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let shared_value: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let fields = Fields::from(vec![
             Arc::new(Field::new("key", DataType::Int32, false)),
             Arc::new(Field::new("value", DataType::Int32, false)),
         ]);
-        let union_fields: UnionFields =
+
+        let first = map_with_shared_children(&fields, &shared_key, &shared_value);
+        let second = map_with_shared_children(&fields, &shared_key, &shared_value);
+
+        assert_recursive_shared_child_memory(
+            "map",
+            first,
+            second,
+            shared_key.get_array_memory_size() + shared_value.get_array_memory_size(),
+        );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_union_child() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let fields: UnionFields =
             [(0, Arc::new(Field::new("value", DataType::Int32, false)))]
                 .into_iter()
                 .collect();
-
-        let arrays = vec![
-            (
-                "list",
-                Arc::new(ListArray::new(
-                    Arc::clone(&list_field),
-                    OffsetBuffer::new(vec![0, 3].into()),
-                    Arc::clone(&shared_child),
+        let make_union = || {
+            Arc::new(
+                UnionArray::try_new(
+                    fields.clone(),
+                    vec![0, 0, 0].into(),
                     None,
-                )) as ArrayRef,
-                Arc::new(ListArray::new(
-                    list_field,
-                    OffsetBuffer::new(vec![0, 3].into()),
-                    Arc::clone(&shared_child),
-                    None,
-                )) as ArrayRef,
-                shared_child.get_array_memory_size(),
-            ),
-            (
-                "map",
-                Arc::new(
-                    MapArray::try_new(
-                        Arc::new(Field::new(
-                            "entries",
-                            DataType::Struct(map_fields.clone()),
-                            false,
-                        )),
-                        OffsetBuffer::new(vec![0, 3].into()),
-                        StructArray::new(
-                            map_fields.clone(),
-                            vec![Arc::clone(&shared_map_key), Arc::clone(&shared_child)],
-                            None,
-                        ),
-                        None,
-                        false,
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                Arc::new(
-                    MapArray::try_new(
-                        Arc::new(Field::new(
-                            "entries",
-                            DataType::Struct(map_fields.clone()),
-                            false,
-                        )),
-                        OffsetBuffer::new(vec![0, 3].into()),
-                        StructArray::new(
-                            map_fields,
-                            vec![Arc::clone(&shared_map_key), Arc::clone(&shared_child)],
-                            None,
-                        ),
-                        None,
-                        false,
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                shared_map_key.get_array_memory_size()
-                    + shared_child.get_array_memory_size(),
-            ),
-            (
-                "union",
-                Arc::new(
-                    UnionArray::try_new(
-                        union_fields.clone(),
-                        vec![0, 0, 0].into(),
-                        None,
-                        vec![Arc::clone(&shared_child)],
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                Arc::new(
-                    UnionArray::try_new(
-                        union_fields,
-                        vec![0, 0, 0].into(),
-                        None,
-                        vec![Arc::clone(&shared_child)],
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                shared_child.get_buffer_memory_size(),
-            ),
-            (
-                "dictionary",
-                Arc::new(
-                    DictionaryArray::<Int32Type>::try_new(
-                        Int32Array::from(vec![0, 1, 2]),
-                        Arc::clone(&shared_child),
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                Arc::new(
-                    DictionaryArray::<Int32Type>::try_new(
-                        Int32Array::from(vec![0, 1, 2]),
-                        Arc::clone(&shared_child),
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                shared_child.get_array_memory_size(),
-            ),
-            (
-                "run_end_encoded",
-                Arc::new(
-                    RunArray::<Int32Type>::try_new(
-                        &Int32Array::from(vec![1, 2, 3]),
-                        shared_child.as_ref(),
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                Arc::new(
-                    RunArray::<Int32Type>::try_new(
-                        &Int32Array::from(vec![1, 2, 3]),
-                        shared_child.as_ref(),
-                    )
-                    .unwrap(),
-                ) as ArrayRef,
-                shared_child.get_buffer_memory_size(),
-            ),
-        ];
+                    vec![Arc::clone(&shared_child)],
+                )
+                .unwrap(),
+            ) as ArrayRef
+        };
 
-        for (name, first, second, shared_memory) in arrays {
-            assert_recursive_shared_child_memory(name, first, second, shared_memory);
-        }
+        assert_recursive_shared_child_memory(
+            "union",
+            make_union(),
+            make_union(),
+            shared_child.get_buffer_memory_size(),
+        );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_dictionary_child() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let make_dictionary = || {
+            Arc::new(
+                DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 1, 2]),
+                    Arc::clone(&shared_child),
+                )
+                .unwrap(),
+            ) as ArrayRef
+        };
+
+        assert_recursive_shared_child_memory(
+            "dictionary",
+            make_dictionary(),
+            make_dictionary(),
+            shared_child.get_array_memory_size(),
+        );
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_deduplicates_shared_run_end_encoded_child() {
+        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let make_run_array = || {
+            Arc::new(
+                RunArray::<Int32Type>::try_new(
+                    &Int32Array::from(vec![1, 2, 3]),
+                    shared_child.as_ref(),
+                )
+                .unwrap(),
+            ) as ArrayRef
+        };
+
+        assert_recursive_shared_child_memory(
+            "run_end_encoded",
+            make_run_array(),
+            make_run_array(),
+            shared_child.get_buffer_memory_size(),
+        );
     }
 
     #[test]

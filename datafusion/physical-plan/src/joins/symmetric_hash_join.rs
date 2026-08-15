@@ -2104,12 +2104,15 @@ mod tests {
     };
     use crate::test::TestMemoryExec;
 
-    use arrow::array::{ArrayRef, Int32Array, StructArray};
+    use arrow::array::{ArrayRef, AsArray, Int32Array, StructArray};
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Field, Fields, Int32Type, IntervalUnit, TimeUnit};
+    use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, PeakRecordingPool, UnboundedMemoryPool,
+    };
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -2256,11 +2259,7 @@ mod tests {
         assert_stream_deduplicates_nested_transformer_batch(BatchSplitter::new(3));
     }
 
-    #[rstest]
-    #[tokio::test]
-    async fn symmetric_hash_join_reserves_transformer_batch(
-        #[values(false, true)] enforce_batch_size_in_joins: bool,
-    ) -> Result<()> {
+    fn transformer_memory_test_join() -> Result<SymmetricHashJoinExec> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(
@@ -2275,7 +2274,7 @@ mod tests {
         let right =
             TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
         let on = vec![(col("id", &schema)?, col("id", &schema)?)];
-        let join = SymmetricHashJoinExec::try_new(
+        SymmetricHashJoinExec::try_new(
             left,
             right,
             on,
@@ -2285,13 +2284,14 @@ mod tests {
             None,
             None,
             StreamJoinPartitionMode::Partitioned,
-        )?;
-        // This limit is intentionally at the regression boundary: accounting that
-        // omits the transformer-held batch succeeds, while corrected accounting fails.
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(2_400, 1.0)
-            .build_arc()?;
-        let context = Arc::new(
+        )
+    }
+
+    fn transformer_memory_test_context(
+        runtime: Arc<RuntimeEnv>,
+        enforce_batch_size_in_joins: bool,
+    ) -> Arc<TaskContext> {
+        Arc::new(
             TaskContext::default()
                 .with_session_config(
                     SessionConfig::new()
@@ -2299,12 +2299,72 @@ mod tests {
                         .with_enforce_batch_size_in_joins(enforce_batch_size_in_joins),
                 )
                 .with_runtime(runtime),
-        );
+        )
+    }
 
-        let error = crate::common::collect(join.execute(0, context)?)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("Additional allocation failed"));
+    fn assert_transformer_memory_test_output(batches: &[RecordBatch]) {
+        let actual_rows = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .iter()
+                    .zip(batch.column(1).as_primitive::<Int32Type>().values())
+                    .map(|(&left, &right)| (left, right))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected_rows = (0..10).map(|id| (id, id)).collect::<Vec<_>>();
+        assert_eq!(actual_rows, expected_rows);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn symmetric_hash_join_reserves_transformer_batch(
+        #[values(false, true)] enforce_batch_size_in_joins: bool,
+    ) -> Result<()> {
+        let recording_pool = Arc::new(PeakRecordingPool::new(Arc::new(
+            UnboundedMemoryPool::default(),
+        )));
+        let pool: Arc<dyn MemoryPool> = Arc::clone(&recording_pool) as _;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(pool)
+            .build_arc()?;
+        let batches = crate::common::collect(transformer_memory_test_join()?.execute(
+            0,
+            transformer_memory_test_context(runtime, enforce_batch_size_in_joins),
+        )?)
+        .await?;
+        assert_transformer_memory_test_output(&batches);
+
+        let peak_reservation = recording_pool.peak_reserved();
+        let transformer_batch_memory = batches
+            .iter()
+            .map(RecordBatch::get_array_memory_size)
+            .max()
+            .expect("join emits a transformer batch");
+        let memory_limit = peak_reservation
+            .checked_sub(transformer_batch_memory)
+            .expect("transformer batch is part of the peak reservation")
+            + 1;
+
+        // The direct stream tests prove this batch is the reservation delta. This
+        // limit leaves room for the old accounting but not the retained batch.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
+            .build_arc()?;
+        let error = crate::common::collect(transformer_memory_test_join()?.execute(
+            0,
+            transformer_memory_test_context(runtime, enforce_batch_size_in_joins),
+        )?)
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "expected a memory-pool error, got: {error}"
+        );
         Ok(())
     }
 
