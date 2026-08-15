@@ -655,6 +655,38 @@ NULL
 NULL
 -1
 
+# Swapped comparison form of the same pattern
+query I
+SELECT CASE WHEN 0 < d THEN n / d ELSE NULL END FROM (VALUES (1, 1), (1, 0), (1, -1)) t(n,d)
+----
+1
+NULL
+NULL
+
+# Float divide-by-zero protection
+query R
+SELECT CASE WHEN d != 0 THEN n / d ELSE NULL END FROM (VALUES (1.0, 2.0), (1.0, 0.0), (1.0, -2.0)) t(n,d)
+----
+0.5
+NULL
+-0.5
+
+# Implicit ELSE (no ELSE clause) is the same as ELSE NULL
+query I
+SELECT CASE WHEN d != 0 THEN n / d END FROM (VALUES (1, 1), (1, 0), (1, -1)) t(n,d)
+----
+1
+NULL
+-1
+
+# NULL divisor is treated as not matching WHEN
+query I
+SELECT CASE WHEN d != 0 THEN n / d ELSE NULL END FROM (VALUES (1, 1), (1, NULL), (1, 0)) t(n,d)
+----
+1
+NULL
+NULL
+
 # single WHEN, no ELSE (absent)
 query I
 SELECT CASE WHEN a > 0 THEN b END
