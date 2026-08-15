@@ -1298,7 +1298,12 @@ impl OrderSensitiveArrayAggAccumulator {
         values: &ArrayRef,
         ordering_values: &[ArrayRef],
     ) -> Result<()> {
-        if let Some(entry_range) = self.store_batch(values, ordering_values, false)? {
+        if let Some(entry_range) = self.store_batch(values, ordering_values, false)?
+            && entry_range
+                .clone()
+                .zip(entry_range.start + 1..entry_range.end)
+                .all(|(left, right)| self.ordering_row(left) <= self.ordering_row(right))
+        {
             self.sorted_runs.push(entry_range);
         }
         self.can_extend_preordered_run = false;
