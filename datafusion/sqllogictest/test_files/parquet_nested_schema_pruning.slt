@@ -1,0 +1,565 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Nested projection pruning: a table whose declared nested type is narrower
+# than the Parquet file's physical type reads only the declared leaves.
+#
+# This file covers both halves of that claim: the results are correct, and
+# the scan really did read less. Each `explain analyze` below pins a literal
+# bytes_scanned against a same-context baseline table declaring the file's
+# own physical schema, so no cast is inserted and every leaf is read. A
+# change that silently widens a clipped read shows up as a mismatch here.
+##########
+
+# The file contains events: ARRAY<STRUCT<x, y, pad_a, pad_b>> and
+# s: STRUCT<x, y, pad>; the table below declares narrower nested types.
+statement ok
+COPY (
+  SELECT id, events, s
+  FROM (VALUES
+    (1, [named_struct('x', 10, 'y', 'a1', 'pad_a', 'p', 'pad_b', 'q')],
+        named_struct('x', 100, 'y', 's1', 'pad', 'sp1')),
+    (2, [named_struct('x', 20, 'y', 'b1', 'pad_a', 'p', 'pad_b', 'q'),
+         named_struct('x', 21, 'y', 'b2', 'pad_a', 'p', 'pad_b', 'q')],
+        named_struct('x', 200, 'y', 's2', 'pad', 'sp2')),
+    (3, NULL,
+        NULL)
+  ) AS t(id, events, s)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet'
+STORED AS PARQUET;
+
+# Declared schema drops pad_a/pad_b from the list elements and pad from the
+# struct, declares x as BIGINT (the file has INT), and adds a z column that
+# does not exist in the file.
+statement ok
+CREATE EXTERNAL TABLE narrow (
+  id INT,
+  events ARRAY<STRUCT<x BIGINT, y VARCHAR, z BIGINT>>,
+  s STRUCT<x BIGINT, y VARCHAR>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+query I??
+SELECT id, events, s FROM narrow ORDER BY id;
+----
+1 [{x: 10, y: a1, z: NULL}] {x: 100, y: s1}
+2 [{x: 20, y: b1, z: NULL}, {x: 21, y: b2, z: NULL}] {x: 200, y: s2}
+3 NULL NULL
+
+# Struct-level nullability is preserved: row 3's struct is NULL, not a
+# struct of NULLs.
+query IBB
+SELECT id, events IS NULL, s IS NULL FROM narrow ORDER BY id;
+----
+1 false false
+2 false false
+3 true true
+
+query II
+SELECT id, s['x'] FROM narrow ORDER BY id;
+----
+1 100
+2 200
+3 NULL
+
+query II
+SELECT id, e['x'] FROM (SELECT id, unnest(events) AS e FROM narrow) ORDER BY id, e['x'];
+----
+1 10
+2 20
+2 21
+
+# `full_schema` names every field the file has, so nothing can be clipped away
+# and the scan always reads every leaf: a same-context baseline for the
+# bytes_scanned comparison below. (A cast is still inserted — the declared
+# leaf types differ from the file's, e.g. VARCHAR maps to Utf8View here while
+# the file holds Utf8 — but it is not a *narrowing* one, so `clip_for_cast`
+# keeps all the leaves.)
+statement ok
+CREATE EXTERNAL TABLE full_schema (
+  id INT,
+  events ARRAY<STRUCT<x INT, y VARCHAR, pad_a VARCHAR, pad_b VARCHAR>>,
+  s STRUCT<x INT, y VARCHAR, pad VARCHAR>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+# bytes_scanned is a literal (not <slt:ignore>) checked-in value: narrow
+# reads fewer bytes than full_schema because the cast-clipped leaves drop
+# pad_a, pad_b, and pad. A future change that widens the narrow read shows
+# up here as a bytes_scanned mismatch.
+query TT
+explain analyze select events from narrow;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=172<slt:ignore>]
+
+query TT
+explain analyze select events from full_schema;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=312<slt:ignore>]
+
+# Same for the top-level struct column: the clipped read drops `pad`.
+query TT
+explain analyze select s from narrow;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+
+query TT
+explain analyze select s from full_schema;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+
+# `get_field` on a schema-narrowed struct becomes `get_field(CAST(s), 'x')`;
+# the read clips to the cast target (every field the *narrow* schema
+# declares), not further down to just `x`. The fair "nothing was clipped"
+# baseline is therefore reading every physical leaf of `s`
+# (`select s from full_schema` above), not the same `get_field` query against
+# `full_schema` -- that one needs no cast at all and takes `get_field`'s own,
+# more precise, single-leaf pushdown path.
+query TT
+explain analyze select s['x'] from narrow;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+
+# Mixed access -- the whole (narrowed) column and a subfield of it -- still
+# reads only the narrow schema's leaves.
+query TT
+explain analyze select s, s['y'] from narrow;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+
+query TT
+explain analyze select s, s['y'] from full_schema;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+
+
+# `SELECT *` goes through the same clipped read as an explicit projection.
+query I??
+SELECT * FROM narrow ORDER BY id;
+----
+1 [{x: 10, y: a1, z: NULL}] {x: 100, y: s1}
+2 [{x: 20, y: b1, z: NULL}, {x: 21, y: b2, z: NULL}] {x: 200, y: s2}
+3 NULL NULL
+
+# Referencing the narrowed column as a whole *and* through a field access in
+# the same query.
+query I?T
+SELECT id, s, s['y'] FROM narrow ORDER BY id;
+----
+1 {x: 100, y: s1} s1
+2 {x: 200, y: s2} s2
+3 NULL NULL
+
+# Aggregating over a clipped nested column.
+query IIT
+SELECT count(*), sum(s['x']), string_agg(s['y'], ',' ORDER BY id) FROM narrow;
+----
+3 300 s1,s2
+
+# Filtering on a field of a clipped nested column.
+query I?
+SELECT id, s FROM narrow WHERE s['x'] = 200 ORDER BY id;
+----
+2 {x: 200, y: s2}
+
+# A declared schema whose fields are in a different order from the file's:
+# the values follow the declared order, not the physical one.
+statement ok
+CREATE EXTERNAL TABLE reordered (
+  id INT,
+  events ARRAY<STRUCT<y VARCHAR, x BIGINT>>,
+  s STRUCT<y VARCHAR, x BIGINT>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+query I??
+SELECT id, events, s FROM reordered ORDER BY id;
+----
+1 [{y: a1, x: 10}] {y: s1, x: 100}
+2 [{y: b1, x: 20}, {y: b2, x: 21}] {y: s2, x: 200}
+3 NULL NULL
+
+statement ok
+DROP TABLE reordered;
+
+# A declared struct sharing no field name with the file's is rejected rather
+# than silently null-filled: `clip_for_cast` never sees a zero-overlap cast.
+statement ok
+CREATE EXTERNAL TABLE no_overlap (
+  id INT,
+  s STRUCT<not_in_file BIGINT>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+statement error DataFusion error: Execution error: Cannot cast column 's'
+SELECT s FROM no_overlap;
+
+statement ok
+DROP TABLE no_overlap;
+
+##########
+# Struct nested inside a struct: both levels are clipped, and the reader's
+# reconstruction of struct validity survives at both levels.
+##########
+
+statement ok
+COPY (
+  SELECT id, n
+  FROM (VALUES
+    (1, named_struct('inner', named_struct('a', 1, 'pad_i', 'pi1'), 'c', 'c1', 'pad_o', 'po1')),
+    (2, named_struct('inner', named_struct('a', 2, 'pad_i', 'pi2'), 'c', 'c2', 'pad_o', 'po2')),
+    (3, NULL)
+  ) AS t(id, n)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/nested_struct.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nested_narrow (
+  id INT,
+  n STRUCT<inner STRUCT<a BIGINT>, c VARCHAR>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/nested_struct.parquet';
+
+query I?
+SELECT id, n FROM nested_narrow ORDER BY id;
+----
+1 {inner: {a: 1}, c: c1}
+2 {inner: {a: 2}, c: c2}
+3 NULL
+
+query IBB
+SELECT id, n IS NULL, n['inner'] IS NULL FROM nested_narrow ORDER BY id;
+----
+1 false false
+2 false false
+3 true true
+
+statement ok
+DROP TABLE nested_narrow;
+
+##########
+# The exact shape reported in datafusion-comet#4859: a two-level
+# `ARRAY<STRUCT<..., items: ARRAY<STRUCT<...>>>>` column with a dropped
+# struct sibling (`latency_parts`), a dropped map sibling (`feature_map`), a
+# dropped nested-struct sibling (`diagnostics`), and dropped top-level
+# sibling columns (`dimension_id`, `region_code`, `raw_payload`).
+# Structurally the same ReadSchema/InputSchema pair as the issue (field names
+# representative, not verbatim), which let Comet's production query read
+# 1.35 TB where plain Spark, given the same pruned ReadSchema, read 30.9 GB.
+#
+# Every dropped sibling carries real data rather than NULLs, so the
+# bytes_scanned gap below is attributable to the clip and not to NULL columns
+# being cheap.
+##########
+
+statement ok
+COPY (
+  SELECT id, is_flagged, dimension_id, region_code, events, raw_payload
+  FROM (VALUES
+    (1, true, 1001, 'us-east', [named_struct(
+          'is_available', true,
+          'event_time_ms', 10,
+          'event_token', 'token-0',
+          'latency_parts', named_struct('queue_time_ms', 5, 'retry_count', 1),
+          'items', [named_struct('group_id', 1, 'entity_id', 101, 'metric_value', 1.5,
+                                 'feature_map', MAP {'f1': 0.25},
+                                 'diagnostics', named_struct('module_id', 'm1', 'trace_id', 't1'),
+                                 'pad', 'pad-0000'),
+                    named_struct('group_id', 2, 'entity_id', 102, 'metric_value', 3.0,
+                                 'feature_map', MAP {'f2': 0.5},
+                                 'diagnostics', named_struct('module_id', 'm2', 'trace_id', 't2'),
+                                 'pad', 'pad-0001')])],
+     'payload-0'),
+    (2, false, 1002, 'us-west', [named_struct(
+          'is_available', false,
+          'event_time_ms', 20,
+          'event_token', 'token-1',
+          'latency_parts', named_struct('queue_time_ms', 7, 'retry_count', 2),
+          'items', [named_struct('group_id', 3, 'entity_id', 103, 'metric_value', 4.5,
+                                 'feature_map', MAP {'f3': 0.75},
+                                 'diagnostics', named_struct('module_id', 'm3', 'trace_id', 't3'),
+                                 'pad', 'pad-0002')])],
+     'payload-1')
+  ) AS t(id, is_flagged, dimension_id, region_code, events, raw_payload)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/two_level.parquet'
+STORED AS PARQUET;
+
+# Declares neither the dropped top-level columns nor, inside `events`,
+# `event_token`/`latency_parts`, nor, inside `items`, the map, the nested
+# struct, or the pad.
+statement ok
+CREATE EXTERNAL TABLE two_level_narrow (
+  id INT,
+  is_flagged BOOLEAN,
+  events ARRAY<STRUCT<
+    is_available BOOLEAN,
+    event_time_ms BIGINT,
+    items ARRAY<STRUCT<group_id BIGINT, entity_id BIGINT, metric_value DOUBLE>>
+  >>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/two_level.parquet';
+
+# The file's own physical schema, so no cast is inserted: the same-context
+# baseline for the bytes comparison.
+statement ok
+CREATE EXTERNAL TABLE two_level_full
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/two_level.parquet';
+
+# Only the declared subfields survive, at *both* nesting levels: the printed
+# structs are the emitted Arrow type.
+query I?
+SELECT id, events FROM two_level_narrow ORDER BY id;
+----
+1 [{is_available: true, event_time_ms: 10, items: [{group_id: 1, entity_id: 101, metric_value: 1.5}, {group_id: 2, entity_id: 102, metric_value: 3.0}]}]
+2 [{is_available: false, event_time_ms: 20, items: [{group_id: 3, entity_id: 103, metric_value: 4.5}]}]
+
+# Unnesting twice reaches the inner list's surviving leaves.
+query III
+SELECT id, i['group_id'], i['entity_id']
+FROM (SELECT id, unnest(e['items']) AS i
+      FROM (SELECT id, unnest(events) AS e FROM two_level_narrow))
+ORDER BY id, i['group_id'];
+----
+1 1 101
+1 2 102
+2 3 103
+
+query TT
+explain analyze select events from two_level_narrow;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=381<slt:ignore>]
+
+query TT
+explain analyze select events from two_level_full;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=1.05 K<slt:ignore>]
+
+statement ok
+DROP TABLE two_level_narrow;
+
+statement ok
+DROP TABLE two_level_full;
+
+##########
+# A MAP column is never clipped (the runtime cast routes maps through Arrow's
+# positional struct cast, which needs every child), but it must not stop a
+# struct sibling from being clipped. The declared schema below omits the map
+# entirely, leaving it in the file as an unprojected root.
+##########
+
+statement ok
+COPY (
+  SELECT id, m, s
+  FROM (VALUES
+    (1, MAP {'k1': 1, 'k2': 2}, named_struct('x', 10, 'pad', 'p1')),
+    (2, MAP {'k1': 3}, named_struct('x', 20, 'pad', 'p2'))
+  ) AS t(id, m, s)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/with_map.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE map_sibling (
+  id INT,
+  s STRUCT<x BIGINT>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/with_map.parquet';
+
+query I?
+SELECT id, s FROM map_sibling ORDER BY id;
+----
+1 {x: 10}
+2 {x: 20}
+
+statement ok
+DROP TABLE map_sibling;
+
+##########
+# One table over two files, one physically narrow (no cast inserted) and one
+# wide (clipped). Both must read correctly in the same scan.
+##########
+
+statement ok
+COPY (
+  SELECT id, s
+  FROM (VALUES
+    (10, named_struct('x', 1000, 'y', 'w1', 'pad', 'wp1'))
+  ) AS t(id, s)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/mixed/wide.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+  SELECT id, s
+  FROM (VALUES
+    (20, named_struct('x', 2000, 'y', 'n1'))
+  ) AS t(id, s)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/mixed/narrow.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE mixed_files (
+  id INT,
+  s STRUCT<x BIGINT, y VARCHAR>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/mixed/';
+
+query I?
+SELECT id, s FROM mixed_files ORDER BY id;
+----
+10 {x: 1000, y: w1}
+20 {x: 2000, y: n1}
+
+statement ok
+DROP TABLE mixed_files;
+
+##########
+# A predicate on a primitive column with filter pushdown enabled, while the
+# projected nested column is clipped: the clip and the row filter have to
+# coexist on the same scan.
+#
+# The predicate is deliberately on `id` and not on a field of the clipped
+# column: `WHERE s['x'] = ...` with pushdown enabled is silently dropped
+# today (apache/datafusion#24109), which is a pre-existing row-filter bug
+# rather than anything this feature does.
+##########
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+query I?
+SELECT id, s FROM narrow WHERE id >= 2 ORDER BY id;
+----
+2 {x: 200, y: s2}
+3 NULL
+
+query TT
+explain analyze select s from narrow where id >= 2;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=219<slt:ignore>]
+
+query TT
+explain analyze select s from full_schema where id >= 2;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=2, <slt:ignore>bytes_scanned=292<slt:ignore>]
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+##########
+# Query-level casts. `ProjectionExec` is merged into the scan, so a `CAST`
+# written in the query reaches the same read-plan analysis as an
+# adapter-inserted one — including one column consumed through two *different*
+# cast targets, which no single clipped read can serve. Clipping to one
+# target's leaves would leave the other cast reading a struct that is missing
+# the fields it names, which `cast_column` either null-fills (wrong results)
+# or, for disjoint targets, rejects outright.
+#
+# `exact` infers its schema from the file, so no adapter cast is interposed
+# and the casts below are the only ones the scan sees.
+##########
+
+statement ok
+CREATE EXTERNAL TABLE exact
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+# A single query-level cast is clipped like an adapter-inserted one.
+query ?
+SELECT CAST(s AS STRUCT<y VARCHAR>) FROM exact ORDER BY id;
+----
+{y: s1}
+{y: s2}
+NULL
+
+# Disjoint targets.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0,
+       CAST(s AS STRUCT<pad VARCHAR>) AS q1
+FROM exact ORDER BY id;
+----
+{x: 100} {pad: sp1}
+{x: 200} {pad: sp2}
+NULL NULL
+
+# Overlapping targets: q1 needs a leaf q0's clip would have dropped.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0,
+       CAST(s AS STRUCT<x BIGINT, y VARCHAR>) AS q1
+FROM exact ORDER BY id;
+----
+{x: 100} {x: 100, y: s1}
+{x: 200} {x: 200, y: s2}
+NULL NULL
+
+# Repeated identical targets still clip.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0,
+       CAST(s AS STRUCT<x BIGINT>) AS q1
+FROM exact ORDER BY id;
+----
+{x: 100} {x: 100}
+{x: 200} {x: 200}
+NULL NULL
+
+# A cast alongside a whole-column reference: the whole-column read wins.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0, s
+FROM exact ORDER BY id;
+----
+{x: 100} {x: 100, y: s1, pad: sp1}
+{x: 200} {x: 200, y: s2, pad: sp2}
+NULL NULL
+
+# The conflicting-target fallback reads the whole column -- exactly what a
+# scan with no clipping at all reads, and never more. These two must match:
+# the first falls back, the second never clips in the first place.
+query TT
+explain analyze select CAST(s AS STRUCT<x BIGINT>) AS q0, CAST(s AS STRUCT<pad VARCHAR>) AS q1 from exact;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+
+query TT
+explain analyze select s from exact;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
+
+statement ok
+DROP TABLE exact;
+
+# A query cast stacked on top of the adapter's cast for a narrowed table.
+query ?
+SELECT CAST(s AS STRUCT<y VARCHAR>) FROM narrow ORDER BY id;
+----
+{y: s1}
+{y: s2}
+NULL
+
+statement ok
+DROP TABLE narrow;
+
+statement ok
+DROP TABLE full_schema;

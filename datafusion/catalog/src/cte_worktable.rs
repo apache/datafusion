@@ -18,6 +18,7 @@
 //! CteWorkTable implementation used for recursive queries
 
 use std::borrow::Cow;
+use std::future::ready;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -26,6 +27,7 @@ use datafusion_common::error::Result;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::work_table::WorkTableExec;
+use futures::future::BoxFuture;
 
 use crate::{ScanArgs, ScanResult, Session, TableProvider};
 
@@ -78,30 +80,39 @@ impl TableProvider for CteWorkTable {
         TableType::Temporary
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
-            .with_filters(Some(filters))
-            .with_limit(limit);
-        Ok(self.scan_with_args(state, options).await?.into_inner())
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
     }
 
-    async fn scan_with_args<'a>(
-        &self,
-        _state: &dyn Session,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
         args: ScanArgs<'a>,
-    ) -> Result<ScanResult> {
-        Ok(ScanResult::new(Arc::new(WorkTableExec::new(
-            self.name.clone(),
-            Arc::clone(&self.table_schema),
-            args.projection().map(|p| p.to_vec()),
-        )?)))
+    ) -> BoxFuture<'async_trait, Result<ScanResult>>
+    where
+        'a: 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(self.scan_with_args_inner(state, &args)))
     }
 
     fn supports_filters_pushdown(
@@ -113,5 +124,43 @@ impl TableProvider for CteWorkTable {
             TableProviderFilterPushDown::Unsupported;
             filters.len()
         ])
+    }
+}
+
+impl CteWorkTable {
+    fn scan_with_args_inner<'a>(
+        &self,
+        _state: &dyn Session,
+        args: &ScanArgs<'a>,
+    ) -> Result<ScanResult> {
+        Ok(ScanResult::new(Arc::new(WorkTableExec::new(
+            self.name.clone(),
+            Arc::clone(&self.table_schema),
+            args.projection().map(|p| p.to_vec()),
+        )?)))
+    }
+
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
+        &self,
+        state: &dyn Session,
+        projection: Option<&[usize]>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection)
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
     }
 }

@@ -18,7 +18,7 @@
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val, take};
 use std::sync::Arc;
 
@@ -27,10 +27,13 @@ use arrow::array::{
     UInt32Array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::compute::{SortOptions, filter};
+use arrow::compute::{SortOptions, cast, filter};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 
 use datafusion_common::cast::as_list_array;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
+use datafusion_common::utils::proxy::HashTableAllocExt;
 use datafusion_common::utils::{
     SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
 };
@@ -49,6 +52,7 @@ use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use hashbrown::hash_table::HashTable;
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -808,15 +812,65 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
     }
 }
 
+/// Resources that are allocated lazily on the first `update_batch` call,
+/// once the concrete runtime Arrow type is known.
+///
+/// Grouping all three fields together makes the "either all present or all
+/// absent" invariant explicit in the type system, replacing the scattered
+/// `.expect()` calls that would otherwise be needed.
+#[derive(Debug)]
+struct DistinctState {
+    /// Converts Arrow arrays to/from the comparable row format.
+    converter: RowConverter,
+    /// One owned encoded row per live distinct value, indexed by group index.
+    /// Compacted via swap-remove on eviction so there are never dead slots.
+    group_rows: Vec<OwnedRow>,
+    /// Live refcount per group index. `counts[i]` is how many times the value
+    /// at `group_rows[i]` is currently present in the window frame.
+    counts: Vec<u64>,
+    /// Hash of the encoded row at group index `i`, kept in sync with
+    /// `group_rows` and `counts`. Needed to patch the map on swap-remove
+    /// eviction without re-encoding the moved row.
+    row_hashes: Vec<u64>,
+    /// Temporary buffer for encoding an incoming batch; reused across calls.
+    rows_buffer: Rows,
+}
+
 #[derive(Debug)]
 pub struct DistinctArrayAggAccumulator {
-    // Value → live refcount. Multiset state lets `retract_batch` correctly
-    // drop a duplicate occurrence while keeping the key alive if other
-    // copies remain in the current window frame.
-    values: HashMap<ScalarValue, u64>,
+    /// Lazily allocated on the first `update_batch`; `None` until then.
+    state: Option<DistinctState>,
+    /// Hash table storing `(hash, group_index)`. Only contains live entries
+    /// (those whose count is > 0). Evicted on `retract_batch` when count
+    /// drops to zero.
+    map: HashTable<(u64, usize)>,
+    /// Heap size of `map` in bytes, tracked for `size()` reporting.
+    map_size: usize,
+    /// Reused buffer for batch hashes.
+    hashes_buffer: Vec<u64>,
+    /// Random state used by `create_hashes`.
+    random_state: RandomState,
     datatype: DataType,
     sort_options: Option<SortOptions>,
     ignore_nulls: bool,
+}
+
+/// Returns `true` if `dt` is, or recursively contains, a `Dictionary` type.
+///
+/// `RowConverter` always decodes to the physical (non-dictionary) type, so a
+/// cast back to the declared logical type is required when this is true.
+fn datatype_contains_dictionary(dt: &DataType) -> bool {
+    match dt {
+        DataType::Dictionary(_, _) => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _) => datatype_contains_dictionary(f.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|f| datatype_contains_dictionary(f.data_type())),
+        _ => false,
+    }
 }
 
 impl DistinctArrayAggAccumulator {
@@ -826,11 +880,36 @@ impl DistinctArrayAggAccumulator {
         ignore_nulls: bool,
     ) -> Result<Self> {
         Ok(Self {
-            values: HashMap::new(),
+            state: None,
+            map: HashTable::new(),
+            map_size: 0,
+            hashes_buffer: Vec::new(),
+            random_state: RandomState::default(),
             datatype: datatype.clone(),
             sort_options,
             ignore_nulls,
         })
+    }
+
+    /// Lazily initialises the `DistinctState` on the first call, using the
+    /// actual runtime column type.
+    fn ensure_state(&mut self, data_type: &DataType) -> Result<()> {
+        if self.state.is_none() {
+            let sort_field = match self.sort_options {
+                Some(opts) => SortField::new_with_options(data_type.clone(), opts),
+                None => SortField::new(data_type.clone()),
+            };
+            let converter = RowConverter::new(vec![sort_field])?;
+            let rows_buffer = converter.empty_rows(0, 0);
+            self.state = Some(DistinctState {
+                converter,
+                group_rows: Vec::new(),
+                counts: Vec::new(),
+                row_hashes: Vec::new(),
+                rows_buffer,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -845,22 +924,76 @@ impl Accumulator for DistinctArrayAggAccumulator {
         }
 
         let val = &values[0];
-        let nulls = if self.ignore_nulls {
-            val.logical_nulls()
+
+        // Filter nulls out upfront when ignore_nulls is set so they are
+        // never inserted into the dedup state.
+        let filtered;
+        let col: &ArrayRef = if self.ignore_nulls {
+            if let Some(nulls) = val.logical_nulls() {
+                if nulls.null_count() > 0 {
+                    let mask: BooleanArray = nulls.iter().map(Some).collect();
+                    filtered = filter(val.as_ref(), &mask)?;
+                    &filtered
+                } else {
+                    val
+                }
+            } else {
+                val
+            }
         } else {
-            None
+            val
         };
 
-        let nulls = nulls.as_ref();
-        if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
-            for i in 0..val.len() {
-                if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    let key = ScalarValue::try_from_array(val, i)?.compacted();
-                    *self.values.entry(key).or_insert(0) += 1;
+        if col.is_empty() {
+            return Ok(());
+        }
+
+        self.ensure_state(col.data_type())?;
+
+        // Encode the entire incoming batch into rows_buffer in one pass.
+        let DistinctState {
+            converter,
+            group_rows,
+            counts,
+            row_hashes,
+            rows_buffer,
+        } = self.state.as_mut().unwrap();
+        rows_buffer.clear();
+        converter.append(rows_buffer, std::slice::from_ref(col))?;
+
+        // Pre-compute all hashes for the batch in one SIMD-friendly pass.
+        self.hashes_buffer.clear();
+        self.hashes_buffer.resize(col.len(), 0);
+        create_hashes(
+            std::slice::from_ref(col),
+            &self.random_state,
+            &mut self.hashes_buffer,
+        )?;
+
+        for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
+            let row = rows_buffer.row(row_idx);
+            let entry = self.map.find_mut(hash, |&(h, group_idx)| {
+                h == hash && group_rows[group_idx].row() == row
+            });
+            match entry {
+                Some((_, group_idx)) => {
+                    // Already known: just increment the live refcount.
+                    counts[*group_idx] += 1;
+                }
+                None => {
+                    // New distinct value: own the encoded row, record it.
+                    let new_group_idx = group_rows.len();
+                    group_rows.push(row.owned());
+                    counts.push(1);
+                    row_hashes.push(hash);
+                    self.map.insert_accounted(
+                        (hash, new_group_idx),
+                        |&(h, _)| h,
+                        &mut self.map_size,
+                    );
                 }
             }
         }
-
         Ok(())
     }
 
@@ -871,12 +1004,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
         assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
-        // The DISTINCT state schema is `List<value>` — partial accumulators
-        // ship the set of values they saw, not multiplicities. Re-ingesting
-        // each element here makes the merged counts represent "partitions
-        // that emitted this value," which is fine because `evaluate` only
-        // reads keys. Refcount semantics for retract are only valid within
-        // a single accumulator instance (window execution).
+        // The DISTINCT state is `List<value>`.
         states[0]
             .as_list::<i32>()
             .iter()
@@ -885,37 +1013,51 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut values: Vec<ScalarValue> = self.values.keys().cloned().collect();
-        if values.is_empty() {
+        if self.map.is_empty() {
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
 
-        if let Some(opts) = self.sort_options {
-            let mut delayed_cmp_err = Ok(());
-            values.sort_by(|a, b| {
-                if a.is_null() {
-                    return match opts.nulls_first {
-                        true => Ordering::Less,
-                        false => Ordering::Greater,
-                    };
-                }
-                if b.is_null() {
-                    return match opts.nulls_first {
-                        true => Ordering::Greater,
-                        false => Ordering::Less,
-                    };
-                }
-                match opts.descending {
-                    true => b.try_cmp(a),
-                    false => a.try_cmp(b),
-                }
-                .unwrap_or_else(|err| {
-                    delayed_cmp_err = Err(err);
-                    Ordering::Equal
-                })
-            });
-            delayed_cmp_err?;
+        let DistinctState {
+            converter,
+            group_rows,
+            ..
+        } = self
+            .state
+            .as_ref()
+            .expect("state must be set when map is non-empty");
+
+        // Collect the group indices of all live entries.
+        let mut live_indices: Vec<usize> =
+            self.map.iter().map(|&(_, group_idx)| group_idx).collect();
+
+        // If ORDER BY was specified, the RowConverter bakes the sort direction
+        // into the row bytes, so lexicographic sort gives the correct order.
+        if self.sort_options.is_some() {
+            live_indices
+                .sort_unstable_by(|&a, &b| group_rows[a].row().cmp(&group_rows[b].row()));
+        }
+
+        // Decode the selected rows back into an Arrow array.
+        let rows: Vec<Row<'_>> =
+            live_indices.iter().map(|&i| group_rows[i].row()).collect();
+        let arrays = converter.convert_rows(rows)?;
+
+        // `convert_rows` always returns the physical (non-dictionary) type.
+        // Cast back to the declared logical type when they differ AND the
+        // declared type contains a Dictionary somewhere (directly or nested
+        // inside a Struct, List, etc.) — that is the only case where
+        // RowConverter strips the logical type.
+        let decoded = if arrays[0].data_type() != &self.datatype
+            && datatype_contains_dictionary(&self.datatype)
+        {
+            cast(arrays[0].as_ref(), &self.datatype)?
+        } else {
+            Arc::clone(&arrays[0])
         };
+
+        let values: Vec<ScalarValue> = (0..decoded.len())
+            .map(|i| ScalarValue::try_from_array(decoded.as_ref(), i))
+            .collect::<Result<_>>()?;
 
         let arr = ScalarValue::new_list(&values, &self.datatype, true);
         Ok(ScalarValue::List(arr))
@@ -929,33 +1071,94 @@ impl Accumulator for DistinctArrayAggAccumulator {
         assert_eq_or_internal_err!(values.len(), 1, "expects single batch");
 
         let val = &values[0];
-        let nulls = if self.ignore_nulls {
-            val.logical_nulls()
-        } else {
-            None
-        };
-        let nulls = nulls.as_ref();
 
-        for i in 0..val.len() {
-            if nulls.is_some_and(|nulls| !nulls.is_valid(i)) {
-                continue;
-            }
-            let key = ScalarValue::try_from_array(val, i)?;
-            match self.values.get_mut(&key) {
-                Some(count) => {
-                    *count -= 1;
-                    if *count == 0 {
-                        self.values.remove(&key);
-                    }
+        // Mirror the null-filtering logic from update_batch so we only
+        // retract values that were actually inserted.
+        let filtered;
+        let col: &ArrayRef = if self.ignore_nulls {
+            if let Some(nulls) = val.logical_nulls() {
+                if nulls.null_count() > 0 {
+                    let mask: BooleanArray = nulls.iter().map(Some).collect();
+                    filtered = filter(val.as_ref(), &mask)?;
+                    &filtered
+                } else {
+                    val
                 }
-                None => {
+            } else {
+                val
+            }
+        } else {
+            val
+        };
+
+        if col.is_empty() {
+            return Ok(());
+        }
+
+        let DistinctState {
+            converter,
+            group_rows,
+            counts,
+            row_hashes,
+            rows_buffer,
+        } = self
+            .state
+            .as_mut()
+            .expect("retract_batch called before update_batch");
+
+        rows_buffer.clear();
+        converter.append(rows_buffer, std::slice::from_ref(col))?;
+
+        self.hashes_buffer.clear();
+        self.hashes_buffer.resize(col.len(), 0);
+        create_hashes(
+            std::slice::from_ref(col),
+            &self.random_state,
+            &mut self.hashes_buffer,
+        )?;
+
+        for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
+            let row = rows_buffer.row(row_idx);
+            match self.map.find_entry(hash, |&(h, group_idx)| {
+                h == hash && group_rows[group_idx].row() == row
+            }) {
+                Err(_) => {
                     return internal_err!(
-                        "DistinctArrayAggAccumulator::retract_batch: value not present in state"
+                        "DistinctArrayAggAccumulator::retract_batch: \
+                         value not present in state"
                     );
+                }
+                Ok(occupied) => {
+                    let (_, dead_idx) = *occupied.get();
+                    counts[dead_idx] -= 1;
+                    if counts[dead_idx] == 0 {
+                        occupied.remove();
+                        // Compact via swap-remove: move the last slot into the
+                        // dead slot so group_rows / counts / row_hashes stay
+                        // dense with no dead entries.
+                        let last_idx = group_rows.len() - 1;
+                        if dead_idx != last_idx {
+                            // Patch the map entry that points to last_idx so
+                            // it points to dead_idx instead.
+                            let last_hash = row_hashes[last_idx];
+                            self.map
+                                .find_mut(last_hash, |&(_, idx)| idx == last_idx)
+                                .ok_or_else(|| {
+                                    datafusion_common::internal_datafusion_err!(
+                                        "DistinctArrayAggAccumulator: map is missing \
+                                         group index {last_idx} during swap-remove \
+                                         compaction"
+                                    )
+                                })?
+                                .1 = dead_idx;
+                        }
+                        group_rows.swap_remove(dead_idx);
+                        counts.swap_remove(dead_idx);
+                        row_hashes.swap_remove(dead_idx);
+                    }
                 }
             }
         }
-
         Ok(())
     }
 
@@ -964,12 +1167,26 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + ScalarValue::size_of_hashmap(&self.values)
-            - size_of_val(&self.values)
+        size_of_val(self)
+            + self
+                .state
+                .as_ref()
+                .map(|s| {
+                    s.group_rows
+                        .iter()
+                        .map(|r| r.row().data().len())
+                        .sum::<usize>()
+                        + s.group_rows.capacity() * size_of::<OwnedRow>()
+                        + s.counts.capacity() * size_of::<u64>()
+                        + s.row_hashes.capacity() * size_of::<u64>()
+                        + s.rows_buffer.size()
+                        + s.converter.size()
+                })
+                .unwrap_or(0)
+            + self.map_size
+            + self.hashes_buffer.capacity() * size_of::<u64>()
             + self.datatype.size()
             - size_of_val(&self.datatype)
-            - size_of_val(&self.sort_options)
-            + size_of::<Option<SortOptions>>()
     }
 }
 
@@ -1524,15 +1741,17 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 282);
+        assert_eq!(acc1.size(), 174);
 
         Ok(())
     }
     #[test]
     fn does_not_over_account_memory_distinct() -> Result<()> {
-        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
-            .distinct()
-            .build_two()?;
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::new(DataType::List(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+        ))
+        .distinct()
+        .build_two()?;
 
         acc1.update_batch(&[string_list_data([
             vec!["a", "b", "c"],
@@ -1541,17 +1760,18 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        // without compaction, the size is 16684
-        assert_eq!(acc1.size(), 1684);
+        assert_eq!(acc1.size(), 2274);
 
         Ok(())
     }
 
     #[test]
     fn does_not_over_account_memory_ordered() -> Result<()> {
-        let mut acc = ArrayAggAccumulatorBuilder::string()
-            .order_by_col("col", SortOptions::new(false, false))
-            .build()?;
+        let mut acc = ArrayAggAccumulatorBuilder::new(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Utf8, true),
+        )))
+        .order_by_col("col", SortOptions::new(false, false))
+        .build()?;
 
         acc.update_batch(&[string_list_data([
             vec!["a", "b", "c"],
@@ -1561,6 +1781,122 @@ mod tests {
 
         // without compaction, the size is 17112
         assert_eq!(acc.size(), 2224);
+
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_aggregate_nested_nullability_mismatch_issue_24022() -> Result<()> {
+        use arrow::array::{Int32Array, Int64Array, StructArray};
+        use datafusion_physical_expr::expressions::Column;
+
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let ordering_dtype = DataType::Int64;
+        let schema = Schema::new(vec![
+            Field::new("val", requested_element_type.clone(), true),
+            Field::new("ord", DataType::Int64, true),
+        ]);
+        let ord_expr = Arc::new(
+            Column::new_with_schema("ord", &schema).expect("column not in schema"),
+        ) as Arc<dyn PhysicalExpr>;
+
+        let asc_opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let asc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::clone(&ord_expr),
+            asc_opts,
+        )])
+        .unwrap();
+
+        let mut acc = OrderSensitiveArrayAggAccumulator::try_new(
+            &requested_element_type,
+            std::slice::from_ref(&ordering_dtype),
+            asc_ordering,
+            /*is_input_pre_ordered=*/ true,
+            /*reverse=*/ false,
+            /*ignore_nulls=*/ false,
+        )?;
+
+        let value_arr = Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])) as ArrayRef;
+
+        let ord_arr = Arc::new(Int64Array::from(vec![0i64])) as ArrayRef;
+
+        acc.update_batch(&[value_arr, ord_arr])?;
+
+        let evaluated = acc.evaluate()?;
+
+        if let ScalarValue::List(arr) = evaluated {
+            assert_eq!(
+                arr.data_type(),
+                &DataType::List(Arc::new(Field::new_list_field(
+                    requested_element_type.clone(),
+                    true
+                )))
+            );
+
+            let expected_struct_array = StructArray::from(vec![(
+                Arc::new(Field::new("n", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            )]);
+            let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+            assert_eq!(&arr.value(0), &expected_array);
+        } else {
+            panic!("Expected ScalarValue::List");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_aggregate_nested_nullability_mismatch_issue_24022() -> Result<()> {
+        use arrow::array::{Int32Array, StructArray};
+        use datafusion_common::ScalarValue;
+
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let mut acc = DistinctArrayAggAccumulator::try_new(
+            &requested_element_type,
+            None,
+            /*ignore_nulls=*/ false,
+        )?;
+
+        let value_arr = Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])) as ArrayRef;
+
+        acc.update_batch(&[value_arr])?;
+
+        let evaluated = acc.evaluate()?;
+
+        if let ScalarValue::List(arr) = evaluated {
+            assert_eq!(
+                arr.data_type(),
+                &DataType::List(Arc::new(Field::new_list_field(
+                    requested_element_type.clone(),
+                    true
+                )))
+            );
+
+            let expected_struct_array = StructArray::from(vec![(
+                Arc::new(Field::new("n", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            )]);
+            let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+            assert_eq!(&arr.value(0), &expected_array);
+        } else {
+            panic!("Expected ScalarValue::List");
+        }
 
         Ok(())
     }
@@ -1688,15 +2024,19 @@ mod tests {
 
         fn new(data_type: DataType) -> Self {
             Self {
-                return_field: Field::new("f", data_type.clone(), true).into(),
+                return_field: Field::new(
+                    "f",
+                    DataType::List(Arc::new(Field::new_list_field(
+                        data_type.clone(),
+                        true,
+                    ))),
+                    true,
+                )
+                .into(),
                 distinct: false,
                 order_bys: vec![],
                 schema: Schema {
-                    fields: Fields::from(vec![Field::new(
-                        "col",
-                        DataType::new_list(data_type, true),
-                        true,
-                    )]),
+                    fields: Fields::from(vec![Field::new("col", data_type, true)]),
                     metadata: Default::default(),
                 },
             }
@@ -2679,6 +3019,39 @@ mod tests {
     }
 
     #[test]
+    fn distinct_array_agg_dictionary_preserves_type() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
+
+        // Dictionary(Int32, Utf8) input with duplicates.
+        let keys = Int32Array::from(vec![0, 1, 0, 2, 1]); // "a", "b", "a", "c", "b"
+        let values = StringArray::from(vec!["a", "b", "c"]);
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+
+        let datatype =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut acc = DistinctArrayAggAccumulator::try_new(&datatype, None, false)?;
+        acc.update_batch(&[dict])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        // The element type of the returned list must stay Dictionary(Int32, Utf8),
+        // not be silently widened to Utf8.
+        assert_eq!(
+            arr.values().data_type(),
+            &datatype,
+            "element type must be Dictionary(Int32, Utf8), got {}",
+            arr.values().data_type()
+        );
+
+        // There should be exactly 3 distinct values.
+        assert_eq!(arr.value(0).len(), 3);
+        Ok(())
+    }
+
+    #[test]
     fn distinct_array_agg_date32_deduplicates() -> Result<()> {
         use arrow::array::Date32Array;
 
@@ -2706,6 +3079,54 @@ mod tests {
         values.sort_unstable();
 
         assert_eq!(values, vec![100i32, 200, 300, 400]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_retract_memory_is_bounded() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        // Emulates a sliding window where each value enters and immediately
+        // leaves. Only CARDINALITY distinct values are ever live at once;
+        // memory must not grow with the number of rows processed.
+        const CARDINALITY: i64 = 10;
+        const WARMUP_ROWS: i64 = 1_000;
+        const EXTRA_ROWS: i64 = 20_000;
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int64, None, false)?;
+
+        let slide = |acc: &mut DistinctArrayAggAccumulator, rows: i64| -> Result<()> {
+            for i in 0..rows {
+                let value: ArrayRef = Arc::new(Int64Array::from(vec![i % CARDINALITY]));
+                acc.update_batch(std::slice::from_ref(&value))?;
+                acc.retract_batch(std::slice::from_ref(&value))?;
+            }
+            Ok(())
+        };
+
+        // Let every buffer reach its steady state before taking a baseline.
+        slide(&mut acc, WARMUP_ROWS)?;
+        let baseline = acc.size();
+
+        slide(&mut acc, EXTRA_ROWS)?;
+        let grown = acc.size();
+
+        assert!(
+            grown <= 2 * baseline,
+            "size() must not grow with the number of retracted rows: \
+             {baseline} bytes after {WARMUP_ROWS} rows, \
+             {grown} bytes after {} rows",
+            WARMUP_ROWS + EXTRA_ROWS
+        );
+
+        // Everything was retracted so evaluate must return null.
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after retracting every row, got {result:?}"
+        );
+
         Ok(())
     }
 }

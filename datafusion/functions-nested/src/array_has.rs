@@ -994,22 +994,22 @@ fn array_has_any_with_scalar_general(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns true if all elements of sub-array exist in array.",
-    syntax_example = "array_has_all(array, sub-array)",
+    description = "Returns true if all elements of sub_array exist in array.",
+    syntax_example = "array_has_all(array, sub_array)",
     sql_example = r#"```sql
 > select array_has_all([1, 2, 3, 4], [2, 3]);
-+--------------------------------------------+
++---------------------------------------------+
 | array_has_all(List([1,2,3,4]), List([2,3])) |
-+--------------------------------------------+
-| true                                       |
-+--------------------------------------------+
++---------------------------------------------+
+| true                                        |
++---------------------------------------------+
 ```"#,
     argument(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
     argument(
-        name = "sub-array",
+        name = "sub_array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
