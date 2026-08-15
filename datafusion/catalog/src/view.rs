@@ -96,10 +96,12 @@ impl TableProvider for ViewTable {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
-        projection: Option<&'life2 Vec<usize>>,
+        projection: Option<&'life2 [usize]>,
         filters: &'life3 [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
@@ -118,7 +120,7 @@ impl ViewTable {
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,
-        projection: Option<&'a Vec<usize>>,
+        projection: Option<&'a [usize]>,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
@@ -128,7 +130,7 @@ impl ViewTable {
     async fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -144,7 +146,7 @@ impl ViewTable {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
                 (0..plan.schema().fields().len()).collect::<Vec<usize>>();
-            if projection == &current_projection {
+            if projection == current_projection {
                 plan
             } else {
                 let fields: Vec<Expr> = projection

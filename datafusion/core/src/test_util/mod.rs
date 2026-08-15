@@ -184,6 +184,8 @@ pub struct TestTableFactory {}
 
 #[async_trait]
 impl TableProviderFactory for TestTableFactory {
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn create<'life0, 'life1, 'life2, 'async_trait>(
         &'life0 self,
         session: &'life1 dyn Session,
@@ -248,7 +250,7 @@ impl TableProvider for TestTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        _projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

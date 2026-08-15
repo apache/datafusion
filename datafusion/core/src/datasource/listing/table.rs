@@ -48,6 +48,8 @@ pub trait ListingTableConfigExt {
 
 #[async_trait]
 impl ListingTableConfigExt for ListingTableConfig {
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn infer_options<'life0, 'async_trait>(
         self,
         state: &'life0 dyn Session,
@@ -59,6 +61,8 @@ impl ListingTableConfigExt for ListingTableConfig {
         infer_options_boxed(self, state)
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn infer<'life0, 'async_trait>(
         self,
         state: &'life0 dyn Session,

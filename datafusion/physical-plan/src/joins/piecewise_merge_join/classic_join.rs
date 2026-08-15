@@ -481,6 +481,16 @@ fn resolve_classic_join(
         buffer_idx = buffered_null_idx;
         stream_idx = stream_null_idx;
         batch_process_state.processed_null_count = true;
+
+        // The scan below starts past the streamed side's NULL-keyed rows, which
+        // sit at the front (`nulls_first`). A NULL join key never matches under
+        // `NullEqualsNothing`, so for `Right`/`Full` those rows are unmatched and
+        // must still be emitted; record them here since the scan will skip them.
+        if matches!(join_type, JoinType::Right | JoinType::Full) {
+            for row_idx in 0..stream_null_idx as u32 {
+                batch_process_state.unmatched_indices.append_value(row_idx);
+            }
+        }
     }
 
     // Our buffer_idx variable allows us to start probing on the buffered side where we last matched

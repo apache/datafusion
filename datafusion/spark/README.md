@@ -23,6 +23,18 @@ under the License.
 
 This crate is a submodule of DataFusion that provides [Apache Spark] compatible expressions for use with DataFusion.
 
+## Using the DataFusion CLI
+
+Pass `--spark` to `datafusion-cli` to enable the Spark SQL dialect and register
+the Spark-compatible scalar, aggregate, and window functions for the session:
+
+```shell
+datafusion-cli --spark
+```
+
+The option is disabled by default because Spark-compatible functions can
+override DataFusion functions with the same name.
+
 [apache arrow]: https://arrow.apache.org/
 [apache datafusion]: https://datafusion.apache.org/
 [apache spark]: https://spark.apache.org/
