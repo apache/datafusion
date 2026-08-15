@@ -2327,8 +2327,10 @@ mod tests {
         }
 
         fn change_deltas(&self) -> Vec<isize> {
-            self.changes()
-                .into_iter()
+            self.symmetric_join_changes
+                .lock()
+                .expect("recording pool mutex is not poisoned")
+                .iter()
                 .map(|change| change.change)
                 .collect()
         }
