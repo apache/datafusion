@@ -100,7 +100,6 @@ use futures::{
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
-use datafusion::optimizer::simplify_expressions::simplify_literal::parse_literal;
 use datafusion::{
     catalog::Session,
     execution::{
@@ -116,9 +115,13 @@ use datafusion::{
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::*,
 };
+use datafusion::{
+    optimizer::simplify_expressions::simplify_literal::parse_literal,
+    physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions},
+};
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
@@ -698,9 +701,10 @@ impl ExecutionPlan for SampleExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::try_new(
             children.swap_remove(0),
@@ -708,6 +712,16 @@ impl ExecutionPlan for SampleExec {
             self.upper_bound,
             self.seed,
         )?))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -749,6 +763,15 @@ impl ExecutionPlan for SampleExec {
             .to_inexact();
 
         Ok(Arc::new(stats))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
