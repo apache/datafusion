@@ -1579,6 +1579,14 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
+        /// When set to true, the physical plan optimizer will reorder joins that form a
+        /// "double star": two hub relations, each joined to its own set of single-edge
+        /// spoke relations, bridged by a shared central relation. The order is chosen
+        /// with a cost model driven by table statistics, and the rule leaves the plan
+        /// untouched when the join graph has a different shape or the statistics are
+        /// unavailable. Disabled by default.
+        pub double_star_join_reorder: bool, default = false
+
         /// When set to true, the physical plan optimizer uses the pluggable
         /// `StatisticsRegistry` for statistics propagation across operators.
         /// This enables more accurate cardinality estimates compared to each

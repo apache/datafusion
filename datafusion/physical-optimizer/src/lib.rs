@@ -27,6 +27,7 @@
 
 pub mod aggregate_statistics;
 pub mod combine_partial_final_agg;
+pub mod double_star_join_reorder;
 pub mod ensure_coop;
 pub mod ensure_requirements;
 // `enforce_distribution` and `enforce_sorting` are now internal implementation

@@ -2473,6 +2473,7 @@ dependencies = [
  "datafusion-session",
  "insta",
  "itertools 0.15.0",
+ "log",
  "recursive",
  "tokio",
 ]

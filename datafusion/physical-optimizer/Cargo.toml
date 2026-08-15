@@ -52,6 +52,7 @@ datafusion-physical-plan = { workspace = true }
 datafusion-pruning = { workspace = true }
 datafusion-session = { workspace = true }
 itertools = { workspace = true }
+log = { workspace = true }
 recursive = { workspace = true, optional = true }
 
 [dev-dependencies]

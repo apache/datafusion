@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::double_star_join_reorder::DoubleStarJoinReorder;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
@@ -93,6 +94,12 @@ impl PhysicalOptimizer {
             // this information is not lost across different rules during optimization.
             Arc::new(OutputRequirements::new_add_mode()),
             Arc::new(AggregateStatistics::new()),
+            // Reorders "double star" join graphs using statistics. It must run
+            // before JoinSelection, which resolves the Auto partition mode and
+            // picks build sides: those decisions should be made about the tree
+            // this rule emits, not about the one it replaced. Disabled unless
+            // `datafusion.optimizer.double_star_join_reorder` is set.
+            Arc::new(DoubleStarJoinReorder::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
             // EnsureRequirements rule as it decides whether to add additional repartitioning and
