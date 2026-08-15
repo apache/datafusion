@@ -90,6 +90,10 @@ where
     }
 
     fn init(&mut self, values: &PrimitiveArray<T>) {
+        if values.is_empty() {
+            self.mode = Mode::Uninit;
+            return;
+        }
         let mut min = u64::MAX;
         let mut max = u64::MIN;
         let mut seen: HashSet<u64> = HashSet::default();
@@ -100,19 +104,17 @@ where
             seen.insert(k);
         }
         let distinct = seen.len() as u64;
-        self.mode = if min > max {
-            // All-null/empty first batch: stay Uninit so a later batch anchors the window.
-            Mode::Uninit
-        } else if max - min >= MAX_FLAT_RANGE
-            || max - min >= distinct.saturating_mul(SPARSE_FACTOR)
-        {
-            Mode::Fallback(GroupValuesPrimitive::new(self.data_type.clone()))
-        } else {
-            let len = (max - min + 1) as usize;
-            Mode::Flat {
-                offset: min,
-                data: vec![0; len],
+        self.mode = match max.checked_sub(min) {
+            Some(range)
+                if range < MAX_FLAT_RANGE
+                    && range < distinct.saturating_mul(SPARSE_FACTOR) =>
+            {
+                Mode::Flat {
+                    offset: min,
+                    data: vec![0; (range + 1) as usize],
+                }
             }
+            _ => Mode::Fallback(GroupValuesPrimitive::new(self.data_type.clone())),
         };
     }
 
@@ -124,21 +126,21 @@ where
         overflow: &mut HashMap<T::Native, usize>,
         key: T::Native,
     ) -> usize {
-        // Below-offset keys wrap huge, so this one get_mut checks underflow and length.
+        // Out of window (below offset wraps huge, above exceeds len)
         let raw = key.to_ordered_u64().wrapping_sub(offset);
-        if let Ok(idx) = usize::try_from(raw)
-            && let Some(slot) = data.get_mut(idx)
-        {
-            return if *slot != 0 {
-                (*slot - 1) as usize
-            } else {
-                let g = values.len();
-                values.push(key);
-                *slot = g as u32 + 1;
-                g
-            };
+        if raw >= data.len() as u64 {
+            return Self::intern_key_outside(raw, data, values, overflow, key);
         }
-        Self::intern_key_outside(raw, data, values, overflow, key)
+
+        // in window
+        let slot = &mut data[raw as usize];
+        if *slot != 0 {
+            return (*slot - 1) as usize;
+        }
+        let g = values.len();
+        values.push(key);
+        *slot = g as u32 + 1;
+        g
     }
 
     /// Cold path: grow the window up to `MAX_FLAT_RANGE`, else spill to overflow.
@@ -166,6 +168,14 @@ where
             })
         }
     }
+
+    fn null_gid(values: &mut Vec<T::Native>, null_group: &mut Option<usize>) -> usize {
+        *null_group.get_or_insert_with(|| {
+            let g = values.len();
+            values.push(Default::default());
+            g
+        })
+    }
 }
 
 impl<T: ArrowPrimitiveType> GroupValues for GroupValuesFlatPrimitive<T>
@@ -173,68 +183,55 @@ where
     T::Native: FlatKey + HashValue + Hash + Eq,
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        assert_eq!(cols.len(), 1);
-
         let values = cols[0].as_primitive::<T>();
 
         if matches!(self.mode, Mode::Uninit) {
             self.init(values);
         }
-        if let Mode::Fallback(inner) = &mut self.mode {
-            return inner.intern(cols, groups);
-        }
 
-        groups.clear();
-
-        // All-null/empty first batch left mode Uninit: every row is the null group.
-        if matches!(self.mode, Mode::Uninit) {
-            if !values.is_empty() {
-                let null_gid = *self.null_group.get_or_insert_with(|| {
-                    let g = self.values.len();
-                    self.values.push(Default::default());
-                    g
-                });
-                groups.resize(values.len(), null_gid);
+        match &mut self.mode {
+            // Wide / sparse / all-null columns run on the hash grouper.
+            Mode::Fallback(inner) => inner.intern(cols, groups),
+            // After init, Uninit means an empty (zero-row) batch: nothing to assign.
+            Mode::Uninit => {
+                groups.clear();
+                Ok(())
             }
-            return Ok(());
-        }
+            Mode::Flat { offset, data } => {
+                let offset = *offset;
+                groups.clear();
 
-        let Mode::Flat { offset, data } = &mut self.mode else {
-            unreachable!("mode is Flat after init unless Fallback")
-        };
-        let offset = *offset;
-        if values.null_count() == 0 {
-            // Fast path: no nulls.
-            for &key in values.values().iter() {
-                let group_id = Self::intern_key(
-                    offset,
-                    data,
-                    &mut self.values,
-                    &mut self.overflow,
-                    key,
-                );
-                groups.push(group_id);
-            }
-        } else {
-            for v in values {
-                let group_id = match v {
-                    None => *self.null_group.get_or_insert_with(|| {
-                        let g = self.values.len();
-                        self.values.push(Default::default());
-                        g
-                    }),
-                    Some(key) => Self::intern_key(
-                        offset,
-                        data,
-                        &mut self.values,
-                        &mut self.overflow,
-                        key,
-                    ),
-                };
-                groups.push(group_id);
+                // Fast path: no nulls.
+                if values.null_count() == 0 {
+                    for &key in values.values().iter() {
+                        let g = Self::intern_key(
+                            offset,
+                            data,
+                            &mut self.values,
+                            &mut self.overflow,
+                            key,
+                        );
+                        groups.push(g);
+                    }
+                    return Ok(());
+                }
+
+                for v in values {
+                    let g = match v {
+                        None => Self::null_gid(&mut self.values, &mut self.null_group),
+                        Some(key) => Self::intern_key(
+                            offset,
+                            data,
+                            &mut self.values,
+                            &mut self.overflow,
+                            key,
+                        ),
+                    };
+                    groups.push(g);
+                }
+                Ok(())
             }
         }
-        Ok(())
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -251,16 +248,18 @@ where
             }
             EmitTo::First(n) => {
                 if let Mode::Flat { data, .. } = &mut self.mode {
+                    // flushed group ids and keeps the rest, a slot with
+                    // id < n is freed and surviving ids shift down
                     for slot in data.iter_mut() {
-                        if *slot != 0 {
-                            let gid = (*slot - 1) as usize;
-                            *slot = match gid.checked_sub(n) {
-                                Some(sub) => sub as u32 + 1,
-                                None => 0,
-                            };
+                        if *slot == 0 {
+                            continue; // unseen
                         }
+                        let gid = (*slot - 1) as usize;
+                        // survivor: shift id down by n; emitted (gid < n): free the slot
+                        *slot = gid.checked_sub(n).map_or(0, |sub| sub as u32 + 1);
                     }
                 }
+
                 self.overflow.retain(|_, g| match g.checked_sub(n) {
                     Some(sub) => {
                         *g = sub;
@@ -457,5 +456,130 @@ mod tests {
         assert_eq!(intern(&mut gv, &[Some(0), Some(1)]), vec![0, 1]);
         assert_eq!(intern(&mut gv, &[Some(-1_000_000), Some(0)]), vec![2, 0]);
         assert_eq!(emit_all(&mut gv), vec![Some(0), Some(1), Some(-1_000_000)]);
+    }
+
+    #[test]
+    fn all_null_first_batch_then_wide_matches_hash() {
+        // Regression (C1): an all-null first batch parks the grouper before it can
+        // size a window. A later wide batch triggers Fallback; the fresh inner must
+        // not re-use the null group's id. Flat must match the hash impl exactly,
+        // batch-for-batch and on emit (a dropped/merged null fails this).
+        let batch1: &[Option<i32>] = &[None, None];
+        let batch2: &[Option<i32>] = &[Some(0), Some(200_000), Some(0)];
+
+        let mut flat = new_gv();
+        let flat_g1 = intern(&mut flat, batch1);
+        let flat_g2 = intern(&mut flat, batch2);
+        let flat_out = emit_all(&mut flat);
+
+        let mut hash = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let (hash_g1, hash_g2) = {
+            let mut run = |vals: &[Option<i32>]| {
+                let col: ArrayRef = Arc::new(Int32Array::from(vals.to_vec()));
+                let mut g = vec![];
+                hash.intern(&[col], &mut g).unwrap();
+                g
+            };
+            (run(batch1), run(batch2))
+        };
+        let hash_out = {
+            let out = hash.emit(EmitTo::All).unwrap();
+            out[0]
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(flat_g1, hash_g1, "first (all-null) batch group ids");
+        assert_eq!(flat_g2, hash_g2, "second (wide) batch group ids");
+        assert_eq!(
+            flat_out, hash_out,
+            "emitted group values (null must survive)"
+        );
+    }
+
+    #[test]
+    fn sparse_first_batch_falls_back_to_hash() {
+        let mut gv = new_gv();
+        // range 100 over only 2 distinct values: 100 >= 2 * SPARSE_FACTOR -> Fallback,
+        // even though 100 < MAX_FLAT_RANGE. (Distinct, not row count, is the signal.)
+        assert_eq!(
+            intern(&mut gv, &[Some(0), Some(100), Some(0)]),
+            vec![0, 1, 0]
+        );
+        assert!(matches!(gv.mode, Mode::Fallback(_)));
+        assert_eq!(emit_all(&mut gv), vec![Some(0), Some(100)]);
+    }
+
+    #[test]
+    fn key_within_max_range_grows_window() {
+        let mut gv = new_gv();
+        // window sized to [0, 1] by the first batch
+        assert_eq!(intern(&mut gv, &[Some(0), Some(1)]), vec![0, 1]);
+        // 500 is outside the window but < MAX_FLAT_RANGE -> grow the array, not overflow
+        assert_eq!(
+            intern(&mut gv, &[Some(500), Some(0), Some(500)]),
+            vec![2, 0, 2]
+        );
+        assert!(gv.overflow.is_empty());
+        assert_eq!(emit_all(&mut gv), vec![Some(0), Some(1), Some(500)]);
+    }
+
+    #[test]
+    fn emit_first_with_overflow_and_null() {
+        let mut gv = new_gv();
+        // window [0, 1] plus a null (gid 2), then an out-of-window overflow key (gid 3)
+        assert_eq!(intern(&mut gv, &[Some(0), Some(1), None]), vec![0, 1, 2]);
+        assert_eq!(intern(&mut gv, &[Some(1_000_000)]), vec![3]);
+
+        // emit gids 0,1 (values 0,1); survivors null(2->0) and 1_000_000(3->1) renumber
+        let emitted = gv.emit(EmitTo::First(2)).unwrap();
+        assert_eq!(
+            emitted[0]
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1)]
+        );
+
+        // null is now gid 0, the overflow key gid 1, and a fresh in-range key gets gid 2
+        assert_eq!(
+            intern(&mut gv, &[None, Some(1_000_000), Some(5)]),
+            vec![0, 1, 2]
+        );
+        assert_eq!(emit_all(&mut gv), vec![None, Some(1_000_000), Some(5)]);
+    }
+
+    #[test]
+    fn unsigned_u64_flat_matches_hash() {
+        use arrow::array::UInt64Array;
+        use arrow::array::types::UInt64Type;
+
+        // Dense unsigned keys exercise the identity ordered-u64 map on the flat path.
+        let data: &[Option<u64>] = &[Some(10), Some(13), Some(10), None, Some(11)];
+        let col: ArrayRef = Arc::new(UInt64Array::from(data.to_vec()));
+
+        let mut flat = GroupValuesFlatPrimitive::<UInt64Type>::new(DataType::UInt64);
+        let mut flat_groups = vec![];
+        flat.intern(&[Arc::clone(&col)], &mut flat_groups).unwrap();
+        assert!(matches!(flat.mode, Mode::Flat { .. }));
+
+        let mut hash = GroupValuesPrimitive::<UInt64Type>::new(DataType::UInt64);
+        let mut hash_groups = vec![];
+        hash.intern(&[col], &mut hash_groups).unwrap();
+        assert_eq!(flat_groups, hash_groups);
+
+        let flat_out = flat.emit(EmitTo::All).unwrap();
+        let hash_out = hash.emit(EmitTo::All).unwrap();
+        assert_eq!(
+            flat_out[0]
+                .as_primitive::<UInt64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            hash_out[0]
+                .as_primitive::<UInt64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+        );
     }
 }
