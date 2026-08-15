@@ -2102,12 +2102,16 @@ mod tests {
         join_expr_tests_fixture_temporal, partitioned_hash_join_with_filter,
         partitioned_sym_join_with_filter, split_record_batches,
     };
+    use crate::test::TestMemoryExec;
     use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
     use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_execution::memory_pool::{
+        MemoryLimit, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+    };
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -2277,6 +2281,169 @@ mod tests {
     fn transformer_reservation_exhausts_pool() -> Result<()> {
         assert_transformer_reservation_exhausts_pool(NoopBatchTransformer::new())?;
         assert_transformer_reservation_exhausts_pool(BatchSplitter::new(3))?;
+        Ok(())
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingMemoryPool {
+        inner: UnboundedMemoryPool,
+        symmetric_join_changes: Mutex<Vec<isize>>,
+    }
+
+    impl fmt::Display for RecordingMemoryPool {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.inner, f)
+        }
+    }
+
+    impl RecordingMemoryPool {
+        fn record(&self, reservation: &MemoryReservation, change: isize) {
+            if reservation
+                .consumer()
+                .name()
+                .starts_with("SymmetricHashJoinStream")
+            {
+                self.symmetric_join_changes
+                    .lock()
+                    .expect("recording pool mutex is not poisoned")
+                    .push(change);
+            }
+        }
+
+        fn changes(&self) -> Vec<isize> {
+            self.symmetric_join_changes
+                .lock()
+                .expect("recording pool mutex is not poisoned")
+                .clone()
+        }
+    }
+
+    impl MemoryPool for RecordingMemoryPool {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+            self.inner.grow(reservation, additional);
+            self.record(reservation, additional as isize);
+        }
+
+        fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+            self.inner.shrink(reservation, shrink);
+            self.record(reservation, -(shrink as isize));
+        }
+
+        fn try_grow(
+            &self,
+            reservation: &MemoryReservation,
+            additional: usize,
+        ) -> Result<()> {
+            self.inner.try_grow(reservation, additional)?;
+            self.record(reservation, additional as isize);
+            Ok(())
+        }
+
+        fn reserved(&self) -> usize {
+            self.inner.reserved()
+        }
+
+        fn memory_limit(&self) -> MemoryLimit {
+            self.inner.memory_limit()
+        }
+    }
+
+    fn transformer_lifecycle_test_join() -> Result<SymmetricHashJoinExec> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?;
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let on = vec![(col("id", &schema)?, col("id", &schema)?)];
+        SymmetricHashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            None,
+            None,
+            StreamJoinPartitionMode::Partitioned,
+        )
+    }
+
+    fn transformer_lifecycle_test_context(
+        runtime: Arc<RuntimeEnv>,
+        enforce_batch_size_in_joins: bool,
+    ) -> Arc<TaskContext> {
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new()
+                        .with_batch_size(3)
+                        .with_enforce_batch_size_in_joins(enforce_batch_size_in_joins),
+                )
+                .with_runtime(runtime),
+        )
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn symmetric_hash_join_updates_reservation_while_transforming_output(
+        #[values(false, true)] enforce_batch_size_in_joins: bool,
+    ) -> Result<()> {
+        let pool = Arc::new(RecordingMemoryPool::default());
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+            .build_arc()?;
+        let mut stream = transformer_lifecycle_test_join()?.execute(
+            0,
+            transformer_lifecycle_test_context(runtime, enforce_batch_size_in_joins),
+        )?;
+
+        let first_batch = stream.next().await.transpose()?.unwrap();
+        let retained_batch_size = first_batch.get_array_memory_size() as isize;
+        let changes_after_first_batch = pool.changes();
+        assert!(
+            changes_after_first_batch.contains(&retained_batch_size),
+            "expected transformer retain reservation update: {changes_after_first_batch:?}"
+        );
+        if enforce_batch_size_in_joins {
+            assert!(
+                !changes_after_first_batch.contains(&-retained_batch_size),
+                "splitter must retain the output batch after a non-final slice: {changes_after_first_batch:?}"
+            );
+        } else {
+            assert!(
+                changes_after_first_batch
+                    .windows(2)
+                    .any(|changes| changes == [retained_batch_size, -retained_batch_size]),
+                "expected Noop transformer release after emission: {changes_after_first_batch:?}"
+            );
+        }
+
+        let remaining_batches = crate::common::collect(stream).await?;
+        let changes_after_completion = pool.changes();
+        if enforce_batch_size_in_joins {
+            assert!(
+                changes_after_completion.contains(&-retained_batch_size),
+                "expected splitter release after final slice: {changes_after_completion:?}"
+            );
+        }
+        let output_rows = first_batch.num_rows()
+            + remaining_batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>();
+        assert_eq!(output_rows, 10);
         Ok(())
     }
 
