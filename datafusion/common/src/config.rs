@@ -311,7 +311,7 @@ config_namespace! {
         ///
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
-        pub default_null_ordering: String, default = "nulls_max".to_string()
+        pub default_null_ordering: NullOrdering, default = NullOrdering::NullsMax
 
         /// When set to true, DataFusion may remove `ORDER BY` clauses from
         /// subqueries or CTEs during SQL planning when their ordering cannot
@@ -792,6 +792,80 @@ impl Display for MapKeyDedupPolicy {
             Self::LastWin => "LAST_WIN",
         };
         write!(f, "{str}")
+    }
+}
+
+/// Default null ordering for query results when `ORDER BY` does not specify
+/// `NULLS FIRST` or `NULLS LAST`.
+///
+/// Valid values are validated at configuration time so invalid
+/// `datafusion.sql_parser.default_null_ordering` settings are rejected
+/// immediately instead of being stored and later treated as `nulls_max`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NullOrdering {
+    /// Nulls appear last in ascending order and first in descending order.
+    #[default]
+    NullsMax,
+    /// Nulls appear first in ascending order and last in descending order.
+    NullsMin,
+    /// Nulls always appear first.
+    NullsFirst,
+    /// Nulls always appear last.
+    NullsLast,
+}
+
+impl NullOrdering {
+    /// Evaluates the null ordering based on the given ascending flag.
+    ///
+    /// # Returns
+    /// * `true` if nulls should appear first.
+    /// * `false` if nulls should appear last.
+    pub fn nulls_first(&self, asc: bool) -> bool {
+        match self {
+            Self::NullsMax => !asc,
+            Self::NullsMin => asc,
+            Self::NullsFirst => true,
+            Self::NullsLast => false,
+        }
+    }
+}
+
+impl FromStr for NullOrdering {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "nulls_max" => Ok(Self::NullsMax),
+            "nulls_min" => Ok(Self::NullsMin),
+            "nulls_first" => Ok(Self::NullsFirst),
+            "nulls_last" => Ok(Self::NullsLast),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid default null ordering: {other}. Expected one of: nulls_max, nulls_min, nulls_first, nulls_last"
+            ))),
+        }
+    }
+}
+
+impl Display for NullOrdering {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::NullsMax => "nulls_max",
+            Self::NullsMin => "nulls_min",
+            Self::NullsFirst => "nulls_first",
+            Self::NullsLast => "nulls_last",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl ConfigField for NullOrdering {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = Self::from_str(value)?;
+        Ok(())
     }
 }
 
@@ -4441,6 +4515,53 @@ mod tests {
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );
+    }
+
+    #[test]
+    fn test_default_null_ordering_validation() {
+        use crate::assert_contains;
+        use crate::config::{ConfigOptions, NullOrdering};
+
+        let mut config = ConfigOptions::default();
+        assert_eq!(
+            config.sql_parser.default_null_ordering,
+            NullOrdering::NullsMax
+        );
+
+        for (value, expected) in [
+            ("nulls_max", NullOrdering::NullsMax),
+            ("nulls_min", NullOrdering::NullsMin),
+            ("nulls_first", NullOrdering::NullsFirst),
+            ("nulls_last", NullOrdering::NullsLast),
+            // Values are case-insensitive, matching other enum config options.
+            ("NULLS_FIRST", NullOrdering::NullsFirst),
+        ] {
+            config
+                .set("datafusion.sql_parser.default_null_ordering", value)
+                .unwrap();
+            assert_eq!(config.sql_parser.default_null_ordering, expected);
+        }
+
+        // Invalid values, including the previous silent-fallback empty string,
+        // should error immediately at SET time.
+        for value in ["nuls_max", "", "nulls first"] {
+            let err = config
+                .set("datafusion.sql_parser.default_null_ordering", value)
+                .unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                "Invalid or Unsupported Configuration: Invalid default null ordering:"
+            );
+            assert_contains!(
+                err.to_string(),
+                "Expected one of: nulls_max, nulls_min, nulls_first, nulls_last"
+            );
+            // Previous valid value remains active on error.
+            assert_eq!(
+                config.sql_parser.default_null_ordering,
+                NullOrdering::NullsFirst
+            );
+        }
     }
 
     #[cfg(feature = "parquet")]
