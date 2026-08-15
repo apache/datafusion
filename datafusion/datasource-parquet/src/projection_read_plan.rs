@@ -1548,6 +1548,32 @@ mod test {
         );
     }
 
+    /// A union that covers every leaf falls back to the full root type.
+    #[test]
+    fn build_projection_read_plan_falls_back_for_complete_cast_union() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let exprs = vec![
+            cast_to_struct("s", 1, vec![("value", DataType::Int32)]),
+            cast_to_struct(
+                "s",
+                1,
+                vec![("label", DataType::Utf8), ("pad", DataType::Utf8)],
+            ),
+        ];
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1, 2, 3])
+        );
+        assert_eq!(
+            read_plan.projected_schema.field_with_name("s").unwrap(),
+            file_schema.field(1)
+        );
+    }
+
     /// Overlapping cast targets deduplicate their shared leaves.
     #[test]
     fn build_projection_read_plan_unions_overlapping_cast_targets() {
