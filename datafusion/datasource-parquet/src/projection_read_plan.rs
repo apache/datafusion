@@ -643,7 +643,8 @@ fn build_read_plan_with_cast_clipping(
     // Add leaves reached through `get_field` to cast roots. The resolver
     // returns absolute Parquet leaf indices; convert them back to offsets in
     // their root so they can share the same union as cast clipping.
-    for leaf in resolve_struct_field_leaves(struct_accesses, file_schema, schema_descr) {
+    let struct_access_tree = StructAccessTree::from_accesses(struct_accesses);
+    for leaf in resolve_struct_field_leaves(&struct_access_tree, schema_descr) {
         let root = schema_descr.get_column_root_idx(leaf);
         if !kept_offsets_by_root.contains_key(&root) {
             continue;

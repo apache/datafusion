@@ -541,6 +541,14 @@ mod tests {
         assert_eq!(emitted, list_of(struct_of(vec![int64("x"), utf8("y")])));
     }
 
+    /// A complete leaf set has nothing to prune, so callers must retain the
+    /// original root type rather than treating it as a clipped projection.
+    #[test]
+    fn type_for_leaf_subset_rejects_complete_selection() {
+        let physical = struct_of(vec![int64("x"), utf8("y"), utf8("pad")]);
+        assert!(type_for_leaf_subset(&physical, &[0, 1, 2]).is_none());
+    }
+
     /// Partial selection below a wrapper cast clipping does not understand
     /// must fall back instead of predicting a type the reader may not emit.
     #[test]
