@@ -190,8 +190,8 @@ impl RecordBatchMemoryCounter {
     /// Counts unique buffers and Array objects retained by `batch`.
     ///
     /// This is useful for accounting a sequence of batches at an operator
-    /// boundary. It counts buffers once, and also avoids double-counting a
-    /// top-level Arrow array shared by multiple batches.
+    /// boundary. It counts buffers and recursively reachable Arrow array objects
+    /// once, including objects shared by multiple batches.
     pub fn count_batch_with_array_overhead(&mut self, batch: &RecordBatch) -> usize {
         let mut total_size = self.count_batch(batch);
         let mut array_overhead = 0;
