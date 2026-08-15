@@ -4404,6 +4404,15 @@ mod tests {
         }
     }
 
+    fn assert_transformer_memory(
+        transformer: &impl BatchTransformer,
+        expected_size: usize,
+    ) {
+        let mut counter = RecordBatchMemoryCounter::new();
+        transformer.count_memory(&mut counter);
+        assert_eq!(counter.memory_usage(), expected_size);
+    }
+
     #[test]
     fn batch_transformers_count_retained_batch_memory() {
         let batch = create_test_batch(10);
@@ -4411,15 +4420,11 @@ mod tests {
 
         let mut noop = NoopBatchTransformer::new();
         noop.set_batch(batch.clone());
-        let mut noop_counter = RecordBatchMemoryCounter::new();
-        noop.count_memory(&mut noop_counter);
-        assert_eq!(noop_counter.memory_usage(), expected_size);
+        assert_transformer_memory(&noop, expected_size);
 
         let mut splitter = BatchSplitter::new(3);
         splitter.set_batch(batch.clone());
-        let mut splitter_counter = RecordBatchMemoryCounter::new();
-        splitter.count_memory(&mut splitter_counter);
-        assert_eq!(splitter_counter.memory_usage(), expected_size);
+        assert_transformer_memory(&splitter, expected_size);
 
         let mut shared_buffer_counter = RecordBatchMemoryCounter::new();
         shared_buffer_counter.count_batch_with_array_overhead(&batch);

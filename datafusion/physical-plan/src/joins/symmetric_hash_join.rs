@@ -2325,6 +2325,13 @@ mod tests {
                 .expect("recording pool mutex is not poisoned")
                 .clone()
         }
+
+        fn change_deltas(&self) -> Vec<isize> {
+            self.changes()
+                .into_iter()
+                .map(|change| change.change)
+                .collect()
+        }
     }
 
     impl MemoryPool for RecordingMemoryPool {
@@ -2420,11 +2427,7 @@ mod tests {
 
         let first_batch = stream.next().await.transpose()?.unwrap();
         let retained_batch_size = first_batch.get_array_memory_size() as isize;
-        let changes_after_first_batch = pool.changes();
-        let changes_after_first_batch: Vec<_> = changes_after_first_batch
-            .iter()
-            .map(|change| change.change)
-            .collect();
+        let changes_after_first_batch = pool.change_deltas();
         assert!(
             changes_after_first_batch.contains(&retained_batch_size),
             "expected transformer retain reservation update: {changes_after_first_batch:?}"
@@ -2444,11 +2447,7 @@ mod tests {
         }
 
         let remaining_batches = crate::common::collect(stream).await?;
-        let changes_after_completion: Vec<_> = pool
-            .changes()
-            .into_iter()
-            .map(|change| change.change)
-            .collect();
+        let changes_after_completion = pool.change_deltas();
         if enforce_batch_size_in_joins {
             assert!(
                 changes_after_completion.contains(&-retained_batch_size),

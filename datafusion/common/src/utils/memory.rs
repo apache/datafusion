@@ -251,12 +251,14 @@ fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
             let map = array.as_map();
             vec![map.keys(), map.values()]
         }
-        DataType::Union(_, _) => array
-            .as_union()
-            .fields()
-            .iter()
-            .map(|(type_id, _)| array.as_union().child(type_id))
-            .collect(),
+        DataType::Union(_, _) => {
+            let union = array.as_union();
+            union
+                .fields()
+                .iter()
+                .map(|(type_id, _)| union.child(type_id))
+                .collect()
+        }
         DataType::Dictionary(key_type, _) => match key_type.as_ref() {
             DataType::Int8 => vec![array.as_dictionary::<Int8Type>().values()],
             DataType::Int16 => vec![array.as_dictionary::<Int16Type>().values()],
