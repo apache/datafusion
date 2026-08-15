@@ -1408,6 +1408,36 @@ on a non-future value does not compile:</p>
 </ul>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23827">PR #23827</a> for details.</p>
 </section>
+<section id="recursivequery-gained-a-schema-field">
+<h3><code class="docutils literal notranslate"><span class="pre">RecursiveQuery</span></code> gained a <code class="docutils literal notranslate"><span class="pre">schema</span></code> field<a class="headerlink" href="#recursivequery-gained-a-schema-field" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_expr::logical_plan::RecursiveQuery</span></code> exposed the static (anchor) term’s
+schema to parent plans, which ignored columns that only the recursive term makes
+nullable. The node now stores the schema reconciled from both terms explicitly, so
+it can no longer be built with an exhaustive struct literal.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code constructing <code class="docutils literal notranslate"><span class="pre">RecursiveQuery</span></code> with a struct literal. This change also
+shipped in <code class="docutils literal notranslate"><span class="pre">54.1.0</span></code>, so the same migration applies within the <code class="docutils literal notranslate"><span class="pre">54</span></code> series.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Build the node with <code class="docutils literal notranslate"><span class="pre">RecursiveQuery::try_new</span></code>, which computes the schema and
+returns an error if the two terms do not have the same number of columns:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">query</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RecursiveQuery</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">name</span><span class="p">,</span>
+<span class="w">    </span><span class="n">static_term</span><span class="p">,</span>
+<span class="w">    </span><span class="n">recursive_term</span><span class="p">,</span>
+<span class="w">    </span><span class="n">is_distinct</span><span class="p">,</span>
+<span class="p">};</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">query</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">RecursiveQuery</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">static_term</span><span class="p">,</span><span class="w"> </span><span class="n">recursive_term</span><span class="p">,</span><span class="w"> </span><span class="n">is_distinct</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">RecursiveQueryExec::try_new</span></code> takes the reconciled schema as its second argument
+for the same reason, rather than deriving it from its children.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/22552">PR #22552</a> for details.</p>
+</section>
 <section id="executionplan-apply-expressions-is-now-a-required-method">
 <h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> is now a required method<a class="headerlink" href="#executionplan-apply-expressions-is-now-a-required-method" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">apply_expressions</span></code> has been added as a <strong>required</strong> method on the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataSource</span></code> traits. Any custom implementation of
@@ -1686,6 +1716,7 @@ changes.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-logicalextensioncodec-task-ctx-provider-is-now-private"><code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec::task_ctx_provider</span></code> is now private</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unused-async-removed-from-several-public-functions">Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#movingmin-and-movingmax-changed-to-pub-crate"><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#recursivequery-gained-a-schema-field"><code class="docutils literal notranslate"><span class="pre">RecursiveQuery</span></code> gained a <code class="docutils literal notranslate"><span class="pre">schema</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-apply-expressions-is-now-a-required-method"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> is now a required method</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#windowexpr-evaluate-stateful-now-takes-a-windowevalcontext"><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> now takes a <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partitionbatchstate-most-recent-row-removed"><code class="docutils literal notranslate"><span class="pre">PartitionBatchState::most_recent_row</span></code> removed</a></li>
