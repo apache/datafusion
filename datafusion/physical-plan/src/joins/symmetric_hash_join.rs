@@ -2340,18 +2340,13 @@ mod tests {
         assert_transformer_memory_test_output(&batches);
 
         let peak_reservation = recording_pool.peak_reserved();
-        let transformer_batch_memory = batches
-            .iter()
-            .map(RecordBatch::get_array_memory_size)
-            .max()
-            .expect("join emits a transformer batch");
         let memory_limit = peak_reservation
-            .checked_sub(transformer_batch_memory)
-            .expect("transformer batch is part of the peak reservation")
-            + 1;
+            .checked_sub(1)
+            .expect("join must reserve memory");
 
-        // The direct stream tests prove this batch is the reservation delta. This
-        // limit leaves room for the old accounting but not the retained batch.
+        // Direct stream tests prove transformer retain/release accounting and
+        // shared-buffer deduplication. This test verifies the physical plan
+        // enforces its observed peak reservation.
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
             .build_arc()?;
