@@ -320,7 +320,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 
         let plan = sresult_return!(
             internal_provider
-                .scan(session, projections.as_ref(), &filters, limit.into())
+                .scan(session, projections.as_deref(), &filters, limit.into())
                 .await
         );
 
@@ -653,7 +653,7 @@ impl TableProvider for ForeignTableProvider {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -874,7 +874,7 @@ mod tests {
         async fn scan(
             &self,
             session: &dyn Session,
-            projection: Option<&Vec<usize>>,
+            projection: Option<&[usize]>,
             filters: &[Expr],
             limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {

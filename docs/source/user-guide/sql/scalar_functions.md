@@ -796,7 +796,8 @@ round(numeric_expression[, decimal_places])
 
 Returns the sign of a number.
 Negative numbers return `-1`.
-Zero and positive numbers return `1`.
+Zero returns `0`.
+Positive numbers return `1`.
 
 ```sql
 signum(numeric_expression)

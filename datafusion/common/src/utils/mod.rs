@@ -80,9 +80,9 @@ use std::thread::available_parallelism;
 ///
 /// assert_eq!(projected_schema, expected_schema);
 /// ```
-pub fn project_schema(
+pub fn project_schema<T: AsRef<[usize]> + ?Sized>(
     schema: &SchemaRef,
-    projection: Option<&impl AsRef<[usize]>>,
+    projection: Option<&T>,
 ) -> Result<SchemaRef> {
     let schema = match projection {
         Some(columns) => Arc::new(schema.project(columns.as_ref())?),

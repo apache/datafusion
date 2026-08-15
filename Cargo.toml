@@ -352,8 +352,11 @@ unused_qualifications = "deny"
 # To use a profile: `cargo [ build | run | ... ] --profile <profile-name>`
 #
 # Profiles available:
-# - dev: default debug build; fastest to compile, slowest to run, full debug info.
-#     For everyday development; default for "cargo [ build | test | run ]".
+# - dev: default debug build; fastest to compile, slowest to run. Carries line
+#     tables only, so panics and backtraces still name a file and line but a
+#     debugger cannot inspect variables; build with `CARGO_PROFILE_DEV_DEBUG=2`
+#     when you need that. For everyday development; default for
+#     "cargo [ build | test | run ]".
 # - release: fully optimized build; slowest to compile, fastest to run, smallest
 #     binaries. For public releases; default for "cargo [ bench | install ]".
 # - release-nonlto: skips LTO, so it builds much faster while staying close to
@@ -368,6 +371,15 @@ unused_qualifications = "deny"
 #
 # If you want to optimize compilation, the `compile_profile` benchmark can be useful.
 # See `benchmarks/README.md` for more details.
+# `dev` is the profile every `cargo build`/`cargo test` uses, so its debug info
+# is generated over and over. `line-tables-only` keeps file and line numbers --
+# so panics and `RUST_BACKTRACE` output stay useful -- while dropping the
+# variable-level DWARF that only an interactive debugger consumes. Build with
+# `CARGO_PROFILE_DEV_DEBUG=2 cargo build` when you need to step through code in a
+# debugger.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 codegen-units = 1
 lto = true

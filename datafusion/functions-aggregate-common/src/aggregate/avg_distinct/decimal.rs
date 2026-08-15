@@ -56,13 +56,26 @@ impl<I: DecimalType + Debug, S: DecimalType + Debug> DecimalDistinctAvgAccumulat
         let data_type = I::TYPE_CONSTRUCTOR(I::MAX_PRECISION, sum_scale);
 
         Self {
-            sum_accumulator: DistinctSumAccumulator::new(&data_type),
+            sum_accumulator: DistinctSumAccumulator::new(data_type),
             sum_scale,
             target_precision,
             target_scale,
             _sum_type: PhantomData,
         }
     }
+}
+
+/// Adds a distinct input value to AVG's widened intermediate sum.
+/// Wrapping is intentional because the caller selects `S` with the same
+/// `avg_sum_data_type` headroom contract as the non-distinct AVG path.
+#[inline]
+fn add_avg_distinct_sum<I, S>(sum: S::Native, value: I::Native) -> S::Native
+where
+    I: ArrowNumericType,
+    S: ArrowNumericType,
+    I::Native: Into<S::Native>,
+{
+    sum.add_wrapping(value.into())
 }
 
 impl<I, S> Accumulator for DecimalDistinctAvgAccumulator<I, S>
@@ -95,7 +108,7 @@ where
         // overflow the input's native width (mirrors the non-distinct path).
         let mut sum = S::Native::usize_as(0);
         for value in self.sum_accumulator.distinct_values() {
-            sum = sum.add_wrapping(value.into());
+            sum = add_avg_distinct_sum::<I, S>(sum, value);
         }
 
         let Some(count) = S::Native::from_usize(count) else {
