@@ -722,7 +722,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::IntUnsigned(_)
             | SQLDataType::IntegerUnsigned(_)
             | SQLDataType::Int4Unsigned(_) => Ok(DataType::UInt32),
-            SQLDataType::Varchar(length) => {
+            SQLDataType::Varchar(length)
+            | SQLDataType::Nvarchar(length)
+            | SQLDataType::CharacterVarying(length)
+            | SQLDataType::CharVarying(length) => {
                 match (length, self.options.support_varchar_with_length) {
                     (Some(_), false) => plan_err!(
                         "does not support Varchar with length, \
@@ -737,7 +740,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-            SQLDataType::BigIntUnsigned(_) | SQLDataType::Int8Unsigned(_) => {
+            SQLDataType::BigIntUnsigned(_)
+            | SQLDataType::Int8Unsigned(_)
+            | SQLDataType::UBigInt => {
                 Ok(DataType::UInt64)
             }
             SQLDataType::Float(_) => Ok(DataType::Float32),
@@ -804,7 +809,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 make_decimal_type(precision, scale.map(|s| s as u64))
             }
-            SQLDataType::Bytea => Ok(DataType::Binary),
+            SQLDataType::Bytea
+            | SQLDataType::Blob(None)
+            | SQLDataType::Binary(None)
+            | SQLDataType::Varbinary(None)
+            | SQLDataType::Bytes(None) => Ok(DataType::Binary),
             SQLDataType::Interval { fields, precision } => {
                 if fields.is_some() || precision.is_some() {
                     return not_impl_err!("Unsupported SQL type {sql_type}");
@@ -826,7 +835,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
-            SQLDataType::Nvarchar(_)
             | SQLDataType::JSON
             | SQLDataType::Uuid
             | SQLDataType::Binary(_)
@@ -841,8 +849,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::MediumInt(_)
             | SQLDataType::MediumIntUnsigned(_)
             | SQLDataType::Character(_)
-            | SQLDataType::CharacterVarying(_)
-            | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
             | SQLDataType::Timestamp(_, _)
@@ -896,7 +902,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::USmallInt
             | SQLDataType::HugeInt
             | SQLDataType::UHugeInt
-            | SQLDataType::UBigInt
             | SQLDataType::TimestampNtz{..}
             | SQLDataType::NamedTable { .. }
             | SQLDataType::TsVector
