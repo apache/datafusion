@@ -112,7 +112,7 @@ html_static_path = ["_static"]
 
 # Copy agent-facing files (llms.txt) verbatim to the site root so they
 # resolve at the conventional URL `https://datafusion.apache.org/llms.txt`.
-html_extra_path = ["llms.txt"]
+html_extra_path = ["llms.txt", "robots.txt"]
 
 # Base URL of the published site. Required by sphinx-sitemap to build
 # absolute <loc> entries in the generated sitemap.xml.
