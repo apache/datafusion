@@ -718,7 +718,7 @@ impl SharedBuildAccumulator {
         } else {
             // Builds the shared sparse `CASE` for partition filter routing.
             // If no canceled partitions, `ELSE false` covers omitted empty partitions, and vice versa.
-            let mut when_then_branches = if has_canceled_unknown {
+            let mut branches = if has_canceled_unknown {
                 empty_partition_ids
                     .iter()
                     .map(|&partition_id| (lit(partition_id as u64), lit(false)))
@@ -726,7 +726,7 @@ impl SharedBuildAccumulator {
             } else {
                 vec![]
             };
-            when_then_branches.extend(real_partition_ids.iter().map(|&partition_id| {
+            branches.extend(real_partition_ids.iter().map(|&partition_id| {
                 (
                     lit(partition_id as u64),
                     Arc::clone(&partition_filters[partition_id]),
@@ -774,7 +774,7 @@ impl SharedBuildAccumulator {
 
             Arc::new(CaseExpr::try_new(
                 Some(routing_expr),
-                when_then_branches,
+                branches,
                 Some(lit(has_canceled_unknown)),
             )?)
         };
