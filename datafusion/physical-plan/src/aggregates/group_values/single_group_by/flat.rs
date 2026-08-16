@@ -657,4 +657,58 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
     }
+
+    #[test]
+    fn growth_gate_is_exclusive_at_occupied_times_sparse_factor() {
+        // Dense first batch -> window [0, 9], occupied = 10.
+        // Grow gate: grow iff idx < occupied * SPARSE_FACTOR  => threshold 40.
+        let first: Vec<Option<i32>> = (0..10).map(Some).collect();
+
+        // idx == 40 (== threshold): must OVERFLOW — the gate is a strict `<`.
+        let mut gv = new_gv();
+        intern(&mut gv, &first);
+        assert_eq!(intern(&mut gv, &[Some(40)]), vec![10]);
+        assert_eq!(gv.overflow.len(), 1, "idx == occupied*SPARSE_FACTOR must overflow");
+        match &gv.mode {
+            Mode::Flat { data, .. } => {
+                assert_eq!(data.len(), 10, "window must not grow at the boundary")
+            }
+            _ => panic!("expected Flat"),
+        }
+
+        // idx == 39 (threshold - 1): must GROW.
+        let mut gv = new_gv();
+        intern(&mut gv, &first);
+        assert_eq!(intern(&mut gv, &[Some(39)]), vec![10]);
+        assert!(gv.overflow.is_empty(), "idx just below the threshold must grow");
+        match &gv.mode {
+            Mode::Flat { data, .. } => {
+                assert_eq!(data.len(), 40, "window grows to include idx 39")
+            }
+            _ => panic!("expected Flat"),
+        }
+    }
+
+    #[test]
+    fn emit_first_releases_slack_overflow_capacity() {
+        let mut gv = new_gv();
+        // small window, then a wide key stream fills the overflow map
+        intern(&mut gv, &[Some(0), Some(1)]);
+        let wide: Vec<Option<i32>> = (0..500).map(|i| Some(1_000_000 + i)).collect();
+        intern(&mut gv, &wide);
+        let cap_before = gv.overflow.capacity();
+        assert!(cap_before >= 500, "overflow should have grown its capacity");
+
+        // drain almost everything, leaving 2 groups -> overflow capacity is now slack
+        let total = gv.len();
+        gv.emit(EmitTo::First(total - 2)).unwrap();
+
+        assert!(gv.overflow.len() <= 2);
+        assert!(
+            gv.overflow.capacity() < cap_before,
+            "slack overflow capacity must be released after the drain: {} -> {}",
+            cap_before,
+            gv.overflow.capacity()
+        );
+    }
 }
