@@ -760,4 +760,185 @@ mod tests {
         // Perfectly symmetric, so the tie goes to hub A.
         assert_eq!(first.left_hub, HUB_A);
     }
+
+    // ---------- brute force ----------
+    //
+    // Every test above checks this port against the values the reference
+    // implementation produced, which establishes that the translation is
+    // faithful and nothing about whether the approach is right: an error
+    // present in both would pass. These two search the plan space exhaustively
+    // and simulate each candidate directly, so they check the answer rather
+    // than the agreement.
+
+    /// Every ordering of `items`.
+    fn permutations(items: &[Spoke]) -> Vec<Vec<Spoke>> {
+        if items.is_empty() {
+            return vec![Vec::new()];
+        }
+        let mut out = Vec::new();
+        for index in 0..items.len() {
+            let mut rest = items.to_vec();
+            let head = rest.remove(index);
+            for mut tail in permutations(&rest) {
+                tail.insert(0, head);
+                out.push(tail);
+            }
+        }
+        out
+    }
+
+    /// Join `sequence` onto a hub in exactly that order, accumulating cost the
+    /// long way rather than through the precomputed tables.
+    fn simulate(hub_weight: f64, sequence: &[Spoke]) -> (f64, f64) {
+        let mut cost = 0.0;
+        let mut size = hub_weight;
+        for spoke in sequence {
+            cost += size * spoke.weight * spoke.selectivity;
+            size *= spoke.weight;
+            size *= spoke.selectivity;
+        }
+        (cost, size)
+    }
+
+    /// Split `spokes` into the subset selected by `mask` and the rest.
+    fn split(spokes: &[Spoke], mask: usize) -> (Vec<Spoke>, Vec<Spoke>) {
+        let mut chosen = Vec::new();
+        let mut deferred = Vec::new();
+        for (index, spoke) in spokes.iter().enumerate() {
+            if mask & (1 << index) != 0 {
+                chosen.push(*spoke);
+            } else {
+                deferred.push(*spoke);
+            }
+        }
+        (chosen, deferred)
+    }
+
+    /// The cheapest cost reachable in the plan space the model searches, found
+    /// by trying everything: both orientations, every subset of each side's
+    /// spokes taken before the merge, and every ordering within each group.
+    fn brute_force(star: &DoubleStar) -> f64 {
+        let orientations = [
+            (
+                star.hub_a.weight,
+                star.hub_b.weight,
+                star.sel_a,
+                star.sel_b,
+                &star.spokes_a,
+                &star.spokes_b,
+            ),
+            (
+                star.hub_b.weight,
+                star.hub_a.weight,
+                star.sel_b,
+                star.sel_a,
+                &star.spokes_b,
+                &star.spokes_a,
+            ),
+        ];
+
+        let mut best = f64::INFINITY;
+        for (left_hub, right_hub, sel_left, sel_merge, left_spokes, right_spokes) in
+            orientations
+        {
+            let central = Spoke::new(star.central.id, star.central.weight, sel_left);
+
+            for left_mask in 0..(1usize << left_spokes.len()) {
+                let (left_taken, left_deferred) = split(left_spokes, left_mask);
+                for right_mask in 0..(1usize << right_spokes.len()) {
+                    let (right_taken, right_deferred) = split(right_spokes, right_mask);
+
+                    // The central relation is always absorbed before the merge
+                    // on whichever hub owns it.
+                    let mut left_group = left_taken.clone();
+                    left_group.push(central);
+
+                    let mut deferred = left_deferred.clone();
+                    deferred.extend(right_deferred.iter().copied());
+
+                    for left_order in permutations(&left_group) {
+                        let (left_cost, left_size) = simulate(left_hub, &left_order);
+                        for right_order in permutations(&right_taken) {
+                            let (right_cost, right_size) =
+                                simulate(right_hub, &right_order);
+                            let merged = left_size * right_size * sel_merge;
+
+                            for tail in permutations(&deferred) {
+                                let (tail_cost, _) = simulate(merged, &tail);
+                                // `merged` is both the size after the merge and
+                                // the cost of performing it.
+                                let total = left_cost + right_cost + merged + tail_cost;
+                                if total < best {
+                                    best = total;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        let tolerance = 1e-9 * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn matches_an_exhaustive_search_of_the_plan_space() {
+        // Fanouts deliberately straddle 1 in both directions, so the split
+        // points and the orientation all matter.
+        let cases = [
+            (
+                vec![Spoke::new(1, 40.0, 0.01), Spoke::new(2, 30.0, 4.0)],
+                vec![Spoke::new(3, 8.0, 0.05), Spoke::new(4, 12.0, 2.5)],
+            ),
+            (
+                vec![Spoke::new(1, 1000.0, 0.9), Spoke::new(2, 2.0, 0.1)],
+                vec![Spoke::new(3, 5.0, 0.4)],
+            ),
+            (
+                vec![Spoke::new(1, 6.0, 0.5)],
+                vec![Spoke::new(3, 100.0, 0.002), Spoke::new(4, 7.0, 3.0)],
+            ),
+        ];
+
+        for (spokes_a, spokes_b) in cases {
+            let star = DoubleStar {
+                hub_a: Relation::new(HUB_A, 900.0),
+                hub_b: Relation::new(HUB_B, 1_700.0),
+                central: Relation::new(CENTRAL, 250.0),
+                sel_a: 0.02,
+                sel_b: 0.004,
+                spokes_a,
+                spokes_b,
+            };
+
+            let chosen = optimal_double_star(&star).expect("stats are usable");
+            assert_close(chosen.cost, brute_force(&star));
+        }
+    }
+
+    #[test]
+    fn cheapest_fanout_first_beats_every_other_order() {
+        // The greedy claim for a single star, checked against all 24 orders.
+        let spokes = vec![
+            Spoke::new(1, 50.0, 0.02),
+            Spoke::new(2, 10.0, 0.5),
+            Spoke::new(3, 200.0, 0.001),
+            Spoke::new(4, 9.0, 0.4),
+        ];
+
+        let (greedy, _, _) = chain_cost_and_size(1000.0, &spokes);
+        let best = permutations(&spokes)
+            .iter()
+            .map(|order| simulate(1000.0, order).0)
+            .fold(f64::INFINITY, f64::min);
+
+        assert_close(greedy, best);
+    }
 }

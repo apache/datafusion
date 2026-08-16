@@ -63,6 +63,8 @@ pub mod cost_model;
 pub mod join_graph;
 pub mod rewrite;
 pub mod statistics;
+#[cfg(test)]
+mod test_support;
 
 use std::sync::Arc;
 
@@ -225,60 +227,12 @@ impl PhysicalOptimizerRule for DoubleStarJoinReorder {
 mod tests {
     use super::*;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use crate::double_star_join_reorder::test_support::{
+        bowtie, bowtie_from, col, join, relation, relation_without_row_count, scan,
+        typed_join,
+    };
     use datafusion_common::JoinType;
-    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::displayable;
-    use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::joins::HashJoinExecBuilder;
-
-    fn scan(columns: &[&str]) -> Arc<dyn ExecutionPlan> {
-        Arc::new(EmptyExec::new(Arc::new(Schema::new(
-            columns
-                .iter()
-                .map(|name| Field::new(*name, DataType::Int32, false))
-                .collect::<Vec<_>>(),
-        ))))
-    }
-
-    fn join(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-        keys: &[(usize, usize)],
-    ) -> Arc<dyn ExecutionPlan> {
-        let on = keys
-            .iter()
-            .map(|&(left_index, right_index)| {
-                let left_name = left.schema().field(left_index).name().clone();
-                let right_name = right.schema().field(right_index).name().clone();
-                (
-                    Arc::new(Column::new(&left_name, left_index)) as _,
-                    Arc::new(Column::new(&right_name, right_index)) as _,
-                )
-            })
-            .collect();
-
-        HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
-            .build_exec()
-            .expect("valid inner join")
-    }
-
-    /// Relations have distinct widths so a mistaken offset cannot land on a
-    /// valid column by coincidence.
-    fn bowtie() -> Arc<dyn ExecutionPlan> {
-        let hub_a = scan(&["ha_k", "ha_s1", "ha_s2"]);
-        let a1 = scan(&["a1_k"]);
-        let a2 = scan(&["a2_k", "a2_x", "a2_y", "a2_z"]);
-        let central = scan(&["c_ka", "c_kb"]);
-        let hub_b = scan(&["hb_k", "hb_s1", "hb_p", "hb_q", "hb_r"]);
-        let b1 = scan(&["b1_k", "b1_x"]);
-
-        let left = join(hub_a, a1, &[(1, 0)]);
-        let left = join(left, a2, &[(2, 0)]);
-        let left = join(left, central, &[(0, 0)]);
-        let right = join(hub_b, b1, &[(1, 0)]);
-        join(left, right, &[(9, 0)])
-    }
 
     fn config(enabled: bool) -> ConfigOptions {
         let mut config = ConfigOptions::default();
@@ -332,19 +286,73 @@ mod tests {
         // The clump root is a left join, which is not reorderable, and the
         // inner joins beneath it are too few to form a double star.
         let left = join(scan(&["k", "s"]), scan(&["a"]), &[(1, 0)]);
-        let on = vec![(
-            Arc::new(Column::new("k", 0)) as _,
-            Arc::new(Column::new("k", 0)) as _,
-        )];
-        let plan = HashJoinExecBuilder::new(left, scan(&["k"]), on, JoinType::Left)
-            .build_exec()
-            .expect("valid left join");
+        let plan = typed_join(left, scan(&["k"]), &[(0, 0)], JoinType::Left);
 
         let optimized = DoubleStarJoinReorder::new()
             .optimize(Arc::clone(&plan), &config(true))
             .expect("the rule never fails");
 
         assert_eq!(display(&plan), display(&optimized));
+    }
+
+    #[test]
+    fn declines_when_a_relation_has_no_row_count() {
+        // The shape matches and every other relation is measured, but one
+        // missing row count is enough: the rule refuses rather than filling in
+        // a default it cannot distinguish from a real measurement.
+        let plan = bowtie_from(
+            relation(vec![col("ha_k"), col("ha_s1"), col("ha_s2")], 100),
+            relation(vec![col("a1_k")], 10),
+            relation(vec![col("a2_k"), col("a2_x"), col("a2_y"), col("a2_z")], 20),
+            relation_without_row_count(&["c_ka", "c_kb"]),
+            relation(
+                vec![
+                    col("hb_k"),
+                    col("hb_s1"),
+                    col("hb_p"),
+                    col("hb_q"),
+                    col("hb_r"),
+                ],
+                200,
+            ),
+            relation(vec![col("b1_k"), col("b1_x")], 30),
+        );
+
+        let optimized = DoubleStarJoinReorder::new()
+            .optimize(Arc::clone(&plan), &config(true))
+            .expect("the rule never fails");
+
+        assert_eq!(display(&plan), display(&optimized));
+    }
+
+    #[test]
+    fn reorders_a_measured_bowtie() {
+        // The counterpart: with every relation measured, the same shape is
+        // reordered and the schema survives.
+        let plan = bowtie_from(
+            relation(vec![col("ha_k"), col("ha_s1"), col("ha_s2")], 100),
+            relation(vec![col("a1_k")], 10),
+            relation(vec![col("a2_k"), col("a2_x"), col("a2_y"), col("a2_z")], 20),
+            relation(vec![col("c_ka"), col("c_kb")], 400),
+            relation(
+                vec![
+                    col("hb_k"),
+                    col("hb_s1"),
+                    col("hb_p"),
+                    col("hb_q"),
+                    col("hb_r"),
+                ],
+                5_000,
+            ),
+            relation(vec![col("b1_k"), col("b1_x")], 30),
+        );
+
+        let optimized = DoubleStarJoinReorder::new()
+            .optimize(Arc::clone(&plan), &config(true))
+            .expect("the rule never fails");
+
+        assert_ne!(display(&plan), display(&optimized));
+        assert_eq!(plan.schema(), optimized.schema());
     }
 
     #[test]

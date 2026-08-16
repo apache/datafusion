@@ -495,9 +495,14 @@ fn is_connected(adjacency: &[Vec<usize>]) -> bool {
 mod tests {
     use super::*;
 
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_physical_plan::empty::EmptyExec;
+    use crate::double_star_join_reorder::test_support::{
+        join, join_builder, scan, typed_join,
+    };
+
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion_physical_expr::expressions::{CastExpr, lit};
     use datafusion_physical_plan::joins::HashJoinExecBuilder;
+    use datafusion_physical_plan::joins::utils::JoinFilter;
     use std::sync::Arc;
 
     // ---------- shape detection: pure graphs, no execution plans ----------
@@ -644,42 +649,6 @@ mod tests {
     }
 
     // ---------- flattening: real execution plans ----------
-
-    fn schema(columns: &[&str]) -> SchemaRef {
-        Arc::new(Schema::new(
-            columns
-                .iter()
-                .map(|name| Field::new(*name, DataType::Int32, false))
-                .collect::<Vec<_>>(),
-        ))
-    }
-
-    fn scan(columns: &[&str]) -> Arc<dyn ExecutionPlan> {
-        Arc::new(EmptyExec::new(schema(columns)))
-    }
-
-    /// Join `left` and `right` on the given `(left index, right index)` pairs.
-    fn join(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-        keys: &[(usize, usize)],
-    ) -> Arc<dyn ExecutionPlan> {
-        let on = keys
-            .iter()
-            .map(|&(left_index, right_index)| {
-                let left_field = left.schema().field(left_index).name().clone();
-                let right_field = right.schema().field(right_index).name().clone();
-                (
-                    Arc::new(Column::new(&left_field, left_index)) as _,
-                    Arc::new(Column::new(&right_field, right_index)) as _,
-                )
-            })
-            .collect();
-
-        HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
-            .build_exec()
-            .expect("valid inner join")
-    }
 
     /// The worked example from the module docs: a left-deep tree over
     /// orders(3), customer(3), nation(2), lineitem(2).
@@ -830,13 +799,7 @@ mod tests {
         let b = scan(&["x"]);
         let c = scan(&["x"]);
 
-        let on = vec![(
-            Arc::new(Column::new("x", 0)) as _,
-            Arc::new(Column::new("x", 0)) as _,
-        )];
-        let outer = HashJoinExecBuilder::new(a, b, on, JoinType::Left)
-            .build_exec()
-            .expect("valid left join");
+        let outer = typed_join(a, b, &[(0, 0)], JoinType::Left);
         let root = join(outer, c, &[(0, 0)]);
 
         let graph = JoinGraph::try_new(&root).expect("the root is still reorderable");
@@ -844,6 +807,155 @@ mod tests {
         // The left join is opaque, so the clump has two relations, not three.
         assert_eq!(graph.relations().len(), 2);
         assert_eq!(graph.offsets(), &[0, 2]);
+    }
+
+    // ---------- eligibility gates ----------
+    //
+    // Each of these guards the query's answer rather than its speed, so each
+    // gets its own test. The shape of every assertion is the same: an inner
+    // join that trips one gate becomes an opaque leaf, so the clump sees two
+    // relations rather than three.
+
+    /// Build `a JOIN b` (tripped by `alter`) then join the result to `c`.
+    fn clump_over_a_gated_join(
+        alter: impl FnOnce(HashJoinExecBuilder) -> HashJoinExecBuilder,
+    ) -> Arc<dyn ExecutionPlan> {
+        let inner = alter(join_builder(scan(&["a0", "a1"]), scan(&["b0"]), &[(0, 0)]))
+            .build_exec()
+            .expect("valid inner join");
+        join(inner, scan(&["c0"]), &[(0, 0)])
+    }
+
+    fn assert_inner_join_was_opaque(root: &Arc<dyn ExecutionPlan>) {
+        let graph = JoinGraph::try_new(root).expect("the root is still reorderable");
+        assert_eq!(
+            graph.relations().len(),
+            2,
+            "expected the gated join to become an opaque leaf"
+        );
+    }
+
+    #[test]
+    fn stops_at_a_join_carrying_a_filter() {
+        // A join filter is a non-equi predicate bound to these exact inputs;
+        // moving the join without it would change the result.
+        let filter = JoinFilter::new(lit(true), vec![], Arc::new(Schema::empty()));
+        assert_inner_join_was_opaque(&clump_over_a_gated_join(|builder| {
+            builder.with_filter(Some(filter))
+        }));
+    }
+
+    #[test]
+    fn stops_at_a_join_carrying_a_projection() {
+        // A projection breaks the `output == left ++ right` identity that the
+        // offset arithmetic depends on.
+        assert_inner_join_was_opaque(&clump_over_a_gated_join(|builder| {
+            builder.with_projection(Some(vec![0, 1]))
+        }));
+    }
+
+    #[test]
+    fn stops_at_a_join_carrying_a_fetch_limit() {
+        // `fetch` caps the rows returned, so the join order decides *which*
+        // rows survive. Reordering would return different data.
+        assert_inner_join_was_opaque(&clump_over_a_gated_join(|builder| {
+            builder.with_fetch(Some(10))
+        }));
+    }
+
+    #[test]
+    fn stops_at_non_column_equijoin_keys() {
+        // `cast(a.a0) = b.b0` cannot be traced back to a base relation column,
+        // so the graph cannot be built from it.
+        let left = scan(&["a0", "a1"]);
+        let right = scan(&["b0"]);
+        let cast = Arc::new(CastExpr::new(
+            Arc::new(Column::new("a0", 0)),
+            DataType::Int64,
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let on = vec![(
+            cast,
+            Arc::new(Column::new("b0", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        let inner = HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+            .build_exec()
+            .expect("valid inner join");
+        let root = join(inner, scan(&["c0"]), &[(0, 0)]);
+
+        assert_inner_join_was_opaque(&root);
+    }
+
+    #[test]
+    fn refuses_a_clump_that_mixes_null_equality() {
+        // A rebuilt join may merge keys that came from different original
+        // joins, so there would be no single correct setting to apply.
+        let inner = join_builder(scan(&["a0", "a1"]), scan(&["b0"]), &[(0, 0)])
+            .with_null_equality(NullEquality::NullEqualsNull)
+            .build_exec()
+            .expect("valid inner join");
+        let root = join(inner, scan(&["c0"]), &[(0, 0)]);
+
+        assert!(JoinGraph::try_new(&root).is_none());
+    }
+
+    #[test]
+    fn a_uniform_null_equality_clump_is_accepted() {
+        // The counterpart to the test above: agreeing joins flatten normally,
+        // and the setting is carried through for the rewrite to reapply.
+        let inner = join_builder(scan(&["a0", "a1"]), scan(&["b0"]), &[(0, 0)])
+            .with_null_equality(NullEquality::NullEqualsNull)
+            .build_exec()
+            .expect("valid inner join");
+        let root = join_builder(inner, scan(&["c0"]), &[(0, 0)])
+            .with_null_equality(NullEquality::NullEqualsNull)
+            .build_exec()
+            .expect("valid inner join");
+
+        let graph = JoinGraph::try_new(&root).expect("a reorderable clump");
+        assert_eq!(graph.relations().len(), 3);
+        assert_eq!(graph.null_equality(), NullEquality::NullEqualsNull);
+    }
+
+    // ---------- substituting relations ----------
+
+    #[test]
+    fn map_relations_substitutes_each_relation() {
+        // The rule optimizes leaves before rebuilding, so substitution has to
+        // actually take effect.
+        let plan = join(scan(&["a0", "a1"]), scan(&["b0"]), &[(0, 0)]);
+        let graph = JoinGraph::try_new(&plan).expect("a reorderable clump");
+        let replacement = scan(&["a0", "a1"]);
+
+        let mapped = graph
+            .map_relations(|relation| {
+                Ok(if relation.schema().fields().len() == 2 {
+                    Arc::clone(&replacement)
+                } else {
+                    Arc::clone(relation)
+                })
+            })
+            .expect("mapping succeeds");
+
+        assert!(Arc::ptr_eq(&mapped.relations()[0], &replacement));
+    }
+
+    #[test]
+    fn map_relations_discards_a_replacement_that_changed_schema() {
+        // Offsets and edge keys are positions within each relation, so a
+        // narrower replacement would misalign every index after it. Keeping
+        // the original is the fail-safe choice.
+        let plan = join(scan(&["a0", "a1"]), scan(&["b0"]), &[(0, 0)]);
+        let graph = JoinGraph::try_new(&plan).expect("a reorderable clump");
+        let original = Arc::clone(&graph.relations()[0]);
+        let narrower = scan(&["a0"]);
+
+        let mapped = graph
+            .map_relations(|_| Ok(Arc::clone(&narrower)))
+            .expect("mapping succeeds");
+
+        assert!(Arc::ptr_eq(&mapped.relations()[0], &original));
     }
 
     #[test]

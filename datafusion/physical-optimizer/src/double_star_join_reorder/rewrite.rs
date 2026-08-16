@@ -285,38 +285,11 @@ mod tests {
     use crate::double_star_join_reorder::join_graph::{DoubleStarShape, JoinEdge};
     use crate::double_star_join_reorder::statistics::GraphStatistics;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_physical_plan::empty::EmptyExec;
+    use crate::double_star_join_reorder::test_support::{bowtie, join, scan};
     use std::collections::HashSet;
 
     /// Edges as `(left relation, right relation, sorted keys)`.
     type EdgeSet = HashSet<(usize, usize, Vec<(usize, usize)>)>;
-
-    fn scan(columns: &[&str]) -> Arc<dyn ExecutionPlan> {
-        Arc::new(EmptyExec::new(Arc::new(Schema::new(
-            columns
-                .iter()
-                .map(|name| Field::new(*name, DataType::Int32, false))
-                .collect::<Vec<_>>(),
-        ))))
-    }
-
-    fn hash_join(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-        keys: &[(usize, usize)],
-    ) -> Arc<dyn ExecutionPlan> {
-        let on = keys
-            .iter()
-            .map(|&(left_index, right_index)| {
-                key(&left, left_index, &right, right_index).expect("indices in range")
-            })
-            .collect();
-
-        HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
-            .build_exec()
-            .expect("valid inner join")
-    }
 
     /// Edges as an unordered set, renumbered into `reference`'s relation
     /// indices.
@@ -357,30 +330,6 @@ mod tests {
                 (left, right, keys)
             })
             .collect()
-    }
-
-    /// A bowtie whose relations all have distinct widths, so a mistaken offset
-    /// cannot coincidentally land on a valid column.
-    ///
-    /// ```text
-    ///   a1(1)  a2(4)          b1(2)
-    ///       \  /                |
-    ///      hub_a(3) -- c(2) -- hub_b(5)
-    /// ```
-    fn bowtie() -> Arc<dyn ExecutionPlan> {
-        let hub_a = scan(&["ha_k", "ha_s1", "ha_s2"]);
-        let a1 = scan(&["a1_k"]);
-        let a2 = scan(&["a2_k", "a2_x", "a2_y", "a2_z"]);
-        let central = scan(&["c_ka", "c_kb"]);
-        let hub_b = scan(&["hb_k", "hb_s1", "hb_p", "hb_q", "hb_r"]);
-        let b1 = scan(&["b1_k", "b1_x"]);
-
-        let left = hash_join(hub_a, a1, &[(1, 0)]);
-        let left = hash_join(left, a2, &[(2, 0)]);
-        let left = hash_join(left, central, &[(0, 0)]);
-        let right = hash_join(hub_b, b1, &[(1, 0)]);
-        // c_kb is the last column of `left`; hb_k starts `right`.
-        hash_join(left, right, &[(9, 0)])
     }
 
     /// Rebuild `plan` under a chosen order, returning the projected tree.
@@ -540,5 +489,123 @@ mod tests {
         chosen.left_prefix.pop();
 
         assert!(rebuild(&graph, &chosen).is_none());
+    }
+
+    // ---------- the key swap ----------
+
+    /// Every equijoin key pair in a plan, named by the column each side reads,
+    /// with the two names sorted so a pair is compared regardless of which side
+    /// it landed on.
+    ///
+    /// Names come from the schema position the key reads, so a wrong index
+    /// produces a wrong name here.
+    fn key_pairs(plan: &Arc<dyn ExecutionPlan>) -> Vec<(String, String)> {
+        fn walk(plan: &Arc<dyn ExecutionPlan>, out: &mut Vec<(String, String)>) {
+            if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+                for (left, right) in &join.on {
+                    let name = |expr: &Arc<dyn PhysicalExpr>| {
+                        expr.downcast_ref::<Column>()
+                            .expect("an equijoin key is a column")
+                            .name()
+                            .to_string()
+                    };
+                    let (a, b) = (name(left), name(right));
+                    out.push(if a <= b { (a, b) } else { (b, a) });
+                }
+            }
+            for child in plan.children() {
+                walk(child, out);
+            }
+        }
+
+        let mut out = Vec::new();
+        walk(plan, &mut out);
+        out.sort();
+        out
+    }
+
+    /// A double star in which a spoke appears to the *left* of its hub.
+    ///
+    /// Edges are canonicalized so `left < right`, but which endpoint ends up on
+    /// a join's build side depends on the order chosen, not on numbering. When
+    /// the hub is joined first, this arrangement puts `edge.left` on the
+    /// join's right side, which is the only way to reach the key swap in
+    /// `crossing_keys`. The relations are `a1, hub_a, central, hub_b, b1` in
+    /// that order, forming the path `a1 - hub_a - central - hub_b - b1`.
+    fn spoke_before_hub_star() -> Arc<dyn ExecutionPlan> {
+        let a1 = scan(&["a1_k"]);
+        let hub_a = scan(&["ha_k", "ha_s1", "ha_s2"]);
+        let central = scan(&["c_ka", "c_kb"]);
+        let hub_b = scan(&["hb_k", "hb_s1"]);
+        let b1 = scan(&["b1_k"]);
+
+        // a1.a1_k = hub_a.ha_s1
+        let left = join(a1, hub_a, &[(0, 1)]);
+        // hub_a.ha_k sits at index 1, after a1's single column.
+        let left = join(left, central, &[(1, 0)]);
+        let right = join(hub_b, b1, &[(0, 0)]);
+        // central.c_kb is the last of the six columns on the left.
+        join(left, right, &[(5, 0)])
+    }
+
+    #[test]
+    fn remaps_a_flipped_edge() {
+        let original = spoke_before_hub_star();
+        let (rewritten, _) = rewrite(&original);
+
+        // The same columns are paired after the rewrite. A key pair that was
+        // not swapped alongside its edge would either name different columns
+        // here or read past the end of the narrower relation.
+        assert_eq!(key_pairs(&original), key_pairs(&rewritten));
+        assert_eq!(original.schema(), rewritten.schema());
+    }
+
+    #[test]
+    fn a_flipped_edge_still_round_trips_through_flattening() {
+        let original = spoke_before_hub_star();
+        let before = JoinGraph::try_new(&original).expect("a reorderable clump");
+        let (_, rewritten) = rewrite(&original);
+        let after = JoinGraph::try_new(&rewritten.plan).expect("still reorderable");
+
+        assert_eq!(edge_set(&before, &before), edge_set(&after, &before));
+    }
+
+    #[test]
+    fn keeps_multi_key_pairings_together() {
+        // Two keys between the same pair of relations must stay matched to
+        // their own partner, not transposed with each other.
+        let hub_a = scan(&["k1", "k2", "pad"]);
+        let a1 = scan(&["k1", "k2"]);
+        let central = scan(&["c_ka", "c_kb"]);
+        let hub_b = scan(&["hb_k", "hb_s"]);
+        let b1 = scan(&["b1_k"]);
+
+        let left = join(hub_a, a1, &[(0, 0), (1, 1)]);
+        let left = join(left, central, &[(0, 0)]);
+        let right = join(hub_b, b1, &[(0, 0)]);
+        let original = join(left, right, &[(6, 0)]);
+
+        let (rewritten, _) = rewrite(&original);
+
+        assert_eq!(key_pairs(&original), key_pairs(&rewritten));
+        assert_eq!(original.schema(), rewritten.schema());
+    }
+
+    #[test]
+    fn emits_no_projection_when_the_order_is_unchanged() {
+        // A rewrite that happens to reproduce the original column order needs
+        // no projection, and `apply_projection` should hand the tree back
+        // untouched rather than wrapping it in an identity permutation.
+        let graph = JoinGraph::try_new(&bowtie()).expect("a reorderable clump");
+        let identity = (0..graph.width()).collect::<Vec<_>>();
+        let plan = Arc::clone(&graph.relations()[0]);
+
+        let unchanged = apply_projection(Rewritten {
+            plan: Arc::clone(&plan),
+            projection: identity,
+        })
+        .expect("an identity permutation needs no projection");
+
+        assert!(Arc::ptr_eq(&plan, &unchanged));
     }
 }

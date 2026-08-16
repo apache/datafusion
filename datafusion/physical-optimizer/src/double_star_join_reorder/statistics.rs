@@ -248,156 +248,10 @@ fn edge_denominator(
 mod tests {
     use super::*;
 
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, JoinType, Result};
-    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-    use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-    use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-    use datafusion_physical_plan::joins::HashJoinExecBuilder;
-    use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
-    use std::fmt::Formatter;
-
-    /// A leaf relation with statistics fixed by the test.
-    #[derive(Debug)]
-    struct FakeRelation {
-        schema: SchemaRef,
-        statistics: Arc<Statistics>,
-        properties: Arc<PlanProperties>,
-    }
-
-    impl FakeRelation {
-        /// A relation of `rows` rows whose columns carry the given distinct
-        /// counts, `None` meaning the statistic is absent.
-        fn build(
-            columns: &[(&str, Option<usize>)],
-            rows: usize,
-        ) -> Arc<dyn ExecutionPlan> {
-            let schema: SchemaRef = Arc::new(Schema::new(
-                columns
-                    .iter()
-                    .map(|(name, _)| Field::new(*name, DataType::Int32, false))
-                    .collect::<Vec<_>>(),
-            ));
-
-            let column_statistics = columns
-                .iter()
-                .map(|(_, distinct)| ColumnStatistics {
-                    distinct_count: match distinct {
-                        Some(count) => Precision::Exact(*count),
-                        None => Precision::Absent,
-                    },
-                    null_count: Precision::Exact(0),
-                    ..ColumnStatistics::new_unknown()
-                })
-                .collect();
-
-            let properties = Arc::new(PlanProperties::new(
-                EquivalenceProperties::new(Arc::clone(&schema)),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
-            ));
-
-            Arc::new(Self {
-                schema,
-                statistics: Arc::new(Statistics {
-                    num_rows: Precision::Exact(rows),
-                    total_byte_size: Precision::Absent,
-                    column_statistics,
-                }),
-                properties,
-            })
-        }
-
-        /// A relation whose row count is unknown.
-        fn without_row_count(columns: &[&str]) -> Arc<dyn ExecutionPlan> {
-            let schema: SchemaRef = Arc::new(Schema::new(
-                columns
-                    .iter()
-                    .map(|name| Field::new(*name, DataType::Int32, false))
-                    .collect::<Vec<_>>(),
-            ));
-            let properties = Arc::new(PlanProperties::new(
-                EquivalenceProperties::new(Arc::clone(&schema)),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
-            ));
-
-            Arc::new(Self {
-                statistics: Arc::new(Statistics::new_unknown(&schema)),
-                schema,
-                properties,
-            })
-        }
-    }
-
-    impl DisplayAs for FakeRelation {
-        fn fmt_as(&self, _: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-            write!(f, "FakeRelation")
-        }
-    }
-
-    impl ExecutionPlan for FakeRelation {
-        fn name(&self) -> &str {
-            "FakeRelation"
-        }
-
-        fn schema(&self) -> SchemaRef {
-            Arc::clone(&self.schema)
-        }
-
-        fn properties(&self) -> &Arc<PlanProperties> {
-            &self.properties
-        }
-
-        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-            vec![]
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            _: Vec<Arc<dyn ExecutionPlan>>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(self)
-        }
-
-        fn execute(
-            &self,
-            _: usize,
-            _: Arc<TaskContext>,
-        ) -> Result<SendableRecordBatchStream> {
-            unimplemented!("FakeRelation is only used for planning")
-        }
-
-        fn partition_statistics(&self, _: Option<usize>) -> Result<Arc<Statistics>> {
-            Ok(Arc::clone(&self.statistics))
-        }
-    }
-
-    fn join(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-        keys: &[(usize, usize)],
-    ) -> Arc<dyn ExecutionPlan> {
-        let on = keys
-            .iter()
-            .map(|&(left_index, right_index)| {
-                let left_name = left.schema().field(left_index).name().clone();
-                let right_name = right.schema().field(right_index).name().clone();
-                (
-                    Arc::new(Column::new(&left_name, left_index)) as _,
-                    Arc::new(Column::new(&right_name, right_index)) as _,
-                )
-            })
-            .collect();
-
-        HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
-            .build_exec()
-            .expect("valid inner join")
-    }
+    use crate::double_star_join_reorder::test_support::{
+        col, col_ndv, inexact_relation, join, relation, relation_without_row_count,
+    };
+    use std::sync::Arc;
 
     /// Build a two-relation graph and return its single edge's selectivity.
     fn selectivity_of(
@@ -415,8 +269,8 @@ mod tests {
     fn selectivity_uses_the_larger_distinct_count() {
         // 1 / max(100, 500)
         let selectivity = selectivity_of(
-            FakeRelation::build(&[("k", Some(100))], 1_000),
-            FakeRelation::build(&[("k", Some(500))], 2_000),
+            relation(vec![col_ndv("k", 100)], 1_000),
+            relation(vec![col_ndv("k", 500)], 2_000),
             &[(0, 0)],
         );
 
@@ -428,8 +282,8 @@ mod tests {
         // A 10-row relation cannot hold 900 distinct values, so the claim is
         // capped and the other side's 50 wins.
         let selectivity = selectivity_of(
-            FakeRelation::build(&[("k", Some(900))], 10),
-            FakeRelation::build(&[("k", Some(50))], 100),
+            relation(vec![col_ndv("k", 900)], 10),
+            relation(vec![col_ndv("k", 50)], 100),
             &[(0, 0)],
         );
 
@@ -441,8 +295,8 @@ mod tests {
         // No distinct counts anywhere, so NDV becomes num_rows - null_count
         // on each side and the larger relation sets the denominator.
         let selectivity = selectivity_of(
-            FakeRelation::build(&[("k", None)], 300),
-            FakeRelation::build(&[("k", None)], 700),
+            relation(vec![col("k")], 300),
+            relation(vec![col("k")], 700),
             &[(0, 0)],
         );
 
@@ -459,8 +313,8 @@ mod tests {
         // With real distinct counts the estimate is exact: every order
         // matches its one customer, so the join emits one row per order.
         let with_ndv = selectivity_of(
-            FakeRelation::build(&[("custkey", Some(150_000))], 1_500_000),
-            FakeRelation::build(&[("custkey", Some(150_000))], 150_000),
+            relation(vec![col_ndv("custkey", 150_000)], 1_500_000),
+            relation(vec![col_ndv("custkey", 150_000)], 150_000),
             &[(0, 0)],
         )
         .expect("statistics are usable");
@@ -469,8 +323,8 @@ mod tests {
         // Without them the fact table's foreign key is assumed unique, which
         // inflates its NDV to the row count and wins the `max`.
         let without_ndv = selectivity_of(
-            FakeRelation::build(&[("custkey", None)], 1_500_000),
-            FakeRelation::build(&[("custkey", None)], 150_000),
+            relation(vec![col("custkey")], 1_500_000),
+            relation(vec![col("custkey")], 150_000),
             &[(0, 0)],
         )
         .expect("statistics are usable");
@@ -478,12 +332,39 @@ mod tests {
     }
 
     #[test]
+    fn null_count_reduces_the_fallback_ndv() {
+        // With no distinct count the fallback is non-null rows, so 400 nulls
+        // out of 1000 leaves 600 — which still beats the other side's 500 and
+        // sets the denominator.
+        let selectivity = selectivity_of(
+            relation(vec![col("k").nulls(400)], 1_000),
+            relation(vec![col("k")], 500),
+            &[(0, 0)],
+        );
+
+        assert_eq!(selectivity, Some(1.0 / 600.0));
+    }
+
+    #[test]
+    fn inexact_statistics_are_usable() {
+        // Only `Absent` means "no information". An estimate, such as the row
+        // count downstream of a filter, is still worth reasoning from.
+        let selectivity = selectivity_of(
+            inexact_relation(vec![col_ndv("k", 250)], 900),
+            inexact_relation(vec![col_ndv("k", 120)], 700),
+            &[(0, 0)],
+        );
+
+        assert_eq!(selectivity, Some(1.0 / 250.0));
+    }
+
+    #[test]
     fn composite_keys_take_the_most_selective_rather_than_the_product() {
         // Denominators 100 and 40: the product would be 4000, wildly
         // overstating selectivity for keys that are usually correlated.
         let selectivity = selectivity_of(
-            FakeRelation::build(&[("a", Some(100)), ("b", Some(40))], 1_000),
-            FakeRelation::build(&[("a", Some(20)), ("b", Some(10))], 1_000),
+            relation(vec![col_ndv("a", 100), col_ndv("b", 40)], 1_000),
+            relation(vec![col_ndv("a", 20), col_ndv("b", 10)], 1_000),
             &[(0, 0), (1, 1)],
         );
 
@@ -493,8 +374,8 @@ mod tests {
     #[test]
     fn declines_when_a_row_count_is_missing() {
         let plan = join(
-            FakeRelation::build(&[("k", Some(10))], 100),
-            FakeRelation::without_row_count(&["k"]),
+            relation(vec![col_ndv("k", 10)], 100),
+            relation_without_row_count(&["k"]),
             &[(0, 0)],
         );
         let graph = JoinGraph::try_new(&plan).expect("a reorderable clump");
@@ -505,8 +386,8 @@ mod tests {
     #[test]
     fn an_empty_relation_does_not_produce_an_infinite_selectivity() {
         let selectivity = selectivity_of(
-            FakeRelation::build(&[("k", Some(0))], 0),
-            FakeRelation::build(&[("k", Some(0))], 0),
+            relation(vec![col_ndv("k", 0)], 0),
+            relation(vec![col_ndv("k", 0)], 0),
             &[(0, 0)],
         )
         .expect("zero rows is a usable estimate");
@@ -520,11 +401,11 @@ mod tests {
         //   a1        b1
         //    \        /
         //    hub_a - c - hub_b
-        let hub_a = FakeRelation::build(&[("k", Some(1_000)), ("sa", Some(500))], 1_000);
-        let a1 = FakeRelation::build(&[("k", Some(50))], 50);
-        let central = FakeRelation::build(&[("ka", Some(200)), ("kb", Some(200))], 200);
-        let hub_b = FakeRelation::build(&[("k", Some(2_000)), ("sb", Some(800))], 2_000);
-        let b1 = FakeRelation::build(&[("k", Some(80))], 80);
+        let hub_a = relation(vec![col_ndv("k", 1_000), col_ndv("sa", 500)], 1_000);
+        let a1 = relation(vec![col_ndv("k", 50)], 50);
+        let central = relation(vec![col_ndv("ka", 200), col_ndv("kb", 200)], 200);
+        let hub_b = relation(vec![col_ndv("k", 2_000), col_ndv("sb", 800)], 2_000);
+        let b1 = relation(vec![col_ndv("k", 80)], 80);
 
         let left = join(hub_a, a1, &[(1, 0)]);
         let left = join(left, central, &[(0, 0)]);
