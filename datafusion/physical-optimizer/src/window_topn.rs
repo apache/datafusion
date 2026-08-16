@@ -141,6 +141,15 @@ impl WindowTopN {
         // Step 2: Extract limit from predicate (rn <= K, rn < K, etc.)
         let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
 
+        // A predicate such as `rn < 1` (or the flipped `1 > rn`) yields a fetch of
+        // 0. `ROW_NUMBER`/`RANK` are always >= 1, so no row can satisfy it and the
+        // correct result is empty. `PartitionedTopKExec` requires `k > 0` and would
+        // panic on `k = 0`, so bail out here and let the regular `FilterExec` produce
+        // the (empty) result instead of rewriting.
+        if limit_n == 0 {
+            return None;
+        }
+
         // Step 3: Walk through optional ProjectionExec and RepartitionExec to find BoundedWindowAggExec
         let child = filter.input();
         let (window_exec, intermediates) = find_window_below(child)?;

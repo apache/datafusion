@@ -110,6 +110,10 @@ name = "partial_ordering"
 
 [[bench]]
 harness = false
+name = "union_schema"
+
+[[bench]]
+harness = false
 name = "spill_io"
 
 [[bench]]
