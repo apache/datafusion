@@ -235,7 +235,8 @@ fn bench_take_n(c: &mut Criterion) {
                     for _ in 0..N_BATCHES {
                         gv.intern(std::slice::from_ref(&batch), groups).unwrap();
                         black_box(&*groups);
-                        black_box(gv.emit(EmitTo::First(size / 2)).unwrap());
+                        let emit_n = (size / 2).min(gv.len());
+                        black_box(gv.emit(EmitTo::First(emit_n)).unwrap());
                     }
                     black_box(gv.emit(EmitTo::First(gv.len())).unwrap());
                 },
