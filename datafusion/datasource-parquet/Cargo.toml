@@ -61,6 +61,7 @@ chrono = { workspace = true }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+rand = { workspace = true, features = ["small_rng"] }
 tempfile = { workspace = true }
 
 # Note: add additional linter rules in lib.rs.

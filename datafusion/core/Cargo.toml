@@ -306,4 +306,9 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_dictionary_pruning_query"
+required-features = ["parquet", "sql"]
+
+[[bench]]
+harness = false
 name = "reset_plan_states"
