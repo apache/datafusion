@@ -283,7 +283,7 @@ impl LogicalPlanBuilder {
                     && !can_cast_types(&data_type, field_type)
                 {
                     return exec_err!(
-                        "type mismatch and can't cast to got {} and {}",
+                        "Types don't match and no valid cast exists, received data of type {} for field of type {}",
                         data_type,
                         field_type
                     );
@@ -2177,7 +2177,7 @@ pub fn wrap_projection_for_join_if_necessary(
         // Expr contains Arc with interior mutability but is intentionally used as hash key
         let join_key_items = alias_join_keys
             .iter()
-            .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
+            .filter(|expr| expr.try_as_col().is_none())
             .cloned()
             .collect::<HashSet<Expr>>();
         projection.extend(join_key_items);
@@ -3032,6 +3032,27 @@ mod tests {
                 Some("a:2".to_string()),
                 Some("a:1:1".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn test_values_with_schema_type_mismatch_error_message() {
+        // Date32 field, but the value is a Boolean, which cannot be cast to Date32.
+        let schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("a", DataType::Date32, false)].into(),
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
+
+        let err = LogicalPlanBuilder::values_with_schema(vec![vec![lit(true)]], &schema)
+            .unwrap_err();
+
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: Types don't match and no valid cast exists, \
+         received data of type Boolean for field of type Date32"
         );
     }
 }

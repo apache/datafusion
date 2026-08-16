@@ -20,6 +20,7 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod fixed_size_binary;
 pub mod primitive;
 pub mod row_backed;
 
@@ -28,16 +29,20 @@ use std::mem::{self, size_of};
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
-    bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
-    row_backed::RowsGroupColumn,
+    bytes_view::ByteViewGroupValueBuilder,
+    fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
+    primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
 };
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
-    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, StringViewType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
     UInt64Type,
 };
@@ -944,13 +949,20 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
+            | DataType::Float16
             | DataType::Float32
             | DataType::Float64
             | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Binary
             | DataType::LargeBinary
+            // Only non-negative widths: a negative width is not a valid
+            // Arrow type (no array can be constructed for it), and the
+            // dispatcher in `make_group_column` rejects it. Keep the two
+            // in lockstep.
+            | DataType::FixedSizeBinary(0..)
             | DataType::Date32
             | DataType::Date64
             // Only the semantically valid Time variants per the Arrow spec.
@@ -963,6 +975,8 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Time64(TimeUnit::Microsecond)
             | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Timestamp(_, _)
+            | DataType::Duration(_)
+            | DataType::Interval(_)
             | DataType::Utf8View
             | DataType::BinaryView
             | DataType::Boolean
@@ -997,6 +1011,9 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
         DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
         DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
+        DataType::Float16 => {
+            instantiate_primitive!(v, nullable, Float16Type, data_type)
+        }
         DataType::Float32 => {
             instantiate_primitive!(v, nullable, Float32Type, data_type)
         }
@@ -1042,8 +1059,38 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
             }
         },
+        DataType::Duration(t) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, DurationSecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, DurationMillisecondType, data_type)
+            }
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, DurationMicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
+            }
+        },
+        // `IntervalUnit` has exactly three variants, so this match is exhaustive
+        // with no fallback arm (unlike Time32 / Time64).
+        DataType::Interval(u) => match u {
+            IntervalUnit::YearMonth => {
+                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+            }
+            IntervalUnit::DayTime => {
+                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+            }
+            IntervalUnit::MonthDayNano => {
+                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
+            }
+        },
         DataType::Decimal128(_, _) => {
             instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+        }
+        DataType::Decimal256(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
         }
         DataType::Utf8 => {
             v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
@@ -1064,6 +1111,11 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
                 OutputType::Binary,
             )));
+        }
+        // A negative width is not a valid Arrow type; it falls to the `_`
+        // arm below, matching `group_column_supported_type`.
+        DataType::FixedSizeBinary(byte_width @ 0..) => {
+            v.push(Box::new(FixedSizeBinaryGroupValueBuilder::new(byte_width)));
         }
         DataType::Utf8View => {
             v.push(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()));
@@ -1278,7 +1330,11 @@ enum Nulls {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow::array::{
+        Array, ArrayRef, DurationMicrosecondArray, FixedSizeBinaryArray, Float16Array,
+        Int32Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
+        StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use datafusion_common::utils::proxy::HashTableAllocExt;
@@ -1562,13 +1618,18 @@ mod tests {
             DataType::UInt64,
             DataType::Float32,
             DataType::Float64,
+            DataType::Float16,
             DataType::Decimal128(38, 10),
+            DataType::Decimal256(76, 10),
             DataType::Utf8,
             DataType::LargeUtf8,
             DataType::Utf8View,
             DataType::Binary,
             DataType::LargeBinary,
             DataType::BinaryView,
+            DataType::FixedSizeBinary(16),
+            // Zero-width FixedSizeBinary is valid per the Arrow spec
+            DataType::FixedSizeBinary(0),
             DataType::Boolean,
             DataType::Date32,
             DataType::Date64,
@@ -1577,6 +1638,13 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Duration(arrow::datatypes::TimeUnit::Second),
+            DataType::Duration(arrow::datatypes::TimeUnit::Millisecond),
+            DataType::Duration(arrow::datatypes::TimeUnit::Microsecond),
+            DataType::Duration(arrow::datatypes::TimeUnit::Nanosecond),
+            DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
+            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
+            DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
         ];
 
         for dt in &supported_cases {
@@ -1593,8 +1661,6 @@ mod tests {
         }
 
         let unsupported_cases: Vec<DataType> = vec![
-            DataType::Float16,
-            DataType::Decimal256(76, 10),
             // Invalid Time-unit combinations: Time32 is defined only for
             // Second / Millisecond and Time64 only for Microsecond /
             // Nanosecond. The TimeUnit enum allows constructing the other
@@ -1605,6 +1671,9 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+            // A negative width is representable in the DataType but is not
+            // a valid Arrow type; no array can be constructed for it.
+            DataType::FixedSizeBinary(-5),
         ];
 
         for dt in &unsupported_cases {
@@ -1620,14 +1689,187 @@ mod tests {
         }
     }
 
+    // `Duration` group keys stay on the `GroupValuesColumn` fast path, dedup
+    // (including nulls), and round-trip with the `Duration` type preserved.
+    #[test]
+    fn test_group_values_column_duration() {
+        use arrow::datatypes::TimeUnit;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", DataType::Duration(TimeUnit::Microsecond), true),
+            Field::new("i", DataType::Int64, true),
+        ]));
+        assert!(supported_schema(&schema));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        // (d, i) rows, where row 3 repeats row 0 and row 4 repeats the null pair.
+        let d: ArrayRef = Arc::new(DurationMicrosecondArray::from(vec![
+            Some(10),
+            None,
+            Some(20),
+            Some(10),
+            None,
+        ]));
+        let i: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(1),
+            None,
+        ]));
+        let mut groups = Vec::new();
+        group_values.intern(&[d, i], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 2, 0, 1]);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted.len(), 2);
+        // The Duration column round-trips as Duration on emit, not bare i64.
+        assert_eq!(
+            emitted[0].data_type(),
+            &DataType::Duration(TimeUnit::Microsecond)
+        );
+        let actual = emitted[0]
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .expect("emitted column should be a DurationMicrosecondArray");
+        // Three groups in first-seen order: 10, null, 20.
+        assert_eq!(actual.len(), 3);
+        assert_eq!(actual.value(0), 10);
+        assert!(actual.is_null(1));
+        assert_eq!(actual.value(2), 20);
+    }
+
+    // `(Float16, Int32)` keys: ±0.0 collapse (stored as +0.0), NaNs collapse, and
+    // the Int32 key keeps `(0.0, 4)` distinct from `(±0.0, 3)`.
+    #[test]
+    fn test_group_values_column_float16() {
+        use half::f16;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f", DataType::Float16, true),
+            Field::new("i", DataType::Int32, true),
+        ]));
+        assert!(supported_schema(&schema));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        let f: ArrayRef = Arc::new(Float16Array::from(vec![
+            Some(f16::from_f32(1.0)),
+            Some(f16::from_f32(-0.0)),
+            Some(f16::from_f32(0.0)),
+            Some(f16::from_f32(0.0)),
+            Some(f16::NAN),
+            Some(f16::NAN),
+            None,
+            None,
+        ]));
+        let i: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(4),
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(3),
+        ]));
+        let mut groups = Vec::new();
+        group_values.intern(&[f, i], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 1, 2, 3, 3, 4, 4]);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(emitted[0].data_type(), &DataType::Float16);
+        let keys = emitted[0]
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .expect("emitted column should be a Float16Array");
+        assert_eq!(keys.len(), 5);
+        assert_eq!(keys.value(0), f16::from_f32(1.0));
+        // The ±0.0 group is stored canonically as +0.0 (not -0.0).
+        assert_eq!(keys.value(1).to_bits(), f16::from_f32(0.0).to_bits());
+        assert_eq!(keys.value(2).to_bits(), f16::from_f32(0.0).to_bits());
+        assert!(keys.value(3).is_nan());
+        assert!(keys.is_null(4));
+        let ids = emitted[1]
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("emitted column should be an Int32Array");
+        assert_eq!(ids.values().to_vec(), vec![3, 3, 4, 3, 3]);
+    }
+
+    // `(Interval, Int32)` keys for each of the three interval units: null keys
+    // dedup, the Int32 key splits equal intervals, and emit gives back Interval.
+    #[test]
+    fn test_group_values_column_interval() {
+        use arrow::datatypes::{
+            ArrowPrimitiveType, IntervalDayTime, IntervalDayTimeType,
+            IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
+            IntervalYearMonthType,
+        };
+
+        fn check<T: ArrowPrimitiveType>(unit: IntervalUnit, value: T::Native) {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("i", DataType::Interval(unit), true),
+                Field::new("n", DataType::Int32, true),
+            ]));
+            assert!(supported_schema(&schema), "{unit:?} schema not supported");
+            let mut group_values =
+                GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+            let i: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter([
+                Some(value),
+                None,
+                Some(value),
+                None,
+                Some(value),
+            ]));
+            let n: ArrayRef = Arc::new(Int32Array::from(vec![3, 3, 3, 3, 4]));
+            let mut groups = Vec::new();
+            group_values.intern(&[i, n], &mut groups).unwrap();
+            assert_eq!(groups, vec![0, 1, 0, 1, 2], "{unit:?}");
+
+            let emitted = group_values.emit(EmitTo::All).unwrap();
+            assert_eq!(emitted.len(), 2);
+            // The emitted key keeps its Interval type, not the bare native.
+            assert_eq!(emitted[0].data_type(), &DataType::Interval(unit));
+            let actual = emitted[0]
+                .as_any()
+                .downcast_ref::<PrimitiveArray<T>>()
+                .unwrap_or_else(|| panic!("emitted column should be a {unit:?} array"));
+            // Three groups in first-seen order: value, null, value (n=4).
+            assert_eq!(actual.len(), 3, "{unit:?}");
+            assert_eq!(actual.value(0), value, "{unit:?}");
+            assert!(actual.is_null(1), "{unit:?}");
+            assert_eq!(actual.value(2), value, "{unit:?}");
+            let ids = emitted[1]
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("emitted column should be an Int32Array");
+            assert_eq!(ids.values().to_vec(), vec![3, 3, 4], "{unit:?}");
+        }
+
+        check::<IntervalYearMonthType>(IntervalUnit::YearMonth, 13);
+        check::<IntervalDayTimeType>(IntervalUnit::DayTime, IntervalDayTime::new(1, 500));
+        check::<IntervalMonthDayNanoType>(
+            IntervalUnit::MonthDayNano,
+            IntervalMonthDayNano::new(1, 0, 0),
+        );
+    }
+
     #[test]
     fn supported_schema_rejects_mix_of_supported_and_unsupported() {
-        // One Float16 column among supported columns flips the whole
-        // schema to GroupValuesRows fallback.
+        // One unsupported column flips the whole schema to the GroupValuesRows
+        // fallback. Time64(Second) stays invalid as new primitive builders land.
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Float16, true),
+            Field::new(
+                "c",
+                DataType::Time64(arrow::datatypes::TimeUnit::Second),
+                true,
+            ),
         ]);
         assert!(!supported_schema(&schema));
 
@@ -1646,8 +1888,11 @@ mod tests {
         // rejected at construction time rather than at first `intern`.
         // `GroupValuesColumn` doesn't implement `Debug`, so explicit match
         // instead of `unwrap_err`.
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("x", DataType::Float16, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Time64(arrow::datatypes::TimeUnit::Second),
+            true,
+        )]));
         match GroupValuesColumn::<false>::try_new(schema) {
             Ok(_) => panic!("expected NotImpl error, but try_new succeeded"),
             Err(e) => {
@@ -1671,6 +1916,78 @@ mod tests {
         let actual_batch = RecordBatch::try_new(data_set.schema(), actual_batch).unwrap();
 
         check_result(&actual_batch, &data_set.expected_batch);
+    }
+
+    #[test]
+    fn test_intern_for_fixed_size_binary_group_values() {
+        // Two-column group by `(FixedSizeBinary(2), Int64)` exercising the
+        // vectorized intern path end-to-end (hashing included), with nulls,
+        // within-batch repeats and across-batch repeats.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::FixedSizeBinary(2), true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        fn fsb(values: Vec<Option<&[u8; 2]>>) -> ArrayRef {
+            Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    values.into_iter(),
+                    2,
+                )
+                .unwrap(),
+            )
+        }
+
+        let batch1: Vec<ArrayRef> = vec![
+            fsb(vec![Some(b"aa"), Some(b"aa"), None, None, Some(b"bb")]),
+            Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(1),
+                None,
+                Some(2),
+                None,
+            ])),
+        ];
+        // Mix of groups repeated from batch1 and new groups
+        let batch2: Vec<ArrayRef> = vec![
+            fsb(vec![Some(b"aa"), Some(b"cc"), None, Some(b"bb")]),
+            Arc::new(Int64Array::from(vec![Some(1), Some(1), None, Some(3)])),
+        ];
+
+        group_values.intern(&batch1, &mut vec![]).unwrap();
+        group_values.intern(&batch2, &mut vec![]).unwrap();
+
+        let actual_batch = group_values.emit(EmitTo::All).unwrap();
+        let actual_batch =
+            RecordBatch::try_new(Arc::clone(&schema), actual_batch).unwrap();
+
+        let expected_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                fsb(vec![
+                    Some(b"aa"),
+                    None,
+                    None,
+                    Some(b"bb"),
+                    Some(b"cc"),
+                    Some(b"bb"),
+                ]),
+                Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(2),
+                    None,
+                    Some(1),
+                    Some(3),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(actual_batch.num_rows(), expected_batch.num_rows());
+        check_result(&actual_batch, &expected_batch);
     }
 
     #[test]
@@ -1734,7 +2051,7 @@ mod tests {
         // `emit(EmitTo::First(4))` calls can `take_n` without panicking.
         // The hashmap entries below reference group indices 0..=11, so the
         // single column builder needs at least 12 rows to back them.
-        let seed: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![0_i32; 12]));
+        let seed: ArrayRef = Arc::new(Int32Array::from(vec![0_i32; 12]));
         for row in 0..12 {
             group_values.group_values[0]
                 .append_val(&seed, row)

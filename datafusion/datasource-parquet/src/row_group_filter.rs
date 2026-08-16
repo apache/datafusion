@@ -29,7 +29,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, IsNullExpr, NotExpr};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::RowGroupMetaData;
 use parquet::schema::types::SchemaDescriptor;
@@ -373,8 +373,9 @@ impl RowGroupAccessPlanFilter {
             return;
         };
 
-        let Ok(inverted_predicate) =
-            PruningPredicate::try_new(inverted_expr, Arc::clone(predicate.schema()))
+        let Ok(inverted_predicate) = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(predicate.schema()))
+            .try_build(inverted_expr)
         else {
             return;
         };
@@ -430,6 +431,15 @@ impl RowGroupAccessPlanFilter {
         assert_eq!(row_group_bloom_filters.len(), self.access_plan.len());
         for (idx, stats) in row_group_bloom_filters.iter().enumerate() {
             if !self.access_plan.should_scan(idx) {
+                continue;
+            }
+
+            // A row group without any loaded bloom filter cannot be pruned by this pass: with no
+            // bloom statistics to consult, evaluation can only conclude "may match". Skip the
+            // evaluation in that case: it runs once per row group and can be expensive for wide
+            // predicates, a cost files written without bloom filters would pay for nothing.
+            if stats.is_empty() {
+                metrics.row_groups_pruned_bloom_filter.add_matched(1);
                 continue;
             }
 
@@ -543,12 +553,23 @@ mod tests {
     use parquet::arrow::ArrowSchemaConverter;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::basic::LogicalType;
+    use parquet::bloom_filter::Sbbf;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::{
         basic::Type as PhysicalType, file::statistics::Statistics as ParquetStatistics,
         schema::types::SchemaDescPtr,
     };
+
+    fn build_test_pruning_predicate(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: Arc<Schema>,
+    ) -> PruningPredicate {
+        PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)
+            .unwrap()
+    }
 
     struct PrimitiveTypeField {
         name: &'static str,
@@ -612,7 +633,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expr = col("c1").gt(lit(15));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -655,7 +676,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
         let expr = logical2physical(&col("c1").gt(lit(15)), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -781,7 +802,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expr = col("c1").gt(lit(15));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
         let schema_descr = get_test_schema_descr(vec![field]);
@@ -824,7 +845,7 @@ mod tests {
         ]));
         let expr = col("c1").gt(lit(15)).and(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
 
         let schema_descr = get_test_schema_descr(vec![
             PrimitiveTypeField::new("c1", PhysicalType::INT32),
@@ -863,7 +884,7 @@ mod tests {
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
@@ -890,7 +911,7 @@ mod tests {
         let expr = col("c1").gt(lit(0));
         let expr = logical2physical(&expr, &table_schema);
         let pruning_predicate =
-            PruningPredicate::try_new(expr, table_schema.clone()).unwrap();
+            build_test_pruning_predicate(expr, Arc::clone(&table_schema));
 
         // Model a file schema's column order c2 then c1, which is the opposite
         // of the table schema
@@ -967,7 +988,7 @@ mod tests {
         let schema_descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
         let groups = gen_row_group_meta_data_for_pruning_predicate();
 
         let metrics = parquet_file_metrics();
@@ -998,7 +1019,7 @@ mod tests {
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
         let groups = gen_row_group_meta_data_for_pruning_predicate();
 
         let metrics = parquet_file_metrics();
@@ -1033,7 +1054,7 @@ mod tests {
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             // [1.00, 6.00]
@@ -1101,7 +1122,7 @@ mod tests {
             Decimal128(11, 2),
         ));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             // [100, 600]
@@ -1190,7 +1211,7 @@ mod tests {
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").lt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             // [6.00, 8.00]
@@ -1248,7 +1269,7 @@ mod tests {
         let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
         // we must use the big-endian when encode the i128 to bytes or vec[u8].
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
@@ -1323,7 +1344,7 @@ mod tests {
         let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, Arc::clone(&schema));
         // we must use the big-endian when encode the i128 to bytes or vec[u8].
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
@@ -1369,6 +1390,40 @@ mod tests {
             &metrics,
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
+    }
+
+    #[test]
+    fn bloom_filter_pruning_evaluates_row_groups_with_bloom_filters() {
+        // c1 = 15
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = logical2physical(&col("c1").eq(lit(15)), &schema);
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .build(expr)
+            .unwrap();
+
+        // Row group 0 has no bloom filter; row group 1 has a bloom filter
+        // whose values do not include 15, so it can be pruned.
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&1_i32);
+        sbbf.insert(&2_i32);
+        let mut with_bloom_filter = BloomFilterStatistics::new();
+        with_bloom_filter.insert("c1", sbbf, PhysicalType::INT32, 4);
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
+        row_groups.prune_by_bloom_filters(
+            &pruning_predicate,
+            &metrics,
+            &[BloomFilterStatistics::new(), with_bloom_filter],
+        );
+
+        // The bloom-filter-less row group is kept without evaluation while
+        // the row group with a bloom filter is still evaluated and pruned.
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.pruned(), 1);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 1);
     }
 
     fn get_row_group_meta_data(

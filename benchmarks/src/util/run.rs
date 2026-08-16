@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::memory_pool::PeakRecordingPool;
-use datafusion::execution::memory_pool::MemoryPool;
+use datafusion::execution::memory_pool::{MemoryPool, PeakRecordingPool};
 use datafusion::{DATAFUSION_VERSION, error::Result};
 use datafusion_common::utils::get_available_parallelism;
 use serde::{Serialize, Serializer};

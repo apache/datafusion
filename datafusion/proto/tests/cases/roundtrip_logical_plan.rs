@@ -116,7 +116,7 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
-use datafusion_proto::{FromProto, protobuf};
+use datafusion_proto::protobuf;
 
 use crate::cases::{
     MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF, MyHigherOrderUdfNode,
@@ -150,7 +150,7 @@ fn roundtrip_expr_test_with_codec(
     let round_trip: Expr =
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), codec).unwrap();
 
-    assert_eq!(format!("{:?}", initial_struct), format!("{round_trip:?}"));
+    assert_eq!(format!("{initial_struct:?}"), format!("{round_trip:?}"));
 
     roundtrip_json_test(&proto);
 }
@@ -495,9 +495,7 @@ async fn roundtrip_create_external_table_legacy_location() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = DFSchema::empty();
     let create_external_table = protobuf::CreateExternalTableNode {
-        name: Some(protobuf::TableReference::from_proto(TableReference::bare(
-            "t",
-        ))),
+        name: Some(protobuf::TableReference::from(TableReference::bare("t"))),
         location: "legacy.csv".to_string(),
         locations: vec![],
         file_type: "CSV".to_string(),
@@ -1704,7 +1702,7 @@ pub mod proto {
         pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
@@ -2216,7 +2214,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, true),
+                        Field::new("key", DataType::Int32, false),
                         Field::new("value", DataType::Utf8, false),
                     ])),
                     false,
@@ -2228,7 +2226,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, true),
+                        Field::new("key", DataType::Int32, false),
                         Field::new("value", DataType::Utf8, true),
                     ])),
                     false,
@@ -2517,7 +2515,7 @@ fn roundtrip_null_scalar_values() {
     for test_case in test_types.into_iter() {
         let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
         let returned_scalar: ScalarValue = (&proto_scalar).try_into().unwrap();
-        assert_eq!(format!("{:?}", test_case), format!("{returned_scalar:?}"));
+        assert_eq!(format!("{test_case:?}"), format!("{returned_scalar:?}"));
     }
 }
 
@@ -2736,6 +2734,18 @@ fn roundtrip_inlist() {
 fn roundtrip_unnest() {
     let test_expr = Expr::Unnest(Unnest {
         expr: Box::new(col("col")),
+        outer: false,
+    });
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_unnest_outer() {
+    let test_expr = Expr::Unnest(Unnest {
+        expr: Box::new(col("col")),
+        outer: true,
     });
 
     let ctx = SessionContext::new();
@@ -3012,7 +3022,7 @@ fn roundtrip_scalar_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -3026,7 +3036,7 @@ fn roundtrip_aggregate_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -3135,7 +3145,7 @@ fn roundtrip_higher_order_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
