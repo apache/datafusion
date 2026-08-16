@@ -235,7 +235,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // if true, we may not have a guarantee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
-    while let Some((data_rx, serializer, writer, bytes_written)) = rx.recv().await {
+    while let Some((data_rx, serializer, writer, byte_counter)) = rx.recv().await {
         let elapsed_compute = elapsed_compute.clone();
 
         join_set.spawn(async move {
@@ -243,7 +243,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
                 data_rx,
                 serializer,
                 writer,
-                bytes_written,
+                byte_counter,
                 elapsed_compute,
             )
             .await
