@@ -502,7 +502,17 @@ impl std::io::Write for FileSpillWriter {
             )));
         }
 
-        self.file.write_all(buf).map_err(DataFusionError::IoError)?;
+        // Charge the global counter before the OS write so concurrent writers
+        // cannot collectively exceed the quota. If the write fails, roll that
+        // reservation back: `current_file_disk_usage` is only updated on
+        // success, so `Drop` would otherwise subtract too little and the
+        // leaked bytes would permanently shrink spill capacity (#24230).
+        if let Err(e) = self.file.write_all(buf) {
+            self.disk_manager
+                .used_disk_space
+                .fetch_sub(len, Ordering::Relaxed);
+            return Err(e);
+        }
 
         self.current_file_disk_usage
             .fetch_add(len, Ordering::Relaxed);
@@ -1171,6 +1181,61 @@ mod tests {
         drop(file);
 
         // After drop: used_disk_space must be zero (no leak)
+        assert_eq!(dm.used_disk_space(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_io_error_rolls_back_disk_usage() -> Result<()> {
+        // FileSpillWriter::write reserves `len` on the global counter before
+        // the OS write. If that write fails, the reservation must be released.
+        // Otherwise Drop only subtracts the last successful size and the
+        // leaked bytes shrink future spill capacity (issue #24230).
+        let cap = 1000u64;
+        let dm = Arc::new(
+            DiskManagerBuilder::default()
+                .with_max_temp_directory_size(cap)
+                .build()?,
+        );
+
+        let file = dm.create_tmp_file("write_io_error")?;
+        {
+            let mut writer = file.open_writer()?;
+            writer.write_all(&[0u8; 400])?;
+        }
+        assert_eq!(dm.used_disk_space(), 400);
+
+        // Read-only handle: the quota reservation succeeds (400 + 600 == cap)
+        // but the OS write fails. Use a dummy per-file counter so this writer
+        // cannot accidentally "fix" Drop accounting on the real file.
+        let mut failing = FileSpillWriter {
+            file: std::fs::File::open(file.path().unwrap())?,
+            disk_manager: Arc::clone(&dm),
+            current_file_disk_usage: Arc::new(AtomicU64::new(0)),
+        };
+
+        for _ in 0..2 {
+            let err = std::io::Write::write_all(&mut failing, &[1u8; 600]).unwrap_err();
+            // Without the rollback, the first leak fills the cap and the
+            // second attempt fails the quota check instead of the OS write.
+            assert!(
+                !err.to_string().contains("exceeded the allowable limit"),
+                "expected an OS write error, not a quota error: {err}"
+            );
+            assert_eq!(dm.used_disk_space(), 400);
+        }
+        drop(failing);
+
+        // 500 bytes still fits (used 400, cap 1000). A leaked 600-byte
+        // reservation would make this fail the quota check.
+        {
+            let mut writer = file.open_writer()?;
+            writer.write_all(&[2u8; 500])?;
+        }
+        assert_eq!(dm.used_disk_space(), 900);
+
+        drop(file);
         assert_eq!(dm.used_disk_space(), 0);
 
         Ok(())
