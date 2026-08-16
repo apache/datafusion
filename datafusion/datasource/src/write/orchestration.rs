@@ -27,6 +27,7 @@ use super::{BatchSerializer, ObjectWriterBuilder};
 use crate::file_compression_type::FileCompressionType;
 use crate::file_sink_config::FileSinkMetrics;
 use datafusion_common::error::Result;
+use datafusion_physical_plan::metrics::Time;
 
 use arrow::array::RecordBatch;
 use datafusion_common::{
@@ -100,6 +101,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     serializer: Arc<dyn BatchSerializer>,
     mut writer: WriterType,
     bytes_written: Arc<AtomicUsize>,
+    elapsed_compute: Option<Time>,
 ) -> SerializedRecordBatchResult {
     let (tx, mut rx) =
         mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
@@ -109,9 +111,17 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
             let serializer_clone = Arc::clone(&serializer);
+            let elapsed_compute = elapsed_compute.clone();
+
             let task = SpawnedTask::spawn(async move {
                 let num_rows = batch.num_rows();
-                let bytes = serializer_clone.serialize(batch, initial)?;
+
+                let bytes = {
+                    let _timer = elapsed_compute.as_ref().map(|metric| metric.timer());
+
+                    serializer_clone.serialize(batch, initial)?
+                };
+
                 Ok((num_rows, bytes))
             });
             if initial {
@@ -213,6 +223,7 @@ impl<'a> StatelessWriterOptions<'a> {
 pub(crate) async fn stateless_serialize_and_write_files(
     mut rx: Receiver<FileWriteBundle>,
     tx: tokio::sync::oneshot::Sender<(u64, usize)>,
+    elapsed_compute: Option<Time>,
 ) -> Result<()> {
     let mut row_count = 0;
     let mut bytes_written = 0;
@@ -225,12 +236,15 @@ pub(crate) async fn stateless_serialize_and_write_files(
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
     while let Some((data_rx, serializer, writer, bytes_written)) = rx.recv().await {
+        let elapsed_compute = elapsed_compute.clone();
+
         join_set.spawn(async move {
             serialize_rb_stream_to_object_store(
                 data_rx,
                 serializer,
                 writer,
                 bytes_written,
+                elapsed_compute,
             )
             .await
         });
@@ -338,9 +352,9 @@ pub async fn spawn_writer_tasks_and_join_with_metrics(
     demux_task: SpawnedTask<Result<()>>,
     mut file_stream_rx: DemuxedStreamReceiver,
 ) -> Result<u64> {
-    let _timer = options
+    let elapsed_compute = options
         .metrics
-        .map(|metrics| metrics.elapsed_compute().timer());
+        .map(|metrics| metrics.elapsed_compute().clone());
     let rb_buffer_size = &context
         .session_config()
         .options()
@@ -350,7 +364,8 @@ pub async fn spawn_writer_tasks_and_join_with_metrics(
     let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size.get() / 2);
     let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
     let write_coordinator_task = SpawnedTask::spawn(async move {
-        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
+        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, elapsed_compute)
+            .await
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
         let (writer, bytes_written) = ObjectWriterBuilder::new(
