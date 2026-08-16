@@ -50,11 +50,12 @@ impl SortProperties {
             (Self::Singleton, _) => *rhs,
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
+                if lhs.descending == rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 Self::Ordered(SortOptions {
                     descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
+                    nulls_first: lhs.nulls_first,
                 })
             }
             _ => Self::Unordered,
@@ -70,11 +71,12 @@ impl SortProperties {
             }),
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
+                if lhs.descending != rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 Self::Ordered(SortOptions {
                     descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
+                    nulls_first: lhs.nulls_first,
                 })
             }
             _ => Self::Unordered,
@@ -89,7 +91,8 @@ impl SortProperties {
             }),
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
+                if lhs.descending != rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 *self
             }
@@ -100,11 +103,12 @@ impl SortProperties {
     pub fn and_or(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
+                if lhs.descending == rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 Self::Ordered(SortOptions {
                     descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
+                    nulls_first: lhs.nulls_first,
                 })
             }
             (Self::Ordered(opt), Self::Singleton)
@@ -115,6 +119,255 @@ impl SortProperties {
             (Self::Singleton, Self::Singleton) => Self::Singleton,
             _ => Self::Unordered,
         }
+    }
+}
+
+#[cfg(test)]
+mod sort_properties_test {
+    use super::{SortOptions, SortProperties};
+    use rstest::rstest;
+
+    const fn ordered(descending: bool, nulls_first: bool) -> SortProperties {
+        SortProperties::Ordered(SortOptions {
+            descending,
+            nulls_first,
+        })
+    }
+
+    const ASC_NF: SortProperties = ordered(false, true);
+    const ASC_NL: SortProperties = ordered(false, false);
+    const DESC_NF: SortProperties = ordered(true, true);
+    const DESC_NL: SortProperties = ordered(true, false);
+    const UNORDERED: SortProperties = SortProperties::Unordered;
+    const SINGLETON: SortProperties = SortProperties::Singleton;
+
+    type BinOp = fn(&SortProperties, &SortProperties) -> SortProperties;
+
+    /// Each method's direction rule and its `Singleton` arms.
+    ///
+    /// Operands that *disagree* on null placement are deliberately absent:
+    /// that half is covered exhaustively by
+    /// [`conflicting_null_placement_is_never_ordered`].
+    #[test]
+    fn ordering_propagation() {
+        let cases: &[(&str, BinOp, SortProperties, SortProperties, SortProperties)] = &[
+            // `add` preserves ordering when both operands run in the same
+            // direction. It is commutative, so one argument order suffices.
+            (
+                "add: same direction is preserved",
+                SortProperties::add,
+                ASC_NF,
+                ASC_NF,
+                ASC_NF,
+            ),
+            (
+                "add: nulls_last placement is preserved",
+                SortProperties::add,
+                ASC_NL,
+                ASC_NL,
+                ASC_NL,
+            ),
+            (
+                "add: opposing directions are unordered",
+                SortProperties::add,
+                ASC_NF,
+                DESC_NF,
+                UNORDERED,
+            ),
+            (
+                "add: literal with ordered",
+                SortProperties::add,
+                SINGLETON,
+                ASC_NF,
+                ASC_NF,
+            ),
+            (
+                "add: two literals stay a literal",
+                SortProperties::add,
+                SINGLETON,
+                SINGLETON,
+                SINGLETON,
+            ),
+            // `and_or` backs both `AND` and `OR`, whose rules coincide. Same
+            // shape as `add`, and likewise commutative.
+            (
+                "and_or: same direction is preserved",
+                SortProperties::and_or,
+                ASC_NF,
+                ASC_NF,
+                ASC_NF,
+            ),
+            (
+                "and_or: nulls_last placement is preserved",
+                SortProperties::and_or,
+                DESC_NL,
+                DESC_NL,
+                DESC_NL,
+            ),
+            (
+                "and_or: opposing directions are unordered",
+                SortProperties::and_or,
+                ASC_NF,
+                DESC_NF,
+                UNORDERED,
+            ),
+            (
+                "and_or: literal with ordered",
+                SortProperties::and_or,
+                SINGLETON,
+                ASC_NF,
+                ASC_NF,
+            ),
+            (
+                "and_or: two literals stay a literal",
+                SortProperties::and_or,
+                SINGLETON,
+                SINGLETON,
+                SINGLETON,
+            ),
+            // `sub` needs the *opposite* rule: an ascending column minus a
+            // descending one still ascends. It is not commutative
+            (
+                "sub: opposing directions are preserved",
+                SortProperties::sub,
+                ASC_NF,
+                DESC_NF,
+                ASC_NF,
+            ),
+            (
+                "sub: result follows the left operand",
+                SortProperties::sub,
+                DESC_NF,
+                ASC_NF,
+                DESC_NF,
+            ),
+            (
+                "sub: nulls_last placement is preserved",
+                SortProperties::sub,
+                ASC_NL,
+                DESC_NL,
+                ASC_NL,
+            ),
+            (
+                "sub: same direction is unordered",
+                SortProperties::sub,
+                ASC_NF,
+                ASC_NF,
+                UNORDERED,
+            ),
+            (
+                "sub: literal minus ordered flips the direction",
+                SortProperties::sub,
+                SINGLETON,
+                ASC_NF,
+                DESC_NF,
+            ),
+            (
+                "sub: ordered minus literal keeps the direction",
+                SortProperties::sub,
+                ASC_NF,
+                SINGLETON,
+                ASC_NF,
+            ),
+            (
+                "sub: two literals stay a literal",
+                SortProperties::sub,
+                SINGLETON,
+                SINGLETON,
+                SINGLETON,
+            ),
+            // `gt_or_gteq` compares into a boolean column, which is ordered by
+            // `false < true`. Same direction rule as `sub`, also asymmetric.
+            (
+                "gt_or_gteq: opposing directions are preserved",
+                SortProperties::gt_or_gteq,
+                ASC_NF,
+                DESC_NF,
+                ASC_NF,
+            ),
+            (
+                "gt_or_gteq: result follows the left operand",
+                SortProperties::gt_or_gteq,
+                DESC_NF,
+                ASC_NF,
+                DESC_NF,
+            ),
+            (
+                "gt_or_gteq: nulls_last placement is preserved",
+                SortProperties::gt_or_gteq,
+                DESC_NL,
+                ASC_NL,
+                DESC_NL,
+            ),
+            (
+                "gt_or_gteq: same direction is unordered",
+                SortProperties::gt_or_gteq,
+                ASC_NF,
+                ASC_NF,
+                UNORDERED,
+            ),
+            (
+                "gt_or_gteq: literal on the left flips the direction",
+                SortProperties::gt_or_gteq,
+                SINGLETON,
+                ASC_NF,
+                DESC_NF,
+            ),
+            (
+                "gt_or_gteq: literal on the right keeps the direction",
+                SortProperties::gt_or_gteq,
+                ASC_NF,
+                SINGLETON,
+                ASC_NF,
+            ),
+            (
+                "gt_or_gteq: two literals stay a literal",
+                SortProperties::gt_or_gteq,
+                SINGLETON,
+                SINGLETON,
+                SINGLETON,
+            ),
+        ];
+
+        for &(name, op, lhs, rhs, expected) in cases {
+            assert_eq!(op(&lhs, &rhs), expected, "case: {name}");
+        }
+
+        // `add` and `and_or` are commutative, which is what lets the table
+        // above cover only one argument order for them.
+        for (lhs, rhs) in [(ASC_NF, DESC_NL), (ASC_NF, SINGLETON), (ASC_NL, DESC_NF)] {
+            assert_eq!(lhs.add(&rhs), rhs.add(&lhs), "add is commutative");
+            assert_eq!(lhs.and_or(&rhs), rhs.and_or(&lhs), "and_or is commutative");
+        }
+    }
+
+    /// If two ordered operands disagree on null placement, the result is
+    /// always Unordered, no matter which operator or direction is used.
+    /// Checked below for every combination.
+    ///
+    /// Nulls propagate: the result is null wherever either operand is
+    /// null. `nulls_first` treats those rows as a prefix, `nulls_last` as
+    /// a suffix. A set that's both can't be described by any `SortOptions`.
+    ///
+    /// The assertion only checks "not Ordered", not which ordering
+    /// results. That keeps the test from just repeating the logic it's
+    /// checking.
+    #[rstest]
+    #[case::add("add", SortProperties::add)]
+    #[case::sub("sub", SortProperties::sub)]
+    #[case::gt_or_gteq("gt_or_gteq", SortProperties::gt_or_gteq)]
+    #[case::and_or("and_or", SortProperties::and_or)]
+    fn conflicting_null_placement_is_never_ordered(
+        #[values(false, true)] l_descending: bool,
+        #[values(false, true)] r_descending: bool,
+        #[values(false, true)] l_nulls_first: bool,
+        #[case] op_name: &str,
+        #[case] op: BinOp,
+    ) {
+        // Negating `l_nulls_first` makes the operands disagree by construction.
+        let lhs = ordered(l_descending, l_nulls_first);
+        let rhs = ordered(r_descending, !l_nulls_first);
+        assert_eq!(op(&lhs, &rhs), UNORDERED, "{op_name}: {lhs:?} and {rhs:?}");
     }
 }
 
