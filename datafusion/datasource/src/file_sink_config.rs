@@ -75,8 +75,7 @@ impl FileSinkMetrics {
     /// Return the number of bytes written.
     ///
     /// The exact meaning is format-specific. For stateless sinks, this is the
-    /// number of serialized bytes passed to the writer before any stream-level
-    /// compression is applied.
+    /// number of bytes written after any stream-level compression is applied.
     pub fn bytes_written(&self) -> &Count {
         &self.bytes_written
     }

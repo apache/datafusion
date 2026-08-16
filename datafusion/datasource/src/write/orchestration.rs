@@ -20,6 +20,7 @@
 //! parallelization, and abort handling
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::demux::DemuxedStreamReceiver;
 use super::{BatchSerializer, ObjectWriterBuilder};
@@ -52,8 +53,8 @@ pub(crate) enum SerializedRecordBatchResult {
         /// the number of rows successfully written
         row_count: usize,
 
-        /// the number of serialized bytes successfully written
-        bytes_written: usize,
+        /// Counter for the compressed bytes written to the object store writer.
+        bytes_written: Arc<AtomicUsize>,
     },
     Failure {
         /// As explained in [`serialize_rb_stream_to_object_store`]:
@@ -68,7 +69,11 @@ pub(crate) enum SerializedRecordBatchResult {
 
 impl SerializedRecordBatchResult {
     /// Create the success variant
-    pub fn success(writer: WriterType, row_count: usize, bytes_written: usize) -> Self {
+    pub fn success(
+        writer: WriterType,
+        row_count: usize,
+        bytes_written: Arc<AtomicUsize>,
+    ) -> Self {
         Self::Success {
             writer,
             row_count,
@@ -94,6 +99,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
     serializer: Arc<dyn BatchSerializer>,
     mut writer: WriterType,
+    bytes_written: Arc<AtomicUsize>,
 ) -> SerializedRecordBatchResult {
     let (tx, mut rx) =
         mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
@@ -119,11 +125,9 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     });
 
     let mut row_count = 0;
-    let mut bytes_written = 0;
     while let Some(task) = rx.recv().await {
         match task.join().await {
             Ok(Ok((cnt, bytes))) => {
-                let byte_len = bytes.len();
                 match writer.write_all(&bytes).await {
                     Ok(_) => (),
                     Err(e) => {
@@ -134,7 +138,6 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                     }
                 };
                 row_count += cnt;
-                bytes_written += byte_len;
             }
             Ok(Err(e)) => {
                 // Return the writer along with the error
@@ -165,7 +168,12 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     SerializedRecordBatchResult::success(writer, row_count, bytes_written)
 }
 
-type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
+type FileWriteBundle = (
+    Receiver<RecordBatch>,
+    SerializerType,
+    WriterType,
+    Arc<AtomicUsize>,
+);
 
 /// Options for stateless file writer tasks.
 pub struct StatelessWriterOptions<'a> {
@@ -216,12 +224,19 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // if true, we may not have a guarantee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
-    while let Some((data_rx, serializer, writer)) = rx.recv().await {
+    while let Some((data_rx, serializer, writer, bytes_written)) = rx.recv().await {
         join_set.spawn(async move {
-            serialize_rb_stream_to_object_store(data_rx, serializer, writer).await
+            serialize_rb_stream_to_object_store(
+                data_rx,
+                serializer,
+                writer,
+                bytes_written,
+            )
+            .await
         });
     }
     let mut finished_writers = Vec::new();
+    let mut byte_counters = Vec::new();
     while let Some(result) = join_set.join_next().await {
         match result {
             Ok(res) => match res {
@@ -231,8 +246,8 @@ pub(crate) async fn stateless_serialize_and_write_files(
                     bytes_written: bytes,
                 } => {
                     finished_writers.push(writer);
+                    byte_counters.push(bytes);
                     row_count += cnt;
-                    bytes_written += bytes;
                 }
                 SerializedRecordBatchResult::Failure { writer, err } => {
                     finished_writers.extend(writer);
@@ -258,6 +273,10 @@ pub(crate) async fn stateless_serialize_and_write_files(
         writer.shutdown()
                     .await
                     .map_err(|_| internal_datafusion_err!("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!"))?;
+    }
+
+    for counter in byte_counters {
+        bytes_written += counter.load(Ordering::Relaxed);
     }
 
     if any_errors {
@@ -334,7 +353,7 @@ pub async fn spawn_writer_tasks_and_join_with_metrics(
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
-        let writer = ObjectWriterBuilder::new(
+        let (writer, bytes_written) = ObjectWriterBuilder::new(
             options.compression,
             &location,
             Arc::clone(&object_store),
@@ -347,10 +366,10 @@ pub async fn spawn_writer_tasks_and_join_with_metrics(
                 .objectstore_writer_buffer_size,
         ))
         .with_compression_level(options.compression_level)
-        .build()?;
+        .build_with_byte_counter()?;
 
         if tx_file_bundle
-            .send((rb_stream, Arc::clone(&serializer), writer))
+            .send((rb_stream, Arc::clone(&serializer), writer, bytes_written))
             .await
             .is_err()
         {
