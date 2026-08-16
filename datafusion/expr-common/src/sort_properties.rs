@@ -99,32 +99,21 @@ impl SortProperties {
             _ => Self::Unordered,
         }
     }
+
+    /// `AND` keeps an ordering only when nulls sort after `true`
+    /// (`ASC NULLS LAST`, `DESC NULLS FIRST`).
     pub fn and(&self, rhs: &Self) -> Self {
-        // `descending == nulls_first` selects ASC NULLS LAST / DESC NULLS FIRST.
         self.kleene(rhs, |opt| opt.descending == opt.nulls_first)
     }
 
+    /// `OR` keeps an ordering only when nulls sort before `false`
+    /// (`ASC NULLS FIRST`, `DESC NULLS LAST`).
     pub fn or(&self, rhs: &Self) -> Self {
-        // `descending != nulls_first` selects ASC NULLS FIRST / DESC NULLS LAST.
         self.kleene(rhs, |opt| opt.descending != opt.nulls_first)
     }
 
-    #[deprecated(
-        since = "55.0.0",
-        note = "`AND` and `OR` propagate orderings differently under three-valued logic; use `and` or `or`"
-    )]
-    pub fn and_or(&self, rhs: &Self) -> Self {
-        // Only the behavior on which `and` and `or` agree survives; their
-        // `Ordered` conditions are mutually exclusive.
-        match (self, rhs) {
-            (Self::Singleton, Self::Singleton) => Self::Singleton,
-            _ => Self::Unordered,
-        }
-    }
-
-    /// Shared logic of [`Self::and`] and [`Self::or`]: `preserves` accepts
-    /// the sort options whose physical order realizes the operator's truth
-    /// ordering.
+    /// `preserves` reports whether the operator keeps data in that ordering.
+    /// A `Singleton` may be a literal NULL, so it carries the same guard.
     fn kleene(&self, rhs: &Self, preserves: fn(&SortOptions) -> bool) -> Self {
         match (self, rhs) {
             (Self::Singleton, Self::Singleton) => Self::Singleton,
@@ -208,13 +197,8 @@ mod sort_properties_test {
                 SINGLETON,
                 SINGLETON,
             ),
-            // `and`/`or` back Kleene `AND`/`OR`, where NULL does not simply
-            // propagate (`NULL AND false = false`). Each operator is monotone
-            // w.r.t. its truth ordering (`false < NULL < true` for `AND`,
-            // `NULL < false < true` for `OR`), so each preserves exactly the
-            // two physical orderings realizing that truth ordering. A
-            // `Singleton` may be a literal NULL, hence the same restriction
-            // with a literal operand. Both are commutative.
+            // `and` keeps ASC NULLS LAST / DESC NULLS FIRST, `or` keeps ASC
+            // NULLS FIRST / DESC NULLS LAST. Both are commutative.
             (
                 "and: ASC NULLS LAST is preserved",
                 SortProperties::and,
@@ -244,7 +228,7 @@ mod sort_properties_test {
                 UNORDERED,
             ),
             (
-                "and: mixed preserving orderings are unordered",
+                "and: mixed directions are unordered",
                 SortProperties::and,
                 ASC_NL,
                 DESC_NF,
@@ -300,7 +284,7 @@ mod sort_properties_test {
                 UNORDERED,
             ),
             (
-                "or: mixed preserving orderings are unordered",
+                "or: mixed directions are unordered",
                 SortProperties::or,
                 ASC_NF,
                 DESC_NL,
@@ -435,8 +419,8 @@ mod sort_properties_test {
             assert_eq!(op(&lhs, &rhs), expected, "case: {name}");
         }
 
-        // `add`, `and` and `or` are commutative, which is what lets the
-        // table above cover only one argument order for them.
+        // `add`, `and` and `or` are commutative, so the table above covers
+        // only one argument order.
         for (lhs, rhs) in [
             (ASC_NF, DESC_NL),
             (ASC_NF, SINGLETON),
@@ -449,28 +433,15 @@ mod sort_properties_test {
         }
     }
 
-    /// The deprecated `and_or` cannot distinguish the operators, whose
-    /// preserved orderings are disjoint, so it keeps only the behavior on
-    /// which `and` and `or` agree.
-    #[test]
-    #[expect(deprecated)]
-    fn deprecated_and_or_is_conservative() {
-        assert_eq!(SINGLETON.and_or(&SINGLETON), SINGLETON);
-        assert_eq!(ASC_NF.and_or(&ASC_NF), UNORDERED);
-        assert_eq!(ASC_NL.and_or(&ASC_NL), UNORDERED);
-        assert_eq!(ASC_NL.and_or(&SINGLETON), UNORDERED);
-    }
-
     /// If two ordered operands disagree on null placement, the result is
     /// always Unordered, no matter which operator or direction is used.
     /// Checked below for every combination.
     ///
-    /// For the arithmetic and comparison operators, nulls propagate: the
+    /// Nulls propagate through the arithmetic and comparison operators: the
     /// result is null wherever either operand is null. `nulls_first` treats
     /// those rows as a prefix, `nulls_last` as a suffix. A set that's both
-    /// can't be described by any `SortOptions`. For `and`/`or` the reason
-    /// differs (Kleene monotonicity requires *identical* preserving
-    /// orderings), but the conclusion is the same.
+    /// can't be described by any `SortOptions`. `and`/`or` keep an ordering
+    /// only when both operands already share it.
     ///
     /// The assertion only checks "not Ordered", not which ordering
     /// results. That keeps the test from just repeating the logic it's

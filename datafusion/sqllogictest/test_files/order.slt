@@ -1591,9 +1591,8 @@ physical_plan
 statement ok
 DROP TABLE mixed_null_placement;
 
-# NULLS FIRST inputs stay sorted through OR but not AND. The full
-# operator-by-ordering matrix is unit-tested in sort_properties.rs; this
-# checks the planner consumes it.
+# ASC NULLS FIRST survives OR but not AND. The per-operator rules are
+# unit-tested in sort_properties.rs; this checks the planner uses them.
 query I
 COPY (VALUES
   (CAST(NULL AS BOOLEAN), false),
@@ -1613,7 +1612,7 @@ WITH ORDER (b ASC NULLS FIRST)
 LOCATION 'test_files/scratch/order/kleene_nulls_first.csv'
 OPTIONS ('format.has_header' 'true');
 
-# a AND b = (false, NULL, false, true) in scan order: the sort has to happen.
+# a AND b is (false, NULL, false, true) in scan order, so it needs sorting.
 query B
 SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
 ----
@@ -1622,7 +1621,7 @@ false
 false
 true
 
-# Same at the plan level: AND must not claim ASC NULLS FIRST.
+# AND must not claim ASC NULLS FIRST.
 query TT
 EXPLAIN SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
 ----
@@ -1637,8 +1636,8 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/kleene_nulls_first.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC]], file_type=csv, has_header=true
 
-# a OR b = (NULL, true, true, true) in scan order: already sorted, and OR may
-# claim it, so no SortExec.
+# a OR b is (NULL, true, true, true) in scan order, already ASC NULLS FIRST,
+# so no SortExec.
 query B
 SELECT a OR b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
 ----
