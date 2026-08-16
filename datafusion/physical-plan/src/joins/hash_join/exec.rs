@@ -1539,7 +1539,7 @@ impl ExecutionPlan for HashJoinExec {
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
-        let right_stream = self.right.execute(partition, context)?;
+        let right_stream = self.right.execute(partition, Arc::clone(&context))?;
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match self.projection.as_ref() {
@@ -1555,6 +1555,10 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
+
+        let output_reservation =
+            MemoryConsumer::new(format!("HashJoinOutput[{partition}]"))
+                .register(context.memory_pool());
 
         Ok(Box::pin(HashJoinStream::new(
             partition,
@@ -1576,6 +1580,7 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_aware,
             self.fetch,
+            output_reservation,
         )))
     }
 
@@ -5947,10 +5952,12 @@ mod tests {
             let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
-            // Asserting that operator-level reservation attempting to overallocate
+            // Asserting that operator-level reservation attempting to overallocate.
+            // The output coalescer's `HashJoinOutput` consumer holds its idle
+            // baseline at failure time, so it ranks above the failing consumer.
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput with top memory consumers (across reservations) as:\n  HashJoinInput"
+                "Resources exhausted: Additional allocation failed for HashJoinInput with top memory consumers (across reservations) as:\n  HashJoinOutput"
             );
 
             assert_contains!(
@@ -6084,10 +6091,12 @@ mod tests {
             let stream = join.execute(1, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
-            // Asserting that stream-level reservation attempting to overallocate
+            // Asserting that stream-level reservation attempting to overallocate.
+            // The output coalescer's `HashJoinOutput` consumer holds its idle
+            // baseline at failure time, so it ranks above the failing consumer.
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinOutput[1]"
             );
 
             assert_contains!(

@@ -15,19 +15,44 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, assert_or_internal_err};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+};
 
-/// Concatenate multiple [`RecordBatch`]es and apply a limit
+/// Concatenate multiple [`RecordBatch`]es and apply a limit while accounting
+/// for every retained batch in a [`MemoryReservation`].
 ///
-/// See [`BatchCoalescer`] for more details on how this works.
+/// # Memory accounting
+///
+/// The reservation always mirrors [`BatchCoalescer::size`], which covers both
+/// in-progress buffers and completed batches. Growth caused by
+/// [`Self::push_batch`], [`Self::flush_buffered_batch`], and [`Self::finish`] is
+/// enforced against the pool limit and surfaces as a
+/// [`DataFusionError::ResourcesExhausted`]
+/// error, unless enforcement is disabled via
+/// [`Self::with_unenforced_accounting`]; the small baseline of an empty
+/// coalescer is charged infallibly at construction. Note that completed
+/// batches retained without copying (see
+/// [`BatchCoalescer::with_biggest_coalesce_batch_size`]) are measured with
+/// [`RecordBatch::get_array_memory_size`], which counts the full backing
+/// buffers of shared or sliced arrays and may therefore over-report.
+///
+/// [`DataFusionError::ResourcesExhausted`]: datafusion_common::DataFusionError::ResourcesExhausted
 #[derive(Debug)]
 pub struct LimitedBatchCoalescer {
-    /// The arrow structure that builds the output batches
     inner: BatchCoalescer,
-    /// Total number of rows returned so far
+    reservation: MemoryReservation,
+    /// When false, reservation growth is recorded infallibly instead of
+    /// being checked against the pool limit. See
+    /// [`Self::with_unenforced_accounting`].
+    enforce_limit: bool,
+    /// Total number of rows accepted so far
     total_rows: usize,
     /// Limit: maximum number of rows to fetch, `None` means fetch all rows
     fetch: Option<usize>,
@@ -47,25 +72,128 @@ pub enum PushBatchStatus {
 }
 
 impl LimitedBatchCoalescer {
-    /// Create a new `BatchCoalescer`
+    /// Create a coalescer that does **not** account for the batches it
+    /// retains: they are charged to a private, unbounded pool invisible to
+    /// the query's [`MemoryPool`].
     ///
     /// # Arguments
     /// - `schema` - the schema of the output batches
     /// - `target_batch_size` - the minimum number of rows for each
     ///   output batch (until limit reached)
     /// - `fetch` - the maximum number of rows to fetch, `None` means fetch all rows
+    #[deprecated(
+        since = "55.0.0",
+        note = "use `new_with_reservation` so retained batches are charged to the query's memory pool"
+    )]
     pub fn new(
         schema: SchemaRef,
         target_batch_size: usize,
         fetch: Option<usize>,
     ) -> Self {
-        Self {
-            inner: BatchCoalescer::new(schema, target_batch_size)
-                .with_biggest_coalesce_batch_size(Some(target_batch_size / 2)),
+        let untracked_pool: Arc<dyn MemoryPool> =
+            Arc::new(UnboundedMemoryPool::default());
+        // The reservation's registration keeps the private pool alive.
+        let reservation = MemoryConsumer::new("LimitedBatchCoalescer(untracked)")
+            .register(&untracked_pool);
+        Self::new_with_reservation(schema, target_batch_size, fetch, reservation)
+    }
+
+    /// Create a coalescer whose retained input and output batches are charged to
+    /// `reservation`.
+    pub fn new_with_reservation(
+        schema: SchemaRef,
+        target_batch_size: usize,
+        fetch: Option<usize>,
+        reservation: MemoryReservation,
+    ) -> Self {
+        Self::new_inner(
+            schema,
+            target_batch_size,
+            fetch,
+            reservation,
+            Some(target_batch_size / 2),
+        )
+    }
+
+    /// Create a reservation-backed coalescer that always emits target-sized
+    /// batches, except for the final partial batch.
+    pub fn new_exact_with_reservation(
+        schema: SchemaRef,
+        target_batch_size: usize,
+        fetch: Option<usize>,
+        reservation: MemoryReservation,
+    ) -> Self {
+        Self::new_inner(schema, target_batch_size, fetch, reservation, None)
+    }
+
+    fn new_inner(
+        schema: SchemaRef,
+        target_batch_size: usize,
+        fetch: Option<usize>,
+        reservation: MemoryReservation,
+        biggest_coalesce_batch_size: Option<usize>,
+    ) -> Self {
+        assert!(
+            target_batch_size > 0,
+            "LimitedBatchCoalescer: target batch size must be greater than zero"
+        );
+        let inner = BatchCoalescer::new(schema, target_batch_size)
+            .with_biggest_coalesce_batch_size(biggest_coalesce_batch_size);
+        let coalescer = Self {
+            inner,
+            reservation,
+            enforce_limit: true,
             total_rows: 0,
             fetch,
             finished: false,
+        };
+        coalescer.reconcile_reservation();
+        coalescer
+    }
+
+    /// Disable pool-limit enforcement: reservation growth is recorded
+    /// infallibly instead of returning
+    /// [`ResourcesExhausted`](datafusion_common::DataFusionError::ResourcesExhausted).
+    ///
+    /// Intended for the bounded output buffers of operators that manage
+    /// memory pressure by spilling (e.g. sort-merge join, memory-limited
+    /// nested-loop join, repartitioning): their output buffer cannot spill
+    /// (batches must flow downstream), so failing it would turn queries the
+    /// operator could complete by spilling into errors. The memory is still
+    /// fully accounted, appearing in pool usage and top-consumer reports.
+    pub fn with_unenforced_accounting(mut self) -> Self {
+        self.enforce_limit = false;
+        self
+    }
+
+    /// Sync the reservation to the coalescer's current size without enforcing
+    /// the pool limit.
+    ///
+    /// Used on shrink-only paths (dequeueing completed batches) and for the
+    /// empty-coalescer baseline at construction.
+    fn reconcile_reservation(&self) {
+        self.reservation.resize(self.inner.size());
+    }
+
+    /// Sync the reservation to the coalescer's current size, returning an
+    /// error if growth would exceed the pool limit (unless enforcement is
+    /// disabled, see [`Self::with_unenforced_accounting`]).
+    ///
+    /// On error the reservation is still synced infallibly so it keeps
+    /// reflecting the memory actually held while the error propagates; the
+    /// caller must treat the error as terminal and drop this coalescer to
+    /// release the reservation.
+    fn try_reconcile_reservation(&self) -> Result<()> {
+        if !self.enforce_limit {
+            self.reconcile_reservation();
+            return Ok(());
         }
+        let actual_size = self.inner.size();
+        let result = self.reservation.try_resize(actual_size);
+        if result.is_err() {
+            self.reservation.resize(actual_size);
+        }
+        result
     }
 
     /// Return the schema of the output batches
@@ -75,62 +203,86 @@ impl LimitedBatchCoalescer {
 
     /// Pushes the next [`RecordBatch`] into the coalescer and returns its status.
     ///
-    /// # Arguments
-    /// * `batch` - The [`RecordBatch`] to append.
-    ///
-    /// # Returns
-    /// * [`PushBatchStatus::Continue`] - More batches can still be pushed.
-    /// * [`PushBatchStatus::LimitReached`] - The row limit was reached after processing
-    ///   this batch. The caller should call [`Self::finish`] before retrieving the
-    ///   remaining buffered batches.
-    ///
     /// # Errors
-    /// Returns an error if called after [`Self::finish`] or if the internal push
-    /// operation fails.
+    /// Returns an error if called after [`Self::finish`], if the internal push
+    /// operation fails, or if the memory pool cannot accommodate the newly
+    /// buffered data. Errors are terminal: the caller should stop pushing and
+    /// drop the coalescer to release its reservation.
     pub fn push_batch(&mut self, batch: RecordBatch) -> Result<PushBatchStatus> {
         assert_or_internal_err!(
             !self.finished,
             "LimitedBatchCoalescer: cannot push batch after finish"
         );
 
-        // if we are at the limit, return LimitReached
-        if let Some(fetch) = self.fetch {
-            // limit previously reached
-            if self.total_rows >= fetch {
-                return Ok(PushBatchStatus::LimitReached);
-            }
-
-            // limit now reached
-            if self.total_rows + batch.num_rows() >= fetch {
-                // Limit is reached
-                let remaining_rows = fetch - self.total_rows;
-                debug_assert!(remaining_rows > 0);
-
-                let batch_head = batch.slice(0, remaining_rows);
-                self.total_rows += batch_head.num_rows();
-                self.inner.push_batch(batch_head)?;
-                return Ok(PushBatchStatus::LimitReached);
-            }
+        let remaining = self
+            .fetch
+            .map(|fetch| fetch.saturating_sub(self.total_rows));
+        if remaining == Some(0) {
+            return Ok(PushBatchStatus::LimitReached);
         }
 
-        // Limit not reached, push the entire batch
-        self.total_rows += batch.num_rows();
-        self.inner.push_batch(batch)?;
+        let limit_reached =
+            remaining.is_some_and(|remaining| batch.num_rows() >= remaining);
+        let accepted_rows = remaining
+            .map(|remaining| remaining.min(batch.num_rows()))
+            .unwrap_or_else(|| batch.num_rows());
+        if accepted_rows == 0 {
+            return Ok(if limit_reached {
+                PushBatchStatus::LimitReached
+            } else {
+                PushBatchStatus::Continue
+            });
+        }
 
-        Ok(PushBatchStatus::Continue)
+        let accepted = if accepted_rows == batch.num_rows() {
+            batch
+        } else {
+            batch.slice(0, accepted_rows)
+        };
+        let result = self.inner.push_batch(accepted);
+        let reconciled = self.try_reconcile_reservation();
+        result?;
+        reconciled?;
+        self.total_rows += accepted_rows;
+
+        Ok(if limit_reached {
+            PushBatchStatus::LimitReached
+        } else {
+            PushBatchStatus::Continue
+        })
     }
 
-    /// Return true if there is no data buffered
+    /// Return true if there is no data buffered or completed.
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    /// Complete the current buffered batch and finish the coalescer
+    /// Return true if a completed batch is ready to be fetched.
+    pub fn has_completed_batch(&self) -> bool {
+        self.inner.has_completed_batch()
+    }
+
+    /// Complete the current buffered batch without preventing future pushes.
     ///
-    /// Any subsequent calls to `push_batch()` will return an Err
+    /// # Errors
+    /// See [`Self::push_batch`]; errors are terminal.
+    pub fn flush_buffered_batch(&mut self) -> Result<()> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot flush after finish"
+        );
+        let result = self.inner.finish_buffered_batch();
+        let reconciled = self.try_reconcile_reservation();
+        result?;
+        reconciled
+    }
+
+    /// Complete the current buffered batch and finish the coalescer.
     pub fn finish(&mut self) -> Result<()> {
-        self.inner.finish_buffered_batch()?;
-        self.finished = true;
+        if !self.finished {
+            self.flush_buffered_batch()?;
+            self.finished = true;
+        }
         Ok(())
     }
 
@@ -138,9 +290,24 @@ impl LimitedBatchCoalescer {
         self.finished
     }
 
-    /// Return the next completed batch, if any
+    /// Return the next completed batch and an owned reservation for its charge.
+    /// Dropping the returned reservation releases the charge.
+    pub fn next_completed_batch_with_reservation(
+        &mut self,
+    ) -> Option<(RecordBatch, MemoryReservation)> {
+        let source_size = self.inner.size();
+        let batch = self.inner.next_completed_batch()?;
+        let charged_bytes = source_size
+            .checked_sub(self.inner.size())
+            .expect("dequeue cannot increase the coalescer size");
+        Some((batch, self.reservation.split(charged_bytes)))
+    }
+
+    /// Return the next completed batch and release its reservation.
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
-        self.inner.next_completed_batch()
+        let batch = self.inner.next_completed_batch();
+        self.reconcile_reservation();
+        batch
     }
 }
 
@@ -153,6 +320,10 @@ mod tests {
     use arrow::array::UInt32Array;
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DataFusionError;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
 
     #[test]
     fn test_coalesce() {
@@ -223,6 +394,267 @@ mod tests {
             .with_fetch(Some(7))
             .with_expected_output_sizes(vec![7])
             .run()
+    }
+
+    #[test]
+    fn reservation_tracks_buffered_completed_and_drained_size() {
+        let batch = uint32_batch(0..2);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            4,
+            None,
+            reservation,
+        );
+
+        let baseline = pool.reserved();
+        assert!(baseline > 0, "the empty Arrow coalescer retains capacity");
+
+        assert_eq!(
+            coalescer.push_batch(batch.clone()).unwrap(),
+            PushBatchStatus::Continue
+        );
+        let buffered_size = pool.reserved();
+        assert!(
+            buffered_size > baseline,
+            "buffered arrays must increase the reservation"
+        );
+
+        coalescer.finish().unwrap();
+        let completed_size = pool.reserved();
+        assert!(
+            completed_size > baseline,
+            "completed output must remain reserved"
+        );
+
+        assert_eq!(coalescer.next_completed_batch().unwrap(), batch);
+        assert_eq!(pool.reserved(), baseline);
+    }
+
+    #[test]
+    fn dropping_coalescer_releases_baseline_and_buffered_reservation() {
+        let batch = uint32_batch(0..2);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            4,
+            None,
+            reservation,
+        );
+
+        let baseline = pool.reserved();
+        assert!(baseline > 0, "the empty Arrow coalescer retains capacity");
+        coalescer.push_batch(batch).unwrap();
+        assert!(pool.reserved() > baseline);
+
+        drop(coalescer);
+        assert_eq!(pool.reserved(), 0, "drop releases all retained memory");
+    }
+
+    #[test]
+    fn dequeue_transfers_reservation_until_returned_reservation_is_dropped() {
+        let batch = uint32_batch(0..2);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            4,
+            None,
+            reservation,
+        );
+
+        let baseline = pool.reserved();
+        coalescer.push_batch(batch.clone()).unwrap();
+        coalescer.finish().unwrap();
+        let completed_size = pool.reserved();
+
+        let (actual, batch_reservation) =
+            coalescer.next_completed_batch_with_reservation().unwrap();
+        assert_eq!(actual, batch);
+        assert!(
+            batch_reservation.size() > 0,
+            "the dequeued batch must remain charged"
+        );
+        assert_eq!(batch_reservation.size(), completed_size - baseline);
+        assert_eq!(pool.reserved(), completed_size);
+
+        drop(batch_reservation);
+        assert_eq!(pool.reserved(), baseline);
+        drop(coalescer);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn exact_coalescer_can_flush_and_continue() {
+        let input = uint32_batch(0..5);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_exact_with_reservation(
+            input.schema(),
+            2,
+            None,
+            reservation,
+        );
+
+        coalescer.push_batch(input).unwrap();
+        coalescer.flush_buffered_batch().unwrap();
+        assert!(coalescer.has_completed_batch());
+        let mut sizes = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            sizes.push(batch.num_rows());
+        }
+        assert_eq!(sizes, vec![2, 2, 1]);
+        assert!(!coalescer.is_finished());
+
+        coalescer.push_batch(uint32_batch(5..6)).unwrap();
+        coalescer.finish().unwrap();
+        assert_eq!(coalescer.next_completed_batch().unwrap().num_rows(), 1);
+        assert!(coalescer.is_finished());
+        assert!(coalescer.push_batch(uint32_batch(6..7)).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "target batch size must be greater than zero")]
+    fn zero_target_batch_size_is_rejected_at_construction() {
+        let batch = uint32_batch(0..1);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let _ = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            0,
+            None,
+            reservation,
+        );
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn deprecated_new_works_without_a_memory_pool() {
+        let batch = uint32_batch(0..2);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 4, None);
+        coalescer.push_batch(batch.clone()).unwrap();
+        coalescer.finish().unwrap();
+        assert_eq!(coalescer.next_completed_batch().unwrap(), batch);
+    }
+
+    #[test]
+    fn push_batch_fails_when_pool_limit_exceeded() {
+        let batch = uint32_batch(0..1024);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(512));
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            8,
+            None,
+            reservation,
+        );
+
+        let err = coalescer.push_batch(batch).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::ResourcesExhausted(_)),
+            "expected ResourcesExhausted, got {err:?}"
+        );
+        // While the error propagates, the reservation keeps reflecting the
+        // memory actually held, even beyond the pool limit.
+        assert!(pool.reserved() > 512);
+
+        drop(coalescer);
+        assert_eq!(pool.reserved(), 0, "drop releases all retained memory");
+    }
+
+    #[test]
+    fn unenforced_accounting_allows_growth_beyond_pool_limit() {
+        let batch = uint32_batch(0..1024);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(512));
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            8,
+            None,
+            reservation,
+        )
+        .with_unenforced_accounting();
+
+        assert_eq!(
+            coalescer.push_batch(batch).unwrap(),
+            PushBatchStatus::Continue
+        );
+        assert!(pool.reserved() > 512);
+        coalescer.finish().unwrap();
+        while coalescer.next_completed_batch().is_some() {}
+
+        drop(coalescer);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn bypass_batches_are_accounted_and_released() {
+        // A batch larger than half the target bypasses coalescing (see
+        // `BatchCoalescer::with_biggest_coalesce_batch_size`) and is retained
+        // as-is; it must still be charged to the reservation while queued.
+        let batch = uint32_batch(0..100);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            8,
+            None,
+            reservation,
+        );
+        let baseline = pool.reserved();
+
+        assert_eq!(
+            coalescer.push_batch(batch.clone()).unwrap(),
+            PushBatchStatus::Continue
+        );
+        assert!(pool.reserved() >= baseline + batch.get_array_memory_size());
+
+        assert_eq!(coalescer.next_completed_batch().unwrap(), batch);
+        assert_eq!(pool.reserved(), baseline);
+    }
+
+    #[test]
+    fn fetch_limit_truncates_and_reservation_drains_to_baseline() {
+        let batch = uint32_batch(0..5);
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+        let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+            batch.schema(),
+            4,
+            Some(3),
+            reservation,
+        );
+        let baseline = pool.reserved();
+
+        assert_eq!(
+            coalescer.push_batch(batch.clone()).unwrap(),
+            PushBatchStatus::LimitReached
+        );
+        assert!(pool.reserved() > baseline, "truncated rows stay charged");
+        // Further pushes are ignored once the limit is reached.
+        assert_eq!(
+            coalescer.push_batch(batch).unwrap(),
+            PushBatchStatus::LimitReached
+        );
+        coalescer.finish().unwrap();
+
+        let mut rows = 0;
+        while let Some(out) = coalescer.next_completed_batch() {
+            rows += out.num_rows();
+        }
+        assert_eq!(rows, 3, "fetch limit must truncate the accepted rows");
+        assert_eq!(pool.reserved(), baseline);
     }
 
     /// Test for [`LimitedBatchCoalescer`]
@@ -297,8 +729,15 @@ mod tests {
             // create a single large input batch for output comparison
             let single_input_batch = concat_batches(&schema, &input_batches).unwrap();
 
-            let mut coalescer =
-                LimitedBatchCoalescer::new(Arc::clone(&schema), target_batch_size, fetch);
+            let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+            let reservation =
+                MemoryConsumer::new("LimitedBatchCoalescerTest").register(&pool);
+            let mut coalescer = LimitedBatchCoalescer::new_with_reservation(
+                Arc::clone(&schema),
+                target_batch_size,
+                fetch,
+                reservation,
+            );
 
             let mut output_batches = vec![];
             for batch in input_batches {

@@ -63,7 +63,7 @@ use datafusion_common::{
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
@@ -209,10 +209,13 @@ impl PartitionSpillWriters {
 }
 
 impl OutputChannel {
-    fn coalesce(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
+    fn coalesce(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<Vec<(RecordBatch, Option<MemoryReservation>)>> {
         match &self.shared_coalescer {
-            Some(shared) => Ok(shared.push_and_drain(batch)?),
-            None => Ok(vec![batch]),
+            Some(shared) => shared.push_and_drain(batch),
+            None => Ok(vec![(batch, None)]),
         }
     }
 
@@ -221,20 +224,35 @@ impl OutputChannel {
     /// from `self.inner` if the receiver has hung up.
     ///
     /// Used after [`OutputChannel::coalesce`] for performance purposes.
-    async fn send(&mut self, batch: RecordBatch) -> Result<(), SendError<MaybeBatch>> {
+    async fn send(
+        &mut self,
+        batch: RecordBatch,
+        source_reservation: Option<MemoryReservation>,
+    ) -> Result<(), SendError<MaybeBatch>> {
         let size = batch.get_array_memory_size();
 
-        // Decide the payload outside of any await: never hold a MutexGuard
-        // across an await point.
-        let (payload, is_memory_batch) = {
-            match self.reservation.try_grow(size) {
-                Ok(_) => (Ok(RepartitionBatch::Memory(batch)), true),
-                Err(_) => match self.spill_writer.push_batch(&batch) {
-                    Ok(()) => (Ok(RepartitionBatch::Spilled), false),
-                    Err(err) => (Err(err), false),
-                },
+        // Transfer the existing coalescer charge to the channel without
+        // double-counting it. If the channel cannot reserve the batch, restore
+        // the source charge while synchronously writing the spill.
+        let source_size = source_reservation
+            .as_ref()
+            .map(MemoryReservation::free)
+            .unwrap_or_default();
+        let (payload, is_memory_batch) = match self.reservation.try_grow(size) {
+            Ok(_) => (Ok(RepartitionBatch::Memory(batch)), true),
+            Err(_) => {
+                if let Some(reservation) = &source_reservation {
+                    reservation.grow(source_size);
+                }
+                let payload = self
+                    .spill_writer
+                    .push_batch(&batch)
+                    .map(|_| RepartitionBatch::Spilled);
+                drop(batch);
+                (payload, false)
             }
         };
+        drop(source_reservation);
 
         let result = self.sender.send(Some(payload)).await;
         if result.is_err() && is_memory_batch {
@@ -247,10 +265,10 @@ impl OutputChannel {
         let Some(shared) = self.shared_coalescer.take() else {
             return Ok(());
         };
-        for batch in shared.finalize()? {
+        for (batch, reservation) in shared.finalize()? {
             // If this errored, it means that nobody is listening on the other side, which is fine
             // and can happen in certain cases, like when a LIMIT drops the stream that listens.
-            let _ = self.send(batch).await;
+            let _ = self.send(batch, reservation).await;
         }
         Ok(())
     }
@@ -272,33 +290,48 @@ struct SharedCoalescer {
 }
 
 impl SharedCoalescer {
-    fn new(schema: SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
+    fn new(
+        schema: SchemaRef,
+        target_batch_size: usize,
+        num_senders: usize,
+        reservation: MemoryReservation,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(LimitedBatchCoalescer::new(
-                schema,
-                target_batch_size,
-                None,
-            ))),
+            // Unenforced: repartitioning handles memory pressure by spilling
+            // at the channel level (see `OutputChannel::send`); failing this
+            // bounded pre-channel buffer would defeat that.
+            inner: Arc::new(Mutex::new(
+                LimitedBatchCoalescer::new_with_reservation(
+                    schema,
+                    target_batch_size,
+                    None,
+                    reservation,
+                )
+                .with_unenforced_accounting(),
+            )),
             active_senders: Arc::new(AtomicUsize::new(num_senders)),
         }
     }
 
     /// Push `batch` into the coalescer and drain any newly completed
     /// batches. The mutex is held only briefly.
-    fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
+    fn push_and_drain(
+        &self,
+        batch: RecordBatch,
+    ) -> Result<Vec<(RecordBatch, Option<MemoryReservation>)>> {
         let mut acc = Vec::new();
         let mut c = self.inner.lock();
         c.push_batch(batch)?;
-        while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
+        while let Some((batch, reservation)) = c.next_completed_batch_with_reservation() {
+            acc.push((batch, Some(reservation)));
         }
         Ok(acc)
     }
 
     /// Decrement the active-senders counter. If this caller was the last
     /// sender, finalize the coalescer and return its residual batches; if
-    /// other senders are still active, return `Ok(None)`.
-    fn finalize(&self) -> Result<Vec<RecordBatch>> {
+    /// other senders are still active, return an empty `Vec`.
+    fn finalize(&self) -> Result<Vec<(RecordBatch, Option<MemoryReservation>)>> {
         let was_last = self.active_senders.fetch_sub(1, AtomicOrdering::AcqRel) == 1;
         if !was_last {
             return Ok(vec![]);
@@ -306,8 +339,8 @@ impl SharedCoalescer {
         let mut acc = Vec::new();
         let mut c = self.inner.lock();
         c.finish()?;
-        while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
+        while let Some((batch, reservation)) = c.next_completed_batch_with_reservation() {
+            acc.push((batch, Some(reservation)));
         }
         Ok(acc)
     }
@@ -538,10 +571,14 @@ impl RepartitionExecState {
             // handles batching, and for unbounded inputs, where a residual
             // batch could otherwise be withheld indefinitely.
             let shared_coalescer = coalesce_batches.then(|| {
+                let reservation =
+                    MemoryConsumer::new(format!("{name}[Coalesce {partition}]"))
+                        .register(context.memory_pool());
                 SharedCoalescer::new(
                     input.schema(),
                     context.session_config().batch_size(),
                     num_input_partitions,
+                    reservation,
                 )
             });
 
@@ -2150,8 +2187,8 @@ impl RepartitionExec {
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
                 if let Some(output_channel) = output_channels.get_mut(&partition) {
-                    for batch in output_channel.coalesce(batch)? {
-                        if output_channel.send(batch).await.is_err() {
+                    for (batch, reservation) in output_channel.coalesce(batch)? {
+                        if output_channel.send(batch, reservation).await.is_err() {
                             // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                             // so ignore this channel from now on.
                             output_channels.remove(&partition);
@@ -2487,6 +2524,10 @@ mod tests {
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::DiskManagerBuilder;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
@@ -2550,6 +2591,79 @@ mod tests {
         assert_eq!(rewritten.sort_options(), sort_options);
         assert_eq!(rewritten.split_points(), split_points);
 
+        Ok(())
+    }
+
+    #[test]
+    fn shared_coalescer_reserves_final_batch_until_released() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "value",
+            Arc::new(UInt32Array::from(vec![1])) as ArrayRef,
+        )])?;
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("RepartitionCoalescerTest").register(&pool);
+        let coalescer = SharedCoalescer::new(batch.schema(), 4, 2, reservation);
+        let other_sender = coalescer.clone();
+
+        assert!(coalescer.push_and_drain(batch)?.is_empty());
+        assert!(coalescer.finalize()?.is_empty());
+
+        let output = other_sender.finalize()?;
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].0.num_rows(), 1);
+        assert!(output[0].1.as_ref().unwrap().size() > 0);
+
+        drop(output);
+        drop(other_sender);
+        drop(coalescer);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn spilled_coalescer_batch_releases_source_reservation() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "value",
+            Arc::new(UInt32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])?;
+        let size = batch.get_array_memory_size();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(size));
+        let blocker = MemoryConsumer::new("RepartitionBlocker").register(&pool);
+        blocker.try_grow(size)?;
+        let source = MemoryConsumer::new("RepartitionSource").register(&pool);
+        source.grow(size);
+        let destination =
+            Arc::new(MemoryConsumer::new("RepartitionDestination").register(&pool));
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_disk_manager_builder(DiskManagerBuilder::default())
+            .build_arc()?;
+        let spill_manager = Arc::new(SpillManager::new(
+            runtime,
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            batch.schema(),
+        ));
+        let (spill_writer, mut spill_reader) =
+            spill_pool::spsc_channel(usize::MAX, spill_manager);
+        let (mut senders, mut receivers) = channels::<MaybeBatch>(1);
+        let mut output = OutputChannel {
+            sender: senders.pop().unwrap(),
+            reservation: Arc::clone(&destination),
+            spill_writer,
+            shared_coalescer: None,
+        };
+
+        output.send(batch.clone(), Some(source)).await.unwrap();
+        assert_eq!(destination.size(), 0);
+        assert_eq!(pool.reserved(), size);
+        assert!(matches!(
+            receivers[0].recv().await,
+            Some(Some(Ok(RepartitionBatch::Spilled)))
+        ));
+        assert_eq!(spill_reader.next().await.transpose()?, Some(batch));
+
+        drop(blocker);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 

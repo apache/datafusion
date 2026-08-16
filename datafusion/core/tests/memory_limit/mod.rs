@@ -130,7 +130,7 @@ async fn join_by_key_multiple_partitions() {
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "with top memory consumers (across reservations) as:\n  HashJoinOutput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -145,7 +145,7 @@ async fn join_by_key_single_partition() {
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed",
-            "with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "with top memory consumers (across reservations) as:\n  HashJoinOutput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -356,7 +356,7 @@ async fn oom_recursive_cte() {
         SELECT * FROM nodes;",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed",
+            "Resources exhausted: Additional allocation failed for FilterExecOutput[0]",
             "with top memory consumers (across reservations) as:\n  RecursiveQuery",
         ])
         .with_memory_limit(2_000)

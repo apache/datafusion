@@ -46,6 +46,7 @@ use crate::{
         need_produce_result_in_final,
     },
 };
+use datafusion_execution::memory_pool::MemoryReservation;
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::NullBuffer;
@@ -487,10 +488,15 @@ impl HashJoinStream {
         mode: PartitionMode,
         null_aware: bool,
         fetch: Option<usize>,
+        reservation: MemoryReservation,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
-        let output_buffer =
-            LimitedBatchCoalescer::new(Arc::clone(&schema), batch_size, fetch);
+        let output_buffer = LimitedBatchCoalescer::new_with_reservation(
+            Arc::clone(&schema),
+            batch_size,
+            fetch,
+            reservation,
+        );
 
         Self {
             partition,
