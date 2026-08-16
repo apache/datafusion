@@ -35,7 +35,7 @@ use crate::joins::utils::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_on,
+    physical_to_column_exprs, update_join_filter, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
 use crate::statistics::{ChildStats, StatisticsArgs};
@@ -660,6 +660,20 @@ impl ExecutionPlan for SortMergeJoinExec {
             return Ok(None);
         };
 
+        let new_filter = if let Some(filter) = self.filter() {
+            let Some(filter) = update_join_filter(
+                &projection_as_columns[0..=far_right_left_col_ind as _],
+                &projection_as_columns[far_left_right_col_ind as _..],
+                filter,
+                self.left().schema().fields().len(),
+            ) else {
+                return Ok(None);
+            };
+            Some(filter)
+        } else {
+            None
+        };
+
         let (new_left, new_right) = new_join_children(
             &projection_as_columns,
             far_right_left_col_ind,
@@ -672,7 +686,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             Arc::new(new_left),
             Arc::new(new_right),
             new_on,
-            self.filter.clone(),
+            new_filter,
             self.join_type,
             self.sort_options.clone(),
             self.null_equality,
