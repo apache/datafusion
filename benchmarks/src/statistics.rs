@@ -39,6 +39,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 /// Generate reports that compare planning statistics with runtime metrics.
+///
+/// Parser options are captured when the run starts, so `SET` statements do not
+/// affect parsing in later query files.
 #[derive(Debug, Args)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
@@ -101,7 +104,6 @@ impl RunOpt {
                     };
                     print_query_report(&report, previous.as_deref());
                     reports.push(report);
-                    store_report(&result_path, &reports)?;
                     continue;
                 }
             };
@@ -125,9 +127,9 @@ impl RunOpt {
                 };
                 print_query_report(&report, previous.as_deref());
                 reports.push(report);
-                store_report(&result_path, &reports)?;
             }
         }
+        store_report(&result_path, &reports)?;
         print_q_error_summary(
             &reports,
             previous.as_deref(),
