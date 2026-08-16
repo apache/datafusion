@@ -388,6 +388,25 @@ impl FileFormat for ParquetFormat {
         schemas
             .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
+
+        // Check for duplicate column names in each file's schema.
+        // Parquet allows duplicate column names, but the Arrow schema merge
+        // silently drops duplicate columns, resulting in silent data loss.
+        // See https://github.com/apache/datafusion/issues/24381
+        for (location, schema) in &schemas {
+            let mut seen = std::collections::HashSet::new();
+            for field in schema.fields() {
+                if !seen.insert(field.name()) {
+                    return exec_err!(
+                        "Parquet file '{location}' has duplicate column name '{name}'. "
+                        "Parquet files with duplicate column names are not supported.",
+                        location = location,
+                        name = field.name(),
+                    );
+                }
+            }
+        }
+
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let schema = if self.skip_metadata() {
