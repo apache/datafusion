@@ -86,6 +86,7 @@ impl AggregateHashTable<PartialMarker> {
 
         Ok(AggregateHashTable {
             group_by_metrics: self.group_by_metrics.clone(),
+            aggregate_argument_metrics: self.aggregate_argument_metrics.clone(),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
             state_schema: Arc::clone(&self.state_schema),
