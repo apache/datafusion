@@ -186,10 +186,12 @@ impl TableProvider for MemTable {
         TableType::Base
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
-        projection: Option<&'life2 Vec<usize>>,
+        projection: Option<&'life2 [usize]>,
         filters: &'life3 [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
@@ -217,6 +219,8 @@ impl TableProvider for MemTable {
     /// * A plan that returns the number of rows written.
     ///
     /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn insert_into<'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
@@ -235,6 +239,8 @@ impl TableProvider for MemTable {
         self.column_defaults.get(column)
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn delete_from<'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
@@ -248,6 +254,8 @@ impl TableProvider for MemTable {
         self.delete_from_boxed(state, filters)
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn update<'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
@@ -267,7 +275,7 @@ impl MemTable {
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,
-        projection: Option<&'a Vec<usize>>,
+        projection: Option<&'a [usize]>,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
@@ -277,7 +285,7 @@ impl MemTable {
     async fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -287,8 +295,11 @@ impl MemTable {
             partitions.push(inner_vec.clone())
         }
 
-        let mut source =
-            MemorySourceConfig::try_new(&partitions, self.schema(), projection.cloned())?;
+        let mut source = MemorySourceConfig::try_new(
+            &partitions,
+            self.schema(),
+            projection.map(|p| p.to_vec()),
+        )?;
 
         let show_sizes = state.config_options().explain.show_sizes;
         source = source.with_show_sizes(show_sizes);
