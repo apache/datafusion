@@ -54,7 +54,7 @@
 //!
 //! Each left partition owns its cursors, equality-group state, and current
 //! candidate, while the collected right batches are immutable and shared.
-//! The key state-machine entry point is `AsOfJoinStreamState::next_batch`.
+//! The key state-machine entry point is [`AsOfJoinStream::poll_next_impl`].
 //!
 //! This mode preserves probe-side parallelism when there are no equality keys
 //! or when equality keys have low cardinality or skew. It retains the complete
@@ -68,7 +68,9 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Formatter;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, new_null_array};
 use arrow::buffer::NullBuffer;
@@ -93,7 +95,7 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExprRef, fmt_sql, is_volatile,
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
-use futures::{StreamExt, TryStreamExt, future::poll_fn, stream};
+use futures::{Stream, StreamExt, TryStreamExt, future::poll_fn, ready, stream};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::joins::utils::{
@@ -110,7 +112,8 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, InputDistributionRequirements, PlanProperties,
-    ReplaceChildrenOptions, SendableRecordBatchStream, validate_child_count,
+    RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
+    validate_child_count,
 };
 
 /// Physical ordered comparison for an ASOF join.
@@ -480,7 +483,7 @@ impl ExecutionPlan for AsOfJoinExec {
             let mut right_fut = right_fut;
             let right_input = poll_fn(|cx| right_fut.get_shared(cx)).await?;
             let right_stream = right_input.stream()?;
-            let state = AsOfJoinStreamState::new(
+            let stream = AsOfJoinStream::new(
                 Arc::clone(&stream_schema),
                 InputCursor::new(left_stream, left_keys, left_match),
                 InputCursor::new(right_stream, right_keys, right_match),
@@ -488,20 +491,10 @@ impl ExecutionPlan for AsOfJoinExec {
                 column_indices,
                 batch_size,
                 metrics,
-            );
-            // `next_batch` is the key state-machine entry point. `try_unfold`
-            // preserves that state between emitted batches.
-            let stream = stream::try_unfold(
-                (state, right_input),
-                |(mut state, right_input)| async {
-                    match state.next_batch().await? {
-                        Some(batch) => Ok(Some((batch, (state, right_input)))),
-                        None => Ok(None),
-                    }
-                },
+                right_input,
             );
             Ok::<SendableRecordBatchStream, datafusion_common::DataFusionError>(Box::pin(
-                RecordBatchStreamAdapter::new(stream_schema, stream),
+                stream,
             ))
         })
         .try_flatten();
@@ -661,12 +654,16 @@ impl InputCursor {
         }
     }
 
-    async fn ensure_row(&mut self, elapsed_compute: &Time) -> Result<bool> {
+    fn poll_ensure_row(
+        &mut self,
+        cx: &mut Context<'_>,
+        elapsed_compute: &Time,
+    ) -> Poll<Result<bool>> {
         loop {
             if let Some(batch) = &self.batch
                 && self.row < batch.num_rows()
             {
-                return Ok(true);
+                return Poll::Ready(Ok(true));
             }
             self.batch = None;
             self.key_arrays = Arc::from([]);
@@ -674,11 +671,11 @@ impl InputCursor {
             self.match_array = None;
             self.row = 0;
             if self.eof {
-                return Ok(false);
+                return Poll::Ready(Ok(false));
             }
-            let Some(batch) = self.stream.next().await.transpose()? else {
+            let Some(batch) = ready!(self.stream.poll_next_unpin(cx)).transpose()? else {
                 self.eof = true;
-                return Ok(false);
+                return Poll::Ready(Ok(false));
             };
             if batch.num_rows() == 0 {
                 continue;
@@ -756,7 +753,8 @@ impl AsOfJoinMetrics {
 /// the first source batch, a NULL, and row 0 from the second source batch.
 #[derive(Default)]
 struct PendingRows {
-    /// Distinct source batches referenced by `indices`.
+    /// Distinct source batches referenced by `indices`. `Arc` keeps per-row
+    /// clones O(1) and provides stable identity for deduplication.
     sources: Vec<Arc<RecordBatch>>,
     /// Maps an `Arc<RecordBatch>` pointer to its index in `sources`.
     source_by_ptr: HashMap<usize, usize>,
@@ -847,13 +845,15 @@ impl PendingRows {
 /// candidate advances from `(A, 2)` to `(A, 6)` without rewinding the right
 /// cursor. Cursors and the candidate survive input batch changes and output
 /// flushes; a change of equality group clears the candidate before reuse.
-struct AsOfJoinStreamState {
+struct AsOfJoinStream {
     /// Output schema used when pending row references are materialized.
     schema: SchemaRef,
     /// Cursor over the current left partition.
     left: InputCursor,
     /// Independent cursor over the shared, ordered right input.
     right: InputCursor,
+    /// Retains the shared right batches and their memory reservation.
+    _right_input: Arc<BroadcastRightInput>,
     /// Validated ordered match operator.
     op: Operator,
     /// Projected output columns and their input sides.
@@ -877,7 +877,8 @@ struct AsOfJoinStreamState {
     metrics: AsOfJoinMetrics,
 }
 
-impl AsOfJoinStreamState {
+impl AsOfJoinStream {
+    #[expect(clippy::too_many_arguments)]
     fn new(
         schema: SchemaRef,
         left: InputCursor,
@@ -886,6 +887,7 @@ impl AsOfJoinStreamState {
         column_indices: Vec<ColumnIndex>,
         batch_size: usize,
         metrics: AsOfJoinMetrics,
+        right_input: Arc<BroadcastRightInput>,
     ) -> Self {
         let group_sort_options = vec![
             SortOptions {
@@ -900,6 +902,7 @@ impl AsOfJoinStreamState {
             schema,
             left,
             right,
+            _right_input: right_input,
             op,
             projects_right: column_indices
                 .iter()
@@ -997,21 +1000,23 @@ impl AsOfJoinStreamState {
     ///   emit the left row with the candidate (or NULLs), then advance left
     /// flush pending rows without resetting either cursor or the candidate
     /// ```
-    async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+    fn poll_next_impl(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             if self.pending_left.len() >= self.batch_size {
-                return self.flush().map(Some);
+                return Poll::Ready(Some(self.flush()));
             }
-            if !self
-                .left
-                .ensure_row(self.metrics.baseline.elapsed_compute())
-                .await?
-            {
+            if !ready!(
+                self.left
+                    .poll_ensure_row(cx, self.metrics.baseline.elapsed_compute())
+            )? {
                 if !self.pending_left.is_empty() {
-                    return self.flush().map(Some);
+                    return Poll::Ready(Some(self.flush()));
                 }
                 self.metrics.baseline.done();
-                return Ok(None);
+                return Poll::Ready(None);
             }
 
             let left_match = {
@@ -1031,49 +1036,44 @@ impl AsOfJoinStreamState {
             }
 
             loop {
-                if !self
-                    .right
-                    .ensure_row(self.metrics.baseline.elapsed_compute())
-                    .await?
-                {
+                if !ready!(
+                    self.right
+                        .poll_ensure_row(cx, self.metrics.baseline.elapsed_compute())
+                )? {
                     break;
                 }
-                let action = if self.right.group_has_null() {
-                    RightAction::Advance
-                } else {
-                    match self.compare_input_groups()? {
-                        Ordering::Less => RightAction::Advance,
-                        Ordering::Greater => RightAction::Stop,
-                        Ordering::Equal => {
-                            let _timer = self.metrics.baseline.elapsed_compute().timer();
-                            let right_match = self.right.match_value()?;
-                            if right_match.is_null() {
-                                RightAction::Advance
-                            } else if is_eligible(self.op, &left_match, &right_match)? {
-                                let (batch, row) = self.right.batch_row()?;
-                                RightAction::Candidate(Candidate {
-                                    batch,
-                                    row,
-                                    key_arrays: Arc::clone(&self.right.key_arrays),
-                                    key_batch_id: self.right.key_batch_id,
-                                })
-                            } else {
-                                RightAction::Stop
-                            }
-                        }
-                    }
-                };
-                match action {
-                    RightAction::Advance => self.right.advance(),
-                    RightAction::Candidate(candidate) => {
-                        // Replacing the candidate selects the nearest eligible row.
-                        // Equal match values have no secondary ordering, so which
-                        // tied row wins is intentionally nondeterministic.
-                        self.candidate = Some(candidate);
-                        self.right.advance();
-                    }
-                    RightAction::Stop => break,
+                if self.right.group_has_null() {
+                    self.right.advance();
+                    continue;
                 }
+                match self.compare_input_groups()? {
+                    Ordering::Less => {
+                        self.right.advance();
+                        continue;
+                    }
+                    Ordering::Greater => break,
+                    Ordering::Equal => {}
+                }
+                let _timer = self.metrics.baseline.elapsed_compute().timer();
+                let right_match = self.right.match_value()?;
+                if right_match.is_null() {
+                    self.right.advance();
+                    continue;
+                }
+                if !is_eligible(self.op, &left_match, &right_match)? {
+                    break;
+                }
+                let (batch, row) = self.right.batch_row()?;
+                // Replacing the candidate selects the nearest eligible row.
+                // Equal match values have no secondary ordering, so which tied
+                // row wins is intentionally nondeterministic.
+                self.candidate = Some(Candidate {
+                    batch,
+                    row,
+                    key_arrays: Arc::clone(&self.right.key_arrays),
+                    key_batch_id: self.right.key_batch_id,
+                });
+                self.right.advance();
             }
 
             self.push_current_left(self.candidate.clone())?;
@@ -1126,6 +1126,23 @@ impl AsOfJoinStreamState {
         )?;
         (&batch).record_output(&self.metrics.baseline);
         Ok(batch)
+    }
+}
+
+impl RecordBatchStream for AsOfJoinStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+impl Stream for AsOfJoinStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.poll_next_impl(cx)
     }
 }
 
@@ -1209,12 +1226,6 @@ fn validate_expr_side(expr: &PhysicalExprRef, schema: &Schema, name: &str) -> Re
         );
     }
     Ok(())
-}
-
-enum RightAction {
-    Advance,
-    Candidate(Candidate),
-    Stop,
 }
 
 fn is_eligible(op: Operator, left: &ScalarValue, right: &ScalarValue) -> Result<bool> {
