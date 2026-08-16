@@ -750,17 +750,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let mut within_group = within_group;
                 let mut order_by = order_by;
 
-                if supports_within_group
+                let is_inline_order_by = supports_within_group
                     && within_group.is_empty()
-                    && !order_by.is_empty()
-                {
+                    && !order_by.is_empty();
+
+                if is_inline_order_by {
                     // Inline ORDER BY syntax:
                     // quantile_cont(value, percentile ORDER BY value)
-                    if args.len() >= 2 {
-                        args.remove(0);
-                        arg_names.remove(0);
-                    }
-
                     within_group = order_by;
                     order_by = vec![];
                 }
@@ -786,6 +782,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             return plan_err!(
                                 "Only a single ordering expression is permitted in WITHIN GROUP clause"
                             );
+                        }
+
+                        // Remove the ordered value only when it is explicitly repeated.
+                        if is_inline_order_by && args.first() == Some(&sorts[0].expr) {
+                            args.remove(0);
+                            arg_names.remove(0);
                         }
 
                         // Prepend ordered value expression to args
