@@ -735,18 +735,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // accept a WITHIN GROUP clause.
                 let supports_within_group = fm.supports_within_group_clause();
 
-                // Built-in ordered-set aggregates must also support WITHIN GROUP
-                let is_builtin_ordered_set = matches!(
-                    name.as_str(),
-                    "percentile_cont"
-                        | "quantile_cont"
-                        | "approx_percentile_cont"
-                        | "approx_percentile_cont_with_weight"
-                );
-
-                let supports_within_group =
-                    supports_within_group || is_builtin_ordered_set;
-
                 let mut within_group = within_group;
                 let mut order_by = order_by;
 
@@ -785,6 +773,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         }
 
                         // Remove the ordered value only when it is explicitly repeated.
+                        // This ensures these are equivalent:
+                        //   approx_percentile_cont(c3, 0.95, 200 ORDER BY c3)
+                        //   approx_percentile_cont(0.95, 200 ORDER BY c3)
                         if is_inline_order_by && args.first() == Some(&sorts[0].expr) {
                             args.remove(0);
                             arg_names.remove(0);
