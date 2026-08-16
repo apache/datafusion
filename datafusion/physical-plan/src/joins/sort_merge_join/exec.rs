@@ -651,21 +651,25 @@ impl ExecutionPlan for SortMergeJoinExec {
             return Ok(None);
         }
 
+        let left_field_size = self.left().schema().fields().len();
+        let left_projection = &projection_as_columns[0..=far_right_left_col_ind as usize];
+        let right_projection = &projection_as_columns[far_left_right_col_ind as usize..];
+
         let Some(new_on) = update_join_on(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
+            left_projection,
+            right_projection,
             self.on(),
-            self.left().schema().fields().len(),
+            left_field_size,
         ) else {
             return Ok(None);
         };
 
         let new_filter = if let Some(filter) = self.filter() {
             let Some(filter) = update_join_filter(
-                &projection_as_columns[0..=far_right_left_col_ind as _],
-                &projection_as_columns[far_left_right_col_ind as _..],
+                left_projection,
+                right_projection,
                 filter,
-                self.left().schema().fields().len(),
+                left_field_size,
             ) else {
                 return Ok(None);
             };
