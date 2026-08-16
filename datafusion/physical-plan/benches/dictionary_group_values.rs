@@ -221,9 +221,8 @@ fn bench_take_n(c: &mut Criterion) {
     let mut cards = CARDS_RELATIVE.to_vec();
     cards.push(size);
     for cardinality in cards {
-        let batch_a = make_dict(size, cardinality, null_density, SEED);
-        let batch_b = make_dict(size, cardinality, null_density, SEED.wrapping_add(1));
-        group.throughput(Throughput::Elements((size * 2 * N_BATCHES) as u64));
+        let batch = make_dict(size, cardinality, null_density, SEED);
+        group.throughput(Throughput::Elements((size * N_BATCHES) as u64));
         group.bench_function(bench_id("take_n", size, cardinality, null_density), |b| {
             b.iter_batched_ref(
                 || {
@@ -234,13 +233,11 @@ fn bench_take_n(c: &mut Criterion) {
                 },
                 |(gv, groups)| {
                     for _ in 0..N_BATCHES {
-                        gv.intern(std::slice::from_ref(&batch_a), groups).unwrap();
+                        gv.intern(std::slice::from_ref(&batch), groups).unwrap();
                         black_box(&*groups);
-                        gv.intern(std::slice::from_ref(&batch_b), groups).unwrap();
-                        black_box(&*groups);
-                        black_box(gv.emit(EmitTo::First(1)).unwrap());
+                        black_box(gv.emit(EmitTo::First(size / 2)).unwrap());
                     }
-                    black_box(gv.emit(EmitTo::All).unwrap());
+                    black_box(gv.emit(EmitTo::First(gv.len())).unwrap());
                 },
                 BatchSize::SmallInput,
             );
