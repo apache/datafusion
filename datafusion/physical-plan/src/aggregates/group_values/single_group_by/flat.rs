@@ -63,7 +63,11 @@ impl_flat_key_unsigned!(u8, u16, u32, u64);
 
 enum Mode<T: ArrowPrimitiveType> {
     Uninit,
-    Flat { offset: u64, data: Vec<u32> },
+    Flat {
+        offset: u64,
+        data: Vec<u32>,
+        occupied: usize,
+    },
     Fallback(GroupValuesPrimitive<T>),
 }
 
@@ -112,6 +116,7 @@ where
                 Mode::Flat {
                     offset: min,
                     data: vec![0; (range + 1) as usize],
+                    occupied: 0,
                 }
             }
             _ => Mode::Fallback(GroupValuesPrimitive::new(self.data_type.clone())),
@@ -122,6 +127,7 @@ where
     fn intern_key(
         offset: u64,
         data: &mut Vec<u32>,
+        occupied: &mut usize,
         values: &mut Vec<T::Native>,
         overflow: &mut HashMap<T::Native, usize>,
         key: T::Native,
@@ -129,7 +135,7 @@ where
         // Out of window (below offset wraps huge, above exceeds len)
         let raw = key.to_ordered_u64().wrapping_sub(offset);
         if raw >= data.len() as u64 {
-            return Self::intern_key_outside(raw, data, values, overflow, key);
+            return Self::intern_key_outside(raw, data, occupied, values, overflow, key);
         }
 
         // in window
@@ -140,6 +146,7 @@ where
         let g = values.len();
         values.push(key);
         *slot = g as u32 + 1;
+        *occupied += 1;
         g
     }
 
@@ -149,16 +156,19 @@ where
     fn intern_key_outside(
         idx: u64,
         data: &mut Vec<u32>,
+        occupied: &mut usize,
         values: &mut Vec<T::Native>,
         overflow: &mut HashMap<T::Native, usize>,
         key: T::Native,
     ) -> usize {
-        if idx < MAX_FLAT_RANGE {
+        if idx < MAX_FLAT_RANGE && idx < (*occupied as u64).saturating_mul(SPARSE_FACTOR)
+        {
             let idx = idx as usize;
             data.resize(idx + 1, 0);
             let g = values.len();
             values.push(key);
             data[idx] = g as u32 + 1;
+            *occupied += 1;
             g
         } else {
             *overflow.entry(key).or_insert_with(|| {
@@ -197,7 +207,11 @@ where
                 groups.clear();
                 Ok(())
             }
-            Mode::Flat { offset, data } => {
+            Mode::Flat {
+                offset,
+                data,
+                occupied,
+            } => {
                 let offset = *offset;
                 groups.clear();
 
@@ -207,6 +221,7 @@ where
                         let g = Self::intern_key(
                             offset,
                             data,
+                            occupied,
                             &mut self.values,
                             &mut self.overflow,
                             key,
@@ -222,6 +237,7 @@ where
                         Some(key) => Self::intern_key(
                             offset,
                             data,
+                            occupied,
                             &mut self.values,
                             &mut self.overflow,
                             key,
@@ -247,19 +263,29 @@ where
                 build_primitive(values, null)
             }
             EmitTo::First(n) => {
-                if let Mode::Flat { data, .. } = &mut self.mode {
+                if let Mode::Flat { data, occupied, .. } = &mut self.mode {
                     // flushed group ids and keeps the rest, a slot with
                     // id < n is freed and surviving ids shift down
+                    let mut live: usize = 0;
                     for slot in data.iter_mut() {
                         if *slot == 0 {
                             continue; // unseen
                         }
                         let gid = (*slot - 1) as usize;
                         // survivor: shift id down by n; emitted (gid < n): free the slot
-                        *slot = gid.checked_sub(n).map_or(0, |sub| sub as u32 + 1);
+                        match gid.checked_sub(n) {
+                            Some(sub) => {
+                                *slot = sub as u32 + 1;
+                                live += 1;
+                            }
+                            None => *slot = 0,
+                        }
                     }
+                    if live == 0 {
+                        *data = Vec::new();
+                    }
+                    *occupied = live;
                 }
-
                 self.overflow.retain(|_, g| match g.checked_sub(n) {
                     Some(sub) => {
                         *g = sub;
@@ -267,6 +293,10 @@ where
                     }
                     None => false,
                 });
+
+                if self.overflow.capacity() > self.overflow.len().saturating_mul(2) {
+                    self.overflow.shrink_to_fit();
+                }
                 let null_group = match &mut self.null_group {
                     Some(v) if *v >= n => {
                         *v -= n;
@@ -316,7 +346,7 @@ where
         }
         self.mode = Mode::Uninit;
         self.values.clear();
-        self.values.shrink_to(num_rows);
+        self.values.shrink_to_fit();
         self.overflow.clear();
         self.null_group = None;
     }
@@ -406,6 +436,33 @@ mod tests {
         );
         // survivors 2,3 renumber to 0,1; a fresh key gets 2
         assert_eq!(intern(&mut gv, &[Some(2), Some(3), Some(9)]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn emit_first_releases_dead_window_and_overflow() {
+        let mut gv = new_gv();
+        // window sized to [0, 1000)
+        let first: Vec<Option<i32>> = (0..1000).map(Some).collect();
+        intern(&mut gv, &first);
+        // keys far past the window land in overflow (a sorted stream marching
+        // past the window, as in ordered final aggregation)
+        let second: Vec<Option<i32>> = (100_000..101_000).map(Some).collect();
+        intern(&mut gv, &second);
+        let before = gv.size();
+        // drain every group seen so far
+        gv.emit(EmitTo::First(2000)).unwrap();
+        let after = gv.size();
+        assert!(
+            after < before,
+            "size must shrink after a full drain: {before} -> {after}"
+        );
+        // the fully-emitted window is dropped, not kept as a dead allocation
+        match &gv.mode {
+            Mode::Flat { data, .. } => assert!(data.is_empty()),
+            _ => panic!("expected Flat mode"),
+        }
+        // still functional after the drain
+        assert_eq!(intern(&mut gv, &[Some(5), Some(5), Some(7)]), vec![0, 0, 1]);
     }
 
     #[test]
@@ -512,17 +569,35 @@ mod tests {
     }
 
     #[test]
-    fn key_within_max_range_grows_window() {
+    fn window_grows_when_dense_overflows_when_sparse() {
         let mut gv = new_gv();
-        // window sized to [0, 1] by the first batch
-        assert_eq!(intern(&mut gv, &[Some(0), Some(1)]), vec![0, 1]);
-        // 500 is outside the window but < MAX_FLAT_RANGE -> grow the array, not overflow
-        assert_eq!(
-            intern(&mut gv, &[Some(500), Some(0), Some(500)]),
-            vec![2, 0, 2]
-        );
+        // Dense first batch: window [0, 9], occupied = 10.
+        let first: Vec<Option<i32>> = (0..10).map(Some).collect();
+        assert_eq!(intern(&mut gv, &first), (0..10_usize).collect::<Vec<_>>());
+
+        // 30 is out of window but dense enough to grow: 30 < occupied(10) * SPARSE_FACTOR.
+        assert_eq!(intern(&mut gv, &[Some(30)]), vec![10]);
         assert!(gv.overflow.is_empty());
-        assert_eq!(emit_all(&mut gv), vec![Some(0), Some(1), Some(500)]);
+        match &gv.mode {
+            Mode::Flat { data, occupied, .. } => {
+                assert_eq!(data.len(), 31); // grew to include idx 30
+                assert_eq!(*occupied, 11);
+            }
+            _ => panic!("expected Flat"),
+        }
+
+        // 100 is within MAX_FLAT_RANGE but too sparse to grow: 100 >= occupied(11) * 4,
+        // so it goes to overflow instead of ballooning the window.
+        assert_eq!(intern(&mut gv, &[Some(100)]), vec![11]);
+        assert_eq!(gv.overflow.len(), 1);
+        match &gv.mode {
+            Mode::Flat { data, .. } => assert_eq!(data.len(), 31), // did NOT grow
+            _ => panic!("expected Flat"),
+        }
+
+        let expected: Vec<Option<i32>> =
+            (0..10).map(Some).chain([Some(30), Some(100)]).collect();
+        assert_eq!(emit_all(&mut gv), expected);
     }
 
     #[test]
