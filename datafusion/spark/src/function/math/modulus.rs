@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, BooleanArray, Scalar, new_null_array};
+use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
 use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{
     boolean::{and, is_not_null, or},
@@ -23,11 +26,15 @@ use arrow::compute::kernels::{
     numeric::{neg, rem},
     zip::zip,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType};
 use arrow::error::ArrowError;
-use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
+use datafusion_common::types::NativeType;
+use datafusion_common::{
+    Result, ScalarValue, assert_eq_or_internal_err, exec_err, plan_err,
+};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    binary::binary_numeric_coercion,
 };
 
 /// Returns a one element array holding negative zero, for the floating point
@@ -101,6 +108,76 @@ pub fn spark_mod(
     Ok(ColumnarValue::Array(result))
 }
 
+/// Spark derives the decimal result type of `pmod` with `Pmod.resultDecimalType`,
+/// which follows the `Remainder` rule:
+///
+/// ```text
+/// scale     = max(s1, s2)
+/// precision = min(p1 - s1, p2 - s2) + scale
+/// ```
+///
+/// The rule is applied to the *declared* argument types. Collapsing both
+/// arguments to a common decimal first would make the two precisions equal and
+/// the rule would degenerate to the input precision, which is why
+/// [`SparkPmod::coerce_types`] leaves decimal arguments intact.
+fn pmod_decimal_result_type(p1: u8, s1: i8, p2: u8, s2: i8) -> DataType {
+    let scale = s1.max(s2);
+    let whole_digits = (i32::from(p1) - i32::from(s1)).min(i32::from(p2) - i32::from(s2));
+    let precision =
+        (whole_digits + i32::from(scale)).clamp(1, i32::from(DECIMAL128_MAX_PRECISION));
+    DataType::Decimal128(precision as u8, scale)
+}
+
+/// The type `pmod` computes in, which is not always the type it returns.
+///
+/// Spark's result type is narrower than the dividend, so the operands cannot be
+/// cast to it before the remainder is taken without overflowing the dividend.
+/// The computation therefore runs in a common type wide enough for both, and
+/// the result is narrowed afterwards.
+fn pmod_computation_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
+    match binary_numeric_coercion(lhs, rhs) {
+        Some(computation_type) => Ok(computation_type),
+        None => exec_err!("pmod does not support ({lhs}, {rhs})"),
+    }
+}
+
+/// The coercion `Signature::numeric` applied before `pmod` moved to
+/// [`Signature::user_defined`], reproduced so that only the decimal pair below
+/// changes behaviour.
+///
+/// A null argument is skipped rather than coerced, and a call still typed null
+/// afterwards falls back to `Float64`; both match `TypeSignature::Numeric` in
+/// `datafusion_expr::type_coercion::functions`.
+fn pmod_numeric_coercion(lhs: &DataType, rhs: &DataType) -> Result<Vec<DataType>> {
+    let mut valid_type = lhs.clone();
+
+    let rhs_native: NativeType = rhs.into();
+    if rhs_native != NativeType::Null {
+        if !rhs_native.is_numeric() {
+            return plan_err!(
+                "Function 'pmod' expects Numeric but received {rhs_native}"
+            );
+        }
+        match binary_numeric_coercion(&valid_type, rhs) {
+            Some(coerced_type) => valid_type = coerced_type,
+            None => {
+                return plan_err!(
+                    "For function 'pmod' {valid_type} and {rhs} are not coercible to a common numeric type"
+                );
+            }
+        }
+    }
+
+    let valid_native: NativeType = valid_type.clone().into();
+    if valid_native == NativeType::Null {
+        valid_type = DataType::Float64;
+    } else if !valid_native.is_numeric() {
+        return plan_err!("Function 'pmod' expects Numeric but received {valid_native}");
+    }
+
+    Ok(vec![valid_type.clone(), valid_type])
+}
+
 /// Spark-compatible `pmod` function
 /// In ANSI mode, division by zero throws an error.
 /// In legacy mode, division by zero returns NULL (Spark behavior).
@@ -110,14 +187,59 @@ pub fn spark_pmod(
 ) -> Result<ColumnarValue> {
     assert_eq_or_internal_err!(args.len(), 2, "pmod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
-    let left = &args[0];
-    let right = &args[1];
+
+    // Decimal arguments reach here with their declared types intact, so the
+    // Spark result type is derived before they are widened for the computation.
+    let result_type = match (args[0].data_type(), args[1].data_type()) {
+        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+            Some(pmod_decimal_result_type(*p1, *s1, *p2, *s2))
+        }
+        _ => None,
+    };
+
+    let (left, right): (ArrayRef, ArrayRef) =
+        if args[0].data_type() == args[1].data_type() {
+            (Arc::clone(&args[0]), Arc::clone(&args[1]))
+        } else {
+            let computation_type =
+                pmod_computation_type(args[0].data_type(), args[1].data_type())?;
+            // The computation type is wide enough for both operands by
+            // construction, so widening must not silently null on overflow the
+            // way arrow's default (`safe: true`) cast would.
+            let widen = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            (
+                cast_with_options(&args[0], &computation_type, &widen)?,
+                cast_with_options(&args[1], &computation_type, &widen)?,
+            )
+        };
+
+    let left = &left;
+    let right = &right;
     let zero = ScalarValue::new_zero(left.data_type())?.to_array_of_size(left.len())?;
     let result = try_rem(left, right, enable_ansi_mode)?;
     let neg = lt(&result, &zero)?;
     let plus = zip(&neg, right, &zero)?;
     let result = add(&plus, &result)?;
     let result = try_rem(&result, right, enable_ansi_mode)?;
+
+    // The remainder is bounded by the divisor, but the result type only carries
+    // `min(p1 - s1, p2 - s2)` integer digits, so a remainder approaching a
+    // divisor wider than the dividend does not always fit. Spark wraps decimal
+    // arithmetic in `CheckOverflow(nullOnOverflow = !ansiEnabled)`, so an
+    // overflow here is NULL in legacy mode and an error under ANSI.
+    let result = match result_type {
+        Some(result_type) if result.data_type() != &result_type => {
+            let narrow = CastOptions {
+                safe: !enable_ansi_mode,
+                ..Default::default()
+            };
+            cast_with_options(&result, &result_type, &narrow)?
+        }
+        _ => result,
+    };
     Ok(ColumnarValue::Array(result))
 }
 
@@ -182,7 +304,7 @@ impl Default for SparkPmod {
 impl SparkPmod {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(2, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -203,9 +325,31 @@ impl ScalarUDFImpl for SparkPmod {
             "pmod expects exactly two arguments"
         );
 
-        // Return the same type as the first argument for simplicity
-        // Arrow's rem function handles type promotion internally
-        Ok(arg_types[0].clone())
+        match (&arg_types[0], &arg_types[1]) {
+            (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                Ok(pmod_decimal_result_type(*p1, *s1, *p2, *s2))
+            }
+            // Arrow's rem function handles type promotion for the rest
+            _ => Ok(arg_types[0].clone()),
+        }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return plan_err!(
+                "Function 'pmod' expects 2 arguments but received {}",
+                arg_types.len()
+            );
+        }
+
+        match (&arg_types[0], &arg_types[1]) {
+            // Spark applies resultDecimalType to the declared argument types, so
+            // these are left alone; spark_pmod widens them for the computation.
+            (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => {
+                Ok(arg_types.to_vec())
+            }
+            (lhs, rhs) => pmod_numeric_coercion(lhs, rhs),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -934,5 +1078,36 @@ mod test {
         } else {
             panic!("Expected array result");
         }
+    }
+
+    /// Spark's `Pmod.resultDecimalType`: scale = max(s1, s2),
+    /// precision = min(p1 - s1, p2 - s2) + scale.
+    #[test]
+    fn test_pmod_decimal_result_type() {
+        // Equal scales: the narrower argument decides the precision.
+        assert_eq!(
+            pmod_decimal_result_type(3, 1, 2, 1),
+            DataType::Decimal128(2, 1)
+        );
+        // The divisor is wider, so the dividend bounds the result.
+        assert_eq!(
+            pmod_decimal_result_type(5, 2, 4, 1),
+            DataType::Decimal128(5, 2)
+        );
+        // Differing scales: the wider scale wins.
+        assert_eq!(
+            pmod_decimal_result_type(6, 3, 4, 1),
+            DataType::Decimal128(6, 3)
+        );
+        // Integral decimals keep a zero scale.
+        assert_eq!(
+            pmod_decimal_result_type(10, 0, 5, 0),
+            DataType::Decimal128(5, 0)
+        );
+        // The result never exceeds the maximum precision arrow can represent.
+        assert_eq!(
+            pmod_decimal_result_type(38, 0, 38, 38),
+            DataType::Decimal128(38, 38)
+        );
     }
 }
