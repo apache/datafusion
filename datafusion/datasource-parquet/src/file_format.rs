@@ -45,7 +45,7 @@ use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, Result, internal_datafusion_err,
-    internal_err, not_impl_err,
+    exec_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
