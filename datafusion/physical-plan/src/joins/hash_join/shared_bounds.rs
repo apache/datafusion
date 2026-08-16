@@ -733,7 +733,9 @@ impl SharedBuildAccumulator {
                 )
             }));
 
-            let routing_expr = if let Some(range_partitioning) = &self.probe_range_partitioning {
+            let routing_expr = if let Some(range_partitioning) =
+                &self.probe_range_partitioning
+            {
                 // Routes probe rows with the partition id selected by [`RangeExpr`].
                 // CASE range_partition(keys)
                 //   WHEN empty_partition_id THEN false  -- only when cancellation exists
