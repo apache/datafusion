@@ -495,6 +495,52 @@
 </table>
 </div>
 </section>
+<section id="hashjoinexec">
+<h3>HashJoinExec<a class="headerlink" href="#hashjoinexec" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">HashJoinExec</span></code> also exposes the common <code class="docutils literal notranslate"><span class="pre">BaselineMetrics</span></code>. Its
+<code class="docutils literal notranslate"><span class="pre">elapsed_compute</span></code> metric is the sum of the build-side collection time and the
+subsequent join processing time.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>build_time</p></td>
+<td><p>Total time spent collecting and building the build side of the join.</p></td>
+</tr>
+<tr class="row-odd"><td><p>build_input_batches</p></td>
+<td><p>Number of input batches consumed from the build side.</p></td>
+</tr>
+<tr class="row-even"><td><p>build_input_rows</p></td>
+<td><p>Number of input rows consumed from the build side.</p></td>
+</tr>
+<tr class="row-odd"><td><p>build_mem_used</p></td>
+<td><p>Peak tracked memory used by the build side, in bytes.</p></td>
+</tr>
+<tr class="row-even"><td><p>join_time</p></td>
+<td><p>Total time spent processing the join after build-side collection.</p></td>
+</tr>
+<tr class="row-odd"><td><p>input_batches</p></td>
+<td><p>Number of input batches consumed from the probe side.</p></td>
+</tr>
+<tr class="row-even"><td><p>input_rows</p></td>
+<td><p>Number of input rows consumed from the probe side.</p></td>
+</tr>
+<tr class="row-odd"><td><p>probe_hit_rate</p></td>
+<td><p>Fraction of probe-side rows with a build-side join-key match before applying any join filter.</p></td>
+</tr>
+<tr class="row-even"><td><p>avg_fanout</p></td>
+<td><p>Average number of build-side join-key matches per matched probe-side row before applying any join filter.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_map_created_count</p></td>
+<td><p>Number of times <code class="docutils literal notranslate"><span class="pre">HashJoinExec</span></code> created an <code class="docutils literal notranslate"><span class="pre">ArrayMap</span></code> for perfect hash join lookup execution.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 <section id="todo">
 <h2>TODO<a class="headerlink" href="#todo" title="Link to this heading">#</a></h2>
@@ -555,6 +601,7 @@
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator-specific-metrics">Operator-specific Metrics</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec">FilterExec</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hashjoinexec">HashJoinExec</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#todo">TODO</a></li>

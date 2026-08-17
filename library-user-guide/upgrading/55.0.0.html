@@ -1580,6 +1580,32 @@ subarray and ignored the remaining subarrays. For example:</p>
 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4]</span></code>. It now returns a planning error stating that <code class="docutils literal notranslate"><span class="pre">array_distance</span></code> only
 supports one-dimensional arrays.</p>
 </section>
+<section id="exprtype-gained-a-sqlsimilartopattern-variant">
+<h3><code class="docutils literal notranslate"><span class="pre">ExprType</span></code> gained a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant<a class="headerlink" href="#exprtype-gained-a-sqlsimilartopattern-variant" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">SIMILAR</span> <span class="pre">TO</span></code> with a non-literal (column- or expression-based) pattern is now
+represented by a new <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> physical expression, so it can be
+serialized. The generated <code class="docutils literal notranslate"><span class="pre">ExprType</span></code> enum on <code class="docutils literal notranslate"><span class="pre">PhysicalExprNode</span></code> gained a
+matching <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant (tag 28).</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users matching exhaustively on <code class="docutils literal notranslate"><span class="pre">ExprType</span></code> (for example in a custom
+physical-plan encoder/decoder).</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> arm, or fall back to a wildcard arm:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">match</span><span class="w"> </span><span class="n">expr_type</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">ExprType</span><span class="p">::</span><span class="n">SqlSimilarToPattern</span><span class="p">(</span><span class="n">node</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Plans encoded before this variant existed are unaffected: they never produced
+this variant, so decoding is unchanged. Plans containing a dynamic
+<code class="docutils literal notranslate"><span class="pre">SIMILAR</span> <span class="pre">TO</span></code> pattern encoded after this change fail to decode on older
+readers that don’t recognize the new tag.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23188">PR #23188</a> for details.</p>
+</section>
 <section id="parquetobjectreader-parquetobjectwriter-deprecated-upstream">
 <h3><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream<a class="headerlink" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream" title="Link to this heading">#</a></h3>
 <p>The <a class="reference external" href="https://crates.io/crates/parquet"><code class="docutils literal notranslate"><span class="pre">parquet</span></code> crate</a> deprecated <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/struct.ParquetObjectReader.html"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code></a>
@@ -1724,6 +1750,7 @@ changes.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-94-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedparquetfilereader-removed-parquetfilereader-fields-are-now-private"><code class="docutils literal notranslate"><span class="pre">CachedParquetFileReader</span></code> removed; <code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code> fields are now private</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays"><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exprtype-gained-a-sqlsimilartopattern-variant"><code class="docutils literal notranslate"><span class="pre">ExprType</span></code> gained a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-parquet-options-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: parquet options conversions are fallible</a></li>
 </ul>
