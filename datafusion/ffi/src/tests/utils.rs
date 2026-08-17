@@ -81,6 +81,7 @@ fn load_module(lib_path: &Path) -> Result<ForeignLibraryModule> {
     assert_eq!((module.version)(), expected_version);
 
     // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
     std::mem::forget(lib);
 
     Ok(module)

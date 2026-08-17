@@ -405,7 +405,7 @@ impl TableProvider for DistinctIndexTable {
     async fn scan(
         &self,
         _ctx: &dyn Session,
-        _proj: Option<&Vec<usize>>,
+        _proj: Option<&[usize]>,
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

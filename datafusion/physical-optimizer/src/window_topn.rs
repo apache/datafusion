@@ -60,6 +60,7 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -140,6 +141,15 @@ impl WindowTopN {
         // Step 2: Extract limit from predicate (rn <= K, rn < K, etc.)
         let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
 
+        // A predicate such as `rn < 1` (or the flipped `1 > rn`) yields a fetch of
+        // 0. `ROW_NUMBER`/`RANK` are always >= 1, so no row can satisfy it and the
+        // correct result is empty. `PartitionedTopKExec` requires `k > 0` and would
+        // panic on `k = 0`, so bail out here and let the regular `FilterExec` produce
+        // the (empty) result instead of rewriting.
+        if limit_n == 0 {
+            return None;
+        }
+
         // Step 3: Walk through optional ProjectionExec and RepartitionExec to find BoundedWindowAggExec
         let child = filter.input();
         let (window_exec, intermediates) = find_window_below(child)?;
@@ -192,13 +202,13 @@ impl WindowTopN {
         .ok()?;
 
         // Step 7: Rebuild window with PartitionedTopKExec as its child
-        let mut result = window_exec
-            .with_new_children(vec![Arc::new(partitioned_topk)])
-            .ok()?;
+        let mut result =
+            replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)])
+                .ok()?;
 
         // Step 8: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
-            result = node.with_new_children(vec![result]).ok()?;
+            result = replace_children_if_necessary(node, vec![result]).ok()?;
         }
 
         Some(result)
