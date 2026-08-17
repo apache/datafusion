@@ -52,7 +52,8 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr, PlanProperties, ReplaceChildrenOptions, collect_partitioned,
+    PhysicalExpr, PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
+    collect_partitioned, validate_child_count,
 };
 use datafusion_session::Session;
 
@@ -595,6 +596,10 @@ impl MemTable {
         Ok(Arc::new(DmlResultExec::new(total_updated)))
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "matches the TableProvider::merge_into signature"
+    )]
     fn merge_into_boxed<'a>(
         &'a self,
         state: &'a dyn Session,
@@ -603,14 +608,20 @@ impl MemTable {
         on: Expr,
         clauses: Vec<MergeIntoClause>,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
-        Box::pin(self.merge_into_inner(state, source, merge_schema, on, clauses))
+        Box::pin(ready(self.merge_into_inner(
+            state,
+            source,
+            merge_schema.as_ref(),
+            on,
+            clauses,
+        )))
     }
 
-    async fn merge_into_inner(
+    fn merge_into_inner(
         &self,
         state: &dyn Session,
         source: Arc<dyn ExecutionPlan>,
-        merge_schema: DFSchemaRef,
+        merge_schema: &DFSchema,
         on: Expr,
         clauses: Vec<MergeIntoClause>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -619,16 +630,6 @@ impl MemTable {
         }
 
         let source_schema = source.schema();
-        let source_partitions = collect_partitioned(source, state.task_ctx()).await?;
-        let source_rows = partitioned_batches_to_rows(&source_partitions)?;
-
-        let mut target_batches = vec![];
-        for partition_data in &self.batches {
-            let partition = partition_data.read().await;
-            target_batches.extend(partition.iter().cloned());
-        }
-        let target_rows = batches_to_rows(&target_batches)?;
-
         let target_width = self.schema.fields().len();
         let source_width = source_schema.fields().len();
         if merge_schema.fields().len() != target_width + source_width {
@@ -640,12 +641,116 @@ impl MemTable {
         }
 
         let merge_arrow_schema = Arc::new(merge_schema.as_arrow().clone());
-        let on = on.cast_to(&DataType::Boolean, merge_schema.as_ref())?;
-        let on = state.create_physical_expr(on, merge_schema.as_ref())?;
-        let clauses = compile_merge_clauses(self, state, merge_schema.as_ref(), clauses)?;
+        let on = on.cast_to(&DataType::Boolean, merge_schema)?;
+        let on = state.create_physical_expr(on, merge_schema)?;
+        let clauses = compile_merge_clauses(self, state, merge_schema, clauses)?;
 
-        let null_target = null_row_for_schema(&self.schema)?;
-        let null_source = null_row_for_schema(&source_schema)?;
+        Ok(Arc::new(MergeIntoExec::new(
+            self.batches.clone(),
+            Arc::clone(&self.schema),
+            Arc::clone(&self.sort_order),
+            source,
+            source_schema,
+            merge_arrow_schema,
+            on,
+            clauses,
+        )))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CompiledMergeClause {
+    kind: MergeIntoClauseKind,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    action: CompiledMergeAction,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledMergeAction {
+    Update(Vec<CompiledMergeAssignment>),
+    Insert(Vec<CompiledInsertValue>),
+    Delete,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledMergeAssignment {
+    target_index: usize,
+    data_type: DataType,
+    expr: Arc<dyn PhysicalExpr>,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledInsertValue {
+    MergeExpr {
+        data_type: DataType,
+        expr: Arc<dyn PhysicalExpr>,
+    },
+    DefaultExpr {
+        data_type: DataType,
+        expr: Arc<dyn PhysicalExpr>,
+    },
+    Null(ScalarValue),
+}
+
+#[derive(Debug, Clone)]
+struct MergeIntoExec {
+    batches: Vec<PartitionData>,
+    target_schema: SchemaRef,
+    sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
+    source: Arc<dyn ExecutionPlan>,
+    source_schema: SchemaRef,
+    merge_schema: SchemaRef,
+    on: Arc<dyn PhysicalExpr>,
+    clauses: Vec<CompiledMergeClause>,
+    schema: SchemaRef,
+    properties: Arc<PlanProperties>,
+}
+
+impl MergeIntoExec {
+    #[expect(clippy::too_many_arguments)]
+    fn new(
+        batches: Vec<PartitionData>,
+        target_schema: SchemaRef,
+        sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
+        source: Arc<dyn ExecutionPlan>,
+        source_schema: SchemaRef,
+        merge_schema: SchemaRef,
+        on: Arc<dyn PhysicalExpr>,
+        clauses: Vec<CompiledMergeClause>,
+    ) -> Self {
+        let schema = dml_result_schema();
+        let properties = dml_result_properties(&schema);
+        Self {
+            batches,
+            target_schema,
+            sort_order,
+            source,
+            source_schema,
+            merge_schema,
+            on,
+            clauses,
+            schema,
+            properties,
+        }
+    }
+
+    async fn execute_merge(
+        &self,
+        context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<ArrowRecordBatch> {
+        let source_partitions =
+            collect_partitioned(Arc::clone(&self.source), context).await?;
+        let source_rows = partitioned_batches_to_rows(&source_partitions)?;
+
+        let mut target_batches = vec![];
+        for partition_data in &self.batches {
+            let partition = partition_data.read().await;
+            target_batches.extend(partition.iter().cloned());
+        }
+        let target_rows = batches_to_rows(&target_batches)?;
+
+        let null_target = null_row_for_schema(&self.target_schema)?;
+        let null_source = null_row_for_schema(&self.source_schema)?;
 
         let mut target_matches: Vec<Option<usize>> = vec![None; target_rows.len()];
         let mut source_matched = vec![false; source_rows.len()];
@@ -653,11 +758,11 @@ impl MemTable {
         for (target_idx, target_row) in target_rows.iter().enumerate() {
             for (source_idx, source_row) in source_rows.iter().enumerate() {
                 let combined = combined_row_batch(
-                    Arc::clone(&merge_arrow_schema),
+                    Arc::clone(&self.merge_schema),
                     target_row,
                     source_row,
                 )?;
-                if evaluate_merge_predicate(&on, &combined)? {
+                if evaluate_merge_predicate(&self.on, &combined)? {
                     if let Some(first_source_idx) = target_matches[target_idx] {
                         return plan_err!(
                             "MERGE INTO matched target row {target_idx} with more than one source row ({first_source_idx} and {source_idx})"
@@ -683,12 +788,12 @@ impl MemTable {
                 };
 
             let combined = combined_row_batch(
-                Arc::clone(&merge_arrow_schema),
+                Arc::clone(&self.merge_schema),
                 target_row,
                 source_row,
             )?;
             let application = apply_first_merge_clause(
-                &clauses,
+                &self.clauses,
                 clause_kind,
                 &combined,
                 &default_batch,
@@ -708,12 +813,12 @@ impl MemTable {
             }
 
             let combined = combined_row_batch(
-                Arc::clone(&merge_arrow_schema),
+                Arc::clone(&self.merge_schema),
                 &null_target,
                 source_row,
             )?;
             let application = apply_first_merge_clause(
-                &clauses,
+                &self.clauses,
                 MergeIntoClauseKind::NotMatchedByTarget,
                 &combined,
                 &default_batch,
@@ -727,7 +832,7 @@ impl MemTable {
             }
         }
 
-        let merged_batch = rows_to_batch(Arc::clone(&self.schema), &merged_rows)?;
+        let merged_batch = rows_to_batch(Arc::clone(&self.target_schema), &merged_rows)?;
 
         *self.sort_order.lock() = vec![];
         let mut wrote_first_partition = false;
@@ -745,38 +850,105 @@ impl MemTable {
             }
         }
 
-        Ok(Arc::new(DmlResultExec::new(rows_affected)))
+        dml_result_batch(Arc::clone(&self.schema), rows_affected)
+    }
+
+    fn expressions(&self) -> impl Iterator<Item = &Arc<dyn PhysicalExpr>> {
+        std::iter::once(&self.on).chain(self.clauses.iter().flat_map(|clause| {
+            clause.predicate.iter().chain(clause.action.expressions())
+        }))
     }
 }
 
-struct CompiledMergeClause {
-    kind: MergeIntoClauseKind,
-    predicate: Option<Arc<dyn PhysicalExpr>>,
-    action: CompiledMergeAction,
+impl CompiledMergeAction {
+    fn expressions(&self) -> Box<dyn Iterator<Item = &Arc<dyn PhysicalExpr>> + '_> {
+        match self {
+            Self::Update(assignments) => {
+                Box::new(assignments.iter().map(|assignment| &assignment.expr))
+            }
+            Self::Insert(values) => {
+                Box::new(values.iter().filter_map(|value| match value {
+                    CompiledInsertValue::MergeExpr { expr, .. }
+                    | CompiledInsertValue::DefaultExpr { expr, .. } => Some(expr),
+                    CompiledInsertValue::Null(_) => None,
+                }))
+            }
+            Self::Delete => Box::new(std::iter::empty()),
+        }
+    }
 }
 
-enum CompiledMergeAction {
-    Update(Vec<CompiledMergeAssignment>),
-    Insert(Vec<CompiledInsertValue>),
-    Delete,
+impl DisplayAs for MergeIntoExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => write!(f, "MergeIntoExec"),
+        }
+    }
 }
 
-struct CompiledMergeAssignment {
-    target_index: usize,
-    data_type: DataType,
-    expr: Arc<dyn PhysicalExpr>,
-}
+impl ExecutionPlan for MergeIntoExec {
+    fn name(&self) -> &str {
+        "MergeIntoExec"
+    }
 
-enum CompiledInsertValue {
-    MergeExpr {
-        data_type: DataType,
-        expr: Arc<dyn PhysicalExpr>,
-    },
-    DefaultExpr {
-        data_type: DataType,
-        expr: Arc<dyn PhysicalExpr>,
-    },
-    Null(ScalarValue),
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.source]
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        Ok(Arc::new(Self {
+            source: children.swap_remove(0),
+            ..Self::clone(&self)
+        }))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        let exec = self.clone();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.schema),
+            futures::stream::once(async move { exec.execute_merge(context).await }),
+        )))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        apply_expression_roots(self.expressions(), f)
+    }
 }
 
 struct MergeApplication {
@@ -1208,25 +1380,40 @@ struct DmlResultExec {
 
 impl DmlResultExec {
     fn new(rows_affected: u64) -> Self {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "count",
-            DataType::UInt64,
-            false,
-        )]));
-
-        let properties = PlanProperties::new(
-            datafusion_physical_expr::EquivalenceProperties::new(Arc::clone(&schema)),
-            Partitioning::UnknownPartitioning(1),
-            datafusion_physical_plan::execution_plan::EmissionType::Final,
-            datafusion_physical_plan::execution_plan::Boundedness::Bounded,
-        );
+        let schema = dml_result_schema();
+        let properties = dml_result_properties(&schema);
 
         Self {
             rows_affected,
             schema,
-            properties: Arc::new(properties),
+            properties,
         }
     }
+}
+
+fn dml_result_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new(
+        "count",
+        DataType::UInt64,
+        false,
+    )]))
+}
+
+fn dml_result_properties(schema: &SchemaRef) -> Arc<PlanProperties> {
+    Arc::new(PlanProperties::new(
+        datafusion_physical_expr::EquivalenceProperties::new(Arc::clone(schema)),
+        Partitioning::UnknownPartitioning(1),
+        datafusion_physical_plan::execution_plan::EmissionType::Final,
+        datafusion_physical_plan::execution_plan::Boundedness::Bounded,
+    ))
+}
+
+fn dml_result_batch(schema: SchemaRef, rows_affected: u64) -> Result<ArrowRecordBatch> {
+    ArrowRecordBatch::try_new(
+        schema,
+        vec![Arc::new(UInt64Array::from(vec![rows_affected])) as ArrayRef],
+    )
+    .map_err(Into::into)
 }
 
 impl DisplayAs for DmlResultExec {
@@ -1285,12 +1472,7 @@ impl ExecutionPlan for DmlResultExec {
         _partition: usize,
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
-        // Create a single batch with the count
-        let count_array = UInt64Array::from(vec![self.rows_affected]);
-        let batch = ArrowRecordBatch::try_new(
-            Arc::clone(&self.schema),
-            vec![Arc::new(count_array) as ArrayRef],
-        )?;
+        let batch = dml_result_batch(Arc::clone(&self.schema), self.rows_affected)?;
 
         // Create a stream that yields just this one batch
         let stream = futures::stream::iter(vec![Ok(batch)]);
