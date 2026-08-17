@@ -34,9 +34,11 @@ use crate::aggregates::group_values::{
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    aggregate_metric_label, evaluate_group_by,
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
+    evaluate_group_by,
 };
+
+use super::accumulator_phases;
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
@@ -154,20 +156,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             partition,
             aggregate_labels.clone(),
         );
-        let accumulator_phases = match &agg.mode {
-            AggregateMode::Partial => {
-                &[AccumulatorPhase::Update, AccumulatorPhase::State][..]
-            }
-            AggregateMode::PartialReduce => {
-                &[AccumulatorPhase::Merge, AccumulatorPhase::State][..]
-            }
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate][..]
-            }
-            AggregateMode::Single | AggregateMode::SinglePartitioned => {
-                &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate][..]
-            }
-        };
+        let accumulator_phases = accumulator_phases(&agg.mode);
         let aggregate_accumulator_metrics = Arc::new(AggregateAccumulatorMetrics::new(
             &agg.metrics,
             partition,

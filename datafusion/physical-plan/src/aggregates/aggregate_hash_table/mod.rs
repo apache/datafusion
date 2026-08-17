@@ -25,8 +25,60 @@ mod partial_reduce_table;
 mod partial_table;
 mod single_table;
 
+use crate::aggregates::{AggregateMode, group_values::AccumulatorPhase};
+
+pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
+    match mode {
+        AggregateMode::Partial => &[AccumulatorPhase::Update, AccumulatorPhase::State],
+        AggregateMode::PartialReduce => {
+            &[AccumulatorPhase::Merge, AccumulatorPhase::State]
+        }
+        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate]
+        }
+        AggregateMode::Single | AggregateMode::SinglePartitioned => {
+            &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate]
+        }
+    }
+}
+
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
     PartialSkipMarker, SingleMarker,
 };
 pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
+
+#[cfg(test)]
+mod tests {
+    use super::accumulator_phases;
+    use crate::aggregates::AggregateMode;
+    use crate::aggregates::group_values::AccumulatorPhase;
+
+    #[test]
+    fn accumulator_phases_match_aggregate_mode() {
+        assert!(
+            accumulator_phases(&AggregateMode::Partial)
+                == [AccumulatorPhase::Update, AccumulatorPhase::State]
+        );
+        assert!(
+            accumulator_phases(&AggregateMode::PartialReduce)
+                == [AccumulatorPhase::Merge, AccumulatorPhase::State]
+        );
+        assert!(
+            accumulator_phases(&AggregateMode::Final)
+                == [AccumulatorPhase::Merge, AccumulatorPhase::Evaluate]
+        );
+        assert!(
+            accumulator_phases(&AggregateMode::FinalPartitioned)
+                == [AccumulatorPhase::Merge, AccumulatorPhase::Evaluate]
+        );
+        assert!(
+            accumulator_phases(&AggregateMode::Single)
+                == [AccumulatorPhase::Update, AccumulatorPhase::Evaluate]
+        );
+        assert!(
+            accumulator_phases(&AggregateMode::SinglePartitioned)
+                == [AccumulatorPhase::Update, AccumulatorPhase::Evaluate]
+        );
+    }
+}

@@ -41,6 +41,7 @@ use crate::aggregates::{
     aggregate_metric_label, evaluate_group_by,
 };
 
+use super::accumulator_phases;
 use super::common::{
     AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
     MaterializeAccumulatorFn,
@@ -71,20 +72,7 @@ impl OrderedAggregateTableMetrics {
                 &agg.metrics,
                 partition,
                 aggregate_labels,
-                match &agg.mode {
-                    AggregateMode::Partial => {
-                        &[AccumulatorPhase::Update, AccumulatorPhase::State][..]
-                    }
-                    AggregateMode::PartialReduce => {
-                        &[AccumulatorPhase::Merge, AccumulatorPhase::State][..]
-                    }
-                    AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                        &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate][..]
-                    }
-                    AggregateMode::Single | AggregateMode::SinglePartitioned => {
-                        &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate][..]
-                    }
-                },
+                accumulator_phases(&agg.mode),
             )),
         }
     }
