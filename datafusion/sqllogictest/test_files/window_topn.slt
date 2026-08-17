@@ -1273,8 +1273,9 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as dr]
 02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test DR3: dr < 3 should give the same results (fetch = K-1 = 2)
 query III rowsort
@@ -1434,8 +1435,9 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as dr]
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test DR11: `dr < 1` keeps nothing (limit_n = 0). The rule must NOT
 # fire (a fetch=0 PartitionedTopKExec would panic); the ordinary
@@ -1522,8 +1524,9 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val]
 02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test DR14: NULLS LAST — NULL is the largest distinct ob (dr 4). 10 (dr
 # 1) and 20 (dr 2) are the two smallest, so `dr <= 2` excludes the NULLs.
