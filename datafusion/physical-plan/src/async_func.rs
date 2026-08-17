@@ -244,7 +244,7 @@ impl ExecutionPlan for AsyncFuncExec {
                 config_options_ref.execution.batch_size.get(),
                 None,
                 reservation,
-            ),
+            )?,
         };
 
         let stream_with_async_functions = coalesced_input_stream.then(move |batch| {
@@ -588,7 +588,7 @@ mod tests {
             8,
             None,
             reservation,
-        );
+        )?;
         let baseline = pool.reserved();
         let mut stream = CoalesceInputStream {
             input_stream: input,

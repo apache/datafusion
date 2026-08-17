@@ -236,7 +236,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
                 self.target_batch_size,
                 self.fetch,
                 reservation,
-            ),
+            )?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             completed: false,
         }))

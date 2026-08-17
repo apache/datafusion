@@ -489,16 +489,16 @@ impl HashJoinStream {
         null_aware: bool,
         fetch: Option<usize>,
         reservation: MemoryReservation,
-    ) -> Self {
+    ) -> Result<Self> {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer = LimitedBatchCoalescer::new_with_reservation(
             Arc::clone(&schema),
             batch_size,
             fetch,
             reservation,
-        );
+        )?;
 
-        Self {
+        Ok(Self {
             partition,
             schema,
             on_right,
@@ -520,7 +520,7 @@ impl HashJoinStream {
             mode,
             output_buffer,
             null_aware,
-        }
+        })
     }
 
     /// Returns the next state after the build side has been fully collected

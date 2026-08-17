@@ -1581,7 +1581,7 @@ impl ExecutionPlan for HashJoinExec {
             self.null_aware,
             self.fetch,
             output_reservation,
-        )))
+        )?))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -5936,7 +5936,8 @@ mod tests {
 
         for join_type in join_types {
             let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
+                // Enough for the output coalescer baseline, but not the build batch.
+                .with_memory_limit(150, 1.0)
                 .build_arc()?;
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
@@ -6068,7 +6069,8 @@ mod tests {
 
         for join_type in join_types {
             let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
+                // Enough for the output coalescer baseline, but not the build batch.
+                .with_memory_limit(150, 1.0)
                 .build_arc()?;
             let session_config = SessionConfig::default().with_batch_size(50);
             let task_ctx = TaskContext::default()

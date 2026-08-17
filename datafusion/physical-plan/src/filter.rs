@@ -620,7 +620,7 @@ impl ExecutionPlan for FilterExec {
                 self.batch_size,
                 self.fetch,
                 reservation,
-            ),
+            )?,
         }))
     }
 

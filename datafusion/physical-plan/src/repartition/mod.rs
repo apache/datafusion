@@ -238,6 +238,9 @@ impl OutputChannel {
             .as_ref()
             .map(MemoryReservation::free)
             .unwrap_or_default();
+
+        // Decide the payload outside of any await: never hold a MutexGuard
+        // across an await point.
         let (payload, is_memory_batch) = match self.reservation.try_grow(size) {
             Ok(_) => (Ok(RepartitionBatch::Memory(batch)), true),
             Err(_) => {
@@ -295,22 +298,21 @@ impl SharedCoalescer {
         target_batch_size: usize,
         num_senders: usize,
         reservation: MemoryReservation,
-    ) -> Self {
-        Self {
-            // Unenforced: repartitioning handles memory pressure by spilling
-            // at the channel level (see `OutputChannel::send`); failing this
-            // bounded pre-channel buffer would defeat that.
+    ) -> Result<Self> {
+        Ok(Self {
+            // Flush partial batches on memory pressure so `OutputChannel::send`
+            // can route them through the existing spill fallback.
             inner: Arc::new(Mutex::new(
                 LimitedBatchCoalescer::new_with_reservation(
                     schema,
                     target_batch_size,
                     None,
                     reservation,
-                )
-                .with_unenforced_accounting(),
+                )?
+                .with_flush_on_memory_pressure(),
             )),
             active_senders: Arc::new(AtomicUsize::new(num_senders)),
-        }
+        })
     }
 
     /// Push `batch` into the coalescer and drain any newly completed
@@ -570,17 +572,25 @@ impl RepartitionExecState {
             // Skip in preserve-order mode, where `StreamingMergeBuilder`
             // handles batching, and for unbounded inputs, where a residual
             // batch could otherwise be withheld indefinitely.
-            let shared_coalescer = coalesce_batches.then(|| {
+            let shared_coalescer = if coalesce_batches {
                 let reservation =
                     MemoryConsumer::new(format!("{name}[Coalesce {partition}]"))
                         .register(context.memory_pool());
-                SharedCoalescer::new(
+                match SharedCoalescer::new(
                     input.schema(),
                     context.session_config().batch_size(),
                     num_input_partitions,
                     reservation,
-                )
-            });
+                ) {
+                    Ok(coalescer) => Some(coalescer),
+                    // Sending smaller batches is preferable to failing a
+                    // spill-capable repartition at fixed-buffer construction.
+                    Err(DataFusionError::ResourcesExhausted(_)) => None,
+                    Err(error) => return Err(error),
+                }
+            } else {
+                None
+            };
 
             channels.insert(
                 partition,
@@ -2602,7 +2612,7 @@ mod tests {
         )])?;
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let reservation = MemoryConsumer::new("RepartitionCoalescerTest").register(&pool);
-        let coalescer = SharedCoalescer::new(batch.schema(), 4, 2, reservation);
+        let coalescer = SharedCoalescer::new(batch.schema(), 4, 2, reservation)?;
         let other_sender = coalescer.clone();
 
         assert!(coalescer.push_and_drain(batch)?.is_empty());
@@ -2615,6 +2625,38 @@ mod tests {
 
         drop(output);
         drop(other_sender);
+        drop(coalescer);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_coalescer_flushes_partial_batch_on_memory_pressure() -> Result<()> {
+        let value = "x".repeat(1024);
+        let batch = RecordBatch::try_from_iter(vec![(
+            "value",
+            Arc::new(StringArray::from(vec![value.as_str()])) as ArrayRef,
+        )])?;
+
+        let unbounded: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation =
+            MemoryConsumer::new("RepartitionCoalescerBaseline").register(&unbounded);
+        let baseline_coalescer = SharedCoalescer::new(batch.schema(), 4, 1, reservation)?;
+        let baseline = unbounded.reserved();
+        drop(baseline_coalescer);
+
+        let limit = baseline + 1;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        let reservation = MemoryConsumer::new("RepartitionCoalescerTest").register(&pool);
+        let coalescer = SharedCoalescer::new(batch.schema(), 4, 1, reservation)?;
+
+        let output = coalescer.push_and_drain(batch.clone())?;
+        assert_eq!(output.len(), 1, "memory pressure must flush partial data");
+        assert_eq!(output[0].0, batch);
+        assert!(pool.reserved() > limit);
+
+        drop(output);
+        assert_eq!(pool.reserved(), baseline);
         drop(coalescer);
         assert_eq!(pool.reserved(), 0);
         Ok(())
