@@ -3346,6 +3346,18 @@ mod tests {
         Arc::new(task_ctx)
     }
 
+    fn new_migrated_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
+            .build_arc()
+            .unwrap();
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_runtime(runtime),
+        )
+    }
+
     fn migrated_hash_session_config(batch_size: usize) -> SessionConfig {
         SessionConfig::new()
             .with_batch_size(batch_size)
@@ -6978,9 +6990,18 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        let task_ctx = new_spill_ctx(1, 600);
+        let task_ctx = new_migrated_spill_ctx(1, 600);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
-        assert_spill_count_metric(true, aggr);
+        assert_spill_count_metric(true, Arc::clone(&aggr));
+        let metrics = aggr.metrics().unwrap();
+        for phase in ["update", "state", "merge", "evaluate"] {
+            let time = metrics
+                .sum_by_name(&format!("agg_expr_0_{phase}_time"))
+                .unwrap_or_else(|| {
+                    panic!("migrated single aggregate records {phase} time")
+                });
+            assert!(time.as_usize() > 0);
+        }
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"

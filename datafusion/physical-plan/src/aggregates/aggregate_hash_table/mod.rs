@@ -33,12 +33,19 @@ pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorP
         AggregateMode::PartialReduce => {
             &[AccumulatorPhase::Merge, AccumulatorPhase::State]
         }
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate]
-        }
-        AggregateMode::Single | AggregateMode::SinglePartitioned => {
-            &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate]
-        }
+        // Final and single aggregation emit intermediate states when spilling,
+        // then replay them through a final aggregate table.
+        AggregateMode::Final | AggregateMode::FinalPartitioned => &[
+            AccumulatorPhase::Merge,
+            AccumulatorPhase::State,
+            AccumulatorPhase::Evaluate,
+        ],
+        AggregateMode::Single | AggregateMode::SinglePartitioned => &[
+            AccumulatorPhase::Update,
+            AccumulatorPhase::State,
+            AccumulatorPhase::Merge,
+            AccumulatorPhase::Evaluate,
+        ],
     }
 }
 
@@ -66,19 +73,37 @@ mod tests {
         );
         assert!(
             accumulator_phases(&AggregateMode::Final)
-                == [AccumulatorPhase::Merge, AccumulatorPhase::Evaluate]
+                == [
+                    AccumulatorPhase::Merge,
+                    AccumulatorPhase::State,
+                    AccumulatorPhase::Evaluate,
+                ]
         );
         assert!(
             accumulator_phases(&AggregateMode::FinalPartitioned)
-                == [AccumulatorPhase::Merge, AccumulatorPhase::Evaluate]
+                == [
+                    AccumulatorPhase::Merge,
+                    AccumulatorPhase::State,
+                    AccumulatorPhase::Evaluate,
+                ]
         );
         assert!(
             accumulator_phases(&AggregateMode::Single)
-                == [AccumulatorPhase::Update, AccumulatorPhase::Evaluate]
+                == [
+                    AccumulatorPhase::Update,
+                    AccumulatorPhase::State,
+                    AccumulatorPhase::Merge,
+                    AccumulatorPhase::Evaluate,
+                ]
         );
         assert!(
             accumulator_phases(&AggregateMode::SinglePartitioned)
-                == [AccumulatorPhase::Update, AccumulatorPhase::Evaluate]
+                == [
+                    AccumulatorPhase::Update,
+                    AccumulatorPhase::State,
+                    AccumulatorPhase::Merge,
+                    AccumulatorPhase::Evaluate,
+                ]
         );
     }
 }
