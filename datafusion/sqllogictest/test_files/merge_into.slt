@@ -66,8 +66,16 @@ logical_plan
 01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN MATCHED THEN UPDATE SET val = source.val, WHEN NOT MATCHED THEN INSERT (id, val) VALUES (source.id, source.val)]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=2
+01)MergeIntoExec
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
+
+# EXPLAIN must not execute the MERGE.
+query ITI rowsort
+select * from target;
+----
+1 foo 100
+2 bar 200
+3 baz 300
 
 # Simple MATCHED DELETE
 query TT
@@ -78,8 +86,8 @@ logical_plan
 01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN MATCHED THEN DELETE]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=2
+01)MergeIntoExec
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
 
 # Aliased target and source preserve their visible qualifiers
 query TT
@@ -92,8 +100,8 @@ logical_plan
 02)--SubqueryAlias: s
 03)----TableScan: source projection=[id, val, is_active]
 physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=2
+01)MergeIntoExec
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
 
 # WHEN NOT MATCHED THEN DELETE is rejected by the parser (no target row exists);
 query error DELETE is not allowed in a NOT MATCHED merge clause at Line: 2, Column: 23
@@ -109,8 +117,8 @@ logical_plan
 01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN NOT MATCHED BY SOURCE THEN DELETE]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+01)MergeIntoExec
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
 
 # Subquery as the USING source
 query TT
@@ -125,8 +133,12 @@ logical_plan
 04)------Aggregate: groupBy=[[source.id]], aggr=[[max(source.val)]]
 05)--------TableScan: source projection=[id, val]
 physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+01)MergeIntoExec
+02)--ProjectionExec: expr=[id@0 as id, max(source.val)@1 as val]
+03)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[max(source.val)]
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[max(source.val)]
+06)----------DataSourceExec: partitions=1, partition_sizes=[2]
 
 # INSERT without an explicit column list requires values for all target columns
 query TT
@@ -137,8 +149,8 @@ logical_plan
 01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN NOT MATCHED THEN INSERT VALUES (source.id, source.val, Int32(0) AS Int64(0))]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=2
+01)MergeIntoExec
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
 
 ##########
 # MemTable execution
