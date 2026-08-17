@@ -835,6 +835,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
+            SQLDataType::Map(key_type, value_type) => {
+                let key_field = Arc::new(Field::new(
+                    "key", self.convert_data_type_to_field(key_type)?.data_type().clone(), false
+                ));
+                let value_field = Arc::new(Field::new(
+                    "value", self.convert_data_type_to_field(value_type)?.data_type().clone(), true)
+                );
+                let entries = DataType::Struct(Fields::from([key_field, value_field]));
+                Ok(DataType::Map(Arc::new(Field::new("entries", entries, false)), false))
+            }
             | SQLDataType::JSON
             | SQLDataType::Uuid
             | SQLDataType::Binary(_)
@@ -876,7 +886,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Date32
             | SQLDataType::Datetime64(_, _)
             | SQLDataType::FixedString(_)
-            | SQLDataType::Map(_, _)
             | SQLDataType::Tuple(_)
             | SQLDataType::Nested(_)
             | SQLDataType::Union(_)

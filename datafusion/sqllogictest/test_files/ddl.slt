@@ -1053,6 +1053,11 @@ e Binary YES
 statement ok
 drop table t;
 
+
+# Table with Map types
+statement ok
+create table t (a map(int, int), b map(varchar, map(varchar, int)));
+
 # Test uint64 type aliases
 statement ok
 create table t (
@@ -1067,6 +1072,31 @@ describe t;
 a UInt64 YES
 b UInt64 YES
 c UInt64 YES
+a Map("entries": non-null Struct("key": non-null Int32, "value": Int32), unsorted) YES
+b Map("entries": non-null Struct("key": non-null Utf8View, "value": Map("entries": non-null Struct("key": non-null Utf8View, "value": Int32), unsorted)), unsorted) YES
+
+statement ok
+insert into t values
+  (map{1: 10, 2: 20}, map{'a': map{'aa': 1, 'ab': 2}, 'b': map{'ba': 10, 'bb': 20}}),
+  (map{10: 100}, map{'c': map{'d': 100}}),
+  (map{}, map{'a': map{}}),
+  (null, map{'a': null});
+
+query ?? rowsort
+select * from t;
+----
+NULL {a: NULL}
+{10: 100} {c: {d: 100}}
+{1: 10, 2: 20} {a: {aa: 1, ab: 2}, b: {ba: 10, bb: 20}}
+{} {a: {}}
+
+# duplicate keys
+statement error DataFusion error: Execution error: map key must be unique, duplicate key found: a
+insert into t values (map{'a': 1, 'a': 10}, null);
+
+# key can't be null
+statement error DataFusion error: Execution error: map key cannot be null
+insert into t values (map{null: 1}, null);
 
 statement ok
 drop table t;
