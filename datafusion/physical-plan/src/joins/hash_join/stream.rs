@@ -20,6 +20,7 @@
 //! This module implements [`HashJoinStream`], the streaming engine for
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
+use std::future::poll_fn;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::task::Poll;
@@ -35,13 +36,13 @@ use crate::joins::hash_join::shared_bounds::{
 use crate::joins::utils::{
     OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap, matchable_join_keys,
 };
-use crate::stream::EmptyRecordBatchStream;
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{
-    RecordBatchStream, SendableRecordBatchStream, handle_state,
+    SendableRecordBatchStream,
     hash_utils::create_hashes,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
+        adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
         need_produce_result_in_final,
     },
@@ -49,110 +50,20 @@ use crate::{
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
-};
+use datafusion_common::{DataFusionError, JoinSide, JoinType, NullEquality, Result};
+use datafusion_execution::{TryEmitter, async_try_stream};
 use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::{Stream, StreamExt, ready};
+use futures::{StreamExt, ready};
 
-/// Represents build-side of hash join.
-pub(super) enum BuildSide {
-    /// Indicates that build-side not collected yet
-    Initial(BuildSideInitialState),
-    /// Indicates that build-side data has been collected
-    Ready(BuildSideReadyState),
-}
-
-/// Container for BuildSide::Initial related data
-pub(super) struct BuildSideInitialState {
-    /// Future for building hash table from build-side input
-    pub(super) left_fut: OnceFut<JoinLeftData>,
-}
-
-/// Container for BuildSide::Ready related data
-pub(super) struct BuildSideReadyState {
-    /// Collected build-side data
-    left_data: Arc<JoinLeftData>,
-}
-
-impl BuildSide {
-    /// Tries to extract BuildSideInitialState from BuildSide enum.
-    /// Returns an error if state is not Initial.
-    fn try_as_initial_mut(&mut self) -> Result<&mut BuildSideInitialState> {
-        match self {
-            BuildSide::Initial(state) => Ok(state),
-            _ => internal_err!("Expected build side in initial state"),
-        }
-    }
-
-    /// Tries to extract BuildSideReadyState from BuildSide enum.
-    /// Returns an error if state is not Ready.
-    fn try_as_ready(&self) -> Result<&BuildSideReadyState> {
-        match self {
-            BuildSide::Ready(state) => Ok(state),
-            _ => internal_err!("Expected build side in ready state"),
-        }
-    }
-
-    /// Tries to extract BuildSideReadyState from BuildSide enum.
-    /// Returns an error if state is not Ready.
-    fn try_as_ready_mut(&mut self) -> Result<&mut BuildSideReadyState> {
-        match self {
-            BuildSide::Ready(state) => Ok(state),
-            _ => internal_err!("Expected build side in ready state"),
-        }
-    }
-}
-
-/// Represents state of HashJoinStream
-///
-/// Expected state transitions performed by HashJoinStream are:
-///
-/// ```text
-///
-///       WaitBuildSide
-///             │
-///             ▼
-///  ┌─► FetchProbeBatch ───► ExhaustedProbeSide ───► Completed
-///  │          │
-///  │          ▼
-///  └─ ProcessProbeBatch
-/// ```
+/// Cursor over one probe-side batch: key values, hash context, and the
+/// chunk offset for `batch_size`-limited hash-map lookups.
 #[derive(Debug, Clone)]
-pub(super) enum HashJoinStreamState {
-    /// Initial state for HashJoinStream indicating that build-side data not collected yet
-    WaitBuildSide,
-    /// Waiting for bounds to be reported by all partitions
-    WaitPartitionBoundsReport,
-    /// Indicates that build-side has been collected, and stream is ready for fetching probe-side
-    FetchProbeBatch,
-    /// Indicates that non-empty batch has been fetched from probe-side, and is ready to be processed
-    ProcessProbeBatch(ProcessProbeBatchState),
-    /// Indicates that probe-side has been fully processed
-    ExhaustedProbeSide,
-    /// Indicates that HashJoinStream execution is completed
-    Completed,
-}
-
-impl HashJoinStreamState {
-    /// Tries to extract ProcessProbeBatchState from HashJoinStreamState enum.
-    /// Returns an error if state is not ProcessProbeBatchState.
-    fn try_as_process_probe_batch_mut(&mut self) -> Result<&mut ProcessProbeBatchState> {
-        match self {
-            HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
-            _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
-        }
-    }
-}
-
-/// Container for HashJoinStreamState::ProcessProbeBatch related data
-#[derive(Debug, Clone)]
-pub(super) struct ProcessProbeBatchState {
+struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
     /// Probe-side on expressions values
@@ -236,6 +147,12 @@ impl BuildReportHandle {
         self.state = BuildReportState::Scheduled;
     }
 
+    /// Waits until the scheduled report (if any) has been delivered to the
+    /// coordinator.
+    async fn delivered(&mut self) -> Result<()> {
+        poll_fn(|cx| self.poll_delivery(cx)).await
+    }
+
     fn poll_delivery(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<()>> {
         if let Some(ref mut fut) = self.waiter {
             ready!(fut.get_shared(cx))?;
@@ -313,10 +230,8 @@ pub(super) struct HashJoinStream {
     column_indices: Vec<ColumnIndex>,
     /// Defines the null equality for the join.
     null_equality: NullEquality,
-    /// State of the stream
-    state: HashJoinStreamState,
-    /// Build side
-    build_side: BuildSide,
+    /// Future producing the shared build-side data (hash table etc.)
+    left_fut: OnceFut<JoinLeftData>,
     /// Maximum output batch size
     batch_size: usize,
     /// Scratch space for computing hashes
@@ -336,12 +251,6 @@ pub(super) struct HashJoinStream {
     output_buffer: LimitedBatchCoalescer,
     /// Whether this is a null-aware anti join
     null_aware: bool,
-}
-
-impl RecordBatchStream for HashJoinStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
 }
 
 /// Executes lookups by hash against JoinHashMap and resolves potential
@@ -478,8 +387,7 @@ impl HashJoinStream {
         join_metrics: BuildProbeJoinMetrics,
         column_indices: Vec<ColumnIndex>,
         null_equality: NullEquality,
-        state: HashJoinStreamState,
-        build_side: BuildSide,
+        left_fut: OnceFut<JoinLeftData>,
         batch_size: usize,
         hashes_buffer: Vec<u64>,
         right_side_ordered: bool,
@@ -487,12 +395,12 @@ impl HashJoinStream {
         mode: PartitionMode,
         null_aware: bool,
         fetch: Option<usize>,
-    ) -> Self {
+    ) -> SendableRecordBatchStream {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer =
             LimitedBatchCoalescer::new(Arc::clone(&schema), batch_size, fetch);
 
-        Self {
+        let this = Self {
             partition,
             schema,
             on_right,
@@ -503,8 +411,7 @@ impl HashJoinStream {
             join_metrics,
             column_indices,
             null_equality,
-            state,
-            build_side,
+            left_fut,
             batch_size,
             hashes_buffer,
             probe_indices_buffer: Vec::with_capacity(batch_size),
@@ -514,15 +421,24 @@ impl HashJoinStream {
             mode,
             output_buffer,
             null_aware,
-        }
+        };
+
+        let schema = Arc::clone(&this.schema);
+        let baseline_metrics = this.join_metrics.baseline.clone();
+        let stream =
+            async_try_stream(|mut emitter| async move { this.join(&mut emitter).await });
+        // ObservedStream records the baseline metrics (output rows/batches,
+        // end time).
+        Box::pin(ObservedStream::new(
+            Box::pin(RecordBatchStreamAdapter::new(schema, stream)),
+            baseline_metrics,
+            None,
+        ))
     }
 
-    /// Returns the next state after the build side has been fully collected
-    /// and any required build-side coordination has completed.
-    fn state_after_build_ready(
-        join_type: JoinType,
-        left_data: &JoinLeftData,
-    ) -> HashJoinStreamState {
+    /// Returns true when an empty build side already determines an empty
+    /// result, so the probe side does not need to be scanned at all.
+    fn empty_build_short_circuit(join_type: JoinType, left_data: &JoinLeftData) -> bool {
         let build_empty = !left_data.has_build_rows();
         // The map can be empty even when the build side has rows: under
         // `NullEqualsNothing`, build rows with a NULL join key are omitted. For
@@ -530,30 +446,100 @@ impl HashJoinStream {
         // guarantees an empty result, so we can skip scanning the probe side.
         let map_empty = !left_data.has_matchable_build_rows();
 
-        if (build_empty && join_type.empty_build_side_produces_empty_result())
+        (build_empty && join_type.empty_build_side_produces_empty_result())
             || (map_empty && join_type.empty_map_produces_empty_result())
-        {
-            HashJoinStreamState::Completed
-        } else {
-            HashJoinStreamState::FetchProbeBatch
+    }
+
+    /// Main loop: the textbook hash join.
+    ///
+    /// ```text
+    /// 1. build: collect the build side into a hash table
+    ///    (with dynamic-filter coordination, also report this partition's
+    ///    build data and wait until every partition has reported)
+    /// 2. probe: for each probe-side batch, look up matches against the
+    ///    hash table in batch_size chunks, apply the join filter, and emit
+    ///    the joined rows
+    /// 3. final: emit the unmatched build-side rows (outer/anti/mark joins)
+    /// ```
+    async fn join(
+        mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        // 1. Build the hash table from the build side.
+        let left_data = self.collect_build_side().await?;
+
+        // Report this partition's build data (bounds/membership) and wait
+        // until every partition has reported, so the probe side's dynamic
+        // filter is complete before its scan starts.
+        if self.build_report.has_accumulator() {
+            self.schedule_build_report(&left_data);
+            self.build_report.delivered().await?;
+        }
+
+        if !Self::empty_build_short_circuit(self.join_type, &left_data) {
+            // 2. Probe: join each probe-side batch against the hash table,
+            // in batch_size chunks.
+            while let Some(batch) = self.fetch_probe_batch().await? {
+                let mut probe = self.prepare_probe_batch(batch, &left_data)?;
+                loop {
+                    let batch_done = self.process_probe_chunk(&mut probe, &left_data)?;
+                    // Sync guard: only enter the async emit helper when a
+                    // completed batch is actually ready.
+                    if self.output_buffer.has_completed_batch() {
+                        self.emit_completed_batches(emitter).await;
+                    }
+                    if self.output_buffer.is_finished() {
+                        // Fetch limit reached.
+                        return Ok(());
+                    }
+                    if batch_done {
+                        break;
+                    }
+                }
+            }
+
+            // 3. Emit the unmatched build-side rows.
+            self.process_unmatched_build_batch(&left_data)?;
+            if self.output_buffer.has_completed_batch() {
+                self.emit_completed_batches(emitter).await;
+            }
+            if self.output_buffer.is_finished() {
+                return Ok(());
+            }
+        }
+
+        // Flush the remaining buffered output.
+        self.output_buffer.finish()?;
+        self.emit_completed_batches(emitter).await;
+        Ok(())
+    }
+
+    /// Emit all completed output batches to the stream consumer.
+    async fn emit_completed_batches(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) {
+        while let Some(batch) = self.output_buffer.next_completed_batch() {
+            emitter.emit(batch).await;
         }
     }
 
-    /// Transitions state after build-side data has been collected, automatically
-    /// reporting build data to the accumulator when one is present.
-    ///
-    /// If a `build_accumulator` is configured, this method constructs the
-    /// appropriate [`PartitionBuildData`], schedules the reporting future, and
-    /// returns [`HashJoinStreamState::WaitPartitionBoundsReport`]. Otherwise it
-    /// delegates to [`Self::state_after_build_ready`].
-    fn transition_after_build_collected(
-        &mut self,
-        left_data: &Arc<JoinLeftData>,
-    ) -> HashJoinStreamState {
-        if !self.build_report.has_accumulator() {
-            return Self::state_after_build_ready(self.join_type, left_data.as_ref());
-        }
+    /// Collects build-side data by awaiting the shared build future.
+    async fn collect_build_side(&mut self) -> Result<Arc<JoinLeftData>> {
+        // The timer guard is scoped to each poll, so `build_time` counts
+        // this stream's polling work only — matching the previous
+        // poll-based accounting — not the wall time spent waiting on the
+        // shared build task.
+        poll_fn(|cx| {
+            let _build_timer = self.join_metrics.build_time.timer();
+            self.left_fut.get_shared(cx)
+        })
+        .await
+    }
 
+    /// Constructs this partition's [`PartitionBuildData`] and schedules its
+    /// report to the shared accumulator.
+    fn schedule_build_report(&mut self, left_data: &Arc<JoinLeftData>) {
         let pushdown = left_data.membership().clone();
         let bounds = left_data
             .bounds
@@ -583,169 +569,68 @@ impl HashJoinStream {
         };
 
         self.build_report.schedule(build_data);
-        HashJoinStreamState::WaitPartitionBoundsReport
     }
 
-    /// Separate implementation function that unpins the [`HashJoinStream`] so
-    /// that partial borrows work correctly
-    fn poll_next_impl(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        loop {
-            // First, check if we have any completed batches ready to emit
-            if let Some(batch) = self.output_buffer.next_completed_batch() {
-                return self
-                    .join_metrics
-                    .baseline
-                    .record_poll(Poll::Ready(Some(Ok(batch))));
-            }
-
-            // Check if the coalescer has finished (limit reached and flushed)
-            if self.output_buffer.is_finished() {
-                return Poll::Ready(None);
-            }
-
-            return match self.state {
-                HashJoinStreamState::WaitBuildSide => {
-                    handle_state!(ready!(self.collect_build_side(cx)))
-                }
-                HashJoinStreamState::WaitPartitionBoundsReport => {
-                    handle_state!(ready!(self.wait_for_partition_bounds_report(cx)))
-                }
-                HashJoinStreamState::FetchProbeBatch => {
-                    handle_state!(ready!(self.fetch_probe_batch(cx)))
-                }
-                HashJoinStreamState::ProcessProbeBatch(_) => {
-                    handle_state!(self.process_probe_batch())
-                }
-                HashJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
-                }
-                HashJoinStreamState::Completed if !self.output_buffer.is_empty() => {
-                    // Flush any remaining buffered data
-                    self.output_buffer.finish()?;
-                    // Continue loop to emit the flushed batch
-                    continue;
-                }
-                HashJoinStreamState::Completed => Poll::Ready(None),
-            };
-        }
-    }
-
-    /// Optional step to wait until build-side information (hash maps or bounds) has been reported by all partitions.
-    /// This state is only entered if a build accumulator is present.
-    ///
-    /// ## Why wait?
-    ///
-    /// The dynamic filter is only built once all partitions have reported their information (hash maps or bounds).
-    /// If we do not wait here, the probe-side scan may start before the filter is ready.
-    /// This can lead to the probe-side scan missing the opportunity to apply the filter
-    /// and skip reading unnecessary data.
-    fn wait_for_partition_bounds_report(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        ready!(self.build_report.poll_delivery(cx))?;
-        let build_side = self.build_side.try_as_ready()?;
-        self.state =
-            Self::state_after_build_ready(self.join_type, build_side.left_data.as_ref());
-        Poll::Ready(Ok(StatefulStreamResult::Continue))
-    }
-
-    /// Collects build-side data by polling `OnceFut` future from initialized build-side
-    ///
-    /// Updates build-side to `Ready`, and state to `FetchProbeSide`
-    fn collect_build_side(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        let build_timer = self.join_metrics.build_time.timer();
-        // build hash table from left (build) side, if not yet done
-        let left_data = ready!(
-            self.build_side
-                .try_as_initial_mut()?
-                .left_fut
-                .get_shared(cx)
-        )?;
-        build_timer.done();
-
-        // Note: For null-aware anti join, we need to check the probe side (right) for NULLs,
-        // not the build side (left). The probe-side NULL check happens during process_probe_batch.
-        // The probe_side_has_null flag will be set there if any probe batch contains NULL.
-
-        self.state = self.transition_after_build_collected(&left_data);
-
-        self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
-        Poll::Ready(Ok(StatefulStreamResult::Continue))
-    }
-
-    /// Fetches next batch from probe-side
-    ///
-    /// If non-empty batch has been fetched, updates state to `ProcessProbeBatchState`,
-    /// otherwise updates state to `ExhaustedProbeSide`
-    fn fetch_probe_batch(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        match ready!(self.right.poll_next_unpin(cx)) {
+    /// Fetches the next probe-side batch. Returns None — releasing the
+    /// probe pipeline's resources — when the probe side is exhausted.
+    async fn fetch_probe_batch(&mut self) -> Result<Option<RecordBatch>> {
+        match self.right.next().await.transpose()? {
             None => {
                 // Release the probe-side input pipeline's resources. The schema
                 // is preserved so callers that still query `self.right.schema()`
                 // (e.g. for unmatched-build emission) keep working.
                 let right_schema = self.right.schema();
                 self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
-                self.state = HashJoinStreamState::ExhaustedProbeSide;
+                Ok(None)
             }
-            Some(Ok(batch)) => {
-                // Precalculate hash values for fetched batch
-                let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
-
-                let valid_keys = if let Map::HashMap(_) =
-                    self.build_side.try_as_ready()?.left_data.map()
-                {
-                    self.hashes_buffer.clear();
-                    self.hashes_buffer.resize(batch.num_rows(), 0);
-                    create_hashes(
-                        &keys_values,
-                        &self.random_state,
-                        &mut self.hashes_buffer,
-                    )?;
-                    matchable_join_keys(&keys_values, self.null_equality)
-                } else {
-                    None
-                };
-
-                self.join_metrics.input_batches.add(1);
-                self.join_metrics.input_rows.add(batch.num_rows());
-
-                self.state =
-                    HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
-                        batch,
-                        values: keys_values,
-                        valid_keys,
-                        offset: (0, None),
-                        joined_probe_idx: None,
-                    });
-            }
-            Some(Err(err)) => return Poll::Ready(Err(err)),
-        };
-
-        Poll::Ready(Ok(StatefulStreamResult::Continue))
+            Some(batch) => Ok(Some(batch)),
+        }
     }
 
-    /// Joins current probe batch with build-side data and produces batch with matched output
-    ///
-    /// Updates state to `FetchProbeBatch`
-    fn process_probe_batch(
+    /// Evaluates the join keys (and their hashes) of a fetched probe batch,
+    /// producing the cursor the chunked lookups iterate with.
+    fn prepare_probe_batch(
         &mut self,
-    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
-        let state = self.state.try_as_process_probe_batch_mut()?;
-        let build_side = self.build_side.try_as_ready_mut()?;
+        batch: RecordBatch,
+        left_data: &JoinLeftData,
+    ) -> Result<ProcessProbeBatchState> {
+        // Precalculate hash values for fetched batch
+        let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
+        let valid_keys = if let Map::HashMap(_) = left_data.map() {
+            self.hashes_buffer.clear();
+            self.hashes_buffer.resize(batch.num_rows(), 0);
+            create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+            matchable_join_keys(&keys_values, self.null_equality)
+        } else {
+            None
+        };
+
+        self.join_metrics.input_batches.add(1);
+        self.join_metrics.input_rows.add(batch.num_rows());
+
+        Ok(ProcessProbeBatchState {
+            batch,
+            values: keys_values,
+            valid_keys,
+            offset: (0, None),
+            joined_probe_idx: None,
+        })
+    }
+
+    /// Joins one `batch_size` chunk of the current probe batch against the
+    /// hash table and pushes the joined rows to the output buffer.
+    ///
+    /// Returns true when the probe batch is fully processed (the caller
+    /// fetches the next one), false when more chunks remain.
+    fn process_probe_chunk(
+        &mut self,
+        probe: &mut ProcessProbeBatchState,
+        left_data: &JoinLeftData,
+    ) -> Result<bool> {
         self.join_metrics
             .probe_hit_rate
-            .add_total(state.batch.num_rows());
+            .add_total(probe.batch.num_rows());
 
         let timer = self.join_metrics.join_time.timer();
 
@@ -757,73 +642,62 @@ impl HashJoinStream {
             // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
             // Only set this if batch has rows - empty batches don't count
             // Use shared atomic state so all partitions can see this global information
-            if state.batch.num_rows() > 0 {
-                build_side
-                    .left_data
+            if probe.batch.num_rows() > 0 {
+                left_data
                     .probe_side_non_empty
                     .store(true, Ordering::Relaxed);
             }
 
             // Check if probe side (RIGHT) contains NULL
             // Since null_aware validation ensures single column join, we only check the first column
-            let probe_key_column = &state.values[0];
+            let probe_key_column = &probe.values[0];
             if probe_key_column.null_count() > 0 {
                 // Found NULL in probe side - set shared flag to prevent any output
-                build_side
-                    .left_data
-                    .probe_side_has_null
-                    .store(true, Ordering::Relaxed);
+                left_data.probe_side_has_null.store(true, Ordering::Relaxed);
             }
 
             // If probe side has NULL (detected in this or any other partition), return empty result
-            if build_side
-                .left_data
-                .probe_side_has_null
-                .load(Ordering::Relaxed)
-            {
+            if left_data.probe_side_has_null.load(Ordering::Relaxed) {
                 timer.done();
-                self.state = HashJoinStreamState::FetchProbeBatch;
-                return Ok(StatefulStreamResult::Continue);
+                return Ok(true);
             }
         }
 
-        let is_empty = !build_side.left_data.has_matchable_build_rows();
+        let is_empty = !left_data.has_matchable_build_rows();
 
         if is_empty {
             let result = build_batch_empty_build_side(
                 &self.schema,
-                build_side.left_data.batch(),
-                &state.batch,
+                left_data.batch(),
+                &probe.batch,
                 &self.column_indices,
                 self.join_type,
             )?;
             timer.done();
             self.output_buffer.push_batch(result)?;
-            self.state = HashJoinStreamState::FetchProbeBatch;
 
-            return Ok(StatefulStreamResult::Continue);
+            return Ok(true);
         }
 
         // get the matched by join keys indices
-        let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
-        {
+        let (left_indices, right_indices, next_offset) = match left_data.map() {
             Map::HashMap(map) => lookup_join_hashmap(
                 map.as_ref(),
-                build_side.left_data.values(),
-                &state.values,
+                left_data.values(),
+                &probe.values,
                 self.null_equality,
                 &self.hashes_buffer,
-                state.valid_keys.as_ref(),
+                probe.valid_keys.as_ref(),
                 self.batch_size,
-                state.offset,
+                probe.offset,
                 &mut self.probe_indices_buffer,
                 &mut self.build_indices_buffer,
             )?,
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
-                    &state.values,
+                    &probe.values,
                     self.batch_size,
-                    state.offset,
+                    probe.offset,
                     &mut self.probe_indices_buffer,
                     &mut self.build_indices_buffer,
                 )?;
@@ -850,8 +724,8 @@ impl HashJoinStream {
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
             apply_join_filter_to_indices(
-                build_side.left_data.batch(),
-                &state.batch,
+                left_data.batch(),
+                &probe.batch,
                 left_indices,
                 right_indices,
                 filter,
@@ -865,7 +739,7 @@ impl HashJoinStream {
 
         // mark joined left-side indices as visited, if required by join type
         if need_produce_result_in_final(self.join_type) {
-            let mut bitmap = build_side.left_data.visited_indices_bitmap().lock();
+            let mut bitmap = left_data.visited_indices_bitmap().lock();
             left_indices.iter().flatten().for_each(|x| {
                 bitmap.set_bit(x as usize, true);
             });
@@ -895,9 +769,9 @@ impl HashJoinStream {
 
         // Calculate range and perform alignment.
         // In case probe batch has been processed -- align all remaining rows.
-        let index_alignment_range_start = state.joined_probe_idx.map_or(0, |v| v + 1);
+        let index_alignment_range_start = probe.joined_probe_idx.map_or(0, |v| v + 1);
         let index_alignment_range_end = if next_offset.is_none() {
-            state.batch.num_rows()
+            probe.batch.num_rows()
         } else {
             last_joined_right_idx.map_or(0, |v| v + 1)
         };
@@ -913,9 +787,9 @@ impl HashJoinStream {
         // Build output batch and push to coalescer
         let (build_batch, probe_batch, join_side) =
             if self.join_type == JoinType::RightMark {
-                (&state.batch, build_side.left_data.batch(), JoinSide::Right)
+                (&probe.batch, left_data.batch(), JoinSide::Right)
             } else {
-                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
+                (left_data.batch(), &probe.batch, JoinSide::Left)
             };
 
         let batch = build_batch_from_indices(
@@ -933,61 +807,45 @@ impl HashJoinStream {
 
         timer.done();
 
-        // If limit reached, finish and move to Completed state
+        // If the fetch limit was reached, finish the output buffer; the
+        // caller observes `is_finished` and stops.
         if push_status == PushBatchStatus::LimitReached {
             self.output_buffer.finish()?;
-            self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
+            return Ok(true);
         }
 
-        if next_offset.is_none() {
-            self.state = HashJoinStreamState::FetchProbeBatch;
-        } else {
-            state.advance(
-                next_offset
-                    .ok_or_else(|| internal_datafusion_err!("unexpected None offset"))?,
-                last_joined_right_idx,
-            )
-        };
-
-        Ok(StatefulStreamResult::Continue)
+        match next_offset {
+            None => Ok(true),
+            Some(next_offset) => {
+                probe.advance(next_offset, last_joined_right_idx);
+                Ok(false)
+            }
+        }
     }
 
-    /// Processes unmatched build-side rows for certain join types and produces output batch
-    ///
-    /// Updates state to `Completed`
-    fn process_unmatched_build_batch(
-        &mut self,
-    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+    /// Emits unmatched build-side rows for join types that need them
+    /// (left/full outer, semi, anti, mark joins), once every partition
+    /// sharing the build side has finished probing.
+    fn process_unmatched_build_batch(&mut self, left_data: &JoinLeftData) -> Result<()> {
         let timer = self.join_metrics.join_time.timer();
 
         if !need_produce_result_in_final(self.join_type) {
-            self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
+            return Ok(());
         }
-
-        let build_side = self.build_side.try_as_ready()?;
 
         // For null-aware anti join, if probe side had NULL, no rows should be output
         // Check shared atomic state to get global knowledge across all partitions
-        if self.null_aware
-            && build_side
-                .left_data
-                .probe_side_has_null
-                .load(Ordering::Relaxed)
-        {
+        if self.null_aware && left_data.probe_side_has_null.load(Ordering::Relaxed) {
             timer.done();
-            self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
+            return Ok(());
         }
-        if !build_side.left_data.report_probe_completed() {
-            self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
+        if !left_data.report_probe_completed() {
+            return Ok(());
         }
 
         // use the global left bitmap to produce the left indices and right indices
         let (mut left_side, mut right_side) = get_final_indices_from_shared_bitmap(
-            build_side.left_data.visited_indices_bitmap(),
+            left_data.visited_indices_bitmap(),
             self.join_type,
             true,
         );
@@ -998,13 +856,10 @@ impl HashJoinStream {
         // Use shared atomic state to get global knowledge across all partitions
         if self.null_aware
             && self.join_type == JoinType::LeftAnti
-            && build_side
-                .left_data
-                .probe_side_non_empty
-                .load(Ordering::Relaxed)
+            && left_data.probe_side_non_empty.load(Ordering::Relaxed)
         {
             // Since null_aware validation ensures single column join, we only check the first column
-            let build_key_column = &build_side.left_data.values()[0];
+            let build_key_column = &left_data.values()[0];
 
             // Filter out indices where the key is NULL
             let filtered_indices: Vec<u64> = left_side
@@ -1032,14 +887,12 @@ impl HashJoinStream {
 
         timer.done();
 
-        self.state = HashJoinStreamState::Completed;
-
         // Push final unmatched indices to output buffer
         if !left_side.is_empty() {
             let empty_right_batch = RecordBatch::new_empty(self.right.schema());
             let batch = build_batch_from_indices(
                 &self.schema,
-                build_side.left_data.batch(),
+                left_data.batch(),
                 &empty_right_batch,
                 &left_side,
                 &right_side,
@@ -1055,18 +908,7 @@ impl HashJoinStream {
             }
         }
 
-        Ok(StatefulStreamResult::Continue)
-    }
-}
-
-impl Stream for HashJoinStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.poll_next_impl(cx)
+        Ok(())
     }
 }
 

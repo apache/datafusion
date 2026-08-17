@@ -36,9 +36,7 @@ use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
-use crate::joins::hash_join::stream::{
-    BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
-};
+use crate::joins::hash_join::stream::HashJoinStream;
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, reorder_output_after_swap,
@@ -1556,7 +1554,7 @@ impl ExecutionPlan for HashJoinExec {
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
 
-        Ok(Box::pin(HashJoinStream::new(
+        Ok(HashJoinStream::new(
             partition,
             self.schema(),
             on_right,
@@ -1567,8 +1565,7 @@ impl ExecutionPlan for HashJoinExec {
             join_metrics,
             column_indices_after_projection,
             self.null_equality,
-            HashJoinStreamState::WaitBuildSide,
-            BuildSide::Initial(BuildSideInitialState { left_fut }),
+            left_fut,
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
@@ -1576,7 +1573,7 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_aware,
             self.fetch,
-        )))
+        ))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
