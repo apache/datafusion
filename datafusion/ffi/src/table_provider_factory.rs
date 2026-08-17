@@ -211,7 +211,7 @@ async fn create_fn_wrapper_impl(
     let mut foreign_session = None;
     let session = session
         .as_local()
-        .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+        .map(Ok::<&dyn Session, DataFusionError>)
         .unwrap_or_else(|| {
             foreign_session = Some(ForeignSession::try_from(&session)?);
             Ok(foreign_session.as_ref().unwrap())

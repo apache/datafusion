@@ -36,8 +36,9 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
-use super::aggregate_hash_table::{AggregateHashTable, SingleMarker};
-use super::group_values::GroupByMetrics;
+use super::aggregate_hash_table::{
+    AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
+};
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
@@ -267,7 +268,7 @@ impl SingleSpillContext {
     fn into_replay_stream(
         self,
         baseline_metrics: &BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         let Self {
@@ -281,6 +282,10 @@ impl SingleSpillContext {
         } = self;
 
         let spill_schema = Arc::clone(spill_manager.schema());
+        // The merge and replay table are two components of the same aggregate
+        // operator. Keep them under one consumer registration so a fair memory
+        // pool does not divide this operator's quota between its own phases.
+        let merge_reservation = reservation.new_empty();
         let merged = StreamingMergeBuilder::new()
             .with_schema(spill_schema)
             .with_spill_manager(spill_manager)
@@ -288,7 +293,7 @@ impl SingleSpillContext {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
-            .with_reservation(reservation)
+            .with_reservation(merge_reservation)
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &final_agg,
@@ -297,8 +302,9 @@ impl SingleSpillContext {
             merged,
             &InputOrderMode::Sorted,
             baseline_metrics.clone(),
-            group_by_metrics,
+            metrics,
             None,
+            reservation,
         )?;
         Ok(Box::pin(replay))
     }
@@ -586,12 +592,12 @@ impl SingleHashAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match spill_context.spill_table(&mut hash_table) {
             Ok(()) => {
-                let group_by_metrics = hash_table.group_by_metrics().clone();
+                let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
                 drop(hash_table);
                 match self.reservation.try_resize(0) {
                     Ok(()) => (*spill_context).into_replay_stream(
                         &self.baseline_metrics,
-                        group_by_metrics,
+                        metrics,
                         self.reservation.new_empty(),
                     ),
                     Err(e) => Err(e),

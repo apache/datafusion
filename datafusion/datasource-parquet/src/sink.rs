@@ -33,6 +33,8 @@ use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::DataSink;
+#[cfg(feature = "proto")]
+use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
@@ -40,6 +42,8 @@ use datafusion_datasource::write::{
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+#[cfg(feature = "proto")]
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::metrics::{
     ElapsedComputeFutureExt, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     MetricsSet, Time,
@@ -239,6 +243,7 @@ async fn set_writer_encryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn set_writer_encryption_properties(
     builder: WriterPropertiesBuilder,
     _runtime: &Arc<RuntimeEnv>,
@@ -408,6 +413,105 @@ impl DataSink for ParquetSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        exec: &DataSinkExec,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
+        let sink = protobuf::ParquetSink::try_from(self)?;
+        let node = protobuf::ParquetSinkExecNode {
+            input: Some(Box::new(input)),
+            sink: Some(sink),
+            sink_schema: Some(exec.schema().as_ref().try_into()?),
+            sort_order,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(node))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetSink) -> Result<Self> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+            parquet_options: Some(value.parquet_options().try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &datafusion_proto_models::protobuf::ParquetSink) -> Result<Self> {
+        let config =
+            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ParquetSink is missing required field 'config'"
+                )
+            })?)?;
+        let parquet_options = value
+            .parquet_options
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ParquetSink is missing required field 'parquet_options'"
+                )
+            })?
+            .try_into()?;
+
+        Ok(Self::new(config, parquet_options))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ParquetSink {
+    /// Reconstructs a [`DataSinkExec`] containing a `ParquetSink` from protobuf.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let sink_node = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::ParquetSink,
+            "ParquetSink",
+        );
+        let input = ctx.decode_required_child(
+            sink_node.input.as_deref(),
+            "ParquetSinkExecNode",
+            "input",
+        )?;
+        let proto_sink = sink_node.sink.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetSinkExecNode is missing required field 'sink'"
+            )
+        })?;
+        let data_sink = ParquetSink::try_from(proto_sink)?;
+        let sort_order = DataSinkExec::decode_sort_order(
+            sink_node.sort_order.as_ref(),
+            ctx,
+            input.schema().as_ref(),
+        )?;
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            sort_order,
+        )))
     }
 }
 

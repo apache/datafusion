@@ -45,6 +45,7 @@ use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
 use crate::nested_schema_pruning::{
     CastColumnAccess, clip_for_cast, contains_struct, count_leaves, field_with_type,
+    type_for_leaf_subset,
 };
 
 /// The result of resolving which Parquet leaf columns and Arrow schema fields
@@ -74,6 +75,83 @@ pub(crate) struct StructFieldAccess {
     /// Field names forming the path into the struct.
     /// e.g., `["value"]` for `s['value']`, `["outer", "inner"]` for `s['outer']['inner']`.
     pub(crate) field_path: Vec<String>,
+}
+
+/// Trie of nested struct accesses, keyed at the top by the root column index in
+/// the file schema and then by field names down each access path.
+///
+/// # Example
+///
+/// For a filter expression
+///
+/// ```sql
+/// WHERE s['outer']['a'] > 10
+///   AND s['outer']['b'] < 20
+///   AND s['outer']['inner']['c'] IS NOT NULL
+/// ```
+///
+/// where `s` is column index `2` in the file schema, three accesses are
+/// recorded — all with `root_index = 2` and paths `["outer","a"]`,
+/// `["outer","b"]`, `["outer","inner","c"]`. They produce a trie in which
+/// the shared `"outer"` prefix is represented by a single intermediate node:
+///
+/// ```text
+/// roots:
+///   2 ──► node { selected_here: false }
+///         children:
+///           "outer" ──► node { selected_here: false }
+///                       children:
+///                         "a"     ──► { selected_here: true,  children: {} }
+///                         "b"     ──► { selected_here: true,  children: {} }
+///                         "inner" ──► { selected_here: false,
+///                                       children: {
+///                                         "c" ──► { selected_here: true,
+///                                                   children: {} }
+///                                       } }
+/// ```
+#[derive(Debug, Default)]
+struct StructAccessTree<'a> {
+    roots: BTreeMap<usize, StructAccessNode<'a>>,
+}
+
+/// One node in a [`StructAccessTree`].
+///
+/// `selected_here` is `true` when at least one access path terminates at this
+/// node. Duplicate paths are idempotent.
+#[derive(Debug, Default)]
+struct StructAccessNode<'a> {
+    children: BTreeMap<&'a str, StructAccessNode<'a>>,
+    selected_here: bool,
+}
+
+impl<'a> StructAccessTree<'a> {
+    /// Builds a [`StructAccessTree`] from a flat list of accesses.
+    ///
+    /// For each [`StructFieldAccess`], walks from the given root index down
+    /// the field path, creating intermediate nodes as needed, and sets the
+    /// terminal node's `selected_here` to `true`. Paths sharing a prefix
+    /// collapse onto common intermediate nodes.
+    fn from_accesses(accesses: &'a [StructFieldAccess]) -> Self {
+        let mut tree = Self::default();
+        for StructFieldAccess {
+            root_index,
+            field_path,
+        } in accesses
+        {
+            let mut node = tree.roots.entry(*root_index).or_default();
+            for component in field_path {
+                node = node.children.entry(component.as_str()).or_default();
+            }
+            node.selected_here = true;
+        }
+        tree
+    }
+
+    /// Returns the node for the given file-schema column index, or `None` if
+    /// no access path was recorded under that root.
+    fn root(&self, idx: usize) -> Option<&StructAccessNode<'a>> {
+        self.roots.get(&idx)
+    }
 }
 
 /// Traverses a `PhysicalExpr` tree to determine if any column references would
@@ -500,22 +578,16 @@ pub(crate) fn build_projection_read_plan(
 /// - roots referenced as whole columns keep every leaf and their full
 ///   physical field (whole-column reads take precedence; cast accesses on
 ///   such roots were already dropped by the caller);
-/// - roots consumed through a cast, and not also through a `get_field`
-///   access on the same root, keep only the leaves the cast target names
-///   (see `crate::nested_schema_pruning`);
+/// - roots consumed through one or more casts keep the union of the leaves
+///   their targets name (see `crate::nested_schema_pruning`);
+/// - a root consumed through both casts and `get_field` accesses keeps the
+///   union of both access kinds;
 /// - roots consumed only through `get_field` accesses keep the union of the
 ///   leaves those accesses reach, as before;
 /// - any other referenced root, a cast that can't be safely clipped (see
-///   `nested_schema_pruning::clip_for_cast`), a root reached by two casts
-///   with *different* targets (a projection can consume the same column
-///   through more than one narrowing cast, e.g.
-///   `SELECT CAST(s AS STRUCT(a)), CAST(s AS STRUCT(b)) FROM t`; clipping to
-///   either target alone would starve the other), or a root reached by both a
-///   cast and a `get_field` access (not produced by
-///   `DefaultPhysicalExprAdapter`, which always routes a `get_field` over a
-///   narrowed column through the same cast rather than a separate access,
-///   but a custom `PhysicalExprAdapter` could in principle inject both),
-///   falls back to a full read of that root.
+///   `nested_schema_pruning::clip_for_cast`), or a merged leaf set whose
+///   emitted Arrow type can't be derived safely, falls back to a full read of
+///   that root.
 fn build_read_plan_with_cast_clipping(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
@@ -524,43 +596,20 @@ fn build_read_plan_with_cast_clipping(
     cast_accesses: &[CastColumnAccess],
 ) -> ParquetReadPlan {
     let whole_roots: BTreeSet<usize> = whole_root_indices.iter().copied().collect();
-    let struct_access_roots: BTreeSet<usize> =
-        struct_accesses.iter().map(|a| a.root_index).collect();
     // Every referenced root's Parquet leaves, grouped in one pass over the
     // schema descriptor rather than one `leaf_indices_for_roots` scan per
     // root (this function may look up several roots).
     let leaves_by_root = leaves_grouped_by_root(schema_descr);
 
-    // Root -> (absolute kept leaf indices, cast-clipped Arrow type) for
-    // roots successfully clipped via a cast.
-    let mut clipped_by_root: BTreeMap<usize, (Vec<usize>, DataType)> = BTreeMap::new();
+    // Root -> relative leaf offsets required by every narrowing cast on that
+    // root. A set makes repeated and overlapping targets a natural union.
+    let mut kept_offsets_by_root: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     // Roots with a cast access that must fall back to a full read.
     let mut fallback_roots: BTreeSet<usize> = BTreeSet::new();
-    // The cast target already clipped for a root, so a second cast on the
-    // same root can be recognised as either a repeat (same target: nothing to
-    // do) or a conflict (different target: neither clip is valid on its own).
-    let mut clipped_target_by_root: BTreeMap<usize, &DataType> = BTreeMap::new();
 
     for access in cast_accesses {
         let root = access.root_index;
         if whole_roots.contains(&root) || fallback_roots.contains(&root) {
-            continue;
-        }
-        if let Some(previous) = clipped_target_by_root.get(&root) {
-            if **previous != access.target_type {
-                // The projection consumes this root through two different
-                // narrowing casts. Each cast only needs its own leaves, but
-                // the mask is per column: clipping to the first target would
-                // silently null-fill whatever the second one needs. Read the
-                // whole root instead.
-                clipped_by_root.remove(&root);
-                clipped_target_by_root.remove(&root);
-                fallback_roots.insert(root);
-            }
-            continue;
-        }
-        if struct_access_roots.contains(&root) {
-            fallback_roots.insert(root);
             continue;
         }
 
@@ -577,17 +626,62 @@ fn build_read_plan_with_cast_clipping(
         }
 
         match clip_for_cast(physical_type, &access.target_type) {
-            Some((kept_offsets, pruned_type)) => {
-                let start = root_leaves[0];
-                let absolute = kept_offsets.into_iter().map(|o| start + o).collect();
-                clipped_by_root.insert(root, (absolute, pruned_type));
-                clipped_target_by_root.insert(root, &access.target_type);
+            Some((kept_offsets, _pruned_type)) => {
+                kept_offsets_by_root
+                    .entry(root)
+                    .or_default()
+                    .extend(kept_offsets);
             }
             // Nothing prunable for this cast: every leaf is consumed.
             None => {
+                kept_offsets_by_root.remove(&root);
                 fallback_roots.insert(root);
             }
         }
+    }
+
+    // Add leaves reached through `get_field` to cast roots. The resolver
+    // returns absolute Parquet leaf indices; convert them back to offsets in
+    // their root so they can share the same union as cast clipping.
+    let struct_access_tree = StructAccessTree::from_accesses(struct_accesses);
+    for leaf in resolve_struct_field_leaves(&struct_access_tree, schema_descr) {
+        let root = schema_descr.get_column_root_idx(leaf);
+        if !kept_offsets_by_root.contains_key(&root) {
+            continue;
+        }
+        let Some(offset) = leaves_by_root
+            .get(&root)
+            .and_then(|root_leaves| root_leaves.binary_search(&leaf).ok())
+        else {
+            kept_offsets_by_root.remove(&root);
+            fallback_roots.insert(root);
+            continue;
+        };
+        kept_offsets_by_root
+            .get_mut(&root)
+            .expect("root presence checked above")
+            .insert(offset);
+    }
+
+    // Derive the reader's one emitted Arrow type from each merged leaf set.
+    // Any unsupported partial wrapper retains the total fallback guarantee.
+    let mut clipped_by_root: BTreeMap<usize, (Vec<usize>, DataType)> = BTreeMap::new();
+    for (root, kept_offsets) in kept_offsets_by_root {
+        if fallback_roots.contains(&root) {
+            continue;
+        }
+        let physical_type = file_schema.field(root).data_type();
+        let root_leaves = leaves_by_root.get(&root).map_or(&[][..], Vec::as_slice);
+        let kept_offsets = kept_offsets.into_iter().collect::<Vec<_>>();
+        let Some(pruned_type) = type_for_leaf_subset(physical_type, &kept_offsets) else {
+            fallback_roots.insert(root);
+            continue;
+        };
+        let absolute = kept_offsets
+            .into_iter()
+            .map(|offset| root_leaves[offset])
+            .collect();
+        clipped_by_root.insert(root, (absolute, pruned_type));
     }
 
     // `get_field` accesses on roots not already read in full (as a whole
@@ -596,14 +690,9 @@ fn build_read_plan_with_cast_clipping(
     let get_field_accesses: Vec<StructFieldAccess> = struct_accesses
         .iter()
         .filter(|a| {
-            // A root carrying a `get_field` access is put into
-            // `fallback_roots` before any clip is attempted (see the loop
-            // above), so it can never also be clipped. Assert that rather
-            // than re-testing it here, so a future reordering trips the
-            // assert instead of silently changing which leaves are read.
-            debug_assert!(!clipped_by_root.contains_key(&a.root_index));
             !whole_roots.contains(&a.root_index)
                 && !fallback_roots.contains(&a.root_index)
+                && !clipped_by_root.contains_key(&a.root_index)
         })
         .cloned()
         .collect();
@@ -630,12 +719,9 @@ fn build_read_plan_with_cast_clipping(
     }
 
     if !get_field_accesses.is_empty() {
-        leaf_indices.extend(resolve_struct_field_leaves(
-            &get_field_accesses,
-            file_schema,
-            schema_descr,
-        ));
-        let get_field_schema = build_filter_schema(file_schema, &[], &get_field_accesses);
+        let get_field_tree = StructAccessTree::from_accesses(&get_field_accesses);
+        leaf_indices.extend(resolve_struct_field_leaves(&get_field_tree, schema_descr));
+        let get_field_schema = build_filter_schema(file_schema, &[], &get_field_tree);
         let get_field_roots: BTreeSet<usize> =
             get_field_accesses.iter().map(|a| a.root_index).collect();
         // `build_filter_schema` emits one field per accessed root in
@@ -692,20 +778,18 @@ pub(crate) fn assemble_read_plan(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
 ) -> (ParquetReadPlan, Vec<usize>) {
+    let access_tree = StructAccessTree::from_accesses(struct_field_accesses);
+
     let mut leaf_indices =
         leaf_indices_for_roots(root_indices.iter().copied(), schema_descr);
-    leaf_indices.extend_from_slice(&resolve_struct_field_leaves(
-        struct_field_accesses,
-        file_schema,
-        schema_descr,
-    ));
+    leaf_indices
+        .extend_from_slice(&resolve_struct_field_leaves(&access_tree, schema_descr));
     leaf_indices.sort_unstable();
     leaf_indices.dedup();
 
     let projection_mask =
         ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
-    let projected_schema =
-        build_filter_schema(file_schema, root_indices, struct_field_accesses);
+    let projected_schema = build_filter_schema(file_schema, root_indices, &access_tree);
 
     (
         ParquetReadPlan {
@@ -762,62 +846,129 @@ where
         .collect()
 }
 
-/// Resolves struct field access to specific Parquet leaf column indices
+/// Returns the Parquet leaf column indices selected by the access tree.
 ///
-/// For every `StructFieldAccess`, finds the leaf columns in the Parquet schema
-/// whose path matches the struct root name + field path. This avoids reading all
-/// leaves of a struct when only specific fields are needed
+/// # Matching
+///
+/// Iterates Parquet leaves in ascending order (`0..num_columns()`). For each
+/// leaf:
+///
+/// 1. **Root dispatch.** Look up the leaf's root index — the top-level Arrow
+///    column it belongs to — via `SchemaDescriptor::get_column_root_idx`. If
+///    that root is absent from the access tree (the filter never touched any
+///    field under it), skip the leaf without further work.
+///
+/// 2. **Path walk.** Otherwise, take the leaf's dotted column path
+///    (`col.path().parts()`), drop the first component (the root field name,
+///    already used in step 1), and walk the remaining components against the
+///    matching trie subtree via [`leaf_under_tree`].
+///
+/// 3. **Inclusion.** The leaf is added to the result iff the walk reaches a
+///    node with `selected_here = true` — either an ancestor along the
+///    descent (subsumption: a shallower access subsumes the leaf) or the
+///    terminal node reached at the end of the path (exact match).
+///
+/// # Returns
+///
+/// `Vec<usize>` of Parquet leaf column indices. The scan visits each leaf
+/// exactly once and pushes in iteration order, so the result is in ascending
+/// order and free of duplicates by construction — callers do not need to
+/// sort or dedup.
 fn resolve_struct_field_leaves(
-    accesses: &[StructFieldAccess],
-    file_schema: &Schema,
+    access_tree: &StructAccessTree<'_>,
     schema_descr: &SchemaDescriptor,
 ) -> Vec<usize> {
     let mut leaf_indices = Vec::new();
 
-    for access in accesses {
-        let root_name = file_schema.field(access.root_index).name();
-        let prefix = std::iter::once(root_name.as_str())
-            .chain(access.field_path.iter().map(|p| p.as_str()))
-            .collect::<Vec<_>>();
-
-        for leaf_idx in 0..schema_descr.num_columns() {
-            let col = schema_descr.column(leaf_idx);
-            let col_path = col.path().parts();
-
-            // A leaf matches if its path starts with our prefix.
-            // e.g., prefix=["s", "value"] matches leaf path ["s", "value"]
-            //       prefix=["s", "outer"] matches ["s", "outer", "inner"]
-            let leaf_matches_path = col_path.len() >= prefix.len()
-                && col_path.iter().zip(prefix.iter()).all(|(a, b)| a == b);
-
-            if leaf_matches_path {
-                leaf_indices.push(leaf_idx);
-            }
+    for leaf_idx in 0..schema_descr.num_columns() {
+        let root_idx = schema_descr.get_column_root_idx(leaf_idx);
+        let Some(root_node) = access_tree.roots.get(&root_idx) else {
+            continue;
+        };
+        // The first part is the root field name, already used in step 1; walk
+        // the rest against the tree.
+        let col = schema_descr.column(leaf_idx);
+        let Some((_root_name, rest)) = col.path().parts().split_first() else {
+            continue;
+        };
+        if leaf_under_tree(root_node, rest) {
+            leaf_indices.push(leaf_idx);
         }
     }
 
     leaf_indices
 }
 
-/// Builds a filter schema that includes only the fields actually accessed by the
-/// filter expression.
+/// True when the leaf path beneath a root is selected by the access tree.
 ///
-/// For regular (non-struct) columns, the full field type is used.
-/// For struct columns accessed via `get_field`, a pruned struct type is created
-/// containing only the fields along the access path. Note: it must match the schema
-/// that the Parquet reader produces when projecting specific struct leaves
+/// A shallower `selected_here` node subsumes deeper accesses: once the walk
+/// reaches such a node, every leaf below it is included.
+fn leaf_under_tree(mut node: &StructAccessNode<'_>, path: &[String]) -> bool {
+    for component in path {
+        if node.selected_here {
+            return true;
+        }
+        let Some(child) = node.children.get(component.as_str()) else {
+            return false;
+        };
+        node = child;
+    }
+    node.selected_here
+}
+
+/// Builds the Arrow schema used to evaluate the filter expression.
+///
+/// The returned schema is a **subset** of `file_schema`, restricted to the
+/// columns the filter actually touches and (for struct columns accessed
+/// only through nested paths) **pruned** to only the accessed fields.
+///
+/// # Inputs
+///
+/// - `file_schema` — the full file schema; provides the source `Field`s
+///   (names, types, nullability, metadata).
+/// - `regular_indices` — file-schema column indices the filter references
+///   as **whole columns** (non-struct columns, or struct roots referenced
+///   in their entirety). Must be sorted, deduplicated.
+/// - `access_tree` — the trie of nested struct field accesses recorded by
+///   [`PushdownChecker`].
+///
+/// # Behavior
+///
+/// The set of columns to include is the union of `regular_indices` and
+/// `access_tree.roots.keys()`. For each column index in that union, decide
+/// how the field appears in the output:
+///
+/// 1. **Whole-column reference** (`idx` is in `regular_indices`). Keep the
+///    field's full type unchanged. This is the **whole-root override**:
+///    pruning is only valid when a column is accessed *exclusively* through
+///    nested field accesses; if any predicate references the whole column,
+///    the projected schema must preserve the full type for that column.
+///
+/// 2. **Nested-access-only struct root.** Look up the column's node in the
+///    access tree and call [`prune_struct_type`] on the field's `DataType`
+///    with that node. Wrap the pruned type in a new `Field` carrying the
+///    original name and nullability.
+///
+/// Column order in the output schema follows ascending file-schema index
+/// (via the `BTreeSet` union), matching the order the Parquet reader
+/// produces when projecting these columns.
+///
+/// # Returns
+///
+/// An `Arc<Schema>` whose fields are a subset of `file_schema`'s, with
+/// struct types pruned per the access tree. The schema's metadata is
+/// inherited from `file_schema`.
 fn build_filter_schema(
     file_schema: &Schema,
     regular_indices: &[usize],
-    struct_field_accesses: &[StructFieldAccess],
+    access_tree: &StructAccessTree<'_>,
 ) -> SchemaRef {
     let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
-    let paths_by_root = group_access_paths_by_root(struct_field_accesses);
 
     let all_indices = regular_indices
         .iter()
         .copied()
-        .chain(paths_by_root.keys().copied())
+        .chain(access_tree.roots.keys().copied())
         .collect::<BTreeSet<_>>();
 
     let fields = all_indices
@@ -834,11 +985,11 @@ fn build_filter_schema(
                 return Arc::new(field.clone());
             }
 
-            let Some(field_paths) = paths_by_root.get(&idx) else {
+            let Some(node) = access_tree.root(idx) else {
                 return Arc::new(field.clone());
             };
 
-            let pruned_data_type = prune_struct_type(field.data_type(), field_paths);
+            let pruned_data_type = prune_struct_type(field.data_type(), node);
             Arc::new(Field::new(
                 field.name(),
                 pruned_data_type,
@@ -853,68 +1004,64 @@ fn build_filter_schema(
     ))
 }
 
-/// Groups struct field access paths once for the root schema level.
+/// Returns a copy of `dt` with non-accessed struct children removed.
 ///
-/// Each map entry contains the complete field paths accessed below a root
-/// column. Recursive pruning groups these paths by their next component at each
-/// nested struct level.
-fn group_access_paths_by_root(
-    struct_field_accesses: &[StructFieldAccess],
-) -> BTreeMap<usize, Vec<&[String]>> {
-    let mut paths_by_root: BTreeMap<usize, Vec<&[String]>> = BTreeMap::new();
-    for StructFieldAccess {
-        root_index,
-        field_path,
-    } in struct_field_accesses
-    {
-        paths_by_root
-            .entry(*root_index)
-            .or_default()
-            .push(field_path.as_slice());
+/// # Behavior
+///
+/// - If `node.selected_here` is `true`, the input type is returned
+///   unchanged. An access path terminates at this node, so the whole
+///   subtree (every field of `dt`, recursively) is required. This mirrors
+///   the subsumption check in [`leaf_under_tree`] so the projection mask
+///   and the projected schema agree even if a producer ever records an
+///   access whose `field_path` terminates above a struct.
+///
+/// - Otherwise, if `dt` is not a `DataType::Struct`, it is cloned and
+///   returned unchanged. The trie only ever guides struct-level pruning;
+///   other types pass through.
+///
+/// - Otherwise, `dt` is a struct and its fields are iterated in their
+///   original order. For each field `f`:
+///   1. Look up `f.name()` in `node.children`.
+///      - **Absent.** No access goes through this field. Drop it.
+///      - **Present, child node's `selected_here` is `true`.** An access
+///        path terminates at this field. Keep the entire subtree by
+///        cloning `f` unchanged (`Arc::clone` — no new `Field`).
+///      - **Present, child node's `selected_here` is `false`.** Some
+///        access goes through this field to a deeper terminal. Recurse
+///        into `f.data_type()` with the matching child node, then wrap
+///        the pruned type in a fresh `Field` with `f`'s name and
+///        nullability.
+///
+/// Field ordering is preserved (consumers must match the order the Parquet
+/// reader produces when projecting specific leaves). Iterating Arrow's
+/// `Fields` directly — rather than iterating `node.children` — is what
+/// preserves that order.
+///
+/// # Returns
+///
+/// A new `DataType::Struct` whose fields are a subset of `dt`'s, restricted
+/// to the paths represented by `node`. The original `dt` is not modified.
+fn prune_struct_type(dt: &DataType, node: &StructAccessNode<'_>) -> DataType {
+    if node.selected_here {
+        // Subsumption: the entire subtree below this node is required.
+        return dt.clone();
     }
 
-    paths_by_root
-}
-
-/// Groups access paths once for the current struct level.
-///
-/// The map key is the field name at this level. The map value is the list of
-/// remaining path suffixes below that field. An empty suffix means the access
-/// path terminates at that field, so the full field must be preserved.
-fn group_paths_by_next_field<'a>(
-    paths: &'a [&'a [String]],
-) -> BTreeMap<&'a str, Vec<&'a [String]>> {
-    let mut paths_by_field: BTreeMap<&str, Vec<&[String]>> = BTreeMap::new();
-    for path in paths {
-        if let Some((field, sub_path)) = path.split_first() {
-            paths_by_field
-                .entry(field.as_str())
-                .or_default()
-                .push(sub_path);
-        }
-    }
-
-    paths_by_field
-}
-
-fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
     let DataType::Struct(fields) = dt else {
         return dt.clone();
     };
 
-    let paths_by_field = group_paths_by_next_field(paths);
-
     let pruned_fields = fields
         .iter()
         .filter_map(|f| {
-            let sub_paths = paths_by_field.get(f.name().as_str())?;
+            let child = node.children.get(f.name().as_str())?;
 
-            let out = if sub_paths.iter().any(|sub| sub.is_empty()) {
-                // Leaf of access path — keep the field as-is.
+            let out = if child.selected_here {
+                // Access path terminates at this field — preserve the whole subtree.
                 Arc::clone(f)
             } else {
                 // Recurse into nested struct.
-                let pruned = prune_struct_type(f.data_type(), sub_paths);
+                let pruned = prune_struct_type(f.data_type(), child);
                 Arc::new(Field::new(f.name(), pruned, f.is_nullable()))
             };
 
@@ -1223,10 +1370,9 @@ mod test {
         );
     }
 
-    /// Once conflicting cast targets have demoted a root to a full read, a
-    /// *third* cast on it must not resurrect the clip.
+    /// A repeated third cast does not duplicate leaves or widen the union.
     #[test]
-    fn build_projection_read_plan_keeps_full_read_after_a_third_cast() {
+    fn build_projection_read_plan_keeps_union_after_a_third_cast() {
         let (file_schema, metadata) = write_id_struct_file();
         let schema_descr = metadata.file_metadata().schema_descr();
 
@@ -1239,10 +1385,19 @@ mod test {
 
         assert_eq!(
             read_plan.projection_mask,
-            ProjectionMask::leaves(schema_descr, [1, 2, 3])
+            ProjectionMask::leaves(schema_descr, [1, 2])
         );
         let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
-        assert_eq!(s_field.data_type(), file_schema.field(1).data_type());
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(
+                vec![
+                    Arc::new(Field::new("value", DataType::Int32, false)),
+                    Arc::new(Field::new("label", DataType::Utf8, false)),
+                ]
+                .into()
+            )
+        );
     }
 
     /// A whole-column reference wins over a `get_field` access on the same
@@ -1355,12 +1510,10 @@ mod test {
         );
     }
 
-    /// Two casts on the same root with *different* targets cannot both be
-    /// served by one mask: clipping to either target alone would null-fill
-    /// whatever the other one needs (or fail its runtime struct-compatibility
-    /// check outright). Read the whole root instead.
+    /// Two casts on the same root with disjoint targets share the union of
+    /// their leaves, while an unreferenced sibling remains pruned.
     #[test]
-    fn build_projection_read_plan_falls_back_on_conflicting_cast_targets() {
+    fn build_projection_read_plan_unions_disjoint_cast_targets() {
         let (file_schema, metadata) = write_id_struct_file();
         let schema_descr = metadata.file_metadata().schema_descr();
 
@@ -1380,11 +1533,68 @@ mod test {
 
         assert_eq!(
             read_plan.projection_mask,
-            ProjectionMask::leaves(schema_descr, [1, 2, 3]),
-            "every leaf of `s` must be read so both casts see their fields"
+            ProjectionMask::leaves(schema_descr, [1, 2]),
+            "the union must serve both casts without reading `s.pad`"
         );
         let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
-        assert_eq!(s_field.data_type(), file_schema.field(1).data_type());
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(
+                vec![
+                    Arc::new(Field::new("value", DataType::Int32, false)),
+                    Arc::new(Field::new("label", DataType::Utf8, false)),
+                ]
+                .into()
+            )
+        );
+    }
+
+    /// A union that covers every leaf falls back to the full root type.
+    #[test]
+    fn build_projection_read_plan_falls_back_for_complete_cast_union() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let exprs = vec![
+            cast_to_struct("s", 1, vec![("value", DataType::Int32)]),
+            cast_to_struct(
+                "s",
+                1,
+                vec![("label", DataType::Utf8), ("pad", DataType::Utf8)],
+            ),
+        ];
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1, 2, 3])
+        );
+        assert_eq!(
+            read_plan.projected_schema.field_with_name("s").unwrap(),
+            file_schema.field(1)
+        );
+    }
+
+    /// Overlapping cast targets deduplicate their shared leaves.
+    #[test]
+    fn build_projection_read_plan_unions_overlapping_cast_targets() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let exprs = vec![
+            cast_to_struct("s", 1, vec![("value", DataType::Int32)]),
+            cast_to_struct(
+                "s",
+                1,
+                vec![("value", DataType::Int32), ("label", DataType::Utf8)],
+            ),
+        ];
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1, 2])
+        );
     }
 
     /// The struct fast-path gate looks at the *projected* columns, not at
@@ -1411,12 +1621,10 @@ mod test {
         assert_eq!(read_plan.projected_schema.fields().len(), 1);
     }
 
-    /// A root reached by both a narrowing cast and a `get_field` access (not
-    /// producible by `DefaultPhysicalExprAdapter`, but a custom
-    /// `PhysicalExprAdapter` could inject both) falls back to a full read of
-    /// that root rather than attempting to union the two leaf sets.
+    /// A root reached by both a narrowing cast and a disjoint `get_field`
+    /// access shares the union of their leaves.
     #[test]
-    fn build_projection_read_plan_falls_back_when_cast_and_get_field_share_a_root() {
+    fn build_projection_read_plan_unions_cast_and_get_field_on_one_root() {
         let (file_schema, metadata) = write_id_struct_file();
         let schema_descr = metadata.file_metadata().schema_descr();
 
@@ -1440,8 +1648,7 @@ mod test {
 
         let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
 
-        // Every leaf of `s` is read (full fallback), not just value/label.
-        let expected_mask = ProjectionMask::leaves(schema_descr, [1, 2, 3]);
+        let expected_mask = ProjectionMask::leaves(schema_descr, [1, 2]);
         assert_eq!(read_plan.projection_mask, expected_mask);
 
         let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
@@ -1451,10 +1658,211 @@ mod test {
                 vec![
                     Arc::new(Field::new("value", DataType::Int32, false)),
                     Arc::new(Field::new("label", DataType::Utf8, false)),
-                    Arc::new(Field::new("pad", DataType::Utf8, false)),
                 ]
                 .into()
             ),
+        );
+    }
+
+    fn access(root: usize, path: &[&str]) -> StructFieldAccess {
+        StructFieldAccess {
+            root_index: root,
+            field_path: path.iter().map(|&s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn struct_access_tree_from_empty_input_has_no_roots() {
+        let tree = StructAccessTree::from_accesses(&[]);
+        assert!(tree.roots.is_empty());
+    }
+
+    #[test]
+    fn struct_access_tree_groups_paths_by_root() {
+        let accesses = [access(0, &["a"]), access(2, &["x"]), access(2, &["y"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
+
+        assert_eq!(tree.roots.keys().copied().collect::<Vec<_>>(), vec![0, 2]);
+        let root0 = tree.root(0).unwrap();
+        assert!(root0.children.contains_key("a"));
+        assert!(root0.children["a"].selected_here);
+
+        let root2 = tree.root(2).unwrap();
+        assert_eq!(
+            root2.children.keys().copied().collect::<Vec<_>>(),
+            vec!["x", "y"],
+        );
+    }
+
+    #[test]
+    fn struct_access_tree_shared_prefix_collapses_into_one_node() {
+        let accesses = [access(0, &["outer", "a"]), access(0, &["outer", "b"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
+
+        let root = tree.root(0).unwrap();
+        assert!(!root.selected_here);
+
+        let outer = &root.children["outer"];
+        // `outer` itself was never the terminal of an access path.
+        assert!(!outer.selected_here);
+        // Both leaves below share the single `outer` node.
+        assert_eq!(
+            outer.children.keys().copied().collect::<Vec<_>>(),
+            vec!["a", "b"],
+        );
+        assert!(outer.children["a"].selected_here);
+        assert!(outer.children["b"].selected_here);
+    }
+
+    #[test]
+    fn struct_access_tree_records_both_shallow_and_deep_selection() {
+        // `s['outer']` (whole subtree) and `s['outer']['a']` (specific leaf)
+        // both recorded. Consumers honor the shallower selection at walk time;
+        // the builder simply records both `selected_here` flags.
+        let accesses = [access(0, &["outer"]), access(0, &["outer", "a"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
+
+        let outer = &tree.root(0).unwrap().children["outer"];
+        assert!(outer.selected_here);
+        assert!(outer.children["a"].selected_here);
+    }
+
+    /// `prune_struct_type` must honor `selected_here` on the input node
+    /// itself, not only on its children — symmetric with `leaf_under_tree`.
+    /// Without this guard, a node with `selected_here = true` and no
+    /// children produces an empty struct (silent drift from the leaf set).
+    #[test]
+    fn prune_struct_type_returns_full_type_when_node_is_selected_here() {
+        let node = StructAccessNode {
+            selected_here: true,
+            ..Default::default()
+        };
+
+        let s_type = DataType::Struct(
+            vec![
+                Arc::new(Field::new("outer", DataType::Int32, false)),
+                Arc::new(Field::new("other", DataType::Int32, false)),
+            ]
+            .into(),
+        );
+
+        let pruned = prune_struct_type(&s_type, &node);
+
+        assert_eq!(
+            pruned, s_type,
+            "selected_here on the input node must preserve the full type"
+        );
+    }
+
+    /// Same guard, but for the case where `selected_here` is set on an
+    /// intermediate node that also has children — e.g. both `s['outer']`
+    /// and `s['outer']['a']` are recorded. The shallower terminal must
+    /// keep the entire `outer` subtree, ignoring the deeper child entry.
+    #[test]
+    fn prune_struct_type_shallow_selection_subsumes_deeper_children() {
+        let accesses = [access(0, &["outer"]), access(0, &["outer", "a"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
+
+        let outer_type = DataType::Struct(
+            vec![
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
+            ]
+            .into(),
+        );
+
+        let outer_node = &tree.root(0).unwrap().children["outer"];
+        let pruned = prune_struct_type(&outer_type, outer_node);
+
+        assert_eq!(
+            pruned, outer_type,
+            "shallow selected_here must preserve the whole subtree, \
+             not narrow to the deeper child"
+        );
+    }
+
+    /// Mixed whole-root and nested access.
+    /// Projecting `s` (whole) alongside `get_field(s, 'outer', 'a')` (nested)
+    /// must preserve the full `s` struct type AND include all `s` leaves in
+    /// the projection mask. The nested access does not narrow the whole-root
+    /// reference — `regular_indices` wins over the access tree for that root.
+    #[test]
+    fn projection_whole_root_plus_nested_access_keeps_full_struct() {
+        // Schema: s (Struct{outer: Struct{a, b}})
+        // Parquet leaves: s.outer.a=0, s.outer.b=1
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let s_fields: Fields = vec![Arc::new(Field::new(
+            "outer",
+            DataType::Struct(outer_fields.clone()),
+            false,
+        ))]
+        .into();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(s_fields.clone()),
+            false,
+        )]));
+
+        let outer_arr = StructArray::new(
+            outer_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as _,
+                Arc::new(Int32Array::from(vec![3, 4])) as _,
+            ],
+            None,
+        );
+        let s_arr =
+            StructArray::new(s_fields.clone(), vec![Arc::new(outer_arr) as _], None);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s_arr)]).unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        // Column("s") (whole struct) + get_field(s, 'outer', 'a') (nested access).
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(PhysicalColumn::new("s", 0)),
+            logical2physical(
+                &get_field().call(vec![
+                    col("s"),
+                    Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                    Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+                ]),
+                &file_schema,
+            ),
+        ];
+
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        // `s` must keep its full nested type — NOT narrowed to Struct{outer: Struct{a}}.
+        let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(s_fields),
+            "whole-root reference must preserve the full nested struct type \
+             even when a nested access is also recorded"
+        );
+
+        // All `s` leaves must be in the projection mask (s.outer.a AND s.outer.b).
+        let expected_mask = ProjectionMask::leaves(schema_descr, [0, 1]);
+        assert_eq!(
+            read_plan.projection_mask, expected_mask,
+            "whole-root reference must select every leaf under the root"
         );
     }
 }
