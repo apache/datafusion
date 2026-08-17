@@ -24,7 +24,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
-use crate::aggregates::group_values::new_group_values;
+use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
@@ -66,7 +66,10 @@ impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::state)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::state,
+            AccumulatorPhase::State,
+        )
     }
 
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
@@ -87,6 +90,9 @@ impl AggregateHashTable<PartialMarker> {
         Ok(AggregateHashTable {
             group_by_metrics: self.group_by_metrics.clone(),
             aggregate_argument_metrics: self.aggregate_argument_metrics.clone(),
+            aggregate_accumulator_metrics: Arc::clone(
+                &self.aggregate_accumulator_metrics,
+            ),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
             state_schema: Arc::clone(&self.state_schema),
@@ -107,7 +113,11 @@ impl AggregateHashTable<PartialMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(batch, HashAggregateAccumulator::update_batch)
+        self.aggregate_batch_inner(
+            batch,
+            HashAggregateAccumulator::update_batch,
+            AccumulatorPhase::Update,
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
@@ -136,6 +146,7 @@ impl AggregateHashTable<PartialMarker> {
             return Ok(());
         }
 
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
         let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
@@ -171,13 +182,15 @@ impl AggregateHashTable<PartialMarker> {
         if any_interned {
             let total_groups = state.group_values.len();
             let false_filter = BooleanArray::from(vec![false]);
-            for acc in state.accumulators.iter_mut() {
+            for (idx, acc) in state.accumulators.iter_mut().enumerate() {
                 let null_args = acc.null_arguments(&self.input_schema)?;
                 let values = EvaluatedAccumulatorArgs {
                     arguments: null_args,
                     filter: Some(Arc::new(false_filter.clone())),
                 };
-                acc.update_batch(&values, &[0], total_groups)?;
+                accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
+                    acc.update_batch(&values, &[0], total_groups)
+                })?;
             }
         }
 
@@ -203,13 +216,19 @@ impl AggregateHashTable<PartialSkipMarker> {
             .next()
             .unwrap_or_default();
 
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building_mut();
-        for (acc, values) in state
+        for (idx, (acc, values)) in state
             .accumulators
             .iter_mut()
             .zip(evaluated_batch.accumulator_args.iter())
+            .enumerate()
         {
-            output.extend(acc.convert_to_state(values)?);
+            output.extend(accumulator_metrics.time(
+                idx,
+                AccumulatorPhase::State,
+                || acc.convert_to_state(values),
+            )?);
         }
 
         Ok(RecordBatch::try_new(
