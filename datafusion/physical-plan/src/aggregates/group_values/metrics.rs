@@ -237,6 +237,21 @@ mod tests {
         );
     }
 
+    fn assert_aggregate_metric_times_positive(metrics: &MetricsSet, suffix: &str) {
+        let mut found = false;
+        for metric in metrics.iter().filter(|metric| {
+            matches!(
+                metric.value(),
+                MetricValue::Time { name, .. }
+                    if name.starts_with("agg_expr_") && name.ends_with(suffix)
+            )
+        }) {
+            found = true;
+            assert!(metric.value().as_usize() > 0);
+        }
+        assert!(found, "expected aggregate metrics ending in {suffix}");
+    }
+
     fn sum_aggregate(
         schema: &Arc<Schema>,
         column: &str,
@@ -392,6 +407,8 @@ mod tests {
         assert_aggregate_metric_labels(&metrics, "arguments_time");
         assert_aggregate_metric_labels(&metrics, "update_time");
         assert_aggregate_metric_labels(&metrics, "state_time");
+        assert_aggregate_metric_times_positive(&metrics, "update_time");
+        assert_aggregate_metric_times_positive(&metrics, "state_time");
 
         Ok(())
     }
@@ -467,6 +484,8 @@ mod tests {
             aggregate_metric_names_and_labels(&metrics, "evaluate_time"),
             vec![("agg_expr_0_evaluate_time".to_string(), "SUM(b)".to_string())]
         );
+        assert_aggregate_metric_times_positive(&metrics, "merge_time");
+        assert_aggregate_metric_times_positive(&metrics, "evaluate_time");
 
         Ok(())
     }
