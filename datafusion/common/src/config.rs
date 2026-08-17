@@ -1398,8 +1398,9 @@ config_namespace! {
         /// has idle cores and can tolerate additional memory usage.
         /// Boosting these values is likely worthwhile when
         /// writing out already in-memory data, such as from a cached
-        /// data frame.
-        pub maximum_parallel_row_group_writers: usize, default = 1
+        /// data frame. Must be greater than zero because the value is used as
+        /// the capacity of an internal channel.
+        pub maximum_parallel_row_group_writers: ConfigNonZeroUsize, default = non_zero_usize_default(1)
 
         /// (writing) By default parallel parquet writer is tuned for minimum
         /// memory usage in a streaming execution plan. You may see

@@ -125,7 +125,9 @@ mod tests {
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
         as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
     };
-    use datafusion_common::config::{ParquetOptions, TableParquetOptions};
+    use datafusion_common::config::{
+        ConfigNonZeroUsize, ParquetOptions, TableParquetOptions,
+    };
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{Result, ScalarValue};
@@ -1311,7 +1313,7 @@ mod tests {
     async fn parquet_sink_parallel_write() -> Result<()> {
         let opts = ParquetOptions {
             allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 2,
+            maximum_parallel_row_group_writers: ConfigNonZeroUsize::try_new(2).unwrap(),
             maximum_buffered_record_batches_per_stream: 2,
             ..Default::default()
         };
@@ -1443,7 +1445,7 @@ mod tests {
         // multithreaded write, skip insert
         let opts = ParquetOptions {
             allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 2,
+            maximum_parallel_row_group_writers: ConfigNonZeroUsize::try_new(2).unwrap(),
             maximum_buffered_record_batches_per_stream: 2,
             skip_arrow_metadata: true,
             ..Default::default()
@@ -1456,7 +1458,7 @@ mod tests {
         // multithreaded write, do not skip insert
         let opts = ParquetOptions {
             allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 2,
+            maximum_parallel_row_group_writers: ConfigNonZeroUsize::try_new(2).unwrap(),
             maximum_buffered_record_batches_per_stream: 2,
             skip_arrow_metadata: false,
             ..Default::default()
@@ -1802,7 +1804,7 @@ mod tests {
 
         let row_parallel_write_opts = ParquetOptions {
             allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 10,
+            maximum_parallel_row_group_writers: ConfigNonZeroUsize::try_new(10).unwrap(),
             maximum_buffered_record_batches_per_stream: 1,
             ..Default::default()
         };
@@ -1812,7 +1814,7 @@ mod tests {
 
         let col_parallel_write_opts = ParquetOptions {
             allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 1,
+            maximum_parallel_row_group_writers: ConfigNonZeroUsize::try_new(1).unwrap(),
             maximum_buffered_record_batches_per_stream: 2,
             ..Default::default()
         };

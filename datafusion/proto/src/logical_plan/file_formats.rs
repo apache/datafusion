@@ -312,7 +312,7 @@ mod parquet {
         }
 
         #[test]
-        fn try_decode_file_format_defaults_empty_writer_version() {
+        fn try_decode_file_format_defaults_empty_options() {
             let proto = TableParquetOptionsProto {
                 global: Some(ParquetOptionsProto::default()),
                 ..Default::default()
@@ -332,6 +332,10 @@ mod parquet {
             assert_eq!(
                 options.global.writer_version,
                 ParquetOptions::default().writer_version
+            );
+            assert_eq!(
+                options.global.maximum_parallel_row_group_writers,
+                ParquetOptions::default().maximum_parallel_row_group_writers
             );
         }
     }
