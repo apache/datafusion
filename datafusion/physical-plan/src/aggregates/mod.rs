@@ -866,6 +866,9 @@ pub struct AggregateExec {
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
+    /// Whether group keys are disjoint across input partitions without being
+    /// ordered within each partition.
+    group_keys_partition_disjoint: bool,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -890,6 +893,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            group_keys_partition_disjoint: self.group_keys_partition_disjoint,
             cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
@@ -910,6 +914,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            group_keys_partition_disjoint: self.group_keys_partition_disjoint,
             cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
@@ -1026,6 +1031,9 @@ impl AggregateExec {
             InputOrderMode::Linear
         };
 
+        let group_keys_partition_disjoint = input_order_mode == InputOrderMode::Linear
+            && input_eq_properties.partition_disjoint_satisfies(&groupby_exprs);
+
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
             ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
@@ -1037,6 +1045,7 @@ impl AggregateExec {
             group_by.is_true_no_grouping(),
             &mode,
             &input_order_mode,
+            group_keys_partition_disjoint,
             aggr_expr.as_ref(),
         )?;
 
@@ -1052,6 +1061,7 @@ impl AggregateExec {
             required_input_ordering,
             limit_options: None,
             input_order_mode,
+            group_keys_partition_disjoint,
             cache: Arc::new(cache),
             dynamic_filter: None,
         };
@@ -1366,6 +1376,10 @@ impl AggregateExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "aggregate property computation needs input, schema, grouping and mode context"
+    )]
     pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
@@ -1373,6 +1387,7 @@ impl AggregateExec {
         is_true_no_grouping: bool,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
+        group_keys_partition_disjoint: bool,
         aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> Result<PlanProperties> {
         // Construct equivalence properties:
@@ -1424,10 +1439,12 @@ impl AggregateExec {
         };
 
         // TODO: Emission type and boundedness information can be enhanced here
-        let emission_type = if *input_order_mode == InputOrderMode::Linear {
-            EmissionType::Final
-        } else {
-            input.pipeline_behavior()
+        let emission_type = match input_order_mode {
+            InputOrderMode::Linear if !group_keys_partition_disjoint => {
+                EmissionType::Final
+            }
+            InputOrderMode::Linear => EmissionType::Incremental,
+            _ => input.pipeline_behavior(),
         };
 
         Ok(PlanProperties::new(
@@ -1440,6 +1457,12 @@ impl AggregateExec {
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
         &self.input_order_mode
+    }
+
+    /// Whether group keys are disjoint across input partitions without being
+    /// ordered within each partition.
+    pub fn group_keys_partition_disjoint(&self) -> bool {
+        self.group_keys_partition_disjoint
     }
 
     /// Estimates output statistics for this aggregate node.
@@ -2298,6 +2321,8 @@ impl ExecutionPlan for AggregateExec {
             required_input_ordering: _,
             // Derived at construction from the input ordering and `group_by`.
             input_order_mode: _,
+            // Derived at construction from the input partition-disjoint property.
+            group_keys_partition_disjoint: _,
             // Derived at construction by `Self::compute_properties`.
             cache: _,
             dynamic_filter,
@@ -3172,6 +3197,7 @@ mod tests {
     use crate::common::collect;
     use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
+    use crate::execution_plan::EmissionType;
     use crate::expressions::col;
     use crate::filter::FilterExecBuilder;
     use crate::metrics::MetricValue;
@@ -4540,6 +4566,95 @@ mod tests {
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
         assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
+
+        Ok(())
+    }
+
+    /// Ensures unsorted multi-partition input with partition-disjoint group keys
+    /// uses incremental partial hash aggregation.
+    #[tokio::test]
+    async fn partition_disjoint_partial_aggregate_planning() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+
+        let partition_0 = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 1, 1])),
+                Arc::new(Int64Array::from(vec![10, 20, 30])),
+            ],
+        )?];
+        let partition_1 = vec![RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![4, 3])),
+                Arc::new(Int64Array::from(vec![40, 50])),
+            ],
+        )?];
+
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        )];
+
+        let test_input = TestMemoryExec::try_new(
+            &[partition_0, partition_1],
+            Arc::clone(&schema),
+            None,
+        )?
+        .try_with_partition_disjoint_keys(vec![col("key", &schema)?])?;
+        let partition_data: Vec<Vec<RecordBatch>> = test_input.partitions().to_vec();
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(test_input)));
+
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            Arc::clone(&input),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert!(aggregate.group_keys_partition_disjoint());
+        assert_eq!(aggregate.cache().emission_type, EmissionType::Incremental);
+
+        let task_ctx = new_migrated_hash_ctx(2);
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialHash(_)));
+
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++-----+-----------------+
+| key | SUM(value)[sum] |
++-----+-----------------+
+| 1   | 50              |
+| 2   | 10              |
++-----+-----------------+
+");
+
+        let blocking_input =
+            TestMemoryExec::try_new_exec(&partition_data, Arc::clone(&schema), None)?;
+        let blocking_aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr,
+            vec![None],
+            blocking_input,
+            schema,
+        )?;
+        assert!(!blocking_aggregate.group_keys_partition_disjoint());
+        assert_eq!(
+            blocking_aggregate.cache().emission_type,
+            EmissionType::Final
+        );
 
         Ok(())
     }

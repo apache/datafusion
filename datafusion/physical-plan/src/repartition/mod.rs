@@ -2053,6 +2053,7 @@ impl RepartitionExec {
         // If the ordering is lost, reset the ordering equivalence class:
         if !Self::maintains_input_order_helper(input, preserve_order)[0] {
             eq_properties.clear_orderings();
+            eq_properties.clear_partition_disjoint_exprs();
         }
         // When there are more than one input partitions, they will be fused at the output.
         // Therefore, remove per partition constants.

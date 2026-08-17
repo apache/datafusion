@@ -36,7 +36,7 @@ use crate::equivalence::{
 use crate::expressions::{Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    PhysicalSortRequirement, physical_exprs_contains,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -144,6 +144,10 @@ pub struct EquivalenceProperties {
     oeq_cache: OrderingEquivalenceCache,
     /// Table constraints that factor in equivalence calculations.
     constraints: Constraints,
+    /// Expressions whose values are known to be disjoint across output
+    /// partitions. Each output partition contains a non-overlapping subset of
+    /// values for these expressions.
+    partition_disjoint_exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -229,6 +233,7 @@ impl EquivalenceProperties {
             oeq_class: OrderingEquivalenceClass::default(),
             oeq_cache: OrderingEquivalenceCache::default(),
             constraints: Constraints::default(),
+            partition_disjoint_exprs: vec![],
             schema,
         }
     }
@@ -262,6 +267,7 @@ impl EquivalenceProperties {
             oeq_class,
             eq_group,
             constraints: Constraints::default(),
+            partition_disjoint_exprs: vec![],
             schema,
         }
     }
@@ -319,6 +325,34 @@ impl EquivalenceProperties {
     pub fn clear_orderings(&mut self) {
         self.oeq_class.clear();
         self.oeq_cache.clear();
+    }
+
+    /// Clears expressions known to be disjoint across output partitions.
+    /// Call this method when merging or repartitioning destroys that guarantee.
+    pub fn clear_partition_disjoint_exprs(&mut self) {
+        self.partition_disjoint_exprs.clear();
+    }
+
+    /// Sets expressions known to be disjoint across output partitions.
+    pub fn set_partition_disjoint_exprs(
+        &mut self,
+        exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) {
+        self.partition_disjoint_exprs = exprs.into_iter().collect();
+    }
+
+    /// Returns expressions known to be disjoint across output partitions.
+    pub fn partition_disjoint_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.partition_disjoint_exprs
+    }
+
+    /// Returns whether `exprs` are covered by the partition-disjoint property.
+    pub fn partition_disjoint_satisfies(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> bool {
+        !self.partition_disjoint_exprs.is_empty()
+            && !exprs.is_empty()
+            && exprs
+                .iter()
+                .all(|expr| physical_exprs_contains(&self.partition_disjoint_exprs, expr))
     }
 
     /// Removes constant expressions that may change across partitions.
@@ -1175,10 +1209,16 @@ impl EquivalenceProperties {
             .iter()
             .cloned()
             .map(|o| eq_group.normalize_sort_exprs(o));
+        let partition_disjoint_exprs = self
+            .partition_disjoint_exprs
+            .iter()
+            .filter_map(|expr| self.project_expr(expr, mapping))
+            .collect();
         Self {
             oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
             oeq_class: OrderingEquivalenceClass::new(orderings),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
+            partition_disjoint_exprs,
             schema: output_schema,
             eq_group,
         }
@@ -1361,6 +1401,12 @@ impl EquivalenceProperties {
         self.oeq_class = self.oeq_class.with_new_schema(&schema)?;
         self.oeq_cache.normal_cls = self.oeq_cache.normal_cls.with_new_schema(&schema)?;
 
+        self.partition_disjoint_exprs = self
+            .partition_disjoint_exprs
+            .into_iter()
+            .map(|expr| with_new_schema(expr, &schema))
+            .collect::<Result<_>>()?;
+
         // Update the schema:
         self.schema = schema;
 
@@ -1384,15 +1430,32 @@ impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let empty_eq_group = self.eq_group.is_empty();
         let empty_oeq_class = self.oeq_class.is_empty();
-        if empty_oeq_class && empty_eq_group {
+        let empty_partition_disjoint = self.partition_disjoint_exprs.is_empty();
+        if empty_oeq_class && empty_eq_group && empty_partition_disjoint {
             write!(f, "No properties")?;
         } else if !empty_oeq_class {
             write!(f, "order: {}", self.oeq_class)?;
             if !empty_eq_group {
                 write!(f, ", eq: {}", self.eq_group)?;
             }
-        } else {
+            if !empty_partition_disjoint {
+                write!(
+                    f,
+                    ", partition_disjoint: {:?}",
+                    self.partition_disjoint_exprs
+                )?;
+            }
+        } else if !empty_eq_group {
             write!(f, "eq: {}", self.eq_group)?;
+            if !empty_partition_disjoint {
+                write!(
+                    f,
+                    ", partition_disjoint: {:?}",
+                    self.partition_disjoint_exprs
+                )?;
+            }
+        } else {
+            write!(f, "partition_disjoint: {:?}", self.partition_disjoint_exprs)?;
         }
         Ok(())
     }

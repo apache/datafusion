@@ -778,6 +778,34 @@ fn preserving_order_enables_streaming(
     Ok(without_ordered.pipeline_behavior() == EmissionType::Final)
 }
 
+/// Checks whether preserving a child's partition-disjoint group keys enables
+/// the parent to run in streaming mode.
+fn preserving_partition_disjoint_enables_streaming(
+    parent: &Arc<dyn ExecutionPlan>,
+    child: &Arc<dyn ExecutionPlan>,
+) -> Result<bool> {
+    if parent.children().len() != 1 {
+        return Ok(false);
+    }
+    if child
+        .equivalence_properties()
+        .partition_disjoint_exprs()
+        .is_empty()
+    {
+        return Ok(false);
+    }
+    let with_disjoint =
+        replace_children_if_necessary(Arc::clone(parent), vec![Arc::clone(child)])?;
+    if with_disjoint.pipeline_behavior() == EmissionType::Final {
+        return Ok(false);
+    }
+    let coalesced_child: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(Arc::clone(child)));
+    let without_disjoint =
+        replace_children_if_necessary(Arc::clone(parent), vec![coalesced_child])?;
+    Ok(without_disjoint.pipeline_behavior() == EmissionType::Final)
+}
+
 /// # Returns
 ///
 /// Updated node with an execution plan, where the desired single distribution
@@ -1425,6 +1453,10 @@ pub fn ensure_distribution(
              }| {
                 let streaming_benefit = if context.data {
                     preserving_order_enables_streaming(&plan, &context.plan)?
+                        || preserving_partition_disjoint_enables_streaming(
+                            &plan,
+                            &context.plan,
+                        )?
                 } else {
                     false
                 };

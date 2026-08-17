@@ -203,7 +203,10 @@ pub fn new_group_values(
     }
 
     if multi_group_by::supported_schema(schema.as_ref()) {
-        if matches!(group_ordering, GroupOrdering::None) {
+        if matches!(
+            group_ordering,
+            GroupOrdering::None | GroupOrdering::PartitionDisjoint(_)
+        ) {
             Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         } else {
             Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))

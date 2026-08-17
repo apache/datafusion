@@ -57,6 +57,7 @@ impl OrderedAggregateTable<FinalMarker> {
             Arc::clone(input_schema),
             batch_size,
             input_order_mode,
+            agg.group_keys_partition_disjoint(),
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
             metrics,
