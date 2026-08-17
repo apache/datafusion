@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use datafusion_common::config::{
     CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
-    ParquetOptions, TableParquetOptions,
+    ParquetOptions, ParquetPushdownFilterMode, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
@@ -348,6 +348,17 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     }
                 }),
             pushdown_filters: proto.pushdown_filters,
+            pushdown_filter_mode: match proto.pushdown_filter_mode() {
+                parquet_options::PushdownFilterMode::Auto => {
+                    ParquetPushdownFilterMode::Auto
+                }
+                parquet_options::PushdownFilterMode::Always => {
+                    ParquetPushdownFilterMode::Always
+                }
+                parquet_options::PushdownFilterMode::Heuristic => {
+                    ParquetPushdownFilterMode::Heuristic
+                }
+            },
             reorder_filters: proto.reorder_filters,
             force_filter_selections: proto.force_filter_selections,
             progressive_io: proto.progressive_io,

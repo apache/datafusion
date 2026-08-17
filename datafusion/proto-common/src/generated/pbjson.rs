@@ -6361,6 +6361,9 @@ impl serde::Serialize for ParquetOptions {
         if self.pushdown_filters {
             len += 1;
         }
+        if self.pushdown_filter_mode != 0 {
+            len += 1;
+        }
         if self.reorder_filters {
             len += 1;
         }
@@ -6472,6 +6475,11 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.pushdown_filters {
             struct_ser.serialize_field("pushdownFilters", &self.pushdown_filters)?;
+        }
+        if self.pushdown_filter_mode != 0 {
+            let v = parquet_options::PushdownFilterMode::try_from(self.pushdown_filter_mode)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.pushdown_filter_mode)))?;
+            struct_ser.serialize_field("pushdownFilterMode", &v)?;
         }
         if self.reorder_filters {
             struct_ser.serialize_field("reorderFilters", &self.reorder_filters)?;
@@ -6669,6 +6677,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "skipMetadata",
             "pushdown_filters",
             "pushdownFilters",
+            "pushdown_filter_mode",
+            "pushdownFilterMode",
             "reorder_filters",
             "reorderFilters",
             "force_filter_selections",
@@ -6741,6 +6751,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             Pruning,
             SkipMetadata,
             PushdownFilters,
+            PushdownFilterMode,
             ReorderFilters,
             ForceFilterSelections,
             ProgressiveIo,
@@ -6799,6 +6810,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "pruning" => Ok(GeneratedField::Pruning),
                             "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
+                            "pushdownFilterMode" | "pushdown_filter_mode" => Ok(GeneratedField::PushdownFilterMode),
                             "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
                             "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
                             "progressiveIo" | "progressive_io" => Ok(GeneratedField::ProgressiveIo),
@@ -6855,6 +6867,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut pruning__ = None;
                 let mut skip_metadata__ = None;
                 let mut pushdown_filters__ = None;
+                let mut pushdown_filter_mode__ = None;
                 let mut reorder_filters__ = None;
                 let mut force_filter_selections__ = None;
                 let mut progressive_io__ = None;
@@ -6913,6 +6926,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("pushdownFilters"));
                             }
                             pushdown_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PushdownFilterMode => {
+                            if pushdown_filter_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pushdownFilterMode"));
+                            }
+                            pushdown_filter_mode__ = Some(map_.next_value::<parquet_options::PushdownFilterMode>()? as i32);
                         }
                         GeneratedField::ReorderFilters => {
                             if reorder_filters__.is_some() {
@@ -7135,6 +7154,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     pruning: pruning__.unwrap_or_default(),
                     skip_metadata: skip_metadata__.unwrap_or_default(),
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
+                    pushdown_filter_mode: pushdown_filter_mode__.unwrap_or_default(),
                     reorder_filters: reorder_filters__.unwrap_or_default(),
                     force_filter_selections: force_filter_selections__.unwrap_or_default(),
                     progressive_io: progressive_io__.unwrap_or_default(),
@@ -7172,6 +7192,80 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             }
         }
         deserializer.deserialize_struct("datafusion_common.ParquetOptions", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for parquet_options::PushdownFilterMode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Auto => "AUTO",
+            Self::Always => "ALWAYS",
+            Self::Heuristic => "HEURISTIC",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for parquet_options::PushdownFilterMode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "AUTO",
+            "ALWAYS",
+            "HEURISTIC",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = parquet_options::PushdownFilterMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "AUTO" => Ok(parquet_options::PushdownFilterMode::Auto),
+                    "ALWAYS" => Ok(parquet_options::PushdownFilterMode::Always),
+                    "HEURISTIC" => Ok(parquet_options::PushdownFilterMode::Heuristic),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for Precision {

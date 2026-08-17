@@ -925,6 +925,14 @@ async fn query_single_parquet_file_pushdown_filters_one_shot_io() {
     let test = Test::new().with_single_file_parquet().await;
     test.set("datafusion.execution.parquet.pushdown_filters", "true")
         .await;
+    // Opt out of the narrow-projection pushdown gate: these tests exist to
+    // demonstrate the pushdown I/O pattern, which requires a RowFilter to
+    // actually be installed.
+    test.set(
+        "datafusion.execution.parquet.pushdown_filter_mode",
+        "always",
+    )
+    .await;
 
     // With filter pushdown enabled and `progressive_io` disabled (the
     // default), all data needed for each row group (columns needed by the
@@ -954,6 +962,14 @@ async fn query_single_parquet_file_pushdown_filters_progressive_io() {
     let test = Test::new().with_single_file_parquet().await;
     test.set("datafusion.execution.parquet.pushdown_filters", "true")
         .await;
+    // Opt out of the narrow-projection pushdown gate: these tests exist to
+    // demonstrate the pushdown I/O pattern, which requires a RowFilter to
+    // actually be installed.
+    test.set(
+        "datafusion.execution.parquet.pushdown_filter_mode",
+        "always",
+    )
+    .await;
     test.set("datafusion.execution.parquet.progressive_io", "true")
         .await;
 
