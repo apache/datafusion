@@ -277,6 +277,18 @@ impl ClassicPWMJStream {
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
+        // A finished scan can leave several completed batches queued; emit
+        // them one per poll and transition only once the queue is empty, so
+        // no output is lost.
+        if !self.batch_process_state.continue_process {
+            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
+                return Ok(StatefulStreamResult::Ready(Some(batch)));
+            }
+
+            self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+            return Ok(StatefulStreamResult::Continue);
+        }
+
         // Produce more work
         let batch = resolve_classic_join(
             buffered_side,
@@ -289,25 +301,8 @@ impl ClassicPWMJStream {
         )?;
 
         if !self.batch_process_state.continue_process {
-            // We finished scanning this stream batch.
-            self.batch_process_state
-                .output_batches
-                .finish_buffered_batch()?;
-            if let Some(b) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-                return Ok(StatefulStreamResult::Ready(Some(b)));
-            }
-
-            // Nothing pending; hand back whatever `resolve` returned (often empty) and move on.
-            if self.batch_process_state.output_batches.is_empty() {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-
-                return Ok(StatefulStreamResult::Ready(Some(batch)));
-            }
+            // Scan finished; re-enter through the drain guard above.
+            return Ok(StatefulStreamResult::Continue);
         }
 
         Ok(StatefulStreamResult::Ready(Some(batch)))
@@ -324,25 +319,13 @@ impl ClassicPWMJStream {
         }
 
         if !self.batch_process_state.continue_process {
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
+            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
 
-            self.batch_process_state
-                .output_batches
-                .finish_buffered_batch()?;
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
-                self.state = PiecewiseMergeJoinStreamState::Completed;
-                return Ok(StatefulStreamResult::Ready(Some(batch)));
-            }
+            // Fully drained; finish instead of re-running the pass.
+            self.state = PiecewiseMergeJoinStreamState::Completed;
+            return Ok(StatefulStreamResult::Continue);
         }
 
         let buffered_data =
@@ -372,29 +355,8 @@ impl ClassicPWMJStream {
         self.batch_process_state.output_batches.push_batch(batch)?;
 
         self.batch_process_state.continue_process = false;
-        if let Some(batch) = self
-            .batch_process_state
-            .output_batches
-            .next_completed_batch()
-        {
-            return Ok(StatefulStreamResult::Ready(Some(batch)));
-        }
-
-        self.batch_process_state
-            .output_batches
-            .finish_buffered_batch()?;
-        if let Some(batch) = self
-            .batch_process_state
-            .output_batches
-            .next_completed_batch()
-        {
-            self.state = PiecewiseMergeJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Ready(Some(batch)));
-        }
-
-        self.state = PiecewiseMergeJoinStreamState::Completed;
-        self.batch_process_state.reset();
-        Ok(StatefulStreamResult::Ready(None))
+        // Re-enter through the drain guard above.
+        Ok(StatefulStreamResult::Continue)
     }
 }
 
@@ -437,6 +399,13 @@ impl BatchProcessState {
         self.found = false;
         self.continue_process = true;
         self.processed_null_count = false;
+    }
+
+    // `None` guarantees the coalescer holds no pending rows, so the caller
+    // may safely transition state without losing output.
+    fn next_drained_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.output_batches.finish_buffered_batch()?;
+        Ok(self.output_batches.next_completed_batch())
     }
 }
 
@@ -674,7 +643,9 @@ mod tests {
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
+    use futures::TryStreamExt;
     use insta::assert_snapshot;
     use std::sync::Arc;
 
@@ -964,12 +935,8 @@ mod tests {
         );
         let (_, batches) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
-        assert_snapshot!(batches_to_string(&batches), @r"
-        +----+----+----+----+----+----+
-        | a1 | b1 | c1 | a2 | b1 | c2 |
-        +----+----+----+----+----+----+
-        +----+----+----+----+----+----+
-        ");
+        // An empty join result produces no batches at all, not an empty batch.
+        assert!(batches.is_empty());
         Ok(())
     }
 
@@ -1298,8 +1265,16 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
-            join_collect(left, right, on, Operator::LtEq, JoinType::Left).await?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1)),
+        );
+        // Bound collection so the old duplicate loop becomes a snapshot mismatch.
+        let batches = join(left, right, on, Operator::LtEq, JoinType::Left)?
+            .execute(0, task_ctx)?
+            .take(6)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
@@ -1344,8 +1319,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
-            join_collect(left, right, on, Operator::GtEq, JoinType::Right).await?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1)),
+        );
+        let join = join(left, right, on, Operator::GtEq, JoinType::Right)?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
@@ -1408,12 +1387,8 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r"
-        +----+----+----+----+----+----+
-        | a1 | b1 | c1 | a2 | b1 | c2 |
-        +----+----+----+----+----+----+
-        +----+----+----+----+----+----+
-        ");
+        // An empty join result produces no batches at all, not an empty batch.
+        assert!(batches.is_empty());
         Ok(())
     }
 
