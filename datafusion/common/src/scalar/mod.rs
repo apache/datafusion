@@ -4574,13 +4574,28 @@ impl ScalarValue {
                 eq_array_primitive!(array, index, as_boolean_array, val)?
             }
             ScalarValue::Float16(val) => {
-                eq_array_primitive!(array, index, as_float16_array, val)?
+                let array = as_float16_array(array)?;
+                let is_valid = array.is_valid(index);
+                Ok(match val {
+                    Some(v) => is_valid && array.value(index).to_bits() == v.to_bits(),
+                    None => !is_valid,
+                })
             }
             ScalarValue::Float32(val) => {
-                eq_array_primitive!(array, index, as_float32_array, val)?
+                let array = as_float32_array(array)?;
+                let is_valid = array.is_valid(index);
+                Ok(match val {
+                    Some(v) => is_valid && array.value(index).to_bits() == v.to_bits(),
+                    None => !is_valid,
+                })
             }
             ScalarValue::Float64(val) => {
-                eq_array_primitive!(array, index, as_float64_array, val)?
+                let array = as_float64_array(array)?;
+                let is_valid = array.is_valid(index);
+                Ok(match val {
+                    Some(v) => is_valid && array.value(index).to_bits() == v.to_bits(),
+                    None => !is_valid,
+                })
             }
             ScalarValue::Int8(val) => {
                 eq_array_primitive!(array, index, as_int8_array, val)?
