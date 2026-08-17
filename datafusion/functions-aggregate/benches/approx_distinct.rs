@@ -421,6 +421,29 @@ fn approx_distinct_benchmark(c: &mut Criterion) {
     }
 }
 
+fn prepare_accumulator_with_precision(
+    data_type: DataType,
+    p: usize,
+) -> Box<dyn Accumulator> {
+    let schema = Arc::new(Schema::new(vec![Field::new("f", data_type, true)]));
+    let expr = col("f", &schema).unwrap();
+    let accumulator_args = AccumulatorArgs {
+        return_field: Field::new("f", DataType::UInt64, true).into(),
+        schema: &schema,
+        expr_fields: &[expr.return_field(&schema).unwrap()],
+        ignore_nulls: false,
+        order_bys: &[],
+        is_reversed: false,
+        name: "approx_distinct(f)",
+        is_distinct: false,
+        exprs: &[expr],
+    };
+    ApproxDistinct::with_hll_precision(p)
+        .unwrap()
+        .accumulator(accumulator_args)
+        .unwrap()
+}
+
 /// Build a `GroupsAccumulator` the same way the aggregate operator does: use the
 /// specialized one if the function supports it, otherwise fall back to wrapping
 /// the per-group `Accumulator` in a `GroupsAccumulatorAdapter`.
@@ -428,6 +451,32 @@ fn prepare_groups_accumulator(data_type: DataType) -> Box<dyn GroupsAccumulator>
     let schema = Arc::new(Schema::new(vec![Field::new("f", data_type, true)]));
     let expr = col("f", &schema).unwrap();
     let udf = Arc::new(AggregateUDF::from(ApproxDistinct::new()));
+    let agg = Arc::new(
+        AggregateExprBuilder::new(udf, vec![expr])
+            .schema(schema)
+            .alias("approx_distinct(f)")
+            .build()
+            .unwrap(),
+    );
+
+    if agg.groups_accumulator_supported() {
+        agg.create_groups_accumulator().unwrap()
+    } else {
+        let agg = Arc::clone(&agg);
+        let factory = move || agg.create_accumulator();
+        Box::new(GroupsAccumulatorAdapter::new(factory))
+    }
+}
+
+fn prepare_groups_accumulator_with_precision(
+    data_type: DataType,
+    p: usize,
+) -> Box<dyn GroupsAccumulator> {
+    let schema = Arc::new(Schema::new(vec![Field::new("f", data_type, true)]));
+    let expr = col("f", &schema).unwrap();
+    let udf = Arc::new(AggregateUDF::from(
+        ApproxDistinct::with_hll_precision(p).unwrap(),
+    ));
     let agg = Arc::new(
         AggregateExprBuilder::new(udf, vec![expr])
             .schema(schema)
@@ -583,9 +632,104 @@ fn approx_distinct_grouped_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark `approx_distinct` at varying HLL precisions (p ∈ {8, 10, 12, 14}).
+///
+/// Lower `p` means fewer registers (1/64th as many at p=8 vs p=14), so p=8
+/// should be noticeably faster than p=14 — this confirms the feature works.
+fn approx_distinct_precision_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("approx_distinct_precision");
+
+    let n_distinct_99 = BATCH_SIZE * 99 / 100;
+
+    // Pre-build input arrays once (outside the benched loop).
+    let i64_values = Arc::new(create_i64_array(n_distinct_99)) as ArrayRef;
+    let short_pool = create_string_pool(n_distinct_99, SHORT_STRING_LENGTH);
+    let utf8_values = Arc::new(create_string_array(&short_pool)) as ArrayRef;
+    let decimal128_values = Arc::new(create_decimal128_array(200)) as ArrayRef;
+
+    for p in [14usize, 12, 10, 8] {
+        // i64 at 99% distinct — measure update_batch + evaluate so the
+        // register scan (O(2^p)) is included. p=8 has 1/64th the registers
+        // to scan vs p=14 and should be noticeably faster on evaluate().
+        {
+            let values = Arc::clone(&i64_values);
+            group.bench_function(&format!("p={p} i64 99% distinct"), |b| {
+                b.iter(|| {
+                    let mut acc = prepare_accumulator_with_precision(DataType::Int64, p);
+                    acc.update_batch(std::slice::from_ref(&values)).unwrap();
+                    black_box(acc.evaluate().unwrap())
+                })
+            });
+        }
+
+        // utf8 short at 99% distinct
+        {
+            let values = Arc::clone(&utf8_values);
+            group.bench_function(&format!("p={p} utf8 short 99% distinct"), |b| {
+                b.iter(|| {
+                    let mut acc = prepare_accumulator_with_precision(DataType::Utf8, p);
+                    acc.update_batch(std::slice::from_ref(&values)).unwrap();
+                    black_box(acc.evaluate().unwrap())
+                })
+            });
+        }
+
+        // Decimal128 at fixed 200 distinct
+        {
+            let values = Arc::clone(&decimal128_values);
+            group.bench_function(&format!("p={p} decimal128 200 distinct"), |b| {
+                b.iter(|| {
+                    let mut acc = prepare_accumulator_with_precision(
+                        DataType::Decimal128(DECIMAL128_PRECISION, DECIMAL_SCALE),
+                        p,
+                    );
+                    acc.update_batch(std::slice::from_ref(&values)).unwrap();
+                    black_box(acc.evaluate().unwrap())
+                })
+            });
+        }
+    }
+
+    group.finish();
+}
+
+/// Benchmark grouped `approx_distinct` at varying HLL precisions.
+fn approx_distinct_grouped_precision_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("approx_distinct_grouped_precision");
+    group.sample_size(10);
+
+    for data_type in [DataType::Int64, DataType::Utf8] {
+        let batches = build_grouped_batches(&data_type);
+        for p in [14usize, 12, 10, 8] {
+            let label = format!("p={p} {data_type:?} {N_GROUPS} groups");
+            let batches = batches.clone();
+            group.bench_function(&label, |b| {
+                b.iter(|| {
+                    let mut acc =
+                        prepare_groups_accumulator_with_precision(data_type.clone(), p);
+                    for (values, group_indices) in &batches {
+                        acc.update_batch(
+                            std::slice::from_ref(values),
+                            group_indices,
+                            None,
+                            N_GROUPS,
+                        )
+                        .unwrap();
+                    }
+                    black_box(acc.evaluate(EmitTo::All).unwrap());
+                })
+            });
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     approx_distinct_benchmark,
-    approx_distinct_grouped_benchmark
+    approx_distinct_grouped_benchmark,
+    approx_distinct_precision_benchmark,
+    approx_distinct_grouped_precision_benchmark
 );
 criterion_main!(benches);
