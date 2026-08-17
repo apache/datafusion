@@ -34,11 +34,10 @@ use crate::aggregates::group_values::{
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
-    evaluate_group_by,
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
 };
 
-use super::accumulator_phases;
+use super::AggregateTableMetrics;
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
@@ -146,28 +145,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
-        let aggregate_labels = agg
-            .aggr_expr
-            .iter()
-            .map(|agg_expr| aggregate_metric_label(agg_expr))
-            .collect::<Vec<_>>();
-        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
-            &agg.metrics,
-            partition,
-            aggregate_labels.clone(),
-        );
-        let accumulator_phases = accumulator_phases(&agg.mode);
-        let aggregate_accumulator_metrics = Arc::new(AggregateAccumulatorMetrics::new(
-            &agg.metrics,
-            partition,
-            aggregate_labels,
-            accumulator_phases,
-        ));
+        let metrics = AggregateTableMetrics::new(agg, partition);
 
         Ok(Self {
-            group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
-            aggregate_argument_metrics,
-            aggregate_accumulator_metrics,
+            group_by_metrics: metrics.group_by,
+            aggregate_argument_metrics: metrics.aggregate_arguments,
+            aggregate_accumulator_metrics: metrics.accumulator,
             input_schema,
             output_schema,
             state_schema,

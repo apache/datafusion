@@ -38,10 +38,10 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    aggregate_metric_label, evaluate_group_by,
+    evaluate_group_by,
 };
 
-use super::accumulator_phases;
+use super::AggregateTableMetrics;
 use super::common::{
     AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
     MaterializeAccumulatorFn,
@@ -56,24 +56,11 @@ pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
 
 impl OrderedAggregateTableMetrics {
     pub(in crate::aggregates) fn new(agg: &AggregateExec, partition: usize) -> Self {
-        let aggregate_labels = agg
-            .aggr_expr
-            .iter()
-            .map(|agg_expr| aggregate_metric_label(agg_expr))
-            .collect::<Vec<_>>();
+        let metrics = AggregateTableMetrics::new(agg, partition);
         Self {
-            group_by: GroupByMetrics::new(&agg.metrics, partition),
-            aggregate_arguments: AggregateArgumentMetrics::new(
-                &agg.metrics,
-                partition,
-                aggregate_labels.clone(),
-            ),
-            accumulator: Arc::new(AggregateAccumulatorMetrics::new(
-                &agg.metrics,
-                partition,
-                aggregate_labels,
-                accumulator_phases(&agg.mode),
-            )),
+            group_by: metrics.group_by,
+            aggregate_arguments: metrics.aggregate_arguments,
+            accumulator: metrics.accumulator,
         }
     }
 

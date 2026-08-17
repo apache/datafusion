@@ -25,7 +25,13 @@ mod partial_reduce_table;
 mod partial_table;
 mod single_table;
 
-use crate::aggregates::{AggregateMode, group_values::AccumulatorPhase};
+use std::sync::Arc;
+
+use crate::aggregates::group_values::{
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+    GroupByMetrics,
+};
+use crate::aggregates::{AggregateExec, AggregateMode, aggregate_metric_label};
 
 pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
     match mode {
@@ -49,6 +55,37 @@ pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorP
     }
 }
 
+pub(super) struct AggregateTableMetrics {
+    pub(super) group_by: GroupByMetrics,
+    pub(super) aggregate_arguments: AggregateArgumentMetrics,
+    pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+}
+
+impl AggregateTableMetrics {
+    pub(super) fn new(agg: &AggregateExec, partition: usize) -> Self {
+        let aggregate_labels = agg
+            .aggr_expr
+            .iter()
+            .map(|agg_expr| aggregate_metric_label(agg_expr))
+            .collect::<Vec<_>>();
+
+        Self {
+            group_by: GroupByMetrics::new(&agg.metrics, partition),
+            aggregate_arguments: AggregateArgumentMetrics::new(
+                &agg.metrics,
+                partition,
+                aggregate_labels.clone(),
+            ),
+            accumulator: Arc::new(AggregateAccumulatorMetrics::new(
+                &agg.metrics,
+                partition,
+                aggregate_labels,
+                accumulator_phases(&agg.mode),
+            )),
+        }
+    }
+}
+
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
     PartialSkipMarker, SingleMarker,
@@ -63,47 +100,53 @@ mod tests {
 
     #[test]
     fn accumulator_phases_match_aggregate_mode() {
-        assert!(
-            accumulator_phases(&AggregateMode::Partial)
-                == [AccumulatorPhase::Update, AccumulatorPhase::State]
-        );
-        assert!(
-            accumulator_phases(&AggregateMode::PartialReduce)
-                == [AccumulatorPhase::Merge, AccumulatorPhase::State]
-        );
-        assert!(
-            accumulator_phases(&AggregateMode::Final)
-                == [
+        let cases: [(AggregateMode, &[AccumulatorPhase]); 6] = [
+            (
+                AggregateMode::Partial,
+                &[AccumulatorPhase::Update, AccumulatorPhase::State],
+            ),
+            (
+                AggregateMode::PartialReduce,
+                &[AccumulatorPhase::Merge, AccumulatorPhase::State],
+            ),
+            (
+                AggregateMode::Final,
+                &[
                     AccumulatorPhase::Merge,
                     AccumulatorPhase::State,
                     AccumulatorPhase::Evaluate,
-                ]
-        );
-        assert!(
-            accumulator_phases(&AggregateMode::FinalPartitioned)
-                == [
+                ],
+            ),
+            (
+                AggregateMode::FinalPartitioned,
+                &[
                     AccumulatorPhase::Merge,
                     AccumulatorPhase::State,
                     AccumulatorPhase::Evaluate,
-                ]
-        );
-        assert!(
-            accumulator_phases(&AggregateMode::Single)
-                == [
+                ],
+            ),
+            (
+                AggregateMode::Single,
+                &[
                     AccumulatorPhase::Update,
                     AccumulatorPhase::State,
                     AccumulatorPhase::Merge,
                     AccumulatorPhase::Evaluate,
-                ]
-        );
-        assert!(
-            accumulator_phases(&AggregateMode::SinglePartitioned)
-                == [
+                ],
+            ),
+            (
+                AggregateMode::SinglePartitioned,
+                &[
                     AccumulatorPhase::Update,
                     AccumulatorPhase::State,
                     AccumulatorPhase::Merge,
                     AccumulatorPhase::Evaluate,
-                ]
-        );
+                ],
+            ),
+        ];
+
+        for (mode, expected) in cases {
+            assert!(accumulator_phases(&mode) == expected, "{mode:?}");
+        }
     }
 }
