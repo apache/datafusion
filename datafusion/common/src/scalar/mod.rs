@@ -1217,6 +1217,17 @@ macro_rules! eq_array_primitive {
     }};
 }
 
+macro_rules! eq_array_float {
+    ($array:expr, $index:expr, $array_cast:ident, $VALUE:expr) => {{
+        let array = $array_cast($array)?;
+        let is_valid = array.is_valid($index);
+        Ok::<bool, DataFusionError>(match $VALUE {
+            Some(val) => is_valid && array.value($index).to_bits() == val.to_bits(),
+            None => !is_valid,
+        })
+    }};
+}
+
 impl ScalarValue {
     /// Create a [`Result<ScalarValue>`] with the provided value and datatype
     ///
@@ -4574,13 +4585,13 @@ impl ScalarValue {
                 eq_array_primitive!(array, index, as_boolean_array, val)?
             }
             ScalarValue::Float16(val) => {
-                eq_array_primitive!(array, index, as_float16_array, val)?
+                eq_array_float!(array, index, as_float16_array, val)?
             }
             ScalarValue::Float32(val) => {
-                eq_array_primitive!(array, index, as_float32_array, val)?
+                eq_array_float!(array, index, as_float32_array, val)?
             }
             ScalarValue::Float64(val) => {
-                eq_array_primitive!(array, index, as_float64_array, val)?
+                eq_array_float!(array, index, as_float64_array, val)?
             }
             ScalarValue::Int8(val) => {
                 eq_array_primitive!(array, index, as_int8_array, val)?
@@ -7874,7 +7885,7 @@ mod tests {
         }
 
         let bool_vals = [Some(true), None, Some(false)];
-        let f32_vals = [Some(-1.0), None, Some(1.0)];
+        let f32_vals = [Some(-0.0), Some(0.0), Some(f32::NAN), None, Some(1.0)];
         let f64_vals = make_typed_vec!(f32_vals, f64);
 
         let i8_vals = [Some(-1), None, Some(1)];
