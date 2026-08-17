@@ -42,9 +42,9 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{
-    AggregateHashTable, FinalMarker, PartialMarker, PartialSkipMarker,
+    AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
+    PartialSkipMarker,
 };
-use super::group_values::GroupByMetrics;
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
@@ -382,7 +382,7 @@ impl FinalSpillContext {
     fn into_replay_stream(
         self,
         baseline_metrics: &BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         let Self {
@@ -416,7 +416,7 @@ impl FinalSpillContext {
             merged,
             &InputOrderMode::Sorted,
             baseline_metrics.clone(),
-            group_by_metrics,
+            metrics,
             None,
             reservation,
         )?;
@@ -1325,12 +1325,12 @@ impl FinalHashAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match spill_context.spill_table(&mut hash_table) {
             Ok(()) => {
-                let group_by_metrics = hash_table.group_by_metrics().clone();
+                let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
                 drop(hash_table);
                 match self.reservation.try_resize(0) {
                     Ok(()) => (*spill_context).into_replay_stream(
                         &self.baseline_metrics,
-                        group_by_metrics,
+                        metrics,
                         self.reservation.new_empty(),
                     ),
                     Err(e) => Err(e),

@@ -1051,6 +1051,7 @@ message PhysicalExprNode {
     PhysicalLambdaExprNode lambda = 25;
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
+    PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
   }
 }
 
@@ -1060,6 +1061,10 @@ message PhysicalDynamicFilterNode {
   uint64 generation = 3;
   PhysicalExprNode inner_expr = 4;
   bool is_complete = 5;
+}
+
+message PhysicalSqlSimilarToPatternNode {
+  PhysicalExprNode expr = 1;
 }
 
 message PhysicalScalarUdfNode {
