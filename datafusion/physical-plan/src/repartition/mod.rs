@@ -2657,6 +2657,15 @@ mod tests {
 
         drop(output);
         assert_eq!(pool.reserved(), baseline);
+
+        // Draining a pressure-generated batch resets the Arrow coalescer, which
+        // must remain usable for later input.
+        let output = coalescer.push_and_drain(batch.clone())?;
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].0, batch);
+        drop(output);
+        assert_eq!(pool.reserved(), baseline);
+
         drop(coalescer);
         assert_eq!(pool.reserved(), 0);
         Ok(())
