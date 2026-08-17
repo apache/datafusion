@@ -3371,6 +3371,16 @@ mod tests {
         )
     }
 
+    fn assert_accumulator_phase_times(aggregate: &AggregateExec, phases: &[&str]) {
+        let metrics = aggregate.metrics().unwrap();
+        for phase in phases {
+            let time = metrics
+                .sum_by_name(&format!("agg_expr_0_{phase}_time"))
+                .unwrap_or_else(|| panic!("aggregate records {phase} time"));
+            assert!(time.as_usize() > 0);
+        }
+    }
+
     fn new_finite_memory_migrated_hash_ctx(
         batch_size: usize,
         max_memory: usize,
@@ -4537,6 +4547,7 @@ mod tests {
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+        assert_accumulator_phase_times(&aggregate, &["update", "state"]);
         assert_snapshot!(batches_to_sort_string(&output), @r"
 +----------+-----------+-------------------------+
 | sort_col | group_col | COUNT(value_col)[count] |
@@ -4615,6 +4626,7 @@ mod tests {
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+        assert_accumulator_phase_times(&final_aggregate, &["merge", "evaluate"]);
         assert_snapshot!(batches_to_sort_string(&output), @r"
 +-----+--------------+
 | key | COUNT(value) |
