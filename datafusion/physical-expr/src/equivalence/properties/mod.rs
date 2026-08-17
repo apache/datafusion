@@ -1157,7 +1157,7 @@ impl EquivalenceProperties {
         let indices = mapping
             .iter()
             .flat_map(|(_, targets)| {
-                targets.iter().flat_map(|(target, _)| {
+                targets.iter().filter_map(|(target, _)| {
                     target.downcast_ref::<Column>().map(|c| c.index())
                 })
             })

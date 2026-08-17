@@ -73,12 +73,10 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::PhysicalOptimizerContext;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::Session;
+use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
@@ -87,6 +85,7 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
@@ -274,11 +273,37 @@ impl Session for SessionState {
         Arc::clone(self.catalog_list())
     }
 
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        self.create_physical_plan(logical_plan).await
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        // Disambiguate: `SessionState` has an inherent `query_planner` (returning
+        // `&Arc<...>`) with the same name as this trait method. The qualified path
+        // calls the inherent one; a bare `self.query_planner()` would recurse.
+        Arc::clone(SessionState::query_planner(self))
+    }
+
+    fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
+        SessionState::optimize(self, plan)
+    }
+
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        SessionState::physical_optimizers(self)
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        SessionState::statistics_registry(self)
+    }
+
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn create_physical_plan<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        logical_plan: &'life1 LogicalPlan,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_physical_plan_boxed(logical_plan)
     }
 
     fn create_physical_expr(
@@ -331,6 +356,22 @@ impl Session for SessionState {
 
     fn task_ctx(&self) -> Arc<TaskContext> {
         self.task_ctx()
+    }
+}
+
+impl SessionState {
+    fn create_physical_plan_boxed<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.create_physical_plan_inner(logical_plan))
+    }
+
+    async fn create_physical_plan_inner(
+        &self,
+        logical_plan: &LogicalPlan,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        self.create_physical_plan(logical_plan).await
     }
 }
 
@@ -2319,10 +2360,36 @@ struct DefaultQueryPlanner {}
 #[async_trait]
 impl QueryPlanner for DefaultQueryPlanner {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
-    async fn create_physical_plan(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        logical_plan: &'life1 LogicalPlan,
+        session_state: &'life2 dyn Session,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_physical_plan_boxed(logical_plan, session_state)
+    }
+}
+
+impl DefaultQueryPlanner {
+    fn create_physical_plan_boxed<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.create_physical_plan_inner(logical_plan, session_state))
+    }
+
+    async fn create_physical_plan_inner(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::default();
         planner

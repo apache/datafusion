@@ -17,7 +17,6 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -2181,16 +2180,9 @@ impl From<SessionContext> for SessionStateBuilder {
     }
 }
 
+// Re-export from this module for backwards compatibility.
 /// A planner used to add extensions to DataFusion logical and physical plans.
-#[async_trait]
-pub trait QueryPlanner: Any + Debug {
-    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-}
+pub use datafusion_session::{QueryPlanner, UnsupportedQueryPlanner};
 
 /// Interface for handling `CREATE FUNCTION` statements and interacting with
 /// [SessionState] to create and register functions ([`ScalarUDF`],
@@ -2390,6 +2382,7 @@ mod tests {
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
+    use datafusion_session::Session;
     use sqlparser::ast;
     use tempfile::TempDir;
 
@@ -2836,7 +2829,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             _logical_plan: &LogicalPlan,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             not_impl_err!("query not supported")
         }
@@ -2845,7 +2838,7 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &DFSchema,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
             _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
@@ -2860,7 +2853,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            session_state: &SessionState,
+            session_state: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let physical_planner = MyPhysicalPlanner {};
             physical_planner

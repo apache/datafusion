@@ -979,6 +979,20 @@ CREATE TABLE dup_src AS VALUES(1, 2);
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name column1
 CREATE TABLE dup_ctas AS SELECT * FROM dup_src LEFT JOIN dup_src y ON dup_src.column1 = y.column2;
 
+statement ok
+CREATE TABLE dup_ctas_with_schema(left_c1 bigint, right_c1 bigint) AS
+SELECT dup_src.column1, right_src.column1
+FROM dup_src
+CROSS JOIN (SELECT column2 AS column1 FROM dup_src) right_src;
+
+query II
+SELECT left_c1, right_c1 FROM dup_ctas_with_schema;
+----
+1 2
+
+statement ok
+DROP TABLE dup_ctas_with_schema;
+
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name column1
 CREATE VIEW dup_view AS SELECT * FROM dup_src LEFT JOIN dup_src y ON dup_src.column1 = y.column2;
 
@@ -987,3 +1001,40 @@ SELECT * INTO dup_into FROM dup_src LEFT JOIN dup_src y ON dup_src.column1 = y.c
 
 statement ok
 DROP TABLE dup_src;
+
+
+# Table with Map types
+statement ok
+create table t (a map(int, int), b map(varchar, map(varchar, int)));
+
+query TTT
+describe t;
+----
+a Map("entries": non-null Struct("key": non-null Int32, "value": Int32), unsorted) YES
+b Map("entries": non-null Struct("key": non-null Utf8View, "value": Map("entries": non-null Struct("key": non-null Utf8View, "value": Int32), unsorted)), unsorted) YES
+
+statement ok
+insert into t values
+  (map{1: 10, 2: 20}, map{'a': map{'aa': 1, 'ab': 2}, 'b': map{'ba': 10, 'bb': 20}}),
+  (map{10: 100}, map{'c': map{'d': 100}}),
+  (map{}, map{'a': map{}}),
+  (null, map{'a': null});
+
+query ?? rowsort
+select * from t;
+----
+NULL {a: NULL}
+{10: 100} {c: {d: 100}}
+{1: 10, 2: 20} {a: {aa: 1, ab: 2}, b: {ba: 10, bb: 20}}
+{} {a: {}}
+
+# duplicate keys
+statement error DataFusion error: Execution error: map key must be unique, duplicate key found: a
+insert into t values (map{'a': 1, 'a': 10}, null);
+
+# key can't be null
+statement error DataFusion error: Execution error: map key cannot be null
+insert into t values (map{null: 1}, null);
+
+statement ok
+drop table t;
