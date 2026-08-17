@@ -27,7 +27,7 @@ cd "${ROOT_DIR}"
 source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
 TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
-PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- aggregate"
+PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- aggregate"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -121,7 +121,7 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 echo "'$TARGET_FILE' successfully updated!"
 
 TARGET_FILE="docs/source/user-guide/sql/scalar_functions.md"
-PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- scalar"
+PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- scalar"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -165,7 +165,7 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 echo "'$TARGET_FILE' successfully updated!"
 
 TARGET_FILE="docs/source/user-guide/sql/window_functions.md"
-PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- window"
+PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- window"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"

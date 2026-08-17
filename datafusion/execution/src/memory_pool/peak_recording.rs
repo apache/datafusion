@@ -27,7 +27,7 @@
 //! itself is never recorded — [`MemoryPool::reserved`] is a live value that has
 //! usually fallen back to zero by the time a query finishes. This module records
 //! the high-water mark so benchmarks can emit it alongside the peak RSS that
-//! [`print_memory_stats`] already prints, making the gap between the two
+//! `print_memory_stats` already prints, making the gap between the two
 //! measurable.
 //!
 //! This is measurement only: nothing here enforces a relationship between the
@@ -38,8 +38,6 @@
 //! through `ArrowMemoryPool` are included, because that adapter grows a
 //! DataFusion reservation against the pool it wraps; nothing claims buffers
 //! today, but the peak picks it up when something does.
-//!
-//! [`print_memory_stats`]: super::print_memory_stats
 
 use std::{
     fmt::{Debug, Display, Formatter},
@@ -49,9 +47,7 @@ use std::{
     },
 };
 
-use datafusion::execution::memory_pool::{
-    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
-};
+use super::{MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation};
 use datafusion_common::Result;
 
 /// Wraps a [`MemoryPool`], recording the high-water mark of
@@ -71,8 +67,7 @@ use datafusion_common::Result;
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryPool};
-/// # use datafusion_benchmarks::util::PeakRecordingPool;
+/// # use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryPool, PeakRecordingPool};
 /// let recording = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(1024))));
 /// let pool: Arc<dyn MemoryPool> = Arc::clone(&recording) as _;
 ///
@@ -116,10 +111,8 @@ impl PeakRecordingPool {
     /// The recorder installed as `pool`, if there is one.
     ///
     /// Returns `None` whenever a benchmark runs without a memory limit, since
-    /// [`CommonOpt::runtime_env_builder`] only installs the wrapper alongside a
+    /// `CommonOpt::runtime_env_builder` only installs the wrapper alongside a
     /// pool it has a limit for.
-    ///
-    /// [`CommonOpt::runtime_env_builder`]: super::CommonOpt::runtime_env_builder
     pub fn from_pool(pool: &dyn MemoryPool) -> Option<&Self> {
         pool.downcast_ref::<Self>()
     }
@@ -140,12 +133,10 @@ impl PeakRecordingPool {
     /// Reset the value returned by [`Self::peak_reserved`] to what is reserved
     /// right now, so the next reading covers only what follows.
     ///
-    /// [`BenchmarkRun::start_new_case`] calls this, giving each benchmark query
+    /// `BenchmarkRun::start_new_case` calls this, giving each benchmark query
     /// its own reading. Anything still held when a query starts — data the
     /// benchmark loaded up front, say — stays in the reading, since the query
     /// runs with those bytes reserved.
-    ///
-    /// [`BenchmarkRun::start_new_case`]: super::BenchmarkRun::start_new_case
     pub fn reset_peak(&self) {
         self.peak
             .store(self.reserved.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -227,7 +218,7 @@ impl MemoryPool for PeakRecordingPool {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::execution::memory_pool::GreedyMemoryPool;
+    use crate::memory_pool::GreedyMemoryPool;
 
     use super::*;
 
@@ -358,10 +349,15 @@ mod tests {
     /// bytes show up in this peak without further changes — as long as the
     /// adapter is built from the `RuntimeEnv`'s pool, which is the wrapped one.
     /// This test pins that.
+    ///
+    /// Only compiled with `--features arrow_buffer_pool`, since that's what
+    /// gates `crate::memory_pool::arrow` and `arrow_buffer::MemoryPool` in the
+    /// first place; not part of this crate's default feature set.
+    #[cfg(feature = "arrow_buffer_pool")]
     #[test]
     fn records_reservations_arriving_through_the_arrow_adapter() {
+        use crate::memory_pool::arrow::ArrowMemoryPool;
         use arrow_buffer::MemoryPool as ArrowMemoryPoolTrait;
-        use datafusion_execution::memory_pool::arrow::ArrowMemoryPool;
 
         let (recording, pool) = pool(4096);
 
