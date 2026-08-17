@@ -18,7 +18,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, new_null_array};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
@@ -34,7 +34,7 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
-    evaluate_group_by,
+    evaluate_expressions_with_selection, evaluate_group_by,
 };
 
 /// Marker for raw rows -> partial state aggregation.
@@ -177,17 +177,25 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let grouping_set_args = evaluate_group_by(&state.group_by, batch)?;
         drop(timer);
 
-        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
-        // The evaluated args for each accumulator
-        let accumulator_args = self
-            .state
-            .building()
+        let filters = state
             .accumulators
             .iter()
+            .map(|acc| acc.evaluate_filter(batch))
+            .collect::<Result<Vec<_>>>()?;
+
+        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
+        // The evaluated args for each accumulator
+        let accumulator_args = state
+            .accumulators
+            .iter()
+            .zip(filters)
             .enumerate()
-            .map(|(idx, acc)| {
-                self.aggregate_argument_metrics
-                    .time(idx, || acc.evaluate_acc_args(batch))
+            .map(|(idx, (acc, filter))| {
+                let selection = filter.as_ref().map(|filter| filter.as_boolean());
+                let arguments = self
+                    .aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_acc_args(batch, selection))?;
+                Ok(EvaluatedAccumulatorArgs { arguments, filter })
             })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
@@ -544,36 +552,26 @@ impl HashAggregateAccumulator {
         ))
     }
 
-    /// Evaluate aggregate arguments and filter for one input batch.
-    ///
-    /// For example, `AVG(x + 1) FILTER (WHERE x > 0)` evaluates both `x + 1`
-    /// and `x > 0`.
-    ///
-    /// These arrays can be passed directly to [`GroupsAccumulator`] next.
-    pub(super) fn evaluate_acc_args(
+    pub(super) fn evaluate_filter(
         &self,
         batch: &RecordBatch,
-    ) -> Result<EvaluatedAccumulatorArgs> {
-        let arguments = self
-            .arguments
-            .iter()
-            .map(|expr| {
-                expr.evaluate(batch)
-                    .and_then(|value| value.into_array(batch.num_rows()))
-            })
-            .collect::<Result<_>>()?;
-
-        let filter = self
-            .filter
+    ) -> Result<Option<ArrayRef>> {
+        self.filter
             .as_ref()
             .map(|filter| {
                 filter
                     .evaluate(batch)
                     .and_then(|value| value.into_array(batch.num_rows()))
             })
-            .transpose()?;
+            .transpose()
+    }
 
-        Ok(EvaluatedAccumulatorArgs { arguments, filter })
+    pub(super) fn evaluate_acc_args(
+        &self,
+        batch: &RecordBatch,
+        selection: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        evaluate_expressions_with_selection(&self.arguments, batch, selection)
     }
 
     pub(super) fn size(&self) -> usize {
