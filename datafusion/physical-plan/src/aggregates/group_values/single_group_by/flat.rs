@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::single_group_by::primitive::{
     GroupValuesPrimitive, HashValue, build_primitive,
@@ -668,7 +669,11 @@ mod tests {
         let mut gv = new_gv();
         intern(&mut gv, &first);
         assert_eq!(intern(&mut gv, &[Some(40)]), vec![10]);
-        assert_eq!(gv.overflow.len(), 1, "idx == occupied*SPARSE_FACTOR must overflow");
+        assert_eq!(
+            gv.overflow.len(),
+            1,
+            "idx == occupied*SPARSE_FACTOR must overflow"
+        );
         match &gv.mode {
             Mode::Flat { data, .. } => {
                 assert_eq!(data.len(), 10, "window must not grow at the boundary")
@@ -680,7 +685,10 @@ mod tests {
         let mut gv = new_gv();
         intern(&mut gv, &first);
         assert_eq!(intern(&mut gv, &[Some(39)]), vec![10]);
-        assert!(gv.overflow.is_empty(), "idx just below the threshold must grow");
+        assert!(
+            gv.overflow.is_empty(),
+            "idx just below the threshold must grow"
+        );
         match &gv.mode {
             Mode::Flat { data, .. } => {
                 assert_eq!(data.len(), 40, "window grows to include idx 39")
