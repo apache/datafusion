@@ -75,7 +75,7 @@ physical_plan_error
 02)caused by
 03)This feature is not implemented: MERGE INTO not supported for Base table
 
-# Aliased target and source: alias is canonicalized to the table name
+# Aliased target and source preserve their visible qualifiers
 query TT
 explain merge into target as t using source as s on t.id = s.id
 when matched and s.is_active then update set val = s.val
@@ -206,13 +206,13 @@ when matched then update set s.val = 'x';
 # Planning errors: qualifier and alias handling
 ##########
 
-# Source alias may not collide with the target table name when the target is aliased
-statement error DataFusion error: Error during planning: MERGE source may not use the target table name 'target' as a qualifier while the target is aliased as 't'; use a different source alias
+# A source alias may equal the target table name when the target has another alias
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
 merge into target as t using source as target on t.id = target.id
 when matched then delete;
 
-# Subqueries correlated to the target alias are not supported yet
-statement error DataFusion error: This feature is not implemented: MERGE subqueries correlated to target alias 't' are not supported
+# Target-correlated subqueries preserve the visible target qualifier
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
 merge into target as t using source as s
 on exists (select 1 from source x where x.id = t.id)
 when matched then delete;
