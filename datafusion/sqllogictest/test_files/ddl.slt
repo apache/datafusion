@@ -1053,11 +1053,6 @@ e Binary YES
 statement ok
 drop table t;
 
-
-# Table with Map types
-statement ok
-create table t (a map(int, int), b map(varchar, map(varchar, int)));
-
 # Test uint64 type aliases
 statement ok
 create table t (
@@ -1072,6 +1067,18 @@ describe t;
 a UInt64 YES
 b UInt64 YES
 c UInt64 YES
+
+statement ok
+drop table t;
+
+
+# Table with Map types
+statement ok
+create table t (a map(int, int), b map(varchar, map(varchar, int)));
+
+query TTT
+describe t;
+----
 a Map("entries": non-null Struct("key": non-null Int32, "value": Int32), unsorted) YES
 b Map("entries": non-null Struct("key": non-null Utf8View, "value": Map("entries": non-null Struct("key": non-null Utf8View, "value": Int32), unsorted)), unsorted) YES
 
