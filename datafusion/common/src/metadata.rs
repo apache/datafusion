@@ -17,7 +17,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use hashbrown::HashMap;
 
 use crate::{DataFusionError, ScalarValue, error::_plan_err};
@@ -84,14 +84,8 @@ impl From<ScalarValue> for ScalarAndMetadata {
 /// Returns a planning error with suitably formatted type representations if
 /// actual and expected do not compare to equal.
 pub fn check_metadata_with_storage_equal(
-    actual: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
-    expected: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
+    actual: (&DataType, Option<&Metadata>),
+    expected: (&DataType, Option<&Metadata>),
     what: &str,
     context: &str,
 ) -> Result<(), DataFusionError> {
@@ -131,7 +125,7 @@ pub fn check_metadata_with_storage_equal(
 /// renderings.
 pub fn format_type_and_metadata(
     data_type: &DataType,
-    metadata: Option<&std::collections::HashMap<String, String>>,
+    metadata: Option<&Metadata>,
 ) -> String {
     match metadata {
         Some(metadata) if !metadata.is_empty() => {
@@ -316,6 +310,13 @@ impl FieldMetadata {
             .collect()
     }
 
+    /// Convert this `FieldMetadata` into an arrow [`Metadata`]
+    ///
+    /// This is cheap: both types share the same `Arc<BTreeMap>` representation.
+    pub fn to_metadata(&self) -> Metadata {
+        Metadata::from(Arc::clone(&self.inner))
+    }
+
     /// Updates the metadata on the Field with this metadata, if it is not empty.
     pub fn add_to_field(&self, field: Field) -> Field {
         if self.inner.is_empty() {
@@ -333,6 +334,24 @@ impl FieldMetadata {
 
         Arc::make_mut(&mut field_ref).set_metadata(self.to_hashmap());
         field_ref
+    }
+}
+
+impl From<&FieldMetadata> for Metadata {
+    fn from(value: &FieldMetadata) -> Self {
+        value.to_metadata()
+    }
+}
+
+impl From<Metadata> for FieldMetadata {
+    fn from(value: Metadata) -> Self {
+        Self::new(value.into())
+    }
+}
+
+impl From<&Metadata> for FieldMetadata {
+    fn from(value: &Metadata) -> Self {
+        Self::from(value.clone())
     }
 }
 

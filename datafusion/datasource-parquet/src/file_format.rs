@@ -32,7 +32,7 @@ pub use crate::schema_coercion::{
 
 pub use crate::sink::ParquetSink;
 
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::datatypes::{Fields, Metadata, Schema, SchemaRef};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
@@ -266,7 +266,7 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.as_ref().clone().with_metadata(Default::default()) // clear meta
+                field.as_ref().clone().with_metadata(Metadata::new()) // clear meta
             })
             .collect::<Fields>();
         Schema::new(fields)

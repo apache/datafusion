@@ -103,7 +103,7 @@ arrow-avro = { version = "59.2.0", default-features = false, features = [
 arrow-buffer = { version = "59.2.0", default-features = false }
 arrow-data = { version = "59.2.0", default-features = false }
 arrow-flight = { version = "59.2.0", features = [
-    "flight-sql-experimental",
+    "flight-sql",
 ] }
 # Both codecs are required here to make sure that code paths like
 # file-spilling have access to all compression codecs.
@@ -176,7 +176,7 @@ liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "59.2.0", default-features = false, features = [
     "arrow",
@@ -359,3 +359,20 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+## Temporary arrow-rs patch to test apache/arrow-rs#9372 (Parquet ALP encoder/decoder support)
+
+[patch.crates-io]
+arrow = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-array = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-avro = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-buffer = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-cast = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-data = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-ipc = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-schema = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-select = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-string = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-ord = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+arrow-flight = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }
+parquet = { git = "https://github.com/sdf-jkl/arrow-rs.git", branch = "alp" }

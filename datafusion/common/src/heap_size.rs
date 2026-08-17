@@ -47,7 +47,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DataType, Field, Fields, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
-    TimeUnit, UnionFields, UnionMode, i256,
+    Metadata, TimeUnit, UnionFields, UnionMode, i256,
 };
 use chrono::{DateTime, Utc};
 use half::f16;
@@ -392,6 +392,19 @@ impl DFHeapSize for UnionFields {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         self.iter()
             .map(|f| f.0.heap_size(ctx) + f.1.heap_size(ctx))
+            .sum()
+    }
+}
+
+impl DFHeapSize for Metadata {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        // `Metadata` does not expose its underlying reference-counted map, so
+        // this approximates the `BTreeMap` entries' sizes and cannot dedupe
+        // instances that share the same allocation.
+        self.iter()
+            .map(|(k, v)| {
+                size_of::<(String, String)>() + k.heap_size(ctx) + v.heap_size(ctx)
+            })
             .sum()
     }
 }
