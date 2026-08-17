@@ -817,27 +817,23 @@ fn estimate_inner_join_cardinality(
         return Some(Precision::Inexact(0));
     }
 
-    // Follow Spark Catalyst's conservative NDV join estimate: for multi-key
-    // joins, use the most selective key instead of multiplying all key denominators.
-    let mut join_selectivity = Precision::Absent;
-    for (left_stat, right_stat) in left_column_statistics
-        .iter()
-        .zip(right_column_statistics.iter())
-    {
-        let left_max_distinct = max_distinct_count(&left_num_rows, left_stat);
-        let right_max_distinct = max_distinct_count(&right_num_rows, right_stat);
-        let max_distinct = left_max_distinct.max(&right_max_distinct);
-        if max_distinct.get_value().is_some() {
-            // Seems like there are a few implementations of this algorithm that implement
-            // exponential decay for the selectivity (like Hive's Optiq Optimizer). Needs
-            // further exploration.
-            join_selectivity = if join_selectivity.get_value().is_some() {
-                join_selectivity.max(&max_distinct)
-            } else {
-                max_distinct
-            };
-        }
-    }
+    // The join key is the *tuple* of all key columns, so the containment
+    // assumption needs that tuple's distinct count on each side.
+    let left_max_distinct =
+        composite_distinct_count(&left_num_rows, &left_column_statistics);
+    let right_max_distinct =
+        composite_distinct_count(&right_num_rows, &right_column_statistics);
+    // `Precision::max` is `Absent` if either input is, so fall back to whichever
+    // side we do have a count for rather than giving up on an estimate.
+    let join_selectivity = match (
+        left_max_distinct.get_value(),
+        right_max_distinct.get_value(),
+    ) {
+        (Some(_), Some(_)) => left_max_distinct.max(&right_max_distinct),
+        (Some(_), None) => left_max_distinct,
+        (None, Some(_)) => right_max_distinct,
+        (None, None) => Precision::Absent,
+    };
 
     // With the assumption that the smaller input's domain is generally represented in the bigger
     // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
@@ -1023,6 +1019,45 @@ fn estimate_semi_join_cardinality(
 /// directly. Otherwise, if the column is numeric and has min/max values, it
 /// estimates the maximum distinct count from those. Otherwise, the num_rows
 /// is used.
+/// Upper bound on the number of distinct values of the join-key *tuple*
+/// `column_statistics` describes.
+///
+/// Distinct tuples can be neither more numerous than the rows they are drawn
+/// from nor than the product of the per-column distinct counts, so the smaller
+/// of the two is the tightest bound these statistics support.
+///
+/// Taking the most selective single column instead badly overestimates a join
+/// on a composite key: in TPC-H q9, `partsupp` is joined on
+/// `(ps_partkey, ps_suppkey)` — its primary key, so 800k distinct pairs — but
+/// the largest per-column count is only 200k, which makes the join output come
+/// out four times too large.
+fn composite_distinct_count(
+    num_rows: &Precision<usize>,
+    column_statistics: &[ColumnStatistics],
+) -> Precision<usize> {
+    if column_statistics.is_empty() {
+        return Precision::Absent;
+    }
+
+    // `multiply` yields `Absent` as soon as one column has no usable count,
+    // which is the behaviour we want: one unknown makes the product unknown.
+    let mut product = Precision::Exact(1);
+    for stats in column_statistics {
+        product = product.multiply(&max_distinct_count(num_rows, stats));
+    }
+
+    // The product is only an upper bound on the number of distinct tuples, so
+    // it must not claim to be exact once more than one column is involved.
+    if column_statistics.len() > 1 {
+        product = product.to_inexact();
+    }
+
+    match num_rows {
+        Precision::Absent => product,
+        _ => product.min(num_rows),
+    }
+}
+
 fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
@@ -3198,8 +3233,9 @@ mod tests {
             create_column_stats(Inexact(100), Inexact(500), Inexact(200), Absent),
         ];
 
-        // We have statistics about 4 columns, where the highest distinct
-        // count is 200, so we are going to pick it.
+        // The join key is the (col0, col1) tuple. Both sides could have up to
+        // 100 * 150 and 50 * 200 distinct tuples respectively, but neither can
+        // have more distinct tuples than it has rows, so both bound out at 400.
         assert_eq!(
             estimate_inner_join_cardinality(
                 Statistics {
@@ -3213,7 +3249,40 @@ mod tests {
                     column_statistics: right_col_stats,
                 },
             ),
-            Some(Inexact((400 * 400) / 200))
+            Some(Inexact((400 * 400) / 400))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_inner_join_cardinality_multiple_column_below_row_count() -> Result<()> {
+        // Same shape, but now the per-column counts are small enough that their
+        // product stays under the row count and becomes the binding limit:
+        // 10 * 20 = 200 on the left, 5 * 8 = 40 on the right.
+        let left_col_stats = vec![
+            create_column_stats(Inexact(0), Inexact(100), Inexact(10), Absent),
+            create_column_stats(Inexact(100), Inexact(500), Inexact(20), Absent),
+        ];
+
+        let right_col_stats = vec![
+            create_column_stats(Inexact(0), Inexact(100), Inexact(5), Absent),
+            create_column_stats(Inexact(100), Inexact(500), Inexact(8), Absent),
+        ];
+
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                Statistics {
+                    num_rows: Inexact(1000),
+                    total_byte_size: Absent,
+                    column_statistics: left_col_stats,
+                },
+                Statistics {
+                    num_rows: Inexact(1000),
+                    total_byte_size: Absent,
+                    column_statistics: right_col_stats,
+                },
+            ),
+            Some(Inexact((1000 * 1000) / 200))
         );
         Ok(())
     }
