@@ -527,13 +527,17 @@ pub mod dml_node {
         }
     }
 }
-/// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+/// Carries the target qualifier, ON condition, and WHEN clauses of a MERGE INTO operation.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MergeIntoOpNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub on: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "2")]
     pub clauses: ::prost::alloc::vec::Vec<MergeIntoClauseNode>,
+    /// SQL-visible target qualifier. Absent in payloads written before this field
+    /// was introduced; readers then fall back to DmlNode.table_name.
+    #[prost(message, optional, tag = "3")]
+    pub target_qualifier: ::core::option::Option<TableReference>,
 }
 /// A single WHEN clause within a MERGE INTO statement.
 #[derive(Clone, PartialEq, ::prost::Message)]

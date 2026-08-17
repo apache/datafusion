@@ -589,6 +589,9 @@ pub fn serialize_merge_into_op(
             .iter()
             .map(|c| serialize_merge_into_clause(c, codec))
             .collect::<Result<Vec<_>, Error>>()?,
+        target_qualifier: Some(protobuf::TableReference::from(
+            op.target_qualifier().clone(),
+        )),
     })
 }
 

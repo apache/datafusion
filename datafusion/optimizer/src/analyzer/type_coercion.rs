@@ -23,7 +23,7 @@ use itertools::{Itertools as _, izip};
 use std::sync::{Arc, LazyLock};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::NamePreserver;
+use crate::utils::{NamePreserver, merge_into_schema};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
@@ -130,18 +130,10 @@ fn analyze_internal(
     }
 
     // MERGE expressions (ON / WHEN clauses) reference the target table, which
-    // is not one of `plan.inputs()`. Rebuild the target schema from the DML's
-    // `table_name` and `target` so those columns resolve during coercion.
-    if let LogicalPlan::Dml(DmlStatement {
-        op: WriteOp::MergeInto(_),
-        table_name,
-        target,
-        ..
-    }) = &plan
-    {
-        let target_schema =
-            DFSchema::try_from_qualified_schema(table_name.clone(), &target.schema())?;
-        schema.merge(&target_schema);
+    // is not one of `plan.inputs()`. Use the operation's visible qualifier
+    // when adding its target schema.
+    if let Some(merge_schema) = merge_into_schema(&plan)? {
+        schema = merge_schema;
     }
 
     // merge the outer schema for correlated subqueries
@@ -1745,9 +1737,10 @@ mod test {
         // target schema to be visible to the analyzer, which only sees
         // `plan.inputs()` (the source plan) by default.
         let on = col("target.id").eq(col("source.id"));
-        let merge_op = MergeIntoOp {
+        let merge_op = MergeIntoOp::new(
+            "target",
             on,
-            clauses: vec![
+            vec![
                 MergeIntoClause {
                     kind: MergeIntoClauseKind::Matched,
                     predicate: None,
@@ -1765,7 +1758,7 @@ mod test {
                     },
                 },
             ],
-        };
+        );
         let plan = LogicalPlan::Dml(DmlStatement::new(
             target_table_name,
             target_source,

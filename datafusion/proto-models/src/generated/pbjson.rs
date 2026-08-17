@@ -15330,12 +15330,18 @@ impl serde::Serialize for MergeIntoOpNode {
         if !self.clauses.is_empty() {
             len += 1;
         }
+        if self.target_qualifier.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.MergeIntoOpNode", len)?;
         if let Some(v) = self.on.as_ref() {
             struct_ser.serialize_field("on", v)?;
         }
         if !self.clauses.is_empty() {
             struct_ser.serialize_field("clauses", &self.clauses)?;
+        }
+        if let Some(v) = self.target_qualifier.as_ref() {
+            struct_ser.serialize_field("targetQualifier", v)?;
         }
         struct_ser.end()
     }
@@ -15349,12 +15355,15 @@ impl<'de> serde::Deserialize<'de> for MergeIntoOpNode {
         const FIELDS: &[&str] = &[
             "on",
             "clauses",
+            "target_qualifier",
+            "targetQualifier",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             On,
             Clauses,
+            TargetQualifier,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15378,6 +15387,7 @@ impl<'de> serde::Deserialize<'de> for MergeIntoOpNode {
                         match value {
                             "on" => Ok(GeneratedField::On),
                             "clauses" => Ok(GeneratedField::Clauses),
+                            "targetQualifier" | "target_qualifier" => Ok(GeneratedField::TargetQualifier),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15399,6 +15409,7 @@ impl<'de> serde::Deserialize<'de> for MergeIntoOpNode {
             {
                 let mut on__ = None;
                 let mut clauses__ = None;
+                let mut target_qualifier__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::On => {
@@ -15413,11 +15424,18 @@ impl<'de> serde::Deserialize<'de> for MergeIntoOpNode {
                             }
                             clauses__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::TargetQualifier => {
+                            if target_qualifier__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetQualifier"));
+                            }
+                            target_qualifier__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(MergeIntoOpNode {
                     on: on__,
                     clauses: clauses__.unwrap_or_default(),
+                    target_qualifier: target_qualifier__,
                 })
             }
         }
