@@ -184,18 +184,10 @@ fn pmod_numeric_coercion(lhs: &DataType, rhs: &DataType) -> Result<Vec<DataType>
 pub fn spark_pmod(
     args: &[ColumnarValue],
     enable_ansi_mode: bool,
+    result_type: &DataType,
 ) -> Result<ColumnarValue> {
     assert_eq_or_internal_err!(args.len(), 2, "pmod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
-
-    // Decimal arguments reach here with their declared types intact, so the
-    // Spark result type is derived before they are widened for the computation.
-    let result_type = match (args[0].data_type(), args[1].data_type()) {
-        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-            Some(pmod_decimal_result_type(*p1, *s1, *p2, *s2))
-        }
-        _ => None,
-    };
 
     let (left, right): (ArrayRef, ArrayRef) =
         if args[0].data_type() == args[1].data_type() {
@@ -230,15 +222,14 @@ pub fn spark_pmod(
     // divisor wider than the dividend does not always fit. Spark wraps decimal
     // arithmetic in `CheckOverflow(nullOnOverflow = !ansiEnabled)`, so an
     // overflow here is NULL in legacy mode and an error under ANSI.
-    let result = match result_type {
-        Some(result_type) if result.data_type() != &result_type => {
-            let narrow = CastOptions {
-                safe: !enable_ansi_mode,
-                ..Default::default()
-            };
-            cast_with_options(&result, &result_type, &narrow)?
-        }
-        _ => result,
+    let result = if result.data_type() == result_type {
+        result
+    } else {
+        let narrow = CastOptions {
+            safe: !enable_ansi_mode,
+            ..Default::default()
+        };
+        cast_with_options(&result, result_type, &narrow)?
     };
     Ok(ColumnarValue::Array(result))
 }
@@ -353,7 +344,13 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        spark_pmod(&args.args, args.config_options.execution.enable_ansi_mode)
+        // The Spark result type was already derived in `return_type`, so it is
+        // read back here rather than recomputed from the argument arrays.
+        spark_pmod(
+            &args.args,
+            args.config_options.execution.enable_ansi_mode,
+            args.return_type(),
+        )
     }
 }
 
@@ -702,7 +699,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -725,7 +723,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int64 =
@@ -769,7 +768,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float64 = result_array
@@ -827,7 +827,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float32 = result_array
@@ -862,7 +863,8 @@ mod test {
 
         let left_value = ColumnarValue::Array(Arc::new(left));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -881,7 +883,8 @@ mod test {
         let left = Int32Array::from(vec![Some(10)]);
         let left_value = ColumnarValue::Array(Arc::new(left));
 
-        let result = spark_pmod(&[left_value], false);
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value], false, &return_type);
         assert!(result.is_err());
     }
 
@@ -894,7 +897,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -916,7 +920,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], true);
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], true, &return_type);
         assert!(result.is_err());
     }
 
@@ -932,7 +937,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], true);
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], true, &return_type);
         assert!(result.is_err());
     }
 
@@ -946,7 +952,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float64 = result_array
@@ -969,7 +976,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], true);
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], true, &return_type);
         assert!(result.is_err());
     }
 
@@ -984,7 +992,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], true).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], true, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -1002,7 +1011,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], true).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], true, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_float64 = result_array
@@ -1025,7 +1035,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
@@ -1063,7 +1074,8 @@ mod test {
         let left_value = ColumnarValue::Array(Arc::new(left));
         let right_value = ColumnarValue::Array(Arc::new(right));
 
-        let result = spark_pmod(&[left_value, right_value], false).unwrap();
+        let return_type = left_value.data_type();
+        let result = spark_pmod(&[left_value, right_value], false, &return_type).unwrap();
 
         if let ColumnarValue::Array(result_array) = result {
             let result_int32 =
