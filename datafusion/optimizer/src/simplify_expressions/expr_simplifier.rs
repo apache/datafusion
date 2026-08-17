@@ -56,18 +56,16 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::simplify_expressions::SimplifyContext;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::unwrap_cast::{
-    is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
-    is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
-    unwrap_cast_in_comparison_for_binary,
+use crate::simplify_expressions::cast_preimage::{
+    rewrite_cast_predicate_for_binary, rewrite_cast_predicate_for_inlist,
+    supports_cast_predicate_for_binary, supports_cast_predicate_for_inlist,
 };
+use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::{
     analyzer::type_coercion::TypeCoercionRewriter,
     simplify_expressions::udf_preimage::rewrite_with_preimage,
 };
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
-use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
 use regex::Regex;
 
@@ -1931,28 +1929,27 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }
 
             // =======================================
-            // unwrap_cast_in_comparison
+            // cast_predicate_in_comparison
             // =======================================
             //
             // For case:
             // try_cast/cast(expr as data_type) op literal
             Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
-                    info, &left, op, &right,
-                ) && op.supports_propagation() =>
+                if supports_cast_predicate_for_binary(info, &left, op, &right)
+                    && op.supports_propagation() =>
             {
-                unwrap_cast_in_comparison_for_binary(info, *left, *right, op)?
+                rewrite_cast_predicate_for_binary(info, *left, *right, op)?
             }
             // literal op try_cast/cast(expr as data_type)
             // -->
             // try_cast/cast(expr as data_type) op_swap literal
             Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
-                    info, &right, op, &left,
-                ) && op.supports_propagation()
-                    && op.swap().is_some() =>
+                if op.supports_propagation()
+                    && op.swap().is_some_and(|swapped| {
+                        supports_cast_predicate_for_binary(info, &right, swapped, &left)
+                    }) =>
             {
-                unwrap_cast_in_comparison_for_binary(
+                rewrite_cast_predicate_for_binary(
                     info,
                     *right,
                     *left,
@@ -1962,52 +1959,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
             Expr::InList(InList {
-                expr: mut left,
+                expr,
                 list,
                 negated,
-            }) if is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
-                info, &left, &list,
-            ) =>
-            {
-                let (Expr::TryCast(TryCast {
-                    expr: left_expr, ..
-                })
-                | Expr::Cast(Cast {
-                    expr: left_expr, ..
-                })) = left.as_mut()
-                else {
-                    return internal_err!("Expect cast expr, but got {:?}", left)?;
-                };
-
-                let expr_type = info.get_data_type(left_expr)?;
-                let right_exprs = list
-                    .into_iter()
-                    .map(|right| {
-                        match right {
-                            Expr::Literal(right_lit_value, _) => {
-                                // if the right_lit_value can be casted to the type of internal_left_expr
-                                // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
-                                let Some(value) = try_cast_literal_to_type(&right_lit_value, &expr_type) else {
-                                    internal_err!(
-                                        "Can't cast the list expr {:?} to type {}",
-                                        right_lit_value, &expr_type
-                                    )?
-                                };
-                                Ok(lit(value))
-                            }
-                            other_expr => internal_err!(
-                                "Only support literal expr to optimize, but the expr is {:?}",
-                                &other_expr
-                            ),
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                Transformed::yes(Expr::InList(InList {
-                    expr: std::mem::take(left_expr),
-                    list: right_exprs,
-                    negated,
-                }))
+            }) if supports_cast_predicate_for_inlist(info, &expr, &list) => {
+                rewrite_cast_predicate_for_inlist(info, *expr, list, negated)?
             }
 
             // =======================================
