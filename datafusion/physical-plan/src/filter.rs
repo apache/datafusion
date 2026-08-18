@@ -369,8 +369,8 @@ impl FilterExec {
                 .partition(|conjunct| check_support(conjunct, schema));
             let split_anything = !rest.is_empty();
 
-            // An unrecognized conjunct still contributes the default, once, as the whole
-            // predicate used to.
+            // An unrecognized conjunct contributes the default once, as the whole predicate
+            // used to.
             let mut unanalyzed_selectivity = 1.0;
             let mut has_unknown_conjunct = false;
             for conjunct in rest {
@@ -425,8 +425,7 @@ impl FilterExec {
                 }
                 (selectivity, filtered_num_rows, cs)
             } else {
-                // No boundaries to derive, so keep the input's value statistics and apply only
-                // the row-count constraints that follow from the predicate.
+                // No boundaries to derive, so keep the input's value statistics.
                 let selectivity = unanalyzed_selectivity;
                 let filtered_num_rows =
                     input_num_rows.with_estimated_selectivity(selectivity);
@@ -1048,7 +1047,6 @@ fn in_list_selectivity(
     Some((values.len() as f64 / distinct as f64).min(1.0))
 }
 
-/// Appends `expr`'s literal value, if it is one, keeping the list distinct.
 fn push_literal(
     values: &mut Vec<ScalarValue>,
     expr: &Arc<dyn PhysicalExpr>,
@@ -1082,7 +1080,6 @@ fn collect_or_equalities<'a>(
                 (None, Some(col)) => (col, binary.left()),
                 _ => return None,
             };
-            // All equalities must constrain the same column.
             if column.is_some_and(|current| current != found) {
                 return None;
             }

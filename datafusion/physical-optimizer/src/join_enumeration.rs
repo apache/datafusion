@@ -15,24 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Cost-based join order enumeration for [`JoinSelection`], which on its own
-//! only picks the build side and partition mode of one join at a time.
+//! Cost-based join order enumeration.
 //!
-//! A subtree of reorderable joins is flattened into a [`JoinGraph`] of opaque
-//! relations plus the predicates between them, [`solve_dp`] searches the orders
-//! (bushy as well as left-deep) under the [`CostModel`], and [`Rebuilder`]
-//! rebuilds the subtree if the winner is cheaper by a clear margin.
+//! A subtree of joins is flattened into relations plus the predicates between
+//! them, a dynamic program searches the orders (bushy as well as left-deep) under
+//! a `C_out` cost model, and the subtree is rebuilt if the winner is cheaper by a
+//! clear margin. `JoinSelection` then picks each join's build side and partition
+//! mode against the shape chosen here.
 //!
 //! Reordering is sound because a tree of inner joins equals the cross product of
 //! its relations filtered by all its predicates: any tree applying every
 //! predicate exactly once, where the columns it needs are available, computes the
-//! same rows. Semi and anti joins join in as [`Reducer`]s because they filter
-//! their output side rather than contributing columns of their own.
-//!
-//! [`JoinSelection`]: crate::join_selection::JoinSelection
+//! same rows. Semi and anti joins take part as reducers, since they filter their
+//! output side rather than contributing columns of their own.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::PhysicalOptimizerRule;
+use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 
 use arrow::datatypes::{FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -47,16 +48,80 @@ use datafusion_physical_plan::joins::utils::{
     ColumnIndex, JoinFilter, max_distinct_count,
 };
 use datafusion_physical_plan::joins::{HashJoinExec, HashJoinExecBuilder, PartitionMode};
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::projection::{ProjectionExec, all_alias_free_columns};
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+
+/// Chooses the shape of the join tree, before [`JoinSelection`] decides how each
+/// join runs.
+///
+/// [`JoinSelection`]: crate::join_selection::JoinSelection
+#[derive(Default, Debug)]
+pub struct JoinEnumeration {}
+
+impl JoinEnumeration {
+    #[expect(missing_docs)]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl PhysicalOptimizerRule for JoinEnumeration {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.config_options();
+        if !config.optimizer.join_enumeration {
+            return Ok(plan);
+        }
+        let mut default_registry = None;
+        let registry: Option<&StatisticsRegistry> =
+            if config.optimizer.use_statistics_registry {
+                Some(context.statistics_registry().unwrap_or_else(|| {
+                    default_registry
+                        .insert(StatisticsRegistry::default_with_builtin_providers())
+                }))
+            } else {
+                None
+            };
+        let mut stats = |plan: &dyn ExecutionPlan| {
+            if let Some(registry) = registry {
+                registry
+                    .compute(plan)
+                    .map(|s| Arc::<Statistics>::clone(s.base_arc()))
+            } else {
+                StatisticsContext::new().compute(plan, &StatisticsArgs::new())
+            }
+        };
+        Ok(enumerate_join_order(&plan, config, &mut stats)?.unwrap_or(plan))
+    }
+
+    fn name(&self) -> &str {
+        "join_enumeration"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
 
 /// Hard upper bound on the relations in one join graph, and on the exhaustive
 /// search, which allocates `2^n` and visits `3^n`. Larger graphs keep the
 /// planner's order however high `join_enumeration_limit` is set.
 const MAX_RELATIONS: usize = 16;
 
-/// Computes the statistics of a plan node, so the enumerator sees the same
-/// estimates as the rest of the rule.
+/// Computes a plan node's statistics, shared with the rest of `JoinSelection`.
 pub(crate) type StatsFn<'a> =
     dyn FnMut(&dyn ExecutionPlan) -> Result<Arc<Statistics>> + 'a;
 
@@ -67,39 +132,33 @@ fn bit(rel: usize) -> RelSet {
     1u64 << rel
 }
 
-/// Iterates the relation indices contained in `mask`.
 fn iter_rels(mask: RelSet) -> impl Iterator<Item = usize> {
     std::iter::successors(Some(mask), |m| Some(m & m.wrapping_sub(1)))
         .take_while(|m| *m != 0)
         .map(|m| m.trailing_zeros() as usize)
 }
 
-/// Whether `mask` contains every relation in `required`.
 fn covers(mask: RelSet, required: RelSet) -> bool {
     required & !mask == 0
 }
 
-/// One column of one relation. Reordering moves columns, so plumbing is done in
-/// these terms rather than in indices.
+/// One column of one relation. Reordering moves columns, so plumbing uses these
+/// rather than indices.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ColRef {
-    /// Index into [`JoinGraph::relations`].
     rel: usize,
-    /// Column index within that relation's output schema.
     col: usize,
 }
 
 /// What a relation contributes to the join.
 #[derive(Debug)]
 enum Role {
-    /// An ordinary input: its rows and columns flow into the output.
     Output,
     /// The quantified side of a semi or anti join, which filters instead of
     /// contributing columns.
     Reducer(Reducer),
 }
 
-/// The quantified side of a semi or anti join.
 #[derive(Debug)]
 struct Reducer {
     /// `true` for an anti join, which keeps the rows that do *not* match.
@@ -156,12 +215,10 @@ struct JoinGraph {
 }
 
 impl JoinGraph {
-    /// Distinct value estimate for a column.
     fn ndv(&self, col: ColRef) -> f64 {
         self.relations[col.rel].ndv[col.col]
     }
 
-    /// The set of all relations in the graph.
     fn all(&self) -> RelSet {
         (0..self.relations.len()).fold(0, |mask, rel| mask | bit(rel))
     }
@@ -182,10 +239,11 @@ impl JoinGraph {
 /// A valid way of combining two relation sets.
 #[derive(Clone, Copy, Debug)]
 enum Combine {
-    /// An inner join of two sets that a predicate connects.
     Inner,
     /// A semi or anti join applying `reducer` to the opposite set.
-    Reducer { reducer: usize },
+    Reducer {
+        reducer: usize,
+    },
 }
 
 /// Cardinality and cost estimates over the subsets of a [`JoinGraph`].
@@ -288,12 +346,10 @@ impl<'a> CostModel<'a> {
         rows.max(1.0)
     }
 
-    /// Whether at least one equi-join predicate connects `left` and `right`.
     fn connected(&self, left: RelSet, right: RelSet) -> bool {
         iter_rels(left).any(|rel| self.adjacency[rel] & right != 0)
     }
 
-    /// How `left` and `right` may be combined, if at all.
     fn combine(&self, left: RelSet, right: RelSet) -> Option<Combine> {
         let reducers = self.graph.reducers;
         // A lone reducer is applied to the other side, which must supply its keys.
@@ -324,7 +380,6 @@ impl<'a> CostModel<'a> {
     }
 }
 
-/// The winning tree: per internal node, the relation set of one of its inputs.
 struct Solution {
     splits: HashMap<RelSet, RelSet>,
     cost: f64,
@@ -387,7 +442,6 @@ fn solve_dp(model: &CostModel) -> Option<Solution> {
         return None;
     }
 
-    // Keep only the splits the winning tree uses.
     let mut splits = HashMap::new();
     let mut stack = vec![full];
     while let Some(mask) = stack.pop() {
@@ -409,16 +463,17 @@ fn solve_dp(model: &CostModel) -> Option<Solution> {
 /// How a join takes part in enumeration, if at all.
 #[derive(Clone, Copy, Debug)]
 enum JoinRole {
-    /// An inner join: both inputs are part of the graph.
     Inner,
     /// A semi or anti join; `output` names the side whose rows survive.
-    Reducing { anti: bool, output: JoinSide },
+    Reducing {
+        anti: bool,
+        output: JoinSide,
+    },
 }
 
-/// Classifies a join for enumeration. Outer and mark joins are excluded (not
-/// filters on their inputs, or they add a column), as are `null_aware` anti joins,
-/// joins with a limit, and semi joins with a filter that is part of their
-/// existential test.
+/// Classifies a join. Outer and mark joins are excluded (not filters on their
+/// inputs, or they add a column), as are `null_aware` anti joins, joins with a
+/// limit, and semi joins whose filter is part of their existential test.
 fn join_role(join: &HashJoinExec) -> Option<JoinRole> {
     if join.null_aware || join.fetch().is_some() || join.on().is_empty() {
         return None;
@@ -463,15 +518,14 @@ fn push_unique(columns: &mut Vec<ColRef>, col: ColRef) {
     }
 }
 
-/// Appends the columns of `wanted` belonging to `side`, in order, without repeats.
 fn extend_required(columns: &mut Vec<ColRef>, wanted: &[ColRef], side: RelSet) {
     for col in wanted.iter().filter(|col| side & bit(col.rel) != 0) {
         push_unique(columns, *col);
     }
 }
 
-/// Extracts the maximal reorderable join subtree rooted at `plan`. `None` covers
-/// every bail-out: an unmodelled join feature, a key that is not a plain column,
+/// Extracts the maximal reorderable subtree at `plan`. `None` covers every
+/// bail-out: an unmodelled join feature, a key that is not a plain column,
 /// missing row counts, too few or too many relations.
 fn extract(
     plan: &Arc<dyn ExecutionPlan>,
@@ -492,7 +546,6 @@ fn extract(
     Extractor::new(stats).extract(plan)
 }
 
-/// Flattens a join subtree into a [`JoinGraph`].
 struct Extractor<'a, 's> {
     graph: JoinGraph,
     stats: &'s mut StatsFn<'a>,
@@ -522,7 +575,6 @@ impl<'a, 's> Extractor<'a, 's> {
         graph.output = output;
 
         if graph.relations.len() < 3 {
-            // A single join has nothing to reorder.
             return Ok(None);
         }
         // A filter over one relation has no join to sit at; the node would be a leaf.
@@ -536,8 +588,6 @@ impl<'a, 's> Extractor<'a, 's> {
         Ok(Some(graph))
     }
 
-    /// Flattens `plan` into the columns it emits and the relations it covers. `None`
-    /// means the caller must give up.
     fn visit(
         &mut self,
         plan: &Arc<dyn ExecutionPlan>,
@@ -587,7 +637,6 @@ impl<'a, 's> Extractor<'a, 's> {
                 .collect::<Option<Vec<_>>>();
             Ok(columns.map(|columns| (columns, mask)))
         } else {
-            // A leaf: opaque, but its statistics are needed.
             let Some(rel) = self.push_relation(plan, Role::Output)? else {
                 return Ok(None);
             };
@@ -708,7 +757,6 @@ impl<'a, 's> Extractor<'a, 's> {
         Ok(Some((columns, mask | bit(rel))))
     }
 
-    /// Adds `plan` as a relation, returning its index.
     fn push_relation(
         &mut self,
         plan: &Arc<dyn ExecutionPlan>,
@@ -723,7 +771,6 @@ impl<'a, 's> Extractor<'a, 's> {
         }
         let statistics = (self.stats)(plan.as_ref())?;
         let Some(rows) = statistics.num_rows.get_value().copied() else {
-            // Without a row count there is no basis for reordering anything.
             return Ok(None);
         };
         let rows = (rows as f64).max(1.0);
@@ -752,7 +799,6 @@ impl<'a, 's> Extractor<'a, 's> {
     }
 }
 
-/// Rebuilds a join subtree from the tree a search picked.
 struct Rebuilder<'a> {
     graph: &'a JoinGraph,
     model: &'a CostModel<'a>,
@@ -762,7 +808,6 @@ struct Rebuilder<'a> {
 }
 
 impl Rebuilder<'_> {
-    /// Builds the node joining `mask`, emitting `required` in that order.
     fn node(
         &self,
         mask: RelSet,
@@ -798,7 +843,6 @@ impl Rebuilder<'_> {
         }
     }
 
-    /// Builds an inner join of `left_mask` and `right_mask`.
     fn inner(
         &self,
         required: &[ColRef],
@@ -862,7 +906,6 @@ impl Rebuilder<'_> {
             .collect::<Result<Vec<_>>>()?;
         let filter = rebuild_filters(&filters, &left_columns, &right_columns)?;
 
-        // The join's natural output, before its projection.
         let mut joined = left_columns;
         joined.extend(right_columns);
         let projection = projection_for(required, &joined)?;
@@ -877,7 +920,6 @@ impl Rebuilder<'_> {
         Ok((Arc::new(join), required.to_vec()))
     }
 
-    /// Builds the semi or anti join applying `reducer` to the rest of `mask`.
     fn reducing(
         &self,
         mask: RelSet,
@@ -936,7 +978,6 @@ impl Rebuilder<'_> {
     }
 }
 
-/// Builds a `Column` expression for `col` against the columns a plan emits.
 fn key_expr(
     columns: &[ColRef],
     plan: &Arc<dyn ExecutionPlan>,
@@ -948,7 +989,6 @@ fn key_expr(
     Ok(Arc::new(Column::new(plan.schema().field(index).name(), index)) as _)
 }
 
-/// The projection selecting `required` out of `emitted`, or `None` if identical.
 fn projection_for(required: &[ColRef], emitted: &[ColRef]) -> Result<Option<Vec<usize>>> {
     let mut projection = Vec::with_capacity(required.len());
     for col in required {
@@ -962,10 +1002,9 @@ fn projection_for(required: &[ColRef], emitted: &[ColRef]) -> Result<Option<Vec<
     Ok((!identity).then_some(projection))
 }
 
-/// Rebuilds the non-equi filters applied at one join as one conjunction over the
-/// columns its inputs now emit. A [`JoinFilter`] addresses an intermediate batch
-/// by index, so merging means concatenating those schemas and shifting all but
-/// the first filter's indices.
+/// Rebuilds the non-equi filters applied at one join as one conjunction. A
+/// [`JoinFilter`] addresses an intermediate batch by index, so merging means
+/// concatenating those schemas and shifting all but the first filter's indices.
 fn rebuild_filters(
     filters: &[&Filter],
     left_columns: &[ColRef],
@@ -1013,7 +1052,6 @@ fn rebuild_filters(
     )))
 }
 
-/// Shifts every column index in `expression` by `offset`.
 fn shift_columns(expression: PhysicalExprRef, offset: usize) -> Result<PhysicalExprRef> {
     if offset == 0 {
         return Ok(expression);
@@ -1031,13 +1069,11 @@ fn shift_columns(expression: PhysicalExprRef, offset: usize) -> Result<PhysicalE
         .data()
 }
 
-/// A relation's plan as the extractor found it, paired with its rewritten form.
 type RewrittenRelation = (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>);
 
 /// Substitutes rewritten relations into a subtree, leaving its shape untouched.
-///
-/// The relations are the exact `Arc`s the extractor took from this subtree, so
-/// pointer identity finds them, and a match is not descended into.
+/// The relations are the exact `Arc`s taken from it, so pointer identity finds
+/// them, and a match is not descended into.
 fn replace_relations(
     plan: &Arc<dyn ExecutionPlan>,
     rewritten: &[RewrittenRelation],
@@ -1073,7 +1109,6 @@ fn replace_relations(
     }
 }
 
-/// Enumerates join orders throughout `plan`, returning `None` if nothing changed.
 pub(crate) fn enumerate_join_order(
     plan: &Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
@@ -1083,11 +1118,9 @@ pub(crate) fn enumerate_join_order(
         if let Some(reordered) = reorder(&graph, config, stats)? {
             return Ok(Some(reordered));
         }
-        // Rejected, so descend into the relations rather than into the children:
-        // re-extracting inside this subtree would search subsets the dynamic
-        // program already costed, and would measure any gain against a subtree's
-        // own cost instead of the whole graph's, letting a change the margin
-        // rejected back in.
+        // Rejected, so descend into the relations, not the children: re-extracting here
+        // would re-search costed subsets, and would weigh a gain against a subtree's own
+        // cost rather than the whole graph's, readmitting what the margin rejected.
         let mut rewritten: Vec<RewrittenRelation> = vec![];
         for relation in &graph.relations {
             if let Some(new) = enumerate_join_order(&relation.plan, config, stats)? {
@@ -1097,7 +1130,6 @@ pub(crate) fn enumerate_join_order(
         return replace_relations(plan, &rewritten);
     }
 
-    // Not a subtree that could be reordered: recurse into the children.
     let mut changed = false;
     let children = plan
         .children()
@@ -1120,7 +1152,6 @@ pub(crate) fn enumerate_join_order(
     }
 }
 
-/// Enumerates orders for one graph, rebuilding it if a cheaper one exists.
 fn reorder(
     graph: &JoinGraph,
     config: &ConfigOptions,
@@ -1143,7 +1174,6 @@ fn reorder(
         return Ok(None);
     }
 
-    // Reorder inside the relations before assembling them.
     let mut relations = Vec::with_capacity(graph.relations.len());
     for relation in &graph.relations {
         relations.push(

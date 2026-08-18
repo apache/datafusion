@@ -32,6 +32,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_enumeration::JoinEnumeration;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -73,7 +74,6 @@ fn scan(rows: usize, columns: &[(&str, usize)]) -> Arc<dyn ExecutionPlan> {
     Arc::new(StatisticsExec::new(statistics, schema))
 }
 
-/// A scan with no statistics at all.
 fn scan_without_statistics(columns: &[&str]) -> Arc<dyn ExecutionPlan> {
     let schema = Schema::new(
         columns
@@ -168,10 +168,12 @@ fn late_reducer_plan() -> Result<Arc<dyn ExecutionPlan>> {
     join(fact_other, types, &[("f_type", "t_type")])
 }
 
+/// Both rules in pipeline order: shape first, then build side and partition mode.
 fn optimize(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let plan = JoinEnumeration::new().optimize(plan, config)?;
     JoinSelection::new().optimize(plan, config)
 }
 
@@ -191,8 +193,7 @@ fn reorders_a_late_reducer() -> Result<()> {
       StatisticsExec: col_count=1, row_count=Inexact(10)
     ");
 
-    // The reducing join moves down so the large tables never join directly, and the
-    // projections keep the output columns in place.
+    // The reducing join moves down so the large tables never join directly.
     assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@3, t_type@2]
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], projection=[f_id@1, f_type@2, t_type@0]
@@ -208,8 +209,7 @@ fn respects_the_config_flag() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.optimizer.join_enumeration = false;
     let optimized = optimize(late_reducer_plan()?, &config)?;
-    // Only build side and partition mode change: the large tables still join first,
-    // for a million row intermediate.
+    // Without enumeration the large tables still join first, for a million rows.
     assert_snapshot!(formatted(&optimized), @r"
     ProjectionExec: expr=[f_id@1 as f_id, f_type@2 as f_type, o_id@3 as o_id, t_type@0 as t_type]
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)]
@@ -299,8 +299,7 @@ fn star_schema_context(join_enumeration: bool) -> Result<SessionContext> {
     Ok(ctx)
 }
 
-/// Queries over `star_schema_context`, covering a plain join tree, `EXISTS`,
-/// `NOT EXISTS` and a non-equi predicate.
+/// A plain join tree, `EXISTS`, `NOT EXISTS`, and a non-equi predicate.
 const STAR_QUERIES: [&str; 4] = [
     "select f_id, f_type, f_region from fact, ids, types, regions \
      where f_id = o_id and f_type = t_type and f_region = r_region order by f_id",
@@ -372,8 +371,7 @@ fn applies_a_selective_semi_join_first() -> Result<()> {
       StatisticsExec: col_count=1, row_count=Inexact(10)
     ");
 
-    // A `RightSemi` filtering the fact table before the inner join, with the ten
-    // row `EXISTS` side building.
+    // A `RightSemi` filtering the fact table before the inner join.
     assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)]
       HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(w_type@0, f_type@1)]
@@ -415,8 +413,7 @@ fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
         Some(greater_than_filter(("f_type", 1), ("t_type", 0))?),
     )?;
 
-    // Re-attached to the join that now brings its two columns together, with column
-    // indices rewritten for that join's inputs.
+    // Re-attached to the join that now brings its two columns together.
     assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@3, t_type@2]
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], filter=f_type@0 > t_type@1, projection=[f_id@1, f_type@2, t_type@0]
