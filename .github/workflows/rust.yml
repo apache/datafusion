@@ -287,6 +287,35 @@ jobs:
       - name: Check datafusion-functions (unicode_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion-functions --features=unicode_expressions
 
+  # Check datafusion-spark crate features
+  #
+  # Ensure via `cargo check` that the crate can be built with a
+  # subset of the features packages enabled. In particular, check
+  # the crate builds without the optional `core` feature (which is
+  # what `cargo publish` verifies).
+  # See https://github.com/apache/datafusion/issues/24474
+  linux-cargo-check-datafusion-spark:
+    name: cargo check datafusion-spark features
+    needs: linux-build-lib
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Check datafusion-spark (default features)
+        run: cargo check --profile ci --all-targets -p datafusion-spark
+      #
+      # Note: Only check libraries (not --all-targets) to cover end user APIs
+      #
+      - name: Check datafusion-spark (no-default-features)
+        run: cargo check --profile ci --no-default-features -p datafusion-spark
+      - name: Check datafusion-spark (core)
+        run: cargo check --profile ci --no-default-features -p datafusion-spark --features=core
+
   # Library and integration tests
   linux-test:
     name: cargo test (amd64)
