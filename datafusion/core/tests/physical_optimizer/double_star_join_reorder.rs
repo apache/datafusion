@@ -68,7 +68,7 @@ fn text_column(values: &[&str]) -> Arc<StringArray> {
 /// Register the five tables of the bowtie with a deliberately uneven shape:
 /// the fact tables have several rows per dimension key, which is what makes
 /// join order affect intermediate sizes.
-async fn register_tables(context: &SessionContext) -> Result<()> {
+fn register_tables(context: &SessionContext) -> Result<()> {
     // dim_a: 3 rows, 2 columns
     let dim_a_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
@@ -163,7 +163,7 @@ async fn run(reorder: bool) -> Result<(String, String)> {
     config.options_mut().execution.target_partitions = 1;
 
     let context = SessionContext::new_with_config(config);
-    register_tables(&context).await?;
+    register_tables(&context)?;
 
     let dataframe = context.sql(QUERY).await?;
     let plan = dataframe.clone().create_physical_plan().await?;
@@ -211,13 +211,13 @@ async fn the_rule_is_inert_when_disabled() -> Result<()> {
     config.options_mut().optimizer.double_star_join_reorder = false;
     config.options_mut().execution.target_partitions = 1;
     let context = SessionContext::new_with_config(config);
-    register_tables(&context).await?;
+    register_tables(&context)?;
     let disabled = context.sql(QUERY).await?.create_physical_plan().await?;
 
     let mut config = SessionConfig::new();
     config.options_mut().execution.target_partitions = 1;
     let context = SessionContext::new_with_config(config);
-    register_tables(&context).await?;
+    register_tables(&context)?;
     let default = context.sql(QUERY).await?.create_physical_plan().await?;
 
     assert_eq!(

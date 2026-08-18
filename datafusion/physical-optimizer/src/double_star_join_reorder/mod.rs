@@ -116,7 +116,14 @@ impl DoubleStarJoinReorder {
 
         let shapes = graph.detect_double_stars();
         if shapes.is_empty() {
-            log::debug!("double star: no valid decomposition of the join graph");
+            // Report the size too: the commonest reason for no decomposition
+            // is a clump split by an intervening operator, leaving too few
+            // relations to form a double star at all.
+            log::debug!(
+                "double star: no valid decomposition of {} relations and {} edges",
+                graph.relations().len(),
+                graph.edges().len()
+            );
             return Ok(Transformed::no(plan));
         }
 

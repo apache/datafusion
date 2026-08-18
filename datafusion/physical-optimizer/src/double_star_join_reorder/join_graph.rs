@@ -34,13 +34,35 @@
 //!                  '-- orders --'  '- customer -'  'nation'  'lineitem'
 //! ```
 //!
-//! Carrying the subtree's starting offset (`base`) down the recursion, a key
-//! at index `i` resolves as `base + i` on the left and `base + left_width + i`
-//! on the right.
+//! Each subtree therefore reports an **output map**: for every column it
+//! emits, the global coordinate of the relation column behind it. A join
+//! concatenates its children's maps; a key at index `i` is translated through
+//! the corresponding child's map.
 //!
 //! That identity is exactly what [`reorderable_join`] protects: a semi join
-//! emits only its left fields, and a projection reorders or drops columns.
-//! Either would silently break the arithmetic, so both are refused.
+//! emits only its left fields, and a projection attached to a join reorders or
+//! drops columns. Either would silently break the arithmetic, so both are
+//! refused.
+//!
+//! # Seeing through pruning projections
+//!
+//! The physical planner inserts a standalone `ProjectionExec` between joins to
+//! drop columns nothing above needs. Treating those as opaque relations splits
+//! every join tree into single-join pieces, far too small to be a double star,
+//! which made this rule inert on real SQL.
+//!
+//! A projection that only selects columns is a subset and reordering of its
+//! input, so [`pass_through_projection`] lets the clump continue through it and
+//! each output column inherits its input's coordinate. Projections that compute
+//! a value or rename a column are still refused: the first has no relation
+//! column behind it, and the second would change the field names of the plan's
+//! output.
+//!
+//! The consequence is that a subtree's output can be narrower than the
+//! relations beneath it, which is why the map is tracked explicitly rather than
+//! assuming output position `i` sits at `base + i`. A rewrite reproduces the
+//! original output by projecting the rebuilt tree back down through that map,
+//! restoring both the column order and the pruning in one step.
 //!
 //! # Detection
 //!
@@ -54,6 +76,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::HashJoinExec;
+use datafusion_physical_plan::projection::ProjectionExec;
 
 /// An equijoin edge between two relations of a [`JoinGraph`].
 ///
@@ -102,6 +125,10 @@ pub struct JoinGraph {
     offsets: Vec<usize>,
     edges: Vec<JoinEdge>,
     null_equality: NullEquality,
+    /// For each column of the clump's output, the global coordinate of the
+    /// relation column it reads. Narrower than the relations beneath it when a
+    /// pruning projection was passed through.
+    output_map: Vec<usize>,
 }
 
 impl JoinGraph {
@@ -116,8 +143,8 @@ impl JoinGraph {
         reorderable_join(plan.as_ref())?;
 
         let mut flattener = Flattener::default();
-        flattener.visit(plan, 0)?;
-        flattener.finish()
+        let output_map = flattener.visit(plan)?;
+        flattener.finish(output_map)
     }
 
     /// The flattened relations, in left-to-right order.
@@ -138,6 +165,26 @@ impl JoinGraph {
     /// The null-handling behavior shared by every join in the clump.
     pub fn null_equality(&self) -> NullEquality {
         self.null_equality
+    }
+
+    /// For each column of the clump's output, the global coordinate of the
+    /// relation column it reads.
+    ///
+    /// This is what a rewrite must reproduce: the same columns, in the same
+    /// order, even though the rebuilt tree holds every relation column and the
+    /// original output may have been pruned down from them.
+    pub fn output_map(&self) -> &[usize] {
+        &self.output_map
+    }
+
+    /// Resolve a global coordinate to `(relation, column within it)`.
+    pub fn locate(&self, global: usize) -> Option<(usize, usize)> {
+        let widths: Vec<usize> = self
+            .relations
+            .iter()
+            .map(|relation| relation.schema().fields().len())
+            .collect();
+        resolve(&self.offsets, &widths, global)
     }
 
     /// Total number of columns across all relations.
@@ -245,55 +292,117 @@ fn column_index(expr: &dyn PhysicalExpr) -> Option<usize> {
 struct Flattener {
     relations: Vec<Arc<dyn ExecutionPlan>>,
     offsets: Vec<usize>,
+    /// Where the next relation encountered will start.
+    next_offset: usize,
     /// Key pairs in global coordinates, resolved to relations in
     /// [`Flattener::finish`] once every leaf is known.
     global_keys: Vec<(usize, usize)>,
     null_equality: Option<NullEquality>,
 }
 
-impl Flattener {
-    /// Walk `plan`, whose columns begin at global offset `base`, and return
-    /// its width. `None` means the clump is unusable and the caller should
-    /// leave the plan alone.
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-    fn visit(&mut self, plan: &Arc<dyn ExecutionPlan>, base: usize) -> Option<usize> {
-        let Some(join) = reorderable_join(plan.as_ref()) else {
-            // A leaf: its contents are opaque to us, only its width matters.
-            let width = plan.schema().fields().len();
-            self.relations.push(Arc::clone(plan));
-            self.offsets.push(base);
-            return Some(width);
+/// A projection the clump can continue through: one that only selects columns,
+/// without computing anything or renaming.
+///
+/// A computed expression has no single relation column behind it, and a rename
+/// would change the field names of the plan's output, which this rule promises
+/// not to do.
+fn pass_through_projection(plan: &dyn ExecutionPlan) -> Option<&ProjectionExec> {
+    let projection = plan.downcast_ref::<ProjectionExec>()?;
+    let input_schema = projection.input().schema();
+
+    for entry in projection.expr() {
+        let Some(index) = column_index(entry.expr.as_ref()) else {
+            log::debug!("double star: projection computes a value, stopping there");
+            return None;
         };
+        let field = input_schema.fields().get(index)?;
+        if field.name() != &entry.alias {
+            log::debug!("double star: projection renames a column, stopping there");
+            return None;
+        }
+    }
 
-        // Rebuilt joins may merge keys that came from different original
-        // joins, so mixing null semantics within a clump is not safe.
-        match self.null_equality {
-            None => self.null_equality = Some(join.null_equality),
-            Some(existing) if existing == join.null_equality => {}
-            Some(_) => {
-                log::debug!("double star: clump mixes null equality settings");
-                return None;
+    Some(projection)
+}
+
+impl Flattener {
+    /// Walk `plan` and return its **output map**: for each column of the
+    /// subtree's output, the global coordinate of the relation column it
+    /// ultimately reads.
+    ///
+    /// An output map rather than a width because a column-pruning projection
+    /// between two joins makes a subtree's output narrower than the relations
+    /// beneath it, so output position and relation position stop coinciding.
+    /// Tracking the correspondence explicitly keeps the arithmetic honest
+    /// through such a node; assuming `output position == base + i` does not.
+    ///
+    /// `None` means the clump is unusable and the caller should leave the plan
+    /// alone.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    fn visit(&mut self, plan: &Arc<dyn ExecutionPlan>) -> Option<Vec<usize>> {
+        if let Some(join) = reorderable_join(plan.as_ref()) {
+            // Rebuilt joins may merge keys that came from different original
+            // joins, so mixing null semantics within a clump is not safe.
+            match self.null_equality {
+                None => self.null_equality = Some(join.null_equality),
+                Some(existing) if existing == join.null_equality => {}
+                Some(_) => {
+                    log::debug!("double star: clump mixes null equality settings");
+                    return None;
+                }
             }
+
+            let left_map = self.visit(&join.left)?;
+            let right_map = self.visit(&join.right)?;
+
+            for (left_key, right_key) in &join.on {
+                // `reorderable_join` already established both are columns, and
+                // each index addresses that child's *output*, which is what the
+                // child's map translates.
+                let left_index = column_index(left_key.as_ref())?;
+                let right_index = column_index(right_key.as_ref())?;
+                self.global_keys
+                    .push((*left_map.get(left_index)?, *right_map.get(right_index)?));
+            }
+
+            // An inner join's output is its left input's columns followed by
+            // its right input's.
+            let mut map = left_map;
+            map.extend(right_map);
+            return Some(map);
         }
 
-        // Left child starts where this subtree starts; the right child starts
-        // immediately after it.
-        let left_width = self.visit(&join.left, base)?;
-        let right_width = self.visit(&join.right, base + left_width)?;
-
-        for (left_key, right_key) in &join.on {
-            // `reorderable_join` already established both are columns.
-            let left_index = column_index(left_key.as_ref())?;
-            let right_index = column_index(right_key.as_ref())?;
-            self.global_keys
-                .push((base + left_index, base + left_width + right_index));
+        if let Some(projection) = pass_through_projection(plan.as_ref()) {
+            // A pruning projection only selects and reorders, so the clump
+            // continues below it and each output column inherits its input's
+            // coordinate. Without this the physical planner's column pruning
+            // splits every join tree into single-join pieces, too small to be
+            // a double star at all.
+            let child_map = self.visit(projection.input())?;
+            return projection
+                .expr()
+                .iter()
+                .map(|entry| {
+                    let index = column_index(entry.expr.as_ref())?;
+                    child_map.get(index).copied()
+                })
+                .collect();
         }
 
-        Some(left_width + right_width)
+        // A leaf: its contents are opaque to us, only its width matters.
+        // Naming it matters for diagnosis, since an unexpected operator between
+        // two joins is what splits a clump into pieces too small to reorder.
+        log::debug!("double star: treating {} as a relation", plan.name());
+        let width = plan.schema().fields().len();
+        let base = self.next_offset;
+        self.relations.push(Arc::clone(plan));
+        self.offsets.push(base);
+        self.next_offset += width;
+        Some((base..base + width).collect())
     }
 
     /// Resolve global key positions to relations and group them into edges.
-    fn finish(self) -> Option<JoinGraph> {
+    fn finish(self, output_map: Vec<usize>) -> Option<JoinGraph> {
         if self.relations.len() < 2 {
             return None;
         }
@@ -334,6 +443,7 @@ impl Flattener {
             edges,
             // A clump always contains at least one join, so this is set.
             null_equality: self.null_equality?,
+            output_map,
         })
     }
 }

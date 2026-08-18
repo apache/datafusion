@@ -136,14 +136,15 @@ pub fn rebuild(graph: &JoinGraph, plan: &DoubleStarPlan) -> Option<Rewritten> {
         return None;
     }
 
-    // Relations were flattened left to right with contiguous offsets, so
-    // walking them in order walks the original schema in order.
-    let mut projection = Vec::with_capacity(top.width);
-    for (relation, node) in graph.relations().iter().enumerate() {
-        let base = top.offset_of(relation)?;
-        for column in 0..node.schema().fields().len() {
-            projection.push(base + column);
-        }
+    // Reproduce the clump's original output: the same columns, in the same
+    // order. The rebuilt tree carries every relation column, and the original
+    // output may have been pruned down from them by a projection we passed
+    // through, so this projection restores the order *and* re-applies that
+    // pruning.
+    let mut projection = Vec::with_capacity(graph.output_map().len());
+    for &global in graph.output_map() {
+        let (relation, column) = graph.locate(global)?;
+        projection.push(top.offset_of(relation)? + column);
     }
 
     Some(Rewritten {
@@ -159,10 +160,15 @@ pub fn rebuild(graph: &JoinGraph, plan: &DoubleStarPlan) -> Option<Rewritten> {
 pub fn apply_projection(rewritten: Rewritten) -> Option<Arc<dyn ExecutionPlan>> {
     let Rewritten { plan, projection } = rewritten;
 
-    if projection
-        .iter()
-        .enumerate()
-        .all(|(position, &source)| position == source)
+    // Only skip when the projection selects every column in its existing
+    // order. The width check is load-bearing: when a pruning projection was
+    // passed through, `projection` is shorter than the tree, and handing back
+    // the tree unprojected would emit columns the clump's output never had.
+    if projection.len() == plan.schema().fields().len()
+        && projection
+            .iter()
+            .enumerate()
+            .all(|(position, &source)| position == source)
     {
         return Some(plan);
     }
@@ -597,8 +603,10 @@ mod tests {
         // no projection, and `apply_projection` should hand the tree back
         // untouched rather than wrapping it in an identity permutation.
         let graph = JoinGraph::try_new(&bowtie()).expect("a reorderable clump");
-        let identity = (0..graph.width()).collect::<Vec<_>>();
         let plan = Arc::clone(&graph.relations()[0]);
+        // The permutation must cover exactly this plan's columns; a shorter one
+        // is a pruning projection and does need emitting.
+        let identity = (0..plan.schema().fields().len()).collect::<Vec<_>>();
 
         let unchanged = apply_projection(Rewritten {
             plan: Arc::clone(&plan),
@@ -607,5 +615,22 @@ mod tests {
         .expect("an identity permutation needs no projection");
 
         assert!(Arc::ptr_eq(&plan, &unchanged));
+    }
+
+    #[test]
+    fn emits_a_projection_when_columns_were_pruned() {
+        // A projection shorter than the tree selects a subset, so skipping it
+        // would hand back columns the clump's output never had.
+        let plan = bowtie();
+        let full_width = plan.schema().fields().len();
+        assert!(full_width > 2);
+
+        let projected = apply_projection(Rewritten {
+            plan: Arc::clone(&plan),
+            projection: vec![0, 1],
+        })
+        .expect("a pruning projection applies to the top join");
+
+        assert_eq!(projected.schema().fields().len(), 2);
     }
 }
