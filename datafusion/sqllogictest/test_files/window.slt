@@ -6963,6 +6963,11 @@ query error DataFusion error: type_coercion\ncaused by\nError during planning: R
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM (VALUES (arrow_cast('a', 'Binary'))) t(x)
 
+# Dictionary-wrapped binary is unwrapped before checking offset arithmetic.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Binary
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast(arrow_cast('a', 'Binary'), 'Dictionary(Int32, Binary)'))) t(x)
+
 query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Utf8
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM (VALUES ('a')) t(x)
