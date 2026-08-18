@@ -264,7 +264,7 @@ impl NullState {
                     .zip(data.iter())
                     .zip(filter.iter())
                     .for_each(|((&group_index, new_value), filter_value)| {
-                        if let Some(true) = filter_value {
+                        if filter_value == Some(true) {
                             seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
                         }
@@ -278,7 +278,7 @@ impl NullState {
                     .zip(group_indices.iter())
                     .zip(values.iter())
                     .for_each(|((filter_value, &group_index), new_value)| {
-                        if let Some(true) = filter_value
+                        if filter_value == Some(true)
                             && let Some(new_value) = new_value
                         {
                             seen_values.set_bit(group_index, true);
@@ -442,7 +442,7 @@ pub fn accumulate<T, F>(
                 .zip(data.iter())
                 .zip(filter.iter())
                 .for_each(|((&group_index, &new_value), filter_value)| {
-                    if let Some(true) = filter_value {
+                    if filter_value == Some(true) {
                         value_fn(group_index, new_value);
                     }
                 })
@@ -458,7 +458,7 @@ pub fn accumulate<T, F>(
                 .zip(group_indices.iter())
                 .zip(values.iter())
                 .for_each(|((filter_value, &group_index), new_value)| {
-                    if let Some(true) = filter_value
+                    if filter_value == Some(true)
                         && let Some(new_value) = new_value
                     {
                         value_fn(group_index, new_value)
@@ -903,7 +903,7 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included
+                            if is_included == Some(true)
                                 && let Some(value) = value
                             {
                                 mock.saw_value(group_index);
@@ -966,7 +966,7 @@ mod test {
                 ),
                 (None, Some(filter)) => group_indices.iter().zip(filter.iter()).for_each(
                     |(&group_index, is_included)| {
-                        if let Some(true) = is_included {
+                        if is_included == Some(true) {
                             expected_values.push(group_index);
                         }
                     },
@@ -978,7 +978,7 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, is_valid), is_included)| {
                             // if value passed filter
-                            if let (true, Some(true)) = (is_valid, is_included) {
+                            if is_valid && is_included == Some(true) {
                                 expected_values.push(group_index);
                             }
                         });
@@ -1032,7 +1032,7 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included
+                            if is_included == Some(true)
                                 && let Some(value) = value
                             {
                                 mock.saw_value(group_index);

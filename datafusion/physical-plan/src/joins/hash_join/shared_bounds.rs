@@ -501,8 +501,8 @@ impl SharedBuildAccumulator {
                     *completed_partitions += 1;
                 }
                 partitions[partition_id] = PartitionStatus::Reported(PartitionData {
-                    pushdown,
                     bounds,
+                    pushdown,
                     keys_have_null,
                 });
             }
@@ -520,8 +520,8 @@ impl SharedBuildAccumulator {
             ) => {
                 if matches!(data, PartitionStatus::Pending) {
                     *data = PartitionStatus::Reported(PartitionData {
-                        pushdown,
                         bounds,
+                        pushdown,
                         keys_have_null,
                     });
                 }

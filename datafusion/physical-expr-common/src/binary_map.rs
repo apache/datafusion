@@ -467,13 +467,12 @@ where
             observe_payload_fn(payload);
         }
         // Check for overflow in offsets (if more data was sent than can be represented)
-        if O::from_usize(self.buffer.len()).is_none() {
-            panic!(
-                "Put {} bytes in buffer, more than can be represented by a {}",
-                self.buffer.len(),
-                type_name::<O>()
-            );
-        }
+        assert!(
+            O::from_usize(self.buffer.len()).is_some(),
+            "Put {} bytes in buffer, more than can be represented by a {}",
+            self.buffer.len(),
+            type_name::<O>()
+        )
     }
 
     /// Converts this set into a `StringArray`, `LargeStringArray`,
