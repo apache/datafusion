@@ -1672,28 +1672,20 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
-        /// When set to true, the physical plan optimizer enumerates alternative
-        /// join orders for connected subtrees of inner hash joins and picks the
-        /// cheapest one from cardinality estimates, considering bushy shapes as
-        /// well as left-deep ones. Subtrees whose inputs lack row count
-        /// statistics, and subtrees whose original order is already the cheapest,
-        /// are left untouched.
+        /// When set to true, the physical plan optimizer enumerates join orders for
+        /// subtrees of joins and picks the cheapest from cardinality estimates,
+        /// considering bushy shapes as well as left-deep ones. Subtrees whose inputs
+        /// lack row count statistics are left untouched.
         pub join_enumeration: bool, default = true
 
-        /// How much cheaper an enumerated join order must be, in percent, before
-        /// `join_enumeration` replaces the order the planner produced.
-        ///
-        /// Cardinality estimates are often unable to tell two orders apart, and
-        /// a plan swapped on an estimate that close is as likely to be slower as
-        /// faster. A margin keeps the planner's order unless the model is
-        /// confident, at the cost of missing genuinely small wins.
+        /// How much cheaper an enumerated join order must be, in percent, before it
+        /// replaces the order the planner produced. Estimates often cannot tell two
+        /// orders apart, and swapping on one that close is as likely to lose as win.
         pub join_enumeration_min_improvement: u8, default = 10
 
-        /// Maximum number of inputs in a join subtree for which
-        /// `join_enumeration` runs its exhaustive dynamic programming search.
-        /// Larger subtrees fall back to a greedy search. The exhaustive search
-        /// costs `O(3^n)` in the number of inputs, so values above 16 are
-        /// clamped to 16.
+        /// Maximum inputs in a join subtree for which `join_enumeration` searches,
+        /// at a cost of `O(3^n)`. Larger subtrees keep the planner's order, as do
+        /// subtrees of over 16 inputs whatever this is set to.
         pub join_enumeration_limit: usize, default = 12
 
         /// When set to true, the physical plan optimizer uses the pluggable

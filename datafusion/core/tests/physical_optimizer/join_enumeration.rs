@@ -40,12 +40,8 @@ use insta::assert_snapshot;
 
 use crate::physical_optimizer::join_selection::StatisticsExec;
 
-/// Statistics for a table of `rows` rows whose columns are described by
-/// `(name, distinct_count)` pairs.
-///
-/// Every column gets a `[0, distinct_count)` range so that the enumerator's
-/// distinct-value estimate is well defined even without an explicit
-/// `distinct_count`, matching what a real scan with min/max statistics offers.
+/// A table of `rows` rows with `(name, distinct_count)` columns. Each gets a
+/// `[0, distinct_count)` range, as a real scan with min/max statistics would.
 fn table(rows: usize, columns: &[(&str, usize)]) -> (Statistics, Schema) {
     let column_statistics = columns
         .iter()
@@ -160,9 +156,9 @@ fn greater_than_filter(
     ))
 }
 
-/// A three way join whose `FROM` order is the expensive one: joining the two
-/// large tables first produces a million rows, while joining either of them with
-/// the tiny table first cuts the input down to ten thousand.
+/// A three way join in its expensive `FROM` order: the two large tables first
+/// produce a million rows, where either with the tiny table first gives ten
+/// thousand.
 fn late_reducer_plan() -> Result<Arc<dyn ExecutionPlan>> {
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
@@ -195,9 +191,8 @@ async fn reorders_a_late_reducer() -> Result<()> {
       StatisticsExec: col_count=1, row_count=Inexact(10)
     ");
 
-    // Enumeration pulls the reducing join down so the two large tables are never
-    // joined directly, and the join projections keep the output columns in their
-    // original positions.
+    // The reducing join moves down so the large tables never join directly, and the
+    // projections keep the output columns in place.
     assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@3, t_type@2]
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], projection=[f_id@1, f_type@2, t_type@0]
@@ -213,9 +208,8 @@ async fn respects_the_config_flag() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.optimizer.join_enumeration = false;
     let optimized = optimize(late_reducer_plan()?, &config)?;
-    // Only the local build side and partition mode decisions are made: the tiny
-    // table becomes the build side of the join it already sat in, but the two
-    // large tables are still joined first, for a million row intermediate.
+    // Only build side and partition mode change: the large tables still join first,
+    // for a million row intermediate.
     assert_snapshot!(formatted(&optimized), @r"
     ProjectionExec: expr=[f_id@1 as f_id, f_type@2 as f_type, o_id@3 as o_id, t_type@0 as t_type]
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)]
@@ -251,8 +245,7 @@ async fn leaves_plans_without_statistics_alone() -> Result<()> {
 
 #[tokio::test]
 async fn keeps_an_already_optimal_order() -> Result<()> {
-    // Same tables, but now written in the cheap order to begin with. The
-    // enumerator must not churn the plan when it cannot do better.
+    // Already in the cheap order, so the enumerator must not churn the plan.
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
     let types = scan(10, &[("t_type", 10)]);
@@ -269,7 +262,7 @@ async fn keeps_an_already_optimal_order() -> Result<()> {
     Ok(())
 }
 
-/// Builds a session over four in-memory tables shaped like a small star schema.
+/// A session over four in-memory tables shaped like a small star schema.
 async fn star_schema_context(join_enumeration: bool) -> Result<SessionContext> {
     let mut config = SessionConfig::new();
     config.options_mut().optimizer.join_enumeration = join_enumeration;
@@ -306,53 +299,53 @@ async fn star_schema_context(join_enumeration: bool) -> Result<SessionContext> {
     Ok(ctx)
 }
 
-const STAR_QUERY: &str = "select f_id, f_type, f_region \
-     from fact, ids, types, regions \
-     where f_id = o_id and f_type = t_type and f_region = r_region \
-     order by f_id";
+/// Queries over `star_schema_context`, covering a plain join tree, `EXISTS`,
+/// `NOT EXISTS` and a non-equi predicate.
+const STAR_QUERIES: [&str; 4] = [
+    "select f_id, f_type, f_region from fact, ids, types, regions \
+     where f_id = o_id and f_type = t_type and f_region = r_region order by f_id",
+    "select f_id, f_type from fact where exists \
+     (select 1 from types where t_type = f_type) \
+     and f_id in (select o_id from ids) order by f_id",
+    "select f_id, f_type from fact where not exists \
+     (select 1 from types where t_type = f_type) \
+     and f_id in (select o_id from ids) order by f_id",
+    "select f_id, f_type, t_type from fact, ids, types \
+     where f_id = o_id and f_type = t_type and f_id > t_type order by f_id",
+];
 
 #[tokio::test]
-async fn reordered_join_returns_the_same_rows() -> Result<()> {
+async fn reordering_returns_the_same_rows() -> Result<()> {
     let enumerated = star_schema_context(true).await?;
     let baseline = star_schema_context(false).await?;
+    let mut reordered_any = false;
+    for query in STAR_QUERIES {
+        let enumerated_plan = enumerated.sql(query).await?.create_physical_plan().await?;
+        let baseline_plan = baseline.sql(query).await?.create_physical_plan().await?;
+        reordered_any |= formatted(&enumerated_plan) != formatted(&baseline_plan);
 
-    let enumerated_plan = enumerated
-        .sql(STAR_QUERY)
-        .await?
-        .create_physical_plan()
-        .await?;
-    let baseline_plan = baseline
-        .sql(STAR_QUERY)
-        .await?
-        .create_physical_plan()
-        .await?;
-    // If enumeration made no difference here the comparison below proves
-    // nothing, so check that it did.
-    assert_ne!(formatted(&enumerated_plan), formatted(&baseline_plan));
-
-    let enumerated_rows = enumerated.sql(STAR_QUERY).await?.collect().await?;
-    let baseline_rows = baseline.sql(STAR_QUERY).await?.collect().await?;
-    assert_eq!(
-        pretty_format_batches(&enumerated_rows)?.to_string(),
-        pretty_format_batches(&baseline_rows)?.to_string(),
-    );
-    // And that the query is not trivially empty.
-    assert_eq!(
-        enumerated_rows.iter().map(|b| b.num_rows()).sum::<usize>(),
-        24
-    );
+        let enumerated_rows = enumerated.sql(query).await?.collect().await?;
+        let baseline_rows = baseline.sql(query).await?.collect().await?;
+        assert_eq!(
+            pretty_format_batches(&enumerated_rows)?.to_string(),
+            pretty_format_batches(&baseline_rows)?.to_string(),
+            "rows differ for: {query}"
+        );
+        assert!(enumerated_rows.iter().map(|b| b.num_rows()).sum::<usize>() > 0);
+    }
+    // Rows matching would prove nothing if no plan had changed.
+    assert!(reordered_any);
     Ok(())
 }
 
-/// A semi join whose `EXISTS` side is highly selective, sitting above a join of
-/// two large tables -- the shape TPC-H q18 has.
+/// A selective semi join sitting above a join of two large tables, as TPC-H q18
+/// has it.
 fn late_semi_join_plan(anti: bool) -> Result<Arc<dyn ExecutionPlan>> {
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
-    // Sized so that either way round the reducer keeps one percent of the fact
-    // table: ten of its thousand types match for the semi join, and all but ten
-    // match for the anti join. A reducer that kept most of its input would not be
-    // worth moving, and the enumerator would rightly leave it alone.
+    // Sized so the reducer keeps one percent either way round: ten of the thousand
+    // types match for the semi join, all but ten for the anti join. A reducer that
+    // kept most of its input would not be worth moving.
     let wanted = if anti {
         scan(990, &[("w_type", 990)])
     } else {
@@ -379,8 +372,8 @@ async fn applies_a_selective_semi_join_first() -> Result<()> {
       StatisticsExec: col_count=1, row_count=Inexact(10)
     ");
 
-    // The semi join becomes a `RightSemi` that filters the fact table before it
-    // reaches the inner join, with the ten row `EXISTS` side on the build side.
+    // A `RightSemi` filtering the fact table before the inner join, with the ten
+    // row `EXISTS` side building.
     assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)]
       HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(w_type@0, f_type@1)]
@@ -406,33 +399,9 @@ async fn applies_an_anti_join_first() -> Result<()> {
 }
 
 #[tokio::test]
-async fn semi_join_returns_the_same_rows() -> Result<()> {
-    for query in [
-        "select f_id, f_type from fact where exists \
-         (select 1 from types where t_type = f_type) \
-         and f_id in (select o_id from ids) order by f_id",
-        "select f_id, f_type from fact where not exists \
-         (select 1 from types where t_type = f_type) \
-         and f_id in (select o_id from ids) order by f_id",
-    ] {
-        let enumerated = star_schema_context(true).await?;
-        let baseline = star_schema_context(false).await?;
-        let enumerated_rows = enumerated.sql(query).await?.collect().await?;
-        let baseline_rows = baseline.sql(query).await?.collect().await?;
-        assert_eq!(
-            pretty_format_batches(&enumerated_rows)?.to_string(),
-            pretty_format_batches(&baseline_rows)?.to_string(),
-            "rows differ for: {query}"
-        );
-        assert!(enumerated_rows.iter().map(|b| b.num_rows()).sum::<usize>() > 0);
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
-    // `f_type > t_type` rides on the join of fact and types, which enumeration
-    // moves below the join with the second large table.
+    // `f_type > t_type` rides on the fact/types join, which moves below the join
+    // with the second large table.
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
     let types = scan(10, &[("t_type", 10)]);
@@ -446,8 +415,8 @@ async fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
         Some(greater_than_filter(("f_type", 1), ("t_type", 0))?),
     )?;
 
-    // The filter is re-attached to whichever join now brings its two columns
-    // together, with its column indices rewritten for that join's inputs.
+    // Re-attached to the join that now brings its two columns together, with column
+    // indices rewritten for that join's inputs.
     assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@3, t_type@2]
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], filter=f_type@0 > t_type@1, projection=[f_id@1, f_type@2, t_type@0]
@@ -455,21 +424,5 @@ async fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
         StatisticsExec: col_count=2, row_count=Inexact(1000000)
       StatisticsExec: col_count=1, row_count=Inexact(1000000)
     ");
-    Ok(())
-}
-
-#[tokio::test]
-async fn non_equi_filter_returns_the_same_rows() -> Result<()> {
-    let query = "select f_id, f_type, t_type from fact, ids, types \
-         where f_id = o_id and f_type = t_type and f_id > t_type order by f_id";
-    let enumerated = star_schema_context(true).await?;
-    let baseline = star_schema_context(false).await?;
-    let enumerated_rows = enumerated.sql(query).await?.collect().await?;
-    let baseline_rows = baseline.sql(query).await?.collect().await?;
-    assert_eq!(
-        pretty_format_batches(&enumerated_rows)?.to_string(),
-        pretty_format_batches(&baseline_rows)?.to_string(),
-    );
-    assert!(enumerated_rows.iter().map(|b| b.num_rows()).sum::<usize>() > 0);
     Ok(())
 }

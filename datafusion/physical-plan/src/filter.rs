@@ -360,21 +360,16 @@ impl FilterExec {
         } else {
             let null_rejecting_columns = collect_null_rejecting_columns(predicate);
 
-            // Estimate the predicate one top-level conjunct at a time. Interval
-            // analysis rejects a whole predicate if any part of it is out of
-            // reach, and an `IN` list is out of reach because the planner expands
-            // it into a chain of `OR`s. Splitting first means a query like
-            // `d_dom between 1 and 2 AND d_year IN (1999, 2000, 2001)` no longer
-            // falls back to the default selectivity for all of it: TPC-DS
-            // estimates that at 20% of `date_dim`, or 14,610 rows, where 72
-            // survive.
+            // Estimate one top-level conjunct at a time: interval analysis rejects a whole
+            // predicate if any part is out of reach, and an `IN` list is, since the planner
+            // expands it into `OR`s. TPC-DS estimated `d_dom between 1 and 2 AND d_year IN
+            // (1999, 2000, 2001)` at 20% of `date_dim`, 14,610 rows, where 72 survive.
             let (supported, rest): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()
                 .partition(|conjunct| check_support(conjunct, schema));
             let split_anything = !rest.is_empty();
 
-            // Selectivity of the conjuncts interval analysis cannot see. An
-            // unrecognized one still contributes the default, once, as the whole
+            // An unrecognized conjunct still contributes the default, once, as the whole
             // predicate used to.
             let mut unanalyzed_selectivity = 1.0;
             let mut has_unknown_conjunct = false;
@@ -392,12 +387,10 @@ impl FilterExec {
                 unanalyzed_selectivity *= default_selectivity as f64 / 100.0;
             }
 
-            // Rebuilding the conjunction re-associates it, and interval
-            // propagation is sensitive to the shape of the tree it walks, so the
-            // predicate is passed through untouched unless something was actually
-            // split off it. It must never be passed through when something was:
-            // interval analysis rejects the parts that were split off, and asking
-            // it to walk them anyway is an error rather than a fallback.
+            // Rebuilding re-associates the conjunction and interval propagation is
+            // sensitive to the tree's shape, so pass the predicate through untouched when
+            // nothing was split off. Never pass it through when something was: analysis
+            // errors on the parts it rejected rather than falling back.
             let analyzable = if split_anything {
                 conjunction_opt(supported.into_iter().cloned())
             } else {
@@ -421,9 +414,7 @@ impl FilterExec {
                     &null_rejecting_columns,
                     filtered_num_rows,
                 );
-                // A column pinned by an equality that was split off has one
-                // distinct value left, which interval analysis of the remaining
-                // conjuncts cannot know.
+                // An equality that was split off pins its column to one distinct value.
                 for idx in &eq_columns {
                     if let Some(col_stat) = cs.get_mut(*idx)
                         && col_stat.distinct_count != Precision::Exact(1)
@@ -434,9 +425,8 @@ impl FilterExec {
                 }
                 (selectivity, filtered_num_rows, cs)
             } else {
-                // Nothing to derive boundaries from, so keep the input's value
-                // statistics and apply only the row-count constraints that still
-                // follow from the filter predicate.
+                // No boundaries to derive, so keep the input's value statistics and apply only
+                // the row-count constraints that follow from the predicate.
                 let selectivity = unanalyzed_selectivity;
                 let filtered_num_rows =
                     input_num_rows.with_estimated_selectivity(selectivity);
@@ -1015,35 +1005,30 @@ impl EmbeddedProjection for FilterExec {
 ///
 /// Only AND conjunctions are traversed; OR is intentionally skipped
 /// since `a = 1 OR a = 2` does not pin NDV to 1.
-/// Estimates the selectivity of `col IN (a, b, c)`, including the chain of
-/// `OR`ed equalities the planner expands a short list into.
+/// Estimates `col IN (a, b, c)`, including the `OR` chain a short list expands
+/// into, as `distinct literals / distinct values` -- the reasoning `col =
+/// literal` gets from `1 / NDV`. Interval arithmetic cannot narrow a column from
+/// a disjunction, so such a conjunct would otherwise only take the default.
 ///
-/// Interval arithmetic cannot narrow a column from a disjunction, so without this
-/// such a conjunct would contribute nothing but the default selectivity. Here the
-/// fraction of values the list selects is `distinct literals / distinct values`,
-/// the same reasoning `col = literal` gets from `1 / NDV`.
-///
-/// Returns `None` when the conjunct is not a list of literals over one column.
+/// `None` when the conjunct is not a list of literals over one column.
 fn in_list_selectivity(
     conjunct: &Arc<dyn PhysicalExpr>,
     column_statistics: &[ColumnStatistics],
     num_rows: &Precision<usize>,
 ) -> Option<f64> {
     let mut column = None;
-    let mut values = HashSet::new();
+    let mut values: Vec<ScalarValue> = vec![];
     if let Some(in_list) = conjunct.downcast_ref::<InListExpr>() {
         if in_list.negated() {
-            // `NOT IN` selects the complement, which is usually most of the
-            // column, and is left to the default rather than guessed at.
+            // `NOT IN` selects most of the column; left to the default.
             return None;
         }
         column = Some(in_list.expr().downcast_ref::<Column>()?);
         for value in in_list.list() {
-            values.insert(value.downcast_ref::<Literal>()?.value().clone());
+            push_literal(&mut values, value)?;
         }
     } else {
-        // Only a disjunction, so that a plain `col = literal` keeps whatever
-        // estimate it gets today rather than being re-derived here.
+        // Disjunctions only, so a plain `col = literal` keeps the estimate it has.
         let binary = conjunct.downcast_ref::<BinaryExpr>()?;
         if *binary.op() != Operator::Or {
             return None;
@@ -1063,14 +1048,24 @@ fn in_list_selectivity(
     Some((values.len() as f64 / distinct as f64).min(1.0))
 }
 
-/// Collects the literals of an `OR` chain of equalities over a single column.
-///
-/// Returns `None` as soon as the expression is anything else, so a mixed
-/// disjunction such as `a = 1 OR b = 2` is not mistaken for a list.
+/// Appends `expr`'s literal value, if it is one, keeping the list distinct.
+fn push_literal(
+    values: &mut Vec<ScalarValue>,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<()> {
+    let value = expr.downcast_ref::<Literal>()?.value();
+    if !values.contains(value) {
+        values.push(value.clone());
+    }
+    Some(())
+}
+
+/// Collects the literals of an `OR` chain of equalities over one column. `None`
+/// for anything else, so `a = 1 OR b = 2` is not mistaken for a list.
 fn collect_or_equalities<'a>(
     expr: &'a Arc<dyn PhysicalExpr>,
     column: &mut Option<&'a Column>,
-    values: &mut HashSet<ScalarValue>,
+    values: &mut Vec<ScalarValue>,
 ) -> Option<()> {
     let binary = expr.downcast_ref::<BinaryExpr>()?;
     match binary.op() {
@@ -1087,14 +1082,12 @@ fn collect_or_equalities<'a>(
                 (None, Some(col)) => (col, binary.left()),
                 _ => return None,
             };
-            // Every equality has to constrain the same column, or the fraction
-            // below would not describe the conjunct.
+            // All equalities must constrain the same column.
             if column.is_some_and(|current| current != found) {
                 return None;
             }
             *column = Some(found);
-            values.insert(literal.downcast_ref::<Literal>()?.value().clone());
-            Some(())
+            push_literal(values, literal)
         }
         _ => None,
     }
