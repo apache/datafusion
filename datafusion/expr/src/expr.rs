@@ -648,7 +648,7 @@ pub type SchemaFieldMetadata = Metadata;
 pub fn intersect_metadata_for_union<'a>(
     metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
 ) -> SchemaFieldMetadata {
-    let mut intersected: Option<std::collections::BTreeMap<String, String>> = None;
+    let mut intersected: Option<SchemaFieldMetadata> = None;
 
     for metadata in metadatas {
         // Skip empty metadata (e.g. from NULL literals or computed expressions)
@@ -658,12 +658,7 @@ pub fn intersect_metadata_for_union<'a>(
         }
         match &mut intersected {
             None => {
-                intersected = Some(
-                    metadata
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                );
+                intersected = Some(metadata.clone());
             }
             Some(current) => {
                 // Only keep keys that exist in both with the same value
@@ -672,7 +667,7 @@ pub fn intersect_metadata_for_union<'a>(
         }
     }
 
-    intersected.map(Metadata::from).unwrap_or_default()
+    intersected.unwrap_or_default()
 }
 
 /// UNNEST expression.
