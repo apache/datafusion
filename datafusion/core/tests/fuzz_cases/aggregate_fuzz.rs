@@ -442,7 +442,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     input4.iter_mut().for_each(|v| {
         *v = rng.random_range(0..n_distinct) as i64;
     });
-    input123.sort();
+    input123.sort_unstable();
     let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
     let input2 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.1));
     let input3 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.2));

@@ -748,7 +748,7 @@ mod tests {
     fn some_str_sorted(value: ScalarValue, sep: &str) -> String {
         let value = some_str(value);
         let mut parts: Vec<&str> = value.split(sep).collect();
-        parts.sort();
+        parts.sort_unstable();
         parts.join(sep)
     }
 

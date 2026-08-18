@@ -776,7 +776,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
             rng.random_range(0..n_distinct) as i32,
         )
     });
-    input123.sort();
+    input123.sort_unstable();
     rng.fill(&mut input4[..]);
     input5.iter_mut().for_each(|v| {
         *v = generate_random_string(&mut rng, 1);

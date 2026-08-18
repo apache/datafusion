@@ -445,7 +445,7 @@ mod sp_repartition_fuzz_tests {
                 rng.random_range(0..n_distinct) as i64,
             )
         });
-        input123.sort();
+        input123.sort_unstable();
         let input1 =
             Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
         let input2 =

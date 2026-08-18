@@ -1503,7 +1503,7 @@ async fn pwmj_collect_ids(
             ids.extend((0..col.len()).map(|i| col.value(i)));
         }
     }
-    ids.sort();
+    ids.sort_unstable();
     ids
 }
 
