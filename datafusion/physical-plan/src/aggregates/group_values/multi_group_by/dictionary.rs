@@ -516,8 +516,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             new_to_old.push(old);
         }
 
-        self.value_dedup = HashTable::new();
-        self.value_dedup_size = 0;
         self.null_inner_slot = None;
 
         self.hash_values(&all_inner_values);
@@ -532,11 +530,23 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 self.inner
                     .append_val(&all_inner_values, old_slot)
                     .expect("append value failed in take_n");
-                self.value_dedup.insert_accounted(
-                    (self.val_hashes[old_slot], new_slot),
-                    |&(entry_hash, _)| entry_hash,
-                    &mut self.value_dedup_size,
-                );
+
+                if old_slot != new_slot {
+                    for i in new_slot..old_slot {
+                        if let Ok(entry) =
+                            self.value_dedup.find_entry(self.val_hashes[i], |e| {
+                                *e == (self.val_hashes[i], i)
+                            })
+                        {
+                            entry.remove();
+                        }
+                    }
+                    self.value_dedup.insert_accounted(
+                        (self.val_hashes[old_slot], new_slot),
+                        |&(entry_hash, _)| entry_hash,
+                        &mut self.value_dedup_size,
+                    );
+                }
             }
         }
 
