@@ -615,7 +615,7 @@ impl SharedBuildAccumulator {
                 self.build_collect_left_filter(partition)
             }
             FinalizeInput::Partitioned(partitions) => {
-                self.build_partitioned_filter(&partitions)
+                self.build_partitioned_filter(partitions)
             }
         }
     }
@@ -623,23 +623,25 @@ impl SharedBuildAccumulator {
     /// Builds the single global filter used by a collect-left join.
     fn build_collect_left_filter(&self, partition: PartitionStatus) -> Result<()> {
         match partition {
-            PartitionStatus::Reported(partition_data) => {
+            PartitionStatus::Reported(PartitionData {
+                bounds,
+                pushdown,
+                keys_have_null,
+            }) => {
                 let membership_expr = create_membership_predicate(
                     &self.on_right,
-                    partition_data.pushdown.clone(),
+                    pushdown,
                     &HASH_JOIN_SEED,
                     self.probe_schema.as_ref(),
                 )?;
-                let bounds_expr =
-                    create_bounds_predicate(&self.on_right, &partition_data.bounds);
+                let bounds_expr = create_bounds_predicate(&self.on_right, &bounds);
 
                 if let Some(filter_expr) =
                     combine_membership_and_bounds(membership_expr, bounds_expr)
                 {
-                    self.dynamic_filter.update(self.preserve_probe_nulls(
-                        filter_expr,
-                        partition_data.keys_have_null,
-                    )?)?;
+                    self.dynamic_filter.update(
+                        self.preserve_probe_nulls(filter_expr, keys_have_null)?,
+                    )?;
                 }
                 Ok(())
             }
@@ -652,32 +654,39 @@ impl SharedBuildAccumulator {
         }
     }
 
-    fn build_partitioned_filter(&self, partitions: &[PartitionStatus]) -> Result<()> {
+    /// Builds one routed probe-side filter from finalized partitioned build data.
+    /// Empty partitions reject their routed rows, while canceled partitions stay
+    /// permissive because their build contents are unknown.
+    fn build_partitioned_filter(&self, partitions: Vec<PartitionStatus>) -> Result<()> {
         let mut partition_filters = Vec::with_capacity(partitions.len());
         let mut real_partition_ids = Vec::new();
         let mut empty_partition_ids = Vec::new();
         let mut has_canceled_unknown = false;
         let mut keys_have_null = false;
 
-        for (partition_id, partition) in partitions.iter().enumerate() {
+        for (partition_id, partition) in partitions.into_iter().enumerate() {
             match partition {
-                PartitionStatus::Reported(partition)
-                    if matches!(partition.pushdown, PushdownStrategy::Empty) =>
-                {
+                PartitionStatus::Reported(PartitionData {
+                    pushdown: PushdownStrategy::Empty,
+                    ..
+                }) => {
                     empty_partition_ids.push(partition_id);
                     partition_filters.push(lit(false));
                 }
-                PartitionStatus::Reported(partition) => {
+                PartitionStatus::Reported(PartitionData {
+                    bounds,
+                    pushdown,
+                    keys_have_null: partition_keys_have_null,
+                }) => {
                     real_partition_ids.push(partition_id);
-                    keys_have_null |= partition.keys_have_null;
+                    keys_have_null |= partition_keys_have_null;
                     let membership_expr = create_membership_predicate(
                         &self.on_right,
-                        partition.pushdown.clone(),
+                        pushdown,
                         &HASH_JOIN_SEED,
                         self.probe_schema.as_ref(),
                     )?;
-                    let bounds_expr =
-                        create_bounds_predicate(&self.on_right, &partition.bounds);
+                    let bounds_expr = create_bounds_predicate(&self.on_right, &bounds);
                     let then_expr =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                             .unwrap_or_else(|| lit(true));
@@ -717,7 +726,10 @@ impl SharedBuildAccumulator {
             Arc::clone(&partition_filters[real_partition_ids[0]])
         } else {
             // Builds the shared sparse `CASE` for partition filter routing.
-            // If no canceled partitions, `ELSE false` covers omitted empty partitions, and vice versa.
+            // Without cancellation, omitted branches are known empty and safely fall
+            // through to `ELSE false`. With cancellation, omitted canceled partitions
+            // have unknown contents and must fall through to `ELSE true`, so known-empty
+            // partitions are emitted explicitly as false branches.
             let mut branches = if has_canceled_unknown {
                 empty_partition_ids
                     .iter()
