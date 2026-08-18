@@ -60,7 +60,7 @@ mod tests {
 
         // scan with projection
         let exec = provider
-            .scan(&session_ctx.state(), Some(&vec![2, 1]), &[], None)
+            .scan(&session_ctx.state(), Some(&[2, 1]), &[], None)
             .await?;
 
         let mut it = exec.execute(0, task_ctx)?;

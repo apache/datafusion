@@ -34,10 +34,10 @@ query TT
 explain select b from t where b ~ '.*'
 ----
 logical_plan
-01)Filter: t.b IS NOT NULL
+01)Filter: t.b IS NOT NULL OR Boolean(NULL)
 02)--TableScan: t projection=[b]
 physical_plan
-01)FilterExec: b@0 IS NOT NULL
+01)FilterExec: b@0 IS NOT NULL OR NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -49,6 +49,24 @@ logical_plan
 physical_plan
 01)FilterExec: b@0 IS NULL AND NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `col ~ '.*'` is TRUE for any non-NULL string and NULL for a NULL input.
+# The `.*` -> IS NOT NULL simplification must preserve that NULL (returning
+# `false` for the NULL row would be wrong in a projection context).
+query TB
+WITH vals(id, col) AS (
+    VALUES
+      (1, 'foo'::text),
+      (2, ''::text),
+      (3, NULL::text)
+)
+SELECT col, col ~ '.*'
+FROM vals
+ORDER BY id
+----
+foo true
+(empty) true
+NULL NULL
 
 query TB
 WITH vals(id, col) AS (
