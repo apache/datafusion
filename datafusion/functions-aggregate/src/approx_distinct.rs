@@ -840,6 +840,7 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _)
+            | DataType::Dictionary(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
@@ -919,6 +920,7 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _)
+            | DataType::Dictionary(_, _)
     )
 }
 

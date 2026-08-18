@@ -1793,6 +1793,40 @@ SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1
 4 1
 
 
+# Dictionary: dictionary-encoded values must hash identically to the plain
+# (non-dictionary) values, so the counts below match the Utf8 case above.
+
+# Dictionary non-grouped
+query I
+SELECT approx_distinct(arrow_cast(s, 'Dictionary(Int32, Utf8)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+# Dictionary grouped
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'Dictionary(Int32, Utf8)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Dictionary with a non-string value type (Int32), also exercising a
+# larger (Int64) key type
+query I
+SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int64, Int32)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query II
+SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int64, Int32)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
 # List
 statement ok
 CREATE TABLE approx_distinct_list_test (g INT, l INT[]) AS VALUES
