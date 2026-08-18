@@ -1366,7 +1366,12 @@ fn make_staggered_batches_binary(
 // streamed side below is spread round-robin over several partitions as one-row batches, so
 // batches arrive in an order no static test pins down, and the counter that gates the final
 // pass is seeded from a partition count that deliberately disagrees with the `num_partitions`
-// argument.
+// argument. `RightSemi`/`RightAnti` take the mirror path -- every partition emits its own
+// rows, decided against a single buffered key -- and are covered here too, over the same
+// inputs, so the two halves are held to the same oracle. Their buffered side is fanned out as
+// well, since it carries no single-partition requirement: each partition is folded to its own
+// extreme on a separate task and those are then combined, and only randomization varies which
+// partition holds the deciding key, or holds none at all.
 
 fn pwmj_kv_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -1396,7 +1401,10 @@ fn pwmj_single_exec(ids: &[i32], keys: &[Option<i32>]) -> Arc<dyn ExecutionPlan>
     .unwrap()
 }
 
-/// Streamed side spread round-robin across `nparts` partitions, one row per batch.
+/// Rows spread round-robin across `nparts` partitions, one row per batch, with any partition
+/// that draws no row left holding a single empty batch. Used for the streamed side throughout,
+/// and for the buffered side of the right existence joins, which place no single-partition
+/// requirement on it.
 fn pwmj_parts_exec(
     ids: &[i32],
     keys: &[Option<i32>],
@@ -1422,25 +1430,31 @@ fn pwmj_existence_plan(
     join_type: JoinType,
 ) -> Arc<dyn ExecutionPlan> {
     // Matches `PiecewiseMergeJoinExec::required_input_ordering`: descending for `<`/`<=`,
-    // ascending for `>`/`>=`, NULLs first either way.
-    let sort_options = match op {
-        Operator::Lt | Operator::LtEq => SortOptions::new(true, true),
-        Operator::Gt | Operator::GtEq => SortOptions::new(false, true),
-        other => panic!("not a range operator: {other:?}"),
+    // ascending for `>`/`>=`, NULLs first either way. Right existence joins require no
+    // ordering at all -- they only read the buffered side's min/max -- so they are fed the
+    // left side unsorted, which is the input shape they will see in a real plan.
+    let buffered = match join_type {
+        JoinType::RightSemi | JoinType::RightAnti => left,
+        _ => {
+            let sort_options = match op {
+                Operator::Lt | Operator::LtEq => SortOptions::new(true, true),
+                Operator::Gt | Operator::GtEq => SortOptions::new(false, true),
+                other => panic!("not a range operator: {other:?}"),
+            };
+            let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+                Arc::new(Column::new("k", 1)),
+                sort_options,
+            )])
+            .unwrap();
+            Arc::new(SortExec::new(ordering, left))
+        }
     };
-    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Column::new("k", 1)),
-        sort_options,
-    )])
-    .unwrap();
-    let sorted_left = Arc::new(SortExec::new(ordering, left));
     let on: (PhysicalExprRef, PhysicalExprRef) =
         (Arc::new(Column::new("k", 1)), Arc::new(Column::new("k", 1)));
     // `num_partitions` is 1 while the streamed side has up to 3: the final-pass counter must
     // come from the streamed side's partition count, not from this argument.
     Arc::new(
-        PiecewiseMergeJoinExec::try_new(sorted_left, right, on, op, join_type, 1)
-            .unwrap(),
+        PiecewiseMergeJoinExec::try_new(buffered, right, on, op, join_type, 1).unwrap(),
     )
 }
 
@@ -1475,10 +1489,13 @@ fn pwmj_nlj_oracle_plan(
     )
 }
 
-/// Executes every output partition concurrently and returns the surviving left `id`s, sorted.
+/// Executes every output partition concurrently and returns the surviving `id`s, sorted.
+/// Both halves of an existence join output an `id` as their first column: the left side's for
+/// `LeftSemi`/`LeftAnti`, the right side's for `RightSemi`/`RightAnti`.
 ///
-/// Concurrent rather than one partition at a time: the partitions share the watermark and race
-/// to be the one that runs the final pass, which is the part a sequential drain cannot reach.
+/// Concurrent rather than one partition at a time: for the left joins the partitions share the
+/// watermark and race to be the one that runs the final pass, which is the part a sequential
+/// drain cannot reach.
 async fn pwmj_collect_ids(
     plan: Arc<dyn ExecutionPlan>,
     task_ctx: Arc<TaskContext>,
@@ -1524,6 +1541,10 @@ async fn fuzz_pwmj_existence_matches_nested_loop() {
         // A narrow key range forces duplicates and equal-boundary cases.
         let key_range = rng.random_range(1..6i32);
         let nparts = rng.random_range(1..4usize);
+        // Independent of the streamed side's, so the two counts disagree across seeds and the
+        // 1-partition buffered case is still drawn. Only the right existence joins can use it:
+        // the others require the buffered side coalesced and globally sorted.
+        let buffered_nparts = rng.random_range(1..4usize);
 
         let gen_keys = |n: usize, rng: &mut StdRng| -> Vec<Option<i32>> {
             (0..n)
@@ -1537,10 +1558,24 @@ async fn fuzz_pwmj_existence_matches_nested_loop() {
         let right_keys = gen_keys(right_len, &mut rng);
 
         for op in ops {
-            for join_type in [JoinType::LeftSemi, JoinType::LeftAnti] {
+            for join_type in [
+                JoinType::LeftSemi,
+                JoinType::LeftAnti,
+                JoinType::RightSemi,
+                JoinType::RightAnti,
+            ] {
+                // Fanned out only for the right existence joins, whose buffered side is
+                // folded one partition per task and then combined -- a reduction the
+                // single-partition shape below never reaches.
+                let buffered = match join_type {
+                    JoinType::RightSemi | JoinType::RightAnti => {
+                        pwmj_parts_exec(&left_ids, &left_keys, buffered_nparts)
+                    }
+                    _ => pwmj_single_exec(&left_ids, &left_keys),
+                };
                 let got = pwmj_collect_ids(
                     pwmj_existence_plan(
-                        pwmj_single_exec(&left_ids, &left_keys),
+                        buffered,
                         pwmj_parts_exec(&right_ids, &right_keys, nparts),
                         op,
                         join_type,
@@ -1562,7 +1597,8 @@ async fn fuzz_pwmj_existence_matches_nested_loop() {
                 assert_eq!(
                     got, want,
                     "mismatch seed={seed} op={op:?} join_type={join_type:?} \
-                     nparts={nparts} left_keys={left_keys:?} right_keys={right_keys:?}"
+                     nparts={nparts} buffered_nparts={buffered_nparts} \
+                     left_keys={left_keys:?} right_keys={right_keys:?}"
                 );
             }
         }
