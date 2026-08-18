@@ -63,3 +63,10 @@ query ?
 SELECT try_to_binary(NULL::string, 'hex'::string);
 ----
 NULL
+
+# in a column, only the offending row becomes NULL
+query ?
+SELECT try_to_binary(a, 'hex'::string) FROM (VALUES ('4142'::string), ('zz')) AS t(a);
+----
+4142
+NULL

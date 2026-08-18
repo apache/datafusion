@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, BinaryBuilder};
@@ -50,6 +51,16 @@ impl BinaryFormat {
     }
 }
 
+impl fmt::Display for BinaryFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Hex => "hex",
+            Self::Utf8 => "utf-8",
+            Self::Base64 => "base64",
+        })
+    }
+}
+
 /// Spark-compatible `to_binary` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#to_binary>
 ///
@@ -70,7 +81,10 @@ impl Default for SparkToBinary {
 impl SparkToBinary {
     pub fn new() -> Self {
         Self {
-            signature: to_binary_signature(),
+            signature: Signature::one_of(
+                vec![TypeSignature::String(1), TypeSignature::String(2)],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -113,7 +127,10 @@ impl Default for SparkTryToBinary {
 impl SparkTryToBinary {
     pub fn new() -> Self {
         Self {
-            signature: to_binary_signature(),
+            signature: Signature::one_of(
+                vec![TypeSignature::String(1), TypeSignature::String(2)],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -134,17 +151,6 @@ impl ScalarUDFImpl for SparkTryToBinary {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         to_binary_inner(self.name(), &args.args, false)
     }
-}
-
-fn to_binary_signature() -> Signature {
-    let mut variants = Vec::with_capacity(12);
-    for str_type in [DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8] {
-        variants.push(TypeSignature::Exact(vec![str_type.clone()]));
-        for fmt_type in [DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8] {
-            variants.push(TypeSignature::Exact(vec![str_type.clone(), fmt_type]));
-        }
-    }
-    Signature::one_of(variants, Volatility::Immutable)
 }
 
 /// Reads the format argument. Spark requires it to be foldable, so only a scalar
@@ -231,16 +237,41 @@ fn convert_array(
     format: BinaryFormat,
     fail_on_error: bool,
 ) -> Result<ArrayRef> {
-    let values: Vec<Option<&str>> = match array.data_type() {
-        DataType::Utf8 => array.as_string::<i32>().iter().collect(),
-        DataType::LargeUtf8 => array.as_string::<i64>().iter().collect(),
-        DataType::Utf8View => array.as_string_view().iter().collect(),
-        other => {
-            return exec_err!("{name}: expected a string argument, got {other}");
-        }
-    };
+    let len = array.len();
+    match array.data_type() {
+        DataType::Utf8 => convert_values(
+            name,
+            array.as_string::<i32>().iter(),
+            len,
+            format,
+            fail_on_error,
+        ),
+        DataType::LargeUtf8 => convert_values(
+            name,
+            array.as_string::<i64>().iter(),
+            len,
+            format,
+            fail_on_error,
+        ),
+        DataType::Utf8View => convert_values(
+            name,
+            array.as_string_view().iter(),
+            len,
+            format,
+            fail_on_error,
+        ),
+        other => exec_err!("{name}: expected a string argument, got {other}"),
+    }
+}
 
-    let mut builder = BinaryBuilder::with_capacity(values.len(), array.len());
+fn convert_values<'a>(
+    name: &str,
+    values: impl Iterator<Item = Option<&'a str>>,
+    len: usize,
+    format: BinaryFormat,
+    fail_on_error: bool,
+) -> Result<ArrayRef> {
+    let mut builder = BinaryBuilder::with_capacity(len, len);
     for value in values {
         match value {
             None => builder.append_null(),
@@ -269,12 +300,7 @@ fn convert_one(
     match converted {
         Some(bytes) => Ok(Some(bytes)),
         None if fail_on_error => exec_err!(
-            "{name}: cannot convert '{value}' to binary using format '{}'",
-            match format {
-                BinaryFormat::Hex => "hex",
-                BinaryFormat::Utf8 => "utf-8",
-                BinaryFormat::Base64 => "base64",
-            }
+            "{name}: cannot convert '{value}' to binary using format '{format}'"
         ),
         None => Ok(None),
     }
@@ -318,168 +344,6 @@ fn decode_base64(value: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::StringArray;
-    use datafusion_common::internal_err;
-
-    fn to_binary(value: &str, fmt: Option<&str>, fail: bool) -> Result<Option<Vec<u8>>> {
-        let mut args = vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            value.to_string(),
-        )))];
-        if let Some(fmt) = fmt {
-            args.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                fmt.to_string(),
-            ))));
-        }
-        let name = if fail { "to_binary" } else { "try_to_binary" };
-        match to_binary_inner(name, &args, fail)? {
-            ColumnarValue::Scalar(ScalarValue::Binary(v)) => Ok(v),
-            other => internal_err!("unexpected result {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_utf8_format() -> Result<()> {
-        assert_eq!(
-            to_binary("abc", Some("utf-8"), true)?,
-            Some(b"abc".to_vec())
-        );
-        assert_eq!(to_binary("abc", Some("utf8"), true)?, Some(b"abc".to_vec()));
-        assert_eq!(
-            to_binary("abc", Some("UTF-8"), true)?,
-            Some(b"abc".to_vec())
-        );
-        // multi-byte input round-trips as its UTF-8 bytes
-        assert_eq!(to_binary("é", Some("utf-8"), true)?, Some(vec![0xc3, 0xa9]));
-        Ok(())
-    }
-
-    #[test]
-    fn test_hex_is_the_default_format() -> Result<()> {
-        assert_eq!(
-            to_binary("537061726B", None, true)?,
-            Some(b"Spark".to_vec())
-        );
-        assert_eq!(
-            to_binary("537061726B", Some("hex"), true)?,
-            Some(b"Spark".to_vec())
-        );
-        // an odd number of digits is left-padded with '0'
-        assert_eq!(to_binary("F", None, true)?, Some(vec![0x0f]));
-        Ok(())
-    }
-
-    #[test]
-    fn test_base64_format() -> Result<()> {
-        assert_eq!(
-            to_binary("U3Bhcms=", Some("base64"), true)?,
-            Some(b"Spark".to_vec())
-        );
-        assert_eq!(
-            to_binary("YWJj", Some("base64"), true)?,
-            Some(b"abc".to_vec())
-        );
-        // whitespace between symbols is ignored
-        assert_eq!(
-            to_binary("U3Bh\ncms=", Some("base64"), true)?,
-            Some(b"Spark".to_vec())
-        );
-        // an unpadded final group is accepted
-        assert_eq!(
-            to_binary("U3Bhcms", Some("base64"), true)?,
-            Some(b"Spark".to_vec())
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_empty_input() -> Result<()> {
-        for fmt in ["hex", "utf-8", "base64"] {
-            assert_eq!(to_binary("", Some(fmt), true)?, Some(vec![]));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_invalid_value_errors_or_nulls() -> Result<()> {
-        // to_binary raises error, try_to_binary returns NULL
-        assert!(to_binary("zz", Some("hex"), true).is_err());
-        assert_eq!(to_binary("zz", Some("hex"), false)?, None);
-
-        assert!(to_binary("a!", Some("base64"), true).is_err());
-        assert_eq!(to_binary("a!", Some("base64"), false)?, None);
-        Ok(())
-    }
-
-    #[test]
-    fn test_invalid_format() -> Result<()> {
-        // to_binary rejects an unrecognised format, try_to_binary returns NULL
-        assert!(to_binary("abc", Some("invalidFormat"), true).is_err());
-        assert_eq!(to_binary("abc", Some("invalidFormat"), false)?, None);
-        Ok(())
-    }
-
-    #[test]
-    fn test_null_inputs() -> Result<()> {
-        // a NULL value yields NULL
-        let args = vec![ColumnarValue::Scalar(ScalarValue::Utf8(None))];
-        assert!(matches!(
-            to_binary_inner("to_binary", &args, true)?,
-            ColumnarValue::Scalar(ScalarValue::Binary(None))
-        ));
-
-        // a NULL format yields NULL, and is not an error even for to_binary
-        let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("abc".into()))),
-            ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-        ];
-        assert!(matches!(
-            to_binary_inner("to_binary", &args, true)?,
-            ColumnarValue::Scalar(ScalarValue::Binary(None))
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn test_column_input() -> Result<()> {
-        let array: ArrayRef =
-            Arc::new(StringArray::from(vec![Some("abc"), None, Some("déf")]));
-        let args = vec![
-            ColumnarValue::Array(array),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("utf-8".into()))),
-        ];
-        let ColumnarValue::Array(result) = to_binary_inner("to_binary", &args, true)?
-        else {
-            unreachable!()
-        };
-        let result = result.as_binary::<i32>();
-        assert_eq!(result.value(0), b"abc");
-        assert!(result.is_null(1));
-        assert_eq!(result.value(2), "déf".as_bytes());
-        Ok(())
-    }
-
-    #[test]
-    fn test_column_with_invalid_value() -> Result<()> {
-        let array: ArrayRef = Arc::new(StringArray::from(vec![Some("4142"), Some("zz")]));
-        let args = vec![
-            ColumnarValue::Array(Arc::clone(&array)),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("hex".into()))),
-        ];
-        // to_binary fails the whole batch
-        assert!(to_binary_inner("to_binary", &args, true).is_err());
-
-        // try_to_binary nulls only the offending row
-        let ColumnarValue::Array(result) =
-            to_binary_inner("try_to_binary", &args, false)?
-        else {
-            unreachable!()
-        };
-        let result = result.as_binary::<i32>();
-        assert_eq!(result.value(0), b"AB");
-        assert!(result.is_null(1));
-        Ok(())
-    }
-
     #[test]
     fn test_base64_validation() {
         assert_eq!(decode_base64("YWJj"), Some(b"abc".to_vec()));
