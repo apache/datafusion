@@ -124,7 +124,7 @@ macro_rules! make_try_spark_abs_function {
             let array = downcast_named_arg!(&input, "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array
                 .try_unary(|x| x.checked_abs().ok_or_else(arithmetic_overflow_error))
-                .and_then(|v| Ok(v.with_data_type(input.data_type().clone())))?;
+                .map(|v| v.with_data_type(input.data_type().clone()))?;
             Ok(Arc::new(res) as ArrayRef)
         }
     }};
