@@ -57,10 +57,15 @@ use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+use datafusion_proto::bytes::{
+    physical_plan_from_bytes_with_proto_converter,
+    physical_plan_to_bytes_with_proto_converter,
+};
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
     PhysicalExtensionCodec, PhysicalProtoConverterExtension,
 };
+use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::Message;
 use std::collections::HashMap;
@@ -156,6 +161,22 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
     Ok(())
 }
 
+/// Returns `FileSource::file_type` of a `DataSourceExec` file scan, e.g.
+/// "arrow" vs "arrow_stream". The two Arrow IPC formats print identically in
+/// plan debug output, so roundtrip tests must inspect the source directly.
+fn scan_file_type(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
+    let data_source = plan.downcast_ref::<DataSourceExec>().ok_or_else(|| {
+        internal_datafusion_err!("Expected DataSourceExec after roundtrip")
+    })?;
+    let file_scan = data_source
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected FileScanConfig after roundtrip")
+        })?;
+    Ok(file_scan.file_source().file_type().to_string())
+}
+
 #[test]
 fn roundtrip_arrow_scan() -> Result<()> {
     let file_schema =
@@ -177,7 +198,85 @@ fn roundtrip_arrow_scan() -> Result<()> {
             })
             .build();
 
-    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &SessionContext::new(),
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    assert_eq!(scan_file_type(&roundtripped)?, "arrow");
+    Ok(())
+}
+
+#[test]
+fn roundtrip_arrow_stream_scan() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ArrowSource::new_stream_file_source(TableSchema::from(
+        &file_schema,
+    )));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.arrows".to_string(),
+                1024,
+            )])])
+            .build();
+
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &SessionContext::new(),
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    assert_eq!(scan_file_type(&roundtripped)?, "arrow_stream");
+    Ok(())
+}
+
+#[test]
+fn arrow_scan_without_format_field_decodes_as_file_format() -> Result<()> {
+    // Payloads encoded before `ArrowScanExecNode.format` existed carry no
+    // format discriminator; they must keep decoding as the IPC file format.
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ArrowSource::new_file_source(TableSchema::from(
+        &file_schema,
+    )));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.arrow".to_string(),
+                1024,
+            )])])
+            .build();
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        DataSourceExec::from_data_source(scan_config),
+        &codec,
+        &proto_converter,
+    )?;
+
+    let mut node = PhysicalPlanNode::decode(bytes.as_ref()).map_err(|e| {
+        internal_datafusion_err!("Failed to decode PhysicalPlanNode: {e}")
+    })?;
+    match node.physical_plan_type.as_mut() {
+        Some(protobuf::physical_plan_node::PhysicalPlanType::ArrowScan(scan)) => {
+            scan.format = protobuf::ArrowIpcFormat::File as i32;
+        }
+        other => return internal_err!("Expected ArrowScan node, got {other:?}"),
+    }
+
+    let ctx = SessionContext::new();
+    let decoded = physical_plan_from_bytes_with_proto_converter(
+        &node.encode_to_vec(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &proto_converter,
+    )?;
+    assert_eq!(scan_file_type(&decoded)?, "arrow");
+    Ok(())
 }
 
 #[test]
@@ -405,7 +504,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             inputs: &[Arc<dyn PhysicalExpr>],
             _ctx: &PhysicalExprDecodeCtx<'_>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
-            if buf == "CustomPredicateExpr".as_bytes() {
+            if buf == b"CustomPredicateExpr" {
                 Ok(Arc::new(CustomPredicateExpr {
                     inner: inputs[0].clone(),
                 }))
@@ -421,7 +520,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _ctx: &PhysicalExprEncodeCtx<'_>,
         ) -> Result<()> {
             if node.downcast_ref::<CustomPredicateExpr>().is_some() {
-                buf.extend_from_slice("CustomPredicateExpr".as_bytes());
+                buf.extend_from_slice(b"CustomPredicateExpr");
                 Ok(())
             } else {
                 internal_err!("Not supported")

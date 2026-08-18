@@ -85,7 +85,7 @@ impl TableProvider for CteWorkTable {
     fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
-        projection: Option<&'life2 Vec<usize>>,
+        projection: Option<&'life2 [usize]>,
         filters: &'life3 [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
@@ -128,10 +128,10 @@ impl TableProvider for CteWorkTable {
 }
 
 impl CteWorkTable {
-    fn scan_with_args_inner<'a>(
+    fn scan_with_args_inner(
         &self,
         _state: &dyn Session,
-        args: &ScanArgs<'a>,
+        args: &ScanArgs<'_>,
     ) -> Result<ScanResult> {
         Ok(ScanResult::new(Arc::new(WorkTableExec::new(
             self.name.clone(),
@@ -143,7 +143,7 @@ impl CteWorkTable {
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,
-        projection: Option<&'a Vec<usize>>,
+        projection: Option<&'a [usize]>,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
@@ -153,12 +153,12 @@ impl CteWorkTable {
     async fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
+            .with_projection(projection)
             .with_filters(Some(filters))
             .with_limit(limit);
         Ok(self.scan_with_args(state, options).await?.into_inner())

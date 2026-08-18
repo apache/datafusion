@@ -1051,6 +1051,7 @@ message PhysicalExprNode {
     PhysicalLambdaExprNode lambda = 25;
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
+    PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
   }
 }
 
@@ -1060,6 +1061,10 @@ message PhysicalDynamicFilterNode {
   uint64 generation = 3;
   PhysicalExprNode inner_expr = 4;
   bool is_complete = 5;
+}
+
+message PhysicalSqlSimilarToPatternNode {
+  PhysicalExprNode expr = 1;
 }
 
 message PhysicalScalarUdfNode {
@@ -1296,8 +1301,18 @@ message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
+// Identifies which Arrow IPC format an ArrowScanExecNode reads.
+enum ArrowIpcFormat {
+  // Arrow IPC file format (with footer, supports range-based parallel reading).
+  // This is the default for payloads encoded before the format field existed.
+  ARROW_IPC_FORMAT_FILE = 0;
+  // Arrow IPC stream format (without footer, sequential reading only)
+  ARROW_IPC_FORMAT_STREAM = 1;
+}
+
 message ArrowScanExecNode {
   FileScanExecConf base_conf = 1;
+  ArrowIpcFormat format = 2;
 }
 
 message MemoryScanExecNode {
