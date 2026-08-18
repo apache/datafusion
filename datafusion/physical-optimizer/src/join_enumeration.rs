@@ -1031,16 +1031,70 @@ fn shift_columns(expression: PhysicalExprRef, offset: usize) -> Result<PhysicalE
         .data()
 }
 
+/// A relation's plan as the extractor found it, paired with its rewritten form.
+type RewrittenRelation = (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>);
+
+/// Substitutes rewritten relations into a subtree, leaving its shape untouched.
+///
+/// The relations are the exact `Arc`s the extractor took from this subtree, so
+/// pointer identity finds them, and a match is not descended into.
+fn replace_relations(
+    plan: &Arc<dyn ExecutionPlan>,
+    rewritten: &[RewrittenRelation],
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    if rewritten.is_empty() {
+        return Ok(None);
+    }
+    if let Some((_, new)) = rewritten
+        .iter()
+        .find(|(original, _)| Arc::ptr_eq(original, plan))
+    {
+        return Ok(Some(Arc::clone(new)));
+    }
+    let mut changed = false;
+    let children = plan
+        .children()
+        .into_iter()
+        .map(|child| match replace_relations(child, rewritten)? {
+            Some(new_child) => {
+                changed = true;
+                Ok(new_child)
+            }
+            None => Ok(Arc::clone(child)),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if changed {
+        Ok(Some(replace_children_if_necessary(
+            Arc::clone(plan),
+            children,
+        )?))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Enumerates join orders throughout `plan`, returning `None` if nothing changed.
 pub(crate) fn enumerate_join_order(
     plan: &Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
     stats: &mut StatsFn,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    if let Some(graph) = extract(plan, stats)?
-        && let Some(reordered) = reorder(&graph, config, stats)?
-    {
-        return Ok(Some(reordered));
+    if let Some(graph) = extract(plan, stats)? {
+        if let Some(reordered) = reorder(&graph, config, stats)? {
+            return Ok(Some(reordered));
+        }
+        // Rejected, so descend into the relations rather than into the children:
+        // re-extracting inside this subtree would search subsets the dynamic
+        // program already costed, and would measure any gain against a subtree's
+        // own cost instead of the whole graph's, letting a change the margin
+        // rejected back in.
+        let mut rewritten: Vec<RewrittenRelation> = vec![];
+        for relation in &graph.relations {
+            if let Some(new) = enumerate_join_order(&relation.plan, config, stats)? {
+                rewritten.push((Arc::clone(&relation.plan), new));
+            }
+        }
+        return replace_relations(plan, &rewritten);
     }
 
     // Not a subtree that could be reordered: recurse into the children.
