@@ -38,6 +38,13 @@ set datafusion.optimizer.hash_join_single_partition_threshold = 1;
 statement ok
 set datafusion.optimizer.hash_join_single_partition_threshold_rows = 1;
 
+# This file tests the build side decision, so cost-based join order enumeration
+# is kept out of the way: with it on, both cases below settle on the same
+# (cheaper) join order and the registry's effect on the build side is no longer
+# visible in the plan. Enumeration is covered on its own at the end of the file.
+statement ok
+set datafusion.optimizer.join_enumeration = false;
+
 # -- Create test data --------------------------------------------------------
 
 query I
@@ -152,6 +159,37 @@ JOIN orders o ON c.customer_id = o.customer_id
 JOIN dim_small d ON o.small_id = d.small_id;
 ----
 66
+
+# -- With join order enumeration ---------------------------------------------
+# The `FROM` order joins customers with orders first, for a 66 row intermediate.
+# Enumeration instead joins orders with dim_small first, which produces 10 rows
+# because every order matches exactly one dim_small row.
+
+statement ok
+set datafusion.optimizer.join_enumeration = true;
+
+query TT
+EXPLAIN SELECT o.order_id, c.region_id, d.label
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+JOIN dim_small d ON o.small_id = d.small_id;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(customer_id@0, customer_id@0)], projection=[order_id@3, region_id@1, label@4]
+02)--RepartitionExec: partitioning=Hash([customer_id@0], 4), input_partitions=1, maintains_sort_order=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], output_ordering=[region_id@1 ASC NULLS LAST], file_type=parquet
+04)--RepartitionExec: partitioning=Hash([customer_id@0], 4), input_partitions=1
+05)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(small_id@2, small_id@0)], projection=[customer_id@1, order_id@0, label@4]
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/dim_small.parquet]]}, projection=[small_id, label], output_ordering=[small_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query III
+SELECT count(*), min(o.order_id), max(d.label)
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+JOIN dim_small d ON o.small_id = d.small_id;
+----
+66 1 10
 
 # -- Cleanup -----------------------------------------------------------------
 

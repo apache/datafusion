@@ -1672,6 +1672,21 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
+        /// When set to true, the physical plan optimizer enumerates alternative
+        /// join orders for connected subtrees of inner hash joins and picks the
+        /// cheapest one from cardinality estimates, considering bushy shapes as
+        /// well as left-deep ones. Subtrees whose inputs lack row count
+        /// statistics, and subtrees whose original order is already the cheapest,
+        /// are left untouched.
+        pub join_enumeration: bool, default = true
+
+        /// Maximum number of inputs in a join subtree for which
+        /// `join_enumeration` runs its exhaustive dynamic programming search.
+        /// Larger subtrees fall back to a greedy search. The exhaustive search
+        /// costs `O(3^n)` in the number of inputs, so values above 16 are
+        /// clamped to 16.
+        pub join_enumeration_limit: usize, default = 12
+
         /// When set to true, the physical plan optimizer uses the pluggable
         /// `StatisticsRegistry` for statistics propagation across operators.
         /// This enables more accurate cardinality estimates compared to each

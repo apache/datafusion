@@ -1023,7 +1023,7 @@ fn estimate_semi_join_cardinality(
 /// directly. Otherwise, if the column is numeric and has min/max values, it
 /// estimates the maximum distinct count from those. Otherwise, the num_rows
 /// is used.
-fn max_distinct_count(
+pub fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
 ) -> Precision<usize> {

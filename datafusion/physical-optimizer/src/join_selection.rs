@@ -20,10 +20,13 @@
 //! is any) to obtain more performant plans. To achieve the first goal, it
 //! tries to transform a non-runnable query (with the given infinite sources)
 //! into a runnable query by replacing pipeline-breaking join operations with
-//! pipeline-friendly ones. To achieve the second goal, it selects the proper
-//! `PartitionMode` and the build side using the available statistics for hash joins.
+//! pipeline-friendly ones. To achieve the second goal, it enumerates alternative
+//! join orders for subtrees of inner hash joins (see [`crate::join_enumeration`])
+//! and selects the proper `PartitionMode` and the build side using the available
+//! statistics for hash joins.
 
 use crate::PhysicalOptimizerRule;
+use crate::join_enumeration::enumerate_join_order;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
@@ -163,6 +166,16 @@ impl PhysicalOptimizerRule for JoinSelection {
             } else {
                 None
             };
+        // Choose the shape of the join tree before making the per-join build
+        // side and partition mode decisions below, which are then made against
+        // the inputs the chosen shape actually produces.
+        let plan = if config.optimizer.join_enumeration {
+            let mut stats = |p: &dyn ExecutionPlan| get_stats(p, registry);
+            enumerate_join_order(&plan, config, &mut stats)?.unwrap_or(plan)
+        } else {
+            plan
+        };
+
         let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
