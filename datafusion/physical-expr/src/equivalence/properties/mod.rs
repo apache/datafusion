@@ -1169,6 +1169,23 @@ impl EquivalenceProperties {
     /// `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
+        self.project_with_eq_group(mapping, output_schema, eq_group)
+    }
+
+    /// Same as [`Self::project`], but takes an already-projected equivalence
+    /// group instead of computing one.
+    ///
+    /// [`EquivalenceGroup::project`] is a pure function of the group and the
+    /// mapping, so a caller that knows both are unchanged since the last
+    /// projection can hand back the previous result rather than recomputing an
+    /// identical one. Orderings are still derived here: they are precisely what
+    /// changes when a sort is introduced below this node.
+    pub fn project_with_eq_group(
+        &self,
+        mapping: &ProjectionMapping,
+        output_schema: SchemaRef,
+        eq_group: EquivalenceGroup,
+    ) -> Self {
         let orderings =
             self.projected_orderings(mapping, self.oeq_cache.normal_cls.clone());
         let normal_orderings = orderings

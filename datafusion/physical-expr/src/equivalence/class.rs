@@ -309,6 +309,14 @@ pub struct EquivalenceGroup {
     classes: Vec<EquivalenceClass>,
 }
 
+impl PartialEq for EquivalenceGroup {
+    /// Compares the equivalence classes. `map` is an index into `classes`, so it
+    /// carries no information the classes themselves do not already have.
+    fn eq(&self, other: &Self) -> bool {
+        self.classes == other.classes
+    }
+}
+
 impl EquivalenceGroup {
     /// Creates an equivalence group from the given equivalence classes.
     pub fn new(classes: impl IntoIterator<Item = EquivalenceClass>) -> Self {

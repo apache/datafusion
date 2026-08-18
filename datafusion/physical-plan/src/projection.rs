@@ -52,7 +52,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{DataFusionError, JoinSide, Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
-use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::equivalence::{EquivalenceGroup, ProjectionMapping};
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
@@ -186,6 +186,45 @@ impl ProjectionExec {
             &projection_mapping,
             Arc::clone(projector.output_schema()),
         )?;
+        Ok(Self {
+            projector,
+            input,
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache: Arc::new(cache),
+        })
+    }
+
+    /// Like [`Self::try_from_projector`], but reuses `eq_group` as the output
+    /// equivalence group instead of projecting the input's group again.
+    ///
+    /// Only sound when the caller has established that the input's equivalence
+    /// group and this projection's mapping are both unchanged, since
+    /// [`EquivalenceGroup::project`] is a pure function of the two.
+    fn try_from_projector_reusing_eq_group(
+        projector: Projector,
+        input: Arc<dyn ExecutionPlan>,
+        eq_group: EquivalenceGroup,
+    ) -> Result<Self> {
+        let projection_mapping =
+            projector.projection().projection_mapping(&input.schema())?;
+        let input_eq_properties = input.equivalence_properties();
+        let eq_properties = input_eq_properties.project_with_eq_group(
+            &projection_mapping,
+            Arc::clone(projector.output_schema()),
+            eq_group,
+        );
+        // Partitioning is projected against the *input's* equivalence
+        // properties, matching `compute_properties`: the question is which
+        // input columns remain interchangeable, not which output ones do.
+        let output_partitioning = input
+            .output_partitioning()
+            .project(&projection_mapping, input_eq_properties);
+        let cache = PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            input.pipeline_behavior(),
+            input.boundedness(),
+        );
         Ok(Self {
             projector,
             input,
@@ -352,11 +391,31 @@ impl ExecutionPlan for ProjectionExec {
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesMode::Recompute => ProjectionExec::try_from_projector(
-                self.projector.clone(),
-                children.swap_remove(0),
-            )
-            .map(|p| Arc::new(p) as _),
+            ChildrenPropertiesMode::Recompute => {
+                // `Keep` above requires the child's properties to be unchanged
+                // outright. A rule that introduces a sort below this projection
+                // does not qualify, yet the child's *equivalence group* is still
+                // identical: sorting changes which orderings hold, not which
+                // expressions are equal to one another. Projecting that group
+                // again would reproduce the group already cached here, so reuse
+                // it and derive only the orderings.
+                if self.input.equivalence_properties().eq_group()
+                    == children[0].equivalence_properties().eq_group()
+                {
+                    let eq_group = self.cache.equivalence_properties().eq_group().clone();
+                    return ProjectionExec::try_from_projector_reusing_eq_group(
+                        self.projector.clone(),
+                        children.swap_remove(0),
+                        eq_group,
+                    )
+                    .map(|p| Arc::new(p) as _);
+                }
+                ProjectionExec::try_from_projector(
+                    self.projector.clone(),
+                    children.swap_remove(0),
+                )
+                .map(|p| Arc::new(p) as _)
+            }
         }
     }
 
