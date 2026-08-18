@@ -22,8 +22,9 @@
 # orders    (10 rows, same distribution)
 # dim_small (50 rows)
 #
-# Built-in: 10*10 / NDV(3) = 33 < 50  -> keeps inner join on build side (wrong; actual = 66)
-# Registry: 10*10 = 100 > 50           -> swaps dim_small to build side (correct)
+# Built-in operator stats give 10*10 / NDV(3) = 33 < 50, which would keep the
+# inner join on the build side (wrong; actual output is 66). The registry's
+# conservative estimate 10*10 = 100 > 50 swaps dim_small to the build side.
 #
 # Parquet files written by COPY TO carry min/max stats (NDV=3 via range) but no
 # distinct_count, so the registry falls back to the cartesian product upper bound.
@@ -87,32 +88,8 @@ CREATE EXTERNAL TABLE dim_small
 STORED AS PARQUET
 LOCATION 'test_files/scratch/statistics_registry/dim_small.parquet';
 
-# -- Without registry --------------------------------------------------------
-# Built-in estimate 33 < 50: inner join stays on left (suboptimal; actual output is 66 rows)
-
-statement ok
-set datafusion.optimizer.use_statistics_registry = false;
-
-query TT
-EXPLAIN SELECT o.order_id, c.region_id, d.label
-FROM customers c
-JOIN orders o ON c.customer_id = o.customer_id
-JOIN dim_small d ON o.small_id = d.small_id;
-----
-physical_plan
-01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(small_id@2, small_id@0)], projection=[order_id@1, region_id@0, label@4]
-02)--RepartitionExec: partitioning=Hash([small_id@2], 4), input_partitions=1, maintains_sort_order=true
-03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(customer_id@0, customer_id@1)], projection=[region_id@1, order_id@2, small_id@4]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], output_ordering=[region_id@1 ASC NULLS LAST], file_type=parquet
-05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-06)--RepartitionExec: partitioning=Hash([small_id@0], 4), input_partitions=1, maintains_sort_order=true
-07)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/dim_small.parquet]]}, projection=[small_id, label], output_ordering=[small_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-
-# -- With registry -----------------------------------------------------------
-# Conservative estimate 100 > 50: dim_small correctly swapped to build side
-
-statement ok
-set datafusion.optimizer.use_statistics_registry = true;
+# -- Registry-driven join ordering -------------------------------------------
+# Conservative estimate 100 > 50: dim_small correctly swapped to the build side.
 
 query TT
 EXPLAIN SELECT o.order_id, c.region_id, d.label
@@ -129,21 +106,46 @@ physical_plan
 06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], output_ordering=[region_id@1 ASC NULLS LAST], file_type=parquet
 07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
-# -- Verify results are identical regardless of join order --------------------
+# -- Registry reflected in EXPLAIN statistics --------------------------------
+# With show_statistics on, the displayed statistics column reflects the
+# registry's estimates (the top join's conservative Rows), not the built-in
+# empty-registry path.
 
 statement ok
-set datafusion.optimizer.use_statistics_registry = false;
+set datafusion.explain.show_statistics = true;
 
-query I
-SELECT count(*)
+query TT
+EXPLAIN SELECT o.order_id, c.region_id, d.label
 FROM customers c
 JOIN orders o ON c.customer_id = o.customer_id
 JOIN dim_small d ON o.small_id = d.small_id;
 ----
-66
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(small_id@0, small_id@2)], projection=[order_id@3, region_id@2, label@1], statistics=[Rows=Inexact(5000), Bytes=Absent, [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0) ScanBytes=Inexact(40)),(Col[1]: Min=Exact(Int32(1)) Max=Exact(Int32(10)) Null=Exact(0) ScanBytes=Exact(40)),(Col[2]: Min=Exact(Int32(1)) Max=Exact(Int32(50)) Null=Exact(0) ScanBytes=Exact(200))]]
+02)--RepartitionExec: partitioning=Hash([small_id@0], 4), input_partitions=1, maintains_sort_order=true, statistics=[Rows=Exact(50), Bytes=Exact(400), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(50)) Null=Exact(0) ScanBytes=Exact(200)),(Col[1]: Min=Exact(Int32(1)) Max=Exact(Int32(50)) Null=Exact(0) ScanBytes=Exact(200))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/dim_small.parquet]]}, projection=[small_id, label], output_ordering=[small_id@0 ASC NULLS LAST], file_type=parquet, statistics=[Rows=Exact(50), Bytes=Exact(400), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(50)) Null=Exact(0) ScanBytes=Exact(200)),(Col[1]: Min=Exact(Int32(1)) Max=Exact(Int32(50)) Null=Exact(0) ScanBytes=Exact(200))]]
+04)--RepartitionExec: partitioning=Hash([small_id@2], 4), input_partitions=1, maintains_sort_order=true, statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(10)) Null=Exact(0) ScanBytes=Exact(40)),(Col[1]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0) ScanBytes=Inexact(40)),(Col[2]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+05)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(customer_id@0, customer_id@1)], projection=[region_id@1, order_id@2, small_id@4], statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(10)) Null=Exact(0) ScanBytes=Exact(40)),(Col[1]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0) ScanBytes=Inexact(40)),(Col[2]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/customers.parquet]]}, projection=[customer_id, region_id], output_ordering=[region_id@1 ASC NULLS LAST], file_type=parquet, statistics=[Rows=Exact(10), Bytes=Exact(80), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(3)) Null=Exact(0) ScanBytes=Exact(40)),(Col[1]: Min=Exact(Int32(1)) Max=Exact(Int32(10)) Null=Exact(0) ScanBytes=Exact(40))]]
+07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/statistics_registry/orders.parquet]]}, projection=[order_id, customer_id, small_id], output_ordering=[order_id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, statistics=[Rows=Inexact(10), Bytes=Inexact(120), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0) ScanBytes=Inexact(40)),(Col[1]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3)) Null=Inexact(0) ScanBytes=Inexact(40)),(Col[2]: Min=Inexact(Int32(1)) Max=Inexact(Int32(10)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+
+# -- Registry reflected in EXPLAIN ANALYZE statistics ------------------------
+# EXPLAIN ANALYZE renders the same registry-refined statistics as plain EXPLAIN
+# (the top join's conservative Rows=Inexact(5000)) alongside runtime metrics.
+# Timings are volatile, so match only the deterministic statistics fragment.
+
+query TT
+EXPLAIN ANALYZE SELECT o.order_id, c.region_id, d.label
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+JOIN dim_small d ON o.small_id = d.small_id;
+----
+Plan with Metrics<slt:ignore>statistics=[Rows=Inexact(5000)<slt:ignore>
 
 statement ok
-set datafusion.optimizer.use_statistics_registry = true;
+set datafusion.explain.show_statistics = false;
+
+# -- Correctness -------------------------------------------------------------
 
 query I
 SELECT count(*)
@@ -157,9 +159,6 @@ JOIN dim_small d ON o.small_id = d.small_id;
 
 statement ok
 set datafusion.explain.physical_plan_only = false;
-
-statement ok
-set datafusion.optimizer.use_statistics_registry = false;
 
 statement ok
 set datafusion.optimizer.hash_join_single_partition_threshold = 1048576;
