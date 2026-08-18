@@ -428,11 +428,11 @@ impl LogicalPlan {
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.apply_expressions(|e| {
-            find_out_reference_exprs(e).into_iter().for_each(|e| {
+            for e in find_out_reference_exprs(e).into_iter() {
                 if !exprs.contains(&e) {
                     exprs.push(e)
                 }
-            });
+            }
             Ok(TreeNodeRecursion::Continue)
         })
         // closure always returns OK

@@ -218,9 +218,9 @@ pub fn analyze(
             }
             PropagationResult::Infeasible => {
                 // If the propagation result is infeasible, set intervals to None
-                target_boundaries
-                    .iter_mut()
-                    .for_each(|bound| bound.interval = None);
+                for bound in target_boundaries.iter_mut() {
+                    bound.interval = None;
+                }
                 Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
             }
             PropagationResult::CannotPropagate => {
@@ -240,7 +240,7 @@ fn shrink_boundaries(
     target_expr_and_indices: &[(Arc<dyn PhysicalExpr>, usize)],
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
-    target_expr_and_indices.iter().for_each(|(expr, i)| {
+    for (expr, i) in target_expr_and_indices.iter() {
         if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(bound) = target_boundaries
                 .iter_mut()
@@ -248,7 +248,7 @@ fn shrink_boundaries(
         {
             bound.interval = Some(graph.get_interval(*i));
         };
-    });
+    }
 
     let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
 

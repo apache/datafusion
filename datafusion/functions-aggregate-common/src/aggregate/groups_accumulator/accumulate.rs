@@ -565,14 +565,14 @@ pub fn accumulate_indices<F>(
                 |(group_index_chunk, mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
+                    for &group_index in group_index_chunk.iter() {
                         // valid bit was set, real vale
                         let is_valid = (mask & index_mask) != 0;
                         if is_valid {
                             index_fn(group_index);
                         }
                         index_mask <<= 1;
-                    })
+                    }
                 },
             );
 
@@ -601,14 +601,14 @@ pub fn accumulate_indices<F>(
                 |(group_index_chunk, mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
+                    for &group_index in group_index_chunk.iter() {
                         // valid bit was set, real vale
                         let is_valid = (mask & index_mask) != 0;
                         if is_valid {
                             index_fn(group_index);
                         }
                         index_mask <<= 1;
-                    })
+                    }
                 },
             );
 
@@ -642,14 +642,14 @@ pub fn accumulate_indices<F>(
                 .for_each(|((group_index_chunk, valid_mask), filter_mask)| {
                     // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
+                    for &group_index in group_index_chunk.iter() {
                         // valid bit was set, real vale
                         let is_valid = (valid_mask & filter_mask & index_mask) != 0;
                         if is_valid {
                             index_fn(group_index);
                         }
                         index_mask <<= 1;
-                    })
+                    }
                 });
 
             // handle any remaining bits (after the initial 64)

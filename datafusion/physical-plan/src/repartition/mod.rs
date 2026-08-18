@@ -1128,7 +1128,9 @@ impl BatchPartitioner {
                         hash_buffer,
                     )?;
 
-                    indices.iter_mut().for_each(|v| v.clear());
+                    for v in indices.iter_mut() {
+                        v.clear();
+                    }
 
                     partition_reducer.partition_indices(hash_buffer, indices);
 
@@ -1158,7 +1160,9 @@ impl BatchPartitioner {
                             &batch,
                         )?;
 
-                        indices.iter_mut().for_each(|v| v.clear());
+                        for v in indices.iter_mut() {
+                            v.clear();
+                        }
 
                         Self::partition_range_indices(
                             &arrays,

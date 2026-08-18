@@ -309,7 +309,6 @@ missing_panics_doc = "allow"                        # 244 hits
 must_use_candidate = "allow"                        # 2726 hits
 needless_bitwise_bool = "allow"                     # 1 hit
 needless_continue = "allow"                         # 37 hits
-needless_for_each = "allow"                         # 44 hits
 needless_raw_string_hashes = "allow"                # 540 hits
 no_effect_underscore_binding = "allow"              # 1 hit
 ptr_as_ptr = "allow"                                # 83 hits

@@ -569,8 +569,9 @@ fn merge_consecutive_projections_one_level(
 
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
-    expr.iter()
-        .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
+    for expr in expr.iter() {
+        expr.add_column_ref_counts(&mut column_referral_map);
+    }
 
     // If an expression is non-trivial (KeepInPlace) and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.

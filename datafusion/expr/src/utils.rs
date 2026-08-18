@@ -527,7 +527,7 @@ pub fn generate_sort_key(
 
     let mut final_sort_keys = vec![];
     let mut is_partition_flag = vec![];
-    partition_by.iter().for_each(|e| {
+    for e in partition_by.iter() {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
         let e = e.clone().sort(true, false);
@@ -541,14 +541,14 @@ pub fn generate_sort_key(
             final_sort_keys.push(e);
             is_partition_flag.push(true);
         }
-    });
+    }
 
-    order_by.iter().for_each(|e| {
+    for e in order_by.iter() {
         if !final_sort_keys.contains(e) {
             final_sort_keys.push(e.clone());
             is_partition_flag.push(false);
         }
-    });
+    }
     let res = final_sort_keys
         .into_iter()
         .zip(is_partition_flag)
