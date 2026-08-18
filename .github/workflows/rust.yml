@@ -290,9 +290,7 @@ jobs:
   # Check datafusion-spark crate features
   #
   # Ensure via `cargo check` that the crate can be built with a
-  # subset of the features packages enabled. In particular, check
-  # the crate builds without the optional `core` feature (which is
-  # what `cargo publish` verifies).
+  # subset of the features packages enabled.
   # See https://github.com/apache/datafusion/issues/24474
   linux-cargo-check-datafusion-spark:
     name: cargo check datafusion-spark features
