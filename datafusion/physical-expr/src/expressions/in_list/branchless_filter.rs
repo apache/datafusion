@@ -42,7 +42,7 @@
 //! different NaN values. [`BranchlessFilterType`] defines these safe,
 //! same-sized mappings and checks their sizes at compile time.
 //!
-//! The fast path is intentionally limited to short lists:
+//! The fast path is limited to short lists:
 //!
 //! - 16 values for 1-byte types
 //! - 8 values for 2-byte types
