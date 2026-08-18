@@ -301,6 +301,9 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             }
             Some(val_idx) => {
                 let dict_values = dict.values();
+                // check if the dictionary values array we are hashing was already seen.
+                // if its arc was already stored we dont need to rehash the entire array again
+                // if its new hash the entire array and store an arc ptr for future use
                 let cache_hit = self
                     .cached_values
                     .as_ref()
