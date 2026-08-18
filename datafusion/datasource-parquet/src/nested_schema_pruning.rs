@@ -855,7 +855,7 @@ mod tests {
 
     /// Assert the [`pin_item_values`] elements survived the masked read:
     /// struct validity `[valid, NULL, valid]` reconstructed from the
-    /// surviving leaves' definition levels, and `x` values intact.
+    /// surviving leaves' definition levels, and selected values intact.
     fn assert_pin_item_values(structs: &StructArray) {
         assert_eq!(structs.len(), 3);
         assert!(structs.is_valid(0));
@@ -868,6 +868,13 @@ mod tests {
             .unwrap();
         assert_eq!(x.value(0), 1);
         assert_eq!(x.value(2), 3);
+        let y = structs
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(y.value(0), "a");
+        assert_eq!(y.value(2), "c");
     }
 
     /// Pins the arrow-rs behavior this module relies on: selecting a subset
@@ -937,6 +944,54 @@ mod tests {
             true,
         )));
         roundtrip_with_clipped_mask(&batch, &target, &[0, 1]);
+    }
+
+    /// Pins the reader contract for `LargeListView<Struct>`.
+    #[test]
+    fn arrow_reader_emits_clipped_type_for_masked_large_list_view_struct() {
+        use arrow::array::LargeListViewArray;
+
+        let (item_field, values) = pin_item_values();
+        // Rows: [e0, e1], NULL, [e2].
+        let events = LargeListViewArray::new(
+            Arc::clone(&item_field),
+            vec![0_i64, 0, 2].into(),
+            vec![2_i64, 0, 1].into(),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "events",
+            DataType::LargeListView(item_field),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(events)]).unwrap();
+
+        let target = DataType::LargeListView(Arc::new(Field::new(
+            "item",
+            struct_of(vec![int64("x"), utf8("y")]),
+            true,
+        )));
+        let out = roundtrip_with_clipped_mask(&batch, &target, &[0, 1]);
+
+        let events = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<LargeListViewArray>()
+            .unwrap();
+        // A null row's offset is unspecified; assert the valid row mappings.
+        assert_eq!(events.value_offsets()[0], 0);
+        assert_eq!(events.value_offsets()[2], 2);
+        assert_eq!(events.value_sizes(), &[2_i64, 0, 1]);
+        assert!(events.is_valid(0));
+        assert!(events.is_null(1));
+        assert!(events.is_valid(2));
+        let structs = events
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_pin_item_values(structs);
     }
 
     /// Pins the reader contract for `FixedSizeList<Struct, 2>`, whose reader
