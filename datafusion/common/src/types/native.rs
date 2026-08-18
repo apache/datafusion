@@ -667,11 +667,15 @@ mod tests {
     fn test_default_cast_for_null_origin() {
         // Native types with several physical types: pick a canonical one
         assert_eq!(
-            NativeType::String.default_cast_for(&DataType::Null).unwrap(),
+            NativeType::String
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
             DataType::Utf8View
         );
         assert_eq!(
-            NativeType::Binary.default_cast_for(&DataType::Null).unwrap(),
+            NativeType::Binary
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
             DataType::BinaryView
         );
         assert_eq!(
