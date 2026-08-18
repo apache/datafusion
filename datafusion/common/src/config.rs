@@ -822,9 +822,14 @@ config_namespace! {
         /// This provides a fast path for joins with very small key ranges,
         /// bypassing the density check.
         ///
+        /// The threshold is effectively a memory budget: the array map holds one
+        /// entry per value in the key range, so the default admits ranges costing
+        /// roughly a megabyte. The allocation itself is taken from the memory pool,
+        /// so a build side that does not fit is rejected rather than overcommitting.
+        ///
         /// Currently only supports cases where build_side.num_rows() < u32::MAX.
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
-        pub perfect_hash_join_small_build_threshold: usize, default = 1024
+        pub perfect_hash_join_small_build_threshold: usize, default = 256 * 1024
 
         /// The minimum required density of join keys on the build side to consider a
         /// perfect hash join (see `HashJoinExec` for more details). Density is calculated as:
