@@ -37,7 +37,9 @@ use datafusion_common::{Result, exec_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+};
 use datafusion_session::Session;
 use futures::Stream;
 use tokio::runtime::Handle;
@@ -137,7 +139,7 @@ impl TableProvider for AsyncTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        _projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -211,11 +213,22 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         Vec::default()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

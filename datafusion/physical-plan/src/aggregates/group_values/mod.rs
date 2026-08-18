@@ -49,7 +49,7 @@ use crate::aggregates::{
 mod metrics;
 mod null_builder;
 
-pub(crate) use metrics::GroupByMetrics;
+pub(crate) use metrics::{AggregateArgumentMetrics, GroupByMetrics};
 
 /// Stores the group values during hash aggregation.
 ///

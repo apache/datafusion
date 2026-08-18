@@ -29,8 +29,8 @@ use super::{
 use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions, validate_child_count,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -175,26 +175,45 @@ impl ExecutionPlan for GlobalLimitExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let mut new_limit =
-            GlobalLimitExec::new(children.swap_remove(0), self.skip, self.fetch);
-        new_limit.set_required_ordering(self.required_ordering.clone());
-        Ok(Arc::new(new_limit))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut new_limit =
+                    GlobalLimitExec::new(children.swap_remove(0), self.skip, self.fetch);
+                new_limit.set_required_ordering(self.required_ordering.clone());
+                Ok(Arc::new(new_limit))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -421,25 +440,45 @@ impl ExecutionPlan for LocalLimitExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let mut new_limit = LocalLimitExec::new(children.swap_remove(0), self.fetch);
-        new_limit.set_required_ordering(self.required_ordering.clone());
-        Ok(Arc::new(new_limit))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut new_limit =
+                    LocalLimitExec::new(children.swap_remove(0), self.fetch);
+                new_limit.set_required_ordering(self.required_ordering.clone());
+                Ok(Arc::new(new_limit))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -873,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn with_new_children_preserves_required_ordering() -> Result<()> {
+    fn replace_children_preserves_required_ordering() -> Result<()> {
         let source = test::scan_partitioned(1);
         let schema = source.schema();
         let ordering = LexOrdering::new(vec![PhysicalSortExpr {
@@ -886,15 +925,19 @@ mod tests {
 
         let mut global = GlobalLimitExec::new(Arc::clone(&source), 0, Some(10));
         global.set_required_ordering(ordering.clone());
-        let rebuilt =
-            Arc::new(global).with_new_children(vec![test::scan_partitioned(1)])?;
+        let rebuilt = Arc::new(global).replace_children(
+            vec![test::scan_partitioned(1)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let rebuilt = rebuilt.downcast_ref::<GlobalLimitExec>().unwrap();
         assert_eq!(rebuilt.required_ordering(), &ordering);
 
         let mut local = LocalLimitExec::new(source, 10);
         local.set_required_ordering(ordering.clone());
-        let rebuilt =
-            Arc::new(local).with_new_children(vec![test::scan_partitioned(1)])?;
+        let rebuilt = Arc::new(local).replace_children(
+            vec![test::scan_partitioned(1)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let rebuilt = rebuilt.downcast_ref::<LocalLimitExec>().unwrap();
         assert_eq!(rebuilt.required_ordering(), &ordering);
 

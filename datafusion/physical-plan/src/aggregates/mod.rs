@@ -59,8 +59,8 @@
 //!     AggregateExec (partial, ordered)
 //! ```
 //!
-//! See [`OrderedPartialAggregateStream`] and [`OrderedFinalAggregateStream`] for
-//! details.
+//! See [`OrderedPartialAggregateStream`], [`OrderedFinalAggregateStream`], and
+//! [`OrderedSingleAggregateStream`] for details.
 //!
 //! Related configuration:
 //!
@@ -81,7 +81,8 @@
 //!   input
 //! ```
 //!
-//! See [`SingleHashAggregateStream`] for details.
+//! See [`SingleHashAggregateStream`] and [`OrderedSingleAggregateStream`] for
+//! details.
 //!
 //! Related configuration:
 //!
@@ -153,6 +154,7 @@ use crate::aggregates::{
     hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
     ordered_final_stream::OrderedFinalAggregateStream,
     ordered_partial_stream::OrderedPartialAggregateStream,
+    ordered_single_stream::OrderedSingleAggregateStream,
     partial_reduce_stream::PartialReduceHashAggregateStream,
     single_stream::SingleHashAggregateStream,
 };
@@ -165,9 +167,10 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, SendableRecordBatchStream, Statistics, check_if_same_properties,
+    InputOrderMode, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
@@ -212,6 +215,7 @@ mod hash_stream;
 pub mod order;
 mod ordered_final_stream;
 mod ordered_partial_stream;
+mod ordered_single_stream;
 mod partial_reduce_stream;
 mod single_stream;
 mod skip_partial;
@@ -675,12 +679,15 @@ enum StreamType {
     OrderedPartialAggregate(OrderedPartialAggregateStream),
     /// Final stage of aggregation for ordered input.
     OrderedFinalAggregate(OrderedFinalAggregateStream),
+    /// Single stage of aggregation for ordered input.
+    OrderedSingleAggregate(OrderedSingleAggregateStream),
     /// Hash aggregation reused for multiple stages
     ///
     /// Note this is being incrementally migrated to dedicated streams like
     /// [`StreamType::PartialHash`], [`StreamType::FinalHash`],
-    /// [`StreamType::OrderedPartialAggregate`], and
-    /// [`StreamType::OrderedFinalAggregate`]
+    /// [`StreamType::OrderedPartialAggregate`],
+    /// [`StreamType::OrderedFinalAggregate`], and
+    /// [`StreamType::OrderedSingleAggregate`]
     ///
     /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
     GroupedHash(GroupedHashAggregateStream),
@@ -702,6 +709,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedSingleAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
@@ -1215,6 +1223,12 @@ impl AggregateExec {
                 )?));
             }
 
+            if self.should_use_ordered_single_aggregate_stream(context) {
+                return Ok(StreamType::OrderedSingleAggregate(
+                    OrderedSingleAggregateStream::new(self, context, partition)?,
+                ));
+            }
+
             if self.should_use_single_hash_stream(context) {
                 return Ok(StreamType::SingleHash(SingleHashAggregateStream::new(
                     self, context, partition,
@@ -1276,6 +1290,16 @@ impl AggregateExec {
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ) && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    fn should_use_ordered_single_aggregate_stream(&self, _context: &TaskContext) -> bool {
+        matches!(
+            self.mode,
+            AggregateMode::Single | AggregateMode::SinglePartitioned
+        ) && self.limit_options.is_none()
+            && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1376,7 +1400,7 @@ impl AggregateExec {
             group_expr_mapping
                 .iter()
                 .flat_map(|(_, target_cols)| {
-                    target_cols.iter().flat_map(|(expr, _)| {
+                    target_cols.iter().filter_map(|(expr, _)| {
                         expr.downcast_ref::<Column>().map(|c| c.index())
                     })
                 })
@@ -1972,6 +1996,10 @@ fn format_tree_aggregate_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
         .unwrap_or_else(|| Cow::Borrowed(agg.name()))
 }
 
+fn aggregate_metric_label(agg: &AggregateFunctionExpr) -> String {
+    format_tree_aggregate_expr(agg).into_owned()
+}
+
 fn format_human_display<'a>(
     human_display: Option<&'a str>,
     alias: Option<&'a str>,
@@ -2031,6 +2059,45 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut me = AggregateExec::try_new_with_schema(
+                    self.mode,
+                    Arc::clone(&self.group_by),
+                    self.aggr_expr.to_vec(),
+                    Arc::clone(&self.filter_expr),
+                    Arc::clone(&children[0]),
+                    Arc::clone(&self.input_schema),
+                    Arc::clone(&self.schema),
+                )?;
+                me.limit_options = self.limit_options;
+                me.dynamic_filter.clone_from(&self.dynamic_filter);
+                Ok(Arc::new(me))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
@@ -2068,36 +2135,14 @@ impl ExecutionPlan for AggregateExec {
             .collect()
     }
 
-    fn with_new_children(
+    fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-
-        let mut me = AggregateExec::try_new_with_schema(
-            self.mode,
-            Arc::clone(&self.group_by),
-            self.aggr_expr.to_vec(),
-            Arc::clone(&self.filter_expr),
-            Arc::clone(&children[0]),
-            Arc::clone(&self.input_schema),
-            Arc::clone(&self.schema),
-        )?;
-        me.limit_options = self.limit_options;
-        me.dynamic_filter.clone_from(&self.dynamic_filter);
-
-        Ok(Arc::new(me))
-    }
-
-    fn with_new_children_and_same_properties(
-        self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -3681,18 +3726,29 @@ mod tests {
             vec![]
         }
 
+        fn replace_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            internal_err!("Children cannot be replaced in {self:?}")
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        }
+
         fn apply_expressions(
             &self,
             _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            _: Vec<Arc<dyn ExecutionPlan>>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            internal_err!("Children cannot be replaced in {self:?}")
         }
 
         fn execute(
@@ -4231,6 +4287,83 @@ mod tests {
 
         let stream = single.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::SingleHash(_)));
+
+        Ok(())
+    }
+
+    /// Ensures `OrderedSingleAggregateStream` is used for ordered raw input.
+    #[tokio::test]
+    async fn ordered_single_aggregate_planning() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sort_col", DataType::Int32, false),
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 1, 1])),
+                    Arc::new(Int32Array::from(vec![10, 11, 10])),
+                    Arc::new(Int64Array::from(vec![1, 2, 3])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 2])),
+                    Arc::new(Int32Array::from(vec![20, 21])),
+                    Arc::new(Int64Array::from(vec![4, 5])),
+                ],
+            )?,
+        ];
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("sort_col", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![
+                (col("sort_col", &schema)?, "sort_col".to_string()),
+                (col("group_col", &schema)?, "group_col".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value_col", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(value_col)")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        assert!(matches!(
+            aggregate.input_order_mode(),
+            InputOrderMode::PartiallySorted(_)
+        ));
+
+        let task_ctx = new_migrated_hash_ctx(2);
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++----------+-----------+----------------+
+| sort_col | group_col | SUM(value_col) |
++----------+-----------+----------------+
+| 1        | 10        | 4              |
+| 1        | 11        | 2              |
+| 2        | 20        | 4              |
+| 2        | 21        | 5              |
++----------+-----------+----------------+
+");
+
+        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
+        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
 
         Ok(())
     }
@@ -5029,8 +5162,10 @@ mod tests {
             Arc::clone(&blocking_exec) as Arc<dyn ExecutionPlan>,
             schema,
         )?);
-        let new_agg =
-            Arc::clone(&aggregate_exec).with_new_children(vec![blocking_exec])?;
+        let new_agg = Arc::clone(&aggregate_exec).replace_children(
+            vec![blocking_exec],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         assert_eq!(new_agg.schema(), aggregate_exec.schema());
         Ok(())
     }

@@ -103,9 +103,10 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Current reset count
     current_reset_epoch: usize,
 
-    /// Stores the previous value of each partitions for tracking the poll counts on the same value
-    /// Used if and only if round robin tie breaker is enabled, otherwise None
-    prev_cursors: Option<Vec<Option<Cursor<C>>>>,
+    /// Stores an owned copy of the last row of each partition's most
+    /// recently exhausted cursor, for tracking the poll counts on the same
+    /// value across a batch boundary.
+    prev_cursors: Option<Vec<Option<C::SingleRowValue>>>,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -435,7 +436,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // Take the current cursor, leaving `None` in its place
                 let taken = self.cursors[stream_idx].take();
                 if let Some(prev_cursors) = &mut self.prev_cursors {
-                    prev_cursors[stream_idx] = taken;
+                    prev_cursors[stream_idx] = taken.map(|c| c.last_value());
                 }
             }
             return finished;
@@ -676,6 +677,8 @@ mod tests {
     struct DummyValues;
 
     impl CursorValues for DummyValues {
+        type SingleRowValue = ();
+
         fn len(&self) -> usize {
             0
         }
@@ -689,6 +692,18 @@ mod tests {
         }
 
         fn compare(_l: &Self, _l_idx: usize, _r: &Self, _r_idx: usize) -> Ordering {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn get_value(&self, _idx: usize) -> Self::SingleRowValue {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn eq_to_single_row_value(
+            _l: &Self,
+            _l_idx: usize,
+            _r: &Self::SingleRowValue,
+        ) -> bool {
             unreachable!("done-path test should not compare cursors")
         }
     }

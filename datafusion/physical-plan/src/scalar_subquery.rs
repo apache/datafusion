@@ -37,7 +37,10 @@ use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
+use crate::{
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
+};
 
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -164,9 +167,10 @@ impl ExecutionPlan for ScalarSubqueryExec {
         children
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // First child is the main input, the rest are subquery plans.
         let input = children.remove(0);
@@ -184,6 +188,16 @@ impl ExecutionPlan for ScalarSubqueryExec {
             subqueries,
             self.results.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -452,9 +466,10 @@ mod tests {
             vec![&self.inner]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(Self::new(
                 children.remove(0),
@@ -467,6 +482,16 @@ mod tests {
             _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
