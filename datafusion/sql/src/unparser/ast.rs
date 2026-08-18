@@ -94,11 +94,11 @@ impl QueryBuilder {
         self.with.is_some()
             || self.order_by_kind.is_some()
             || self.limit.is_some()
-            || !self.limit_by.is_empty()
             || self.offset.is_some()
             || self.fetch.is_some()
-            || !self.locks.is_empty()
             || self.for_clause.is_some()
+            || !self.limit_by.is_empty()
+            || !self.locks.is_empty()
     }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
         let order_by = self

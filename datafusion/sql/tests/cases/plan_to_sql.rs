@@ -170,14 +170,8 @@ fn roundtrip_statement() -> Result<()> {
             SELECT j2_string as string FROM j2
             ORDER BY string DESC
             LIMIT 10"#,
-            // A distinct UNION nested inside a UNION ALL must keep the outer ALL
-            // (an outer `UNION ALL` whose operand is a distinct `UNION`).
             r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1)"#,
-            // The same shape written flat: `a UNION b UNION ALL a` parses as
-            // `(a UNION b) UNION ALL a`, so the outer ALL must be preserved too.
             r#"SELECT j1_string FROM j1 UNION SELECT j2_string FROM j2 UNION ALL SELECT j1_string FROM j1"#,
-            // Operand-scoped clauses on a UNION branch (LIMIT/ORDER BY) must stay
-            // bound to that branch, not leak to the enclosing set operation.
             r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 LIMIT 5)"#,
             r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 ORDER BY 1)"#,
             r#"SELECT col1, id FROM (

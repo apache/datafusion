@@ -1612,15 +1612,20 @@ impl Unparser<'_> {
                     .map(|input| {
                         let mut branch_query = Some(QueryBuilder::default());
                         let body = self.select_to_sql_expr(input, &mut branch_query)?;
-                        let mut branch_query =
-                            branch_query.expect("branch QueryBuilder is always present");
-                        if matches!(body, SetExpr::Select(_))
-                            && !branch_query.has_operand_scoped_clauses()
-                        {
-                            Ok(body)
-                        } else {
-                            let query = branch_query.body(Box::new(body)).build()?;
-                            Ok(SetExpr::Query(Box::new(query)))
+
+                        // Inline a branch only when it is a plain SELECT with no
+                        // query-scoped clauses; otherwise wrap it in a
+                        // parenthesized subquery so its set quantifier and
+                        // clauses stay bound to the branch.
+                        match branch_query {
+                            Some(mut branch_query)
+                                if !matches!(body, SetExpr::Select(_))
+                                    || branch_query.has_operand_scoped_clauses() =>
+                            {
+                                let query = branch_query.body(Box::new(body)).build()?;
+                                Ok(SetExpr::Query(Box::new(query)))
+                            }
+                            _ => Ok(body),
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
