@@ -22,12 +22,11 @@ use arrow::array::{ArrayRef, Int64Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::nth_value::{
     NthValueAccumulator, TrivialNthValueAccumulator,
 };
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
 const N_VALUES: [i64; 6] = [-100, -10, -1, 1, 10, 100];
@@ -44,7 +43,7 @@ fn trivial_accumulator(n: i64) -> TrivialNthValueAccumulator {
 
 fn ordered_accumulator(n: i64) -> NthValueAccumulator {
     let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
-        Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+        Arc::new(Column::new("ordering", 0)),
         SortOptions::default(),
     )])
     .unwrap();
@@ -54,7 +53,6 @@ fn ordered_accumulator(n: i64) -> NthValueAccumulator {
 
 fn nth_value_benchmark(c: &mut Criterion) {
     let values = int64_array(0..BATCH_LEN as i64);
-    let orderings = int64_array(0..BATCH_LEN as i64);
     let mut group = c.benchmark_group("nth_value");
 
     for n in N_VALUES {
@@ -73,13 +71,22 @@ fn nth_value_benchmark(c: &mut Criterion) {
             )
         });
 
-        let ordered_batch = vec![Arc::clone(&values), n_values, Arc::clone(&orderings)];
+        let ordered_batches = (0..UPDATES_PER_ITER)
+            .map(|batch_idx| {
+                let start = (batch_idx * BATCH_LEN) as i64;
+                vec![
+                    Arc::clone(&values),
+                    Arc::clone(&n_values),
+                    int64_array(start..start + BATCH_LEN as i64),
+                ]
+            })
+            .collect::<Vec<_>>();
         group.bench_function(BenchmarkId::new("ordered", format!("n={n}")), |b| {
             b.iter_batched(
                 || ordered_accumulator(n),
                 |mut accumulator| {
-                    for _ in 0..UPDATES_PER_ITER {
-                        accumulator.update_batch(&ordered_batch).unwrap();
+                    for batch in &ordered_batches {
+                        accumulator.update_batch(batch).unwrap();
                     }
                     black_box(accumulator.evaluate().unwrap());
                 },
