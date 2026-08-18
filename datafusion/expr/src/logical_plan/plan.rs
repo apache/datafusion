@@ -4309,9 +4309,8 @@ impl Join {
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
     ) -> Result<(Self, bool)> {
-        let original_join = match original {
-            LogicalPlan::Join(join) => join,
-            _ => return plan_err!("Could not create join with project input"),
+        let LogicalPlan::Join(original_join) = original else {
+            return plan_err!("Could not create join with project input");
         };
 
         let mut left_sch = LogicalPlanBuilder::from(Arc::clone(&left));

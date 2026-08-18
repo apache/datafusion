@@ -620,14 +620,11 @@ impl DefaultPhysicalPlanner {
                             .await?;
                     }
 
-                    let plan = match maybe_plan {
-                        Some(plan) => plan,
-                        None => {
-                            return plan_err!(
-                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
-                                scan.table_name
-                            );
-                        }
+                    let Some(plan) = maybe_plan else {
+                        return plan_err!(
+                            "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                            scan.table_name
+                        );
                     };
 
                     self.ensure_schema_matches(projected_schema, &plan, || {

@@ -311,9 +311,11 @@ impl NullState {
                     None
                 }
                 SeenValues::Some { .. } => {
-                    let mut old_values = match std::mem::take(&mut self.seen_values) {
-                        SeenValues::Some { values } => values,
-                        _ => unreachable!(),
+                    let SeenValues::Some {
+                        values: mut old_values,
+                    } = std::mem::take(&mut self.seen_values)
+                    else {
+                        unreachable!()
                     };
                     let nulls = old_values.finish();
                     let first_n_null = nulls.slice(0, n);

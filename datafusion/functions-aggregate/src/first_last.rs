@@ -708,9 +708,8 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
 
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
 
-        let (is_set_arr, val_and_order_cols) = match values.split_last() {
-            Some(result) => result,
-            None => return internal_err!("Empty row in FIRST_VALUE"),
+        let Some((is_set_arr, val_and_order_cols)) = values.split_last() else {
+            return internal_err!("Empty row in FIRST_VALUE");
         };
 
         let is_set_arr = as_boolean_array(is_set_arr)?;

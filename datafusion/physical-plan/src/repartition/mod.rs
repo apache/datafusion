@@ -816,9 +816,10 @@ impl RangeExpr {
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<PhysicalExprRef> {
         // Decode the raw ordered children for the same reason as `try_to_proto`.
-        let range_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::RangeExpr(expr)) => expr,
-            _ => return internal_err!("PhysicalExprNode is not a RangeExpr"),
+        let Some(protobuf::physical_expr_node::ExprType::RangeExpr(range_expr)) =
+            &node.expr_type
+        else {
+            return internal_err!("PhysicalExprNode is not a RangeExpr");
         };
         let sort_exprs = sort_exprs_try_from_proto(&range_expr.sort_expr, ctx)?;
         let (on_columns, sort_options) = sort_exprs

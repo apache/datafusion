@@ -1175,15 +1175,15 @@ fn try_push_into_inputs(
         input_schemas.iter().map(|s| schema_columns(s)).collect();
 
     // Route pairs and columns to the appropriate inputs
-    let per_input = match route_to_inputs(
+    let Some(per_input) = route_to_inputs(
         pairs,
         columns_needed,
         node,
         &input_column_sets,
         &input_schemas,
-    )? {
-        Some(routed) => routed,
-        None => return Ok(None),
+    )?
+    else {
+        return Ok(None);
     };
 
     let num_inputs = inputs.len();

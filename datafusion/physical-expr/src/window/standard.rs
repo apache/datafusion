@@ -179,9 +179,8 @@ impl WindowExpr for StandardWindowExpr {
                             published: false,
                         })
                 };
-            let evaluator = match &mut window_state.window_fn {
-                WindowFn::Builtin(evaluator) => evaluator,
-                _ => unreachable!(),
+            let WindowFn::Builtin(evaluator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
 

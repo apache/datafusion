@@ -1043,9 +1043,8 @@ mod tests {
             plan: LogicalPlan,
             _config: &dyn OptimizerConfig,
         ) -> Result<Transformed<LogicalPlan>> {
-            let projection = match plan {
-                LogicalPlan::Projection(p) => p,
-                _ => return Ok(Transformed::no(plan)),
+            let LogicalPlan::Projection(projection) = plan else {
+                return Ok(Transformed::no(plan));
             };
 
             let expr = Expr::from(Column::from(projection.schema.qualified_field(0)));

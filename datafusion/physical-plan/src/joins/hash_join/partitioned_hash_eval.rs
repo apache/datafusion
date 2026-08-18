@@ -239,9 +239,10 @@ impl HashExpr {
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_proto_models::protobuf;
-        let hash_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::HashExpr(h)) => h,
-            _ => return internal_err!("PhysicalExprNode is not a HashExpr"),
+        let Some(protobuf::physical_expr_node::ExprType::HashExpr(hash_expr)) =
+            &node.expr_type
+        else {
+            return internal_err!("PhysicalExprNode is not a HashExpr");
         };
         let on_columns = ctx.decode_children_expressions(&hash_expr.on_columns)?;
         Ok(Arc::new(HashExpr::new(

@@ -899,14 +899,10 @@ mod tests {
             file_with_stats("f2.parquet", Statistics::default()),
         ];
 
-        let err = match MinMaxStatistics::new_from_files(
-            &sort_order,
-            &schema,
-            None,
-            files.iter(),
-        ) {
-            Ok(_) => panic!("expected missing statistics error"),
-            Err(err) => err,
+        let Err(err) =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())
+        else {
+            panic!("expected missing statistics error")
         };
 
         assert!(

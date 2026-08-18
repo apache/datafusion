@@ -528,13 +528,12 @@ impl SortPreservingMergeExec {
             .expr
             .iter()
             .map(|e| {
-                let sort = match &e.expr_type {
-                    Some(protobuf::physical_expr_node::ExprType::Sort(s)) => s,
-                    _ => {
-                        return internal_err!(
-                            "SortPreservingMergeExec expression is not a sort expression"
-                        );
-                    }
+                let Some(protobuf::physical_expr_node::ExprType::Sort(sort)) =
+                    &e.expr_type
+                else {
+                    return internal_err!(
+                        "SortPreservingMergeExec expression is not a sort expression"
+                    );
                 };
                 let expr = ctx.decode_required_expr(
                     sort.expr.as_deref(),

@@ -2323,9 +2323,8 @@ impl HigherOrderUDFImpl for ArrayTransform {
             unreachable!()
         };
 
-        let field = match list.data_type() {
-            DataType::List(field) => field,
-            _ => unreachable!(),
+        let DataType::List(field) = list.data_type() else {
+            unreachable!()
         };
 
         Ok(LambdaParametersProgress::Complete(vec![vec![

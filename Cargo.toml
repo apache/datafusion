@@ -296,7 +296,6 @@ implicit_hasher = "allow"                           # 17 hits
 inline_always = "allow"                             # 45 hits
 items_after_statements = "allow"                    # 171 hits
 large_digit_groups = "allow"                        # 3 hits
-manual_let_else = "allow"                           # 106 hits
 manual_string_new = "allow"                         # 84 hits
 many_single_char_names = "allow"                    # 12 hits; short names are idiomatic in the numeric kernels
 map_unwrap_or = "allow"                             # 198 hits

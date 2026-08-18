@@ -1533,19 +1533,14 @@ impl NestedLoopJoinStream {
     /// it to disk. Other partitions share the same spill file.
     fn initiate_fallback(&mut self) -> Result<()> {
         // Take ownership of Pending state
-        let (left_plan, context, left_spill_data) =
-            match std::mem::replace(&mut self.spill_state, SpillState::Disabled) {
-                SpillState::Pending {
-                    left_plan,
-                    task_context,
-                    left_spill_data,
-                } => (left_plan, task_context, left_spill_data),
-                _ => {
-                    return internal_err!(
-                        "initiate_fallback called in non-Pending spill state"
-                    );
-                }
-            };
+        let SpillState::Pending {
+            left_plan,
+            task_context: context,
+            left_spill_data,
+        } = std::mem::replace(&mut self.spill_state, SpillState::Disabled)
+        else {
+            return internal_err!("initiate_fallback called in non-Pending spill state");
+        };
 
         // Use OnceAsync to ensure only the first partition spills the left
         // side. Other partitions will get the same OnceFut that resolves
