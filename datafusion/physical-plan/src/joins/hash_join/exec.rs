@@ -37,7 +37,8 @@ use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
-    BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
+    AdaptiveProbeSide, BuildSide, BuildSideInitialState, HashJoinStream,
+    HashJoinStreamState,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
@@ -52,9 +53,10 @@ use crate::projection::{
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
-    validate_child_count,
+    ChildrenPropertiesMode, EmptyRecordBatchStream, ExecutionPlanProperties,
+    ReplaceChildrenOptions, validate_child_count,
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -79,8 +81,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::{RecordBatchMemoryCounter, estimate_memory_size};
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
-    plan_err, project_schema,
+    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err,
+    internal_datafusion_err, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -96,7 +98,8 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::TryStreamExt;
+use futures::channel::oneshot;
+use futures::{StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 use super::partitioned_hash_eval::SeededRandomState;
@@ -1486,6 +1489,7 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
+        let mut adaptive_probe_side = None;
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -1513,19 +1517,49 @@ impl ExecutionPlan for HashJoinExec {
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
-                OnceFut::new(collect_left_input(
-                    self.random_state.random_state().clone(),
-                    left_stream,
-                    on_left.clone(),
-                    join_metrics.clone(),
-                    reservation,
-                    need_produce_result_in_final(self.join_type),
-                    1,
+
+                if let Some(peek_rows) = adaptive_peek_rows(
+                    self,
+                    context.session_config().options(),
                     enable_dynamic_filter_pushdown,
-                    Arc::clone(context.session_config().options()),
-                    self.null_equality,
-                    array_map_created_count,
-                ))
+                ) {
+                    let right_stream =
+                        self.right.execute(partition, Arc::clone(&context))?;
+                    let (probe_tx, probe_rx) = oneshot::channel();
+                    adaptive_probe_side = Some(probe_rx);
+                    OnceFut::new(choose_build_side_and_collect(
+                        self.random_state.random_state().clone(),
+                        left_stream,
+                        right_stream,
+                        on_left.clone(),
+                        self.on
+                            .iter()
+                            .map(|(_, right_expr)| Arc::clone(right_expr))
+                            .collect(),
+                        peek_rows,
+                        probe_tx,
+                        join_metrics.clone(),
+                        reservation,
+                        1,
+                        Arc::clone(context.session_config().options()),
+                        self.null_equality,
+                        array_map_created_count,
+                    ))
+                } else {
+                    OnceFut::new(collect_left_input(
+                        self.random_state.random_state().clone(),
+                        left_stream,
+                        on_left.clone(),
+                        join_metrics.clone(),
+                        reservation,
+                        need_produce_result_in_final(self.join_type),
+                        1,
+                        enable_dynamic_filter_pushdown,
+                        Arc::clone(context.session_config().options()),
+                        self.null_equality,
+                        array_map_created_count,
+                    ))
+                }
             }
             PartitionMode::Auto => {
                 return plan_err!(
@@ -1539,7 +1573,15 @@ impl ExecutionPlan for HashJoinExec {
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
-        let right_stream = self.right.execute(partition, context)?;
+        let right_stream = if adaptive_probe_side.is_some() {
+            // Adaptive selection already took both inputs; the one left over
+            // for probing arrives once the build future has picked a side. Only
+            // the schema is needed until then.
+            Box::pin(EmptyRecordBatchStream::new(self.right.schema()))
+                as SendableRecordBatchStream
+        } else {
+            self.right.execute(partition, context)?
+        };
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match self.projection.as_ref() {
@@ -1576,6 +1618,7 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             self.null_aware,
             self.fetch,
+            adaptive_probe_side,
         )))
     }
 
@@ -2196,6 +2239,166 @@ fn should_collect_min_max_for_perfect_hash(
     let expr = &on_left[0];
     let data_type = expr.data_type(schema)?;
     Ok(ArrayMap::is_supported_type(&data_type))
+}
+
+/// How many rows to read from each input of `join` before committing to a build
+/// side, or `None` if it must keep the side the planner chose.
+///
+/// Deliberately narrow. Inner joins are the only ones whose two sides are
+/// interchangeable without also rewriting the join type, and a join filter
+/// would need its own side mapping flipped. A join that feeds a dynamic filter
+/// is excluded outright: those filters merge build-side key bounds from every
+/// partition into one predicate, so partitions disagreeing about which side
+/// they built from would produce bounds that no longer cover the probe side and
+/// would drop matching rows.
+fn adaptive_peek_rows(
+    join: &HashJoinExec,
+    options: &ConfigOptions,
+    enable_dynamic_filter_pushdown: bool,
+) -> Option<usize> {
+    let eligible = options.optimizer.adaptive_join_build_side
+        && join.mode == PartitionMode::Partitioned
+        && join.join_type == JoinType::Inner
+        && join.filter.is_none()
+        && !join.null_aware
+        && !enable_dynamic_filter_pushdown;
+
+    eligible
+        .then_some(options.optimizer.adaptive_join_build_side_peek_rows)
+        .filter(|rows| *rows > 0)
+}
+
+/// Re-attaches already-consumed batches to the front of the stream they came
+/// from, so a side that lost the size race can still be probed in full.
+fn prepend_batches(
+    batches: Vec<RecordBatch>,
+    rest: SendableRecordBatchStream,
+) -> SendableRecordBatchStream {
+    if batches.is_empty() {
+        return rest;
+    }
+    let schema = rest.schema();
+    Box::pin(RecordBatchStreamAdapter::new(
+        schema,
+        futures::stream::iter(batches.into_iter().map(Ok)).chain(rest),
+    ))
+}
+
+/// Reads a bounded prefix of both inputs and builds the hash table from
+/// whichever one ends first, on the assumption that it is the smaller.
+///
+/// The loop pulls from whichever side is currently behind on rows, so the two
+/// prefixes stay balanced and the winner is decided by which input actually
+/// runs out — not by which happens to produce batches faster. If both are still
+/// going at `peek_rows`, the planned orientation is kept, which makes the whole
+/// mechanism a no-op for two large inputs.
+///
+/// The chosen probe side is handed back through `probe_tx` before the build
+/// starts, so the stream driving this future can install it.
+#[expect(clippy::too_many_arguments)]
+async fn choose_build_side_and_collect(
+    random_state: RandomState,
+    left_stream: SendableRecordBatchStream,
+    right_stream: SendableRecordBatchStream,
+    on_left: Vec<PhysicalExprRef>,
+    on_right: Vec<PhysicalExprRef>,
+    peek_rows: usize,
+    probe_tx: oneshot::Sender<AdaptiveProbeSide>,
+    metrics: BuildProbeJoinMetrics,
+    reservation: MemoryReservation,
+    probe_threads_count: usize,
+    config: Arc<ConfigOptions>,
+    null_equality: NullEquality,
+    array_map_created_count: Count,
+) -> Result<JoinLeftData> {
+    let mut left_stream = left_stream;
+    let mut right_stream = right_stream;
+    let mut left_batches: Vec<RecordBatch> = vec![];
+    let mut right_batches: Vec<RecordBatch> = vec![];
+    let mut left_rows = 0usize;
+    let mut right_rows = 0usize;
+    let mut left_done = false;
+    let mut right_done = false;
+
+    // Both prefixes are held in memory at once, so account for them while the
+    // decision is being made. `collect_left_input` re-accounts the winner from
+    // scratch, and the loser's batches become ordinary probe input, so this
+    // reservation is released as soon as a side is chosen.
+    let peek_reservation = reservation.new_empty();
+
+    while !left_done && !right_done && left_rows < peek_rows && right_rows < peek_rows {
+        // Pull from whichever side has seen fewer rows so far.
+        if left_rows <= right_rows {
+            match left_stream.next().await.transpose()? {
+                Some(batch) => {
+                    peek_reservation.try_grow(batch.get_array_memory_size())?;
+                    left_rows += batch.num_rows();
+                    left_batches.push(batch);
+                }
+                None => left_done = true,
+            }
+        } else {
+            match right_stream.next().await.transpose()? {
+                Some(batch) => {
+                    peek_reservation.try_grow(batch.get_array_memory_size())?;
+                    right_rows += batch.num_rows();
+                    right_batches.push(batch);
+                }
+                None => right_done = true,
+            }
+        }
+    }
+
+    // Swap only on positive evidence that the right side is the smaller one.
+    let swap = right_done && !left_done;
+
+    let (build_stream, build_on, probe_stream, probe_on, build_join_side) = if swap {
+        (
+            prepend_batches(right_batches, right_stream),
+            on_right,
+            prepend_batches(left_batches, left_stream),
+            on_left,
+            JoinSide::Right,
+        )
+    } else {
+        (
+            prepend_batches(left_batches, left_stream),
+            on_left,
+            prepend_batches(right_batches, right_stream),
+            on_right,
+            JoinSide::Left,
+        )
+    };
+
+    peek_reservation.free();
+
+    // The receiver is owned by the stream polling this future, so a send error
+    // means that stream was dropped and nothing will read the build data.
+    probe_tx
+        .send(AdaptiveProbeSide {
+            stream: probe_stream,
+            on: probe_on,
+            build_join_side,
+        })
+        .map_err(|_| internal_datafusion_err!("hash join probe side receiver dropped"))?;
+
+    collect_left_input(
+        random_state,
+        build_stream,
+        build_on,
+        metrics,
+        reservation,
+        // Inner joins never replay unmatched build rows.
+        false,
+        probe_threads_count,
+        // Adaptive selection is only enabled when this join produces no
+        // dynamic filter, so there are no bounds to compute.
+        false,
+        config,
+        null_equality,
+        array_map_created_count,
+    )
+    .await
 }
 
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
@@ -7276,6 +7479,121 @@ mod tests {
             lit(true),
         ));
         assert!(join.with_dynamic_filter_expr(df).is_err());
+        Ok(())
+    }
+
+    /// Context with adaptive build-side selection turned on.
+    fn adaptive_task_ctx(peek_rows: usize) -> Arc<TaskContext> {
+        let mut config = ConfigOptions::default();
+        config.optimizer.adaptive_join_build_side = true;
+        config.optimizer.adaptive_join_build_side_peek_rows = peek_rows;
+        Arc::new(TaskContext::default().with_session_config(SessionConfig::from(config)))
+    }
+
+    /// A left input far larger than the right, so the planner's choice of the
+    /// left as build side is the wrong one.
+    fn lopsided_inputs() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let big: Vec<i32> = (0..2000).collect();
+        let left = build_table(
+            ("a1", &big),
+            ("b1", &big.iter().map(|v| v % 16).collect()),
+            ("c1", &big),
+        );
+        let right = build_table(
+            ("a2", &vec![3, 7, 11]),
+            ("b2", &vec![3, 7, 11]),
+            ("c2", &vec![30, 70, 110]),
+        );
+        let on: JoinOn = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema()).unwrap()) as _,
+        )];
+        (left, right, on)
+    }
+
+    /// The swap must not disturb the output: same rows, same column order.
+    #[tokio::test]
+    async fn adaptive_build_side_matches_planned_output() -> Result<()> {
+        let (left, right, on) = lopsided_inputs();
+
+        let (planned_cols, planned, _) = join_collect_with_partition_mode(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            Arc::new(TaskContext::default()),
+        )
+        .await?;
+
+        let (adaptive_cols, adaptive, metrics) = join_collect_with_partition_mode(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            adaptive_task_ctx(8192),
+        )
+        .await?;
+
+        assert_eq!(planned_cols, adaptive_cols, "column order must not change");
+        assert_eq!(
+            planned.iter().map(|b| b.num_rows()).sum::<usize>(),
+            adaptive.iter().map(|b| b.num_rows()).sum::<usize>(),
+            "row count must not change"
+        );
+        // Compare the two result sets directly rather than against a literal,
+        // so the assertion is exactly "swapping changed nothing".
+        let sorted_rows = |batches: &[RecordBatch]| -> Result<Vec<String>> {
+            let mut rows: Vec<String> =
+                arrow::util::pretty::pretty_format_batches(batches)?
+                    .to_string()
+                    .lines()
+                    .map(|line| line.to_string())
+                    .collect();
+            rows.sort();
+            Ok(rows)
+        };
+        assert_eq!(sorted_rows(&planned)?, sorted_rows(&adaptive)?);
+
+        // The right side is tiny and ends first, so it should have built the
+        // hash table instead of the 2000-row left side.
+        let build_rows = metrics
+            .sum_by_name("build_input_rows")
+            .map(|v| v.as_usize())
+            .unwrap_or(0);
+        assert_eq!(build_rows, 3, "expected the small right side to build");
+
+        Ok(())
+    }
+
+    /// With the peek budget exhausted on both sides, the planned orientation
+    /// has to survive untouched.
+    #[tokio::test]
+    async fn adaptive_build_side_keeps_plan_when_neither_side_ends() -> Result<()> {
+        let (left, right, on) = lopsided_inputs();
+
+        let (_, batches, metrics) = join_collect_with_partition_mode(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            // Below every input's size, so neither side reaches EOF first.
+            adaptive_task_ctx(1),
+        )
+        .await?;
+
+        let build_rows = metrics
+            .sum_by_name("build_input_rows")
+            .map(|v| v.as_usize())
+            .unwrap_or(0);
+        assert_eq!(build_rows, 2000, "expected the planned left side to build");
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+
         Ok(())
     }
 }

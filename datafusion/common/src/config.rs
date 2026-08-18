@@ -1672,6 +1672,29 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
+        /// When set to true, a partitioned hash join reads a bounded prefix of
+        /// both of its inputs before building, and builds its hash table from
+        /// whichever input turns out to be smaller, rather than trusting the
+        /// plan-time estimate. If neither input ends within
+        /// `adaptive_join_build_side_peek_rows`, the planned build side is kept.
+        ///
+        /// The decision is made independently per partition, so it also adapts
+        /// to skew. It applies only to inner joins without a join filter, in
+        /// `Partitioned` mode, that are not producing a dynamic filter: those
+        /// filters merge build-side key bounds across every partition, and a
+        /// per-partition swap would make the merged bounds unsound.
+        pub adaptive_join_build_side: bool, default = false
+
+        /// Rows to read from each side of a hash join, per partition, before
+        /// giving up on `adaptive_join_build_side` and keeping the planned
+        /// build side.
+        ///
+        /// Only the losing side's prefix is wasted work: whichever side ends up
+        /// building would have been materialized in full anyway. So the budget
+        /// can be as large as a build side you would have tolerated, and the
+        /// default matches `hash_join_single_partition_threshold_rows`.
+        pub adaptive_join_build_side_peek_rows: usize, default = 1024 * 128
+
         /// When set to true, the physical plan optimizer uses the pluggable
         /// `StatisticsRegistry` for statistics propagation across operators.
         /// This enables more accurate cardinality estimates compared to each

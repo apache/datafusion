@@ -20,6 +20,7 @@
 //! This module implements [`HashJoinStream`], the streaming engine for
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::task::Poll;
@@ -58,7 +59,8 @@ use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::{Stream, StreamExt, ready};
+use futures::channel::oneshot;
+use futures::{Future, Stream, StreamExt, ready};
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -78,6 +80,20 @@ pub(super) struct BuildSideInitialState {
 pub(super) struct BuildSideReadyState {
     /// Collected build-side data
     left_data: Arc<JoinLeftData>,
+}
+
+/// The probe side left over once an adaptive join has picked which input to
+/// build its hash table from.
+///
+/// Sent from the build future rather than chosen up front, because the choice
+/// depends on how much data each input actually produces.
+pub(super) struct AdaptiveProbeSide {
+    /// Input to probe with
+    pub(super) stream: SendableRecordBatchStream,
+    /// Equijoin keys on the probe side
+    pub(super) on: Vec<PhysicalExprRef>,
+    /// Which of the join's inputs the hash table was built from
+    pub(super) build_join_side: JoinSide,
 }
 
 impl BuildSide {
@@ -336,6 +352,12 @@ pub(super) struct HashJoinStream {
     output_buffer: LimitedBatchCoalescer,
     /// Whether this is a null-aware anti join
     null_aware: bool,
+    /// Set when the build side is chosen at execution time: resolves to the
+    /// input left over for probing, once the build future has decided.
+    adaptive_probe_side: Option<oneshot::Receiver<AdaptiveProbeSide>>,
+    /// Which of the join's inputs the hash table was built from. Always
+    /// [`JoinSide::Left`] unless adaptive selection swapped it.
+    build_join_side: JoinSide,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -487,6 +509,7 @@ impl HashJoinStream {
         mode: PartitionMode,
         null_aware: bool,
         fetch: Option<usize>,
+        adaptive_probe_side: Option<oneshot::Receiver<AdaptiveProbeSide>>,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer =
@@ -514,6 +537,8 @@ impl HashJoinStream {
             mode,
             output_buffer,
             null_aware,
+            adaptive_probe_side,
+            build_join_side: JoinSide::Left,
         }
     }
 
@@ -669,6 +694,23 @@ impl HashJoinStream {
                 .get_shared(cx)
         )?;
         build_timer.done();
+
+        // An adaptive join only learns which input it is probing once the build
+        // future has picked a side. The value is sent before the build starts,
+        // so it is already available by the time we get here.
+        if let Some(mut rx) = self.adaptive_probe_side.take() {
+            let probe_side = match ready!(Pin::new(&mut rx).poll(cx)) {
+                Ok(probe_side) => probe_side,
+                Err(_) => {
+                    return Poll::Ready(internal_err!(
+                        "hash join build side finished without choosing a probe side"
+                    ));
+                }
+            };
+            self.right = probe_side.stream;
+            self.on_right = probe_side.on;
+            self.build_join_side = probe_side.build_join_side;
+        }
 
         // Note: For null-aware anti join, we need to check the probe side (right) for NULLs,
         // not the build side (left). The probe-side NULL check happens during process_probe_batch.
@@ -910,12 +952,22 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        // Build output batch and push to coalescer
+        // Build output batch and push to coalescer.
+        //
+        // `build_join_side` names which of the join's inputs supplied the hash
+        // table, which adaptive selection can flip. `build_batch_from_indices`
+        // reads a column from the build buffer when its recorded side matches,
+        // so passing the real side keeps the output column order intact without
+        // rewriting `column_indices`.
         let (build_batch, probe_batch, join_side) =
             if self.join_type == JoinType::RightMark {
                 (&state.batch, build_side.left_data.batch(), JoinSide::Right)
             } else {
-                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
+                (
+                    build_side.left_data.batch(),
+                    &state.batch,
+                    self.build_join_side,
+                )
             };
 
         let batch = build_batch_from_indices(
@@ -1063,7 +1115,7 @@ impl Stream for HashJoinStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
