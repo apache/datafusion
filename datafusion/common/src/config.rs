@@ -1851,6 +1851,12 @@ config_namespace! {
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
 
+        /// When set to true, the physical plan optimizer will replace
+        /// `SortPreservingMergeExec` with `ProgressiveEvalExec` when the input
+        /// partitions are non-overlapping ranges of the merge ordering,
+        /// avoiding a merge by emitting the partitions sequentially.
+        pub sequence_sorted_inputs: bool, default = false
+
         /// When set to true, the optimizer will extract leaf expressions
         /// (such as `get_field`) from filter/sort/join nodes into projections
         /// closer to the leaf table scans, and push those projections down
