@@ -30,18 +30,51 @@ use datafusion_expr::EmitTo;
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    AggregateArgumentMetrics, GroupByMetrics, GroupValues, new_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by,
+    aggregate_metric_label, evaluate_group_by,
 };
 
 use super::common::{
-    AggregateAccumulator, AggregateBatchFn, EvaluatedAggregateBatch,
+    AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
     MaterializeAccumulatorFn,
 };
+
+#[derive(Clone)]
+pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
+    pub(super) group_by: GroupByMetrics,
+    pub(super) aggregate_arguments: AggregateArgumentMetrics,
+}
+
+impl OrderedAggregateTableMetrics {
+    pub(in crate::aggregates) fn new(agg: &AggregateExec, partition: usize) -> Self {
+        let aggregate_arguments = AggregateArgumentMetrics::new(
+            &agg.metrics,
+            partition,
+            agg.aggr_expr
+                .iter()
+                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+        );
+        Self {
+            group_by: GroupByMetrics::new(&agg.metrics, partition),
+            aggregate_arguments,
+        }
+    }
+
+    pub(in crate::aggregates) fn from_hash_table<AggrMode>(
+        table: &AggregateHashTable<AggrMode>,
+    ) -> Self {
+        Self {
+            group_by: table.group_by_metrics.clone(),
+            aggregate_arguments: table.aggregate_argument_metrics.clone(),
+        }
+    }
+}
 
 /// Aggregate table shared by the ordered single, partial and final paths.
 ///
@@ -100,6 +133,9 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
 
+    /// Per-aggregate timing metrics for evaluating aggregate arguments.
+    pub(super) aggregate_argument_metrics: AggregateArgumentMetrics,
+
     /// Group keys, ordering state, and accumulator states.
     pub(super) buffer: OrderedAggregateTableBuffer,
 
@@ -149,7 +185,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         input_order_mode: &InputOrderMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         assert_or_internal_err!(
             batch_size > 0,
@@ -184,7 +220,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             output_schema,
             state_schema,
             batch_size,
-            group_by_metrics,
+            group_by_metrics: metrics.group_by,
+            aggregate_argument_metrics: metrics.aggregate_arguments,
             buffer: OrderedAggregateTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_ordering,
@@ -213,7 +250,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .buffer
             .accumulators
             .iter()
-            .map(|acc| acc.evaluate_acc_args(batch))
+            .enumerate()
+            .map(|(idx, acc)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_acc_args(batch))
+            })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
 
@@ -259,8 +300,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_indices.allocated_size()
     }
 
-    pub(in crate::aggregates) fn group_by_metrics(&self) -> GroupByMetrics {
-        self.group_by_metrics.clone()
+    pub(in crate::aggregates) fn metrics(&self) -> OrderedAggregateTableMetrics {
+        OrderedAggregateTableMetrics {
+            group_by: self.group_by_metrics.clone(),
+            aggregate_arguments: self.aggregate_argument_metrics.clone(),
+        }
     }
 
     /// Takes every intermediate aggregate state and resets the table so it can

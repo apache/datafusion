@@ -170,7 +170,7 @@ impl TableProvider for MyTable {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -323,7 +323,7 @@ expects to work with:
 async fn scan(
     &self,
     state: &dyn Session,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
     filters: &[Expr],
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -528,7 +528,7 @@ To opt in, implement `supports_filters_pushdown`:
 # impl TableProvider for MyFilterTable {
 #     fn schema(&self) -> SchemaRef { todo!() }
 #     fn table_type(&self) -> TableType { TableType::Base }
-#     async fn scan(&self, _: &dyn Session, _: Option<&Vec<usize>>, _: &[Expr], _: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> { todo!() }
+#     async fn scan(&self, _: &dyn Session, _: Option<&[usize]>, _: &[Expr], _: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> { todo!() }
 #
 fn supports_filters_pushdown(
     &self,
@@ -700,7 +700,7 @@ impl TableProvider for DatePartitionedTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -848,7 +848,7 @@ impl TableProvider for CountingTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
