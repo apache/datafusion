@@ -1594,7 +1594,32 @@ impl Unparser<'_> {
                 let input_exprs: Vec<SetExpr> = union
                     .inputs
                     .iter()
-                    .map(|input| self.select_to_sql_expr(input, query))
+                    .map(|input| {
+                        // A distinct UNION (represented as `Distinct(Union)`)
+                        // nested as an input to this UNION must be emitted as its
+                        // own parenthesized subquery. Unparsing it inline shares
+                        // this statement's `QueryBuilder`, whose single
+                        // `distinct_union` flag would then leak the child's
+                        // DISTINCT up to the enclosing UNION; and sqlparser
+                        // renders nested `SetExpr::SetOperation`s without
+                        // parentheses. Either alone silently rewrites
+                        // `a UNION ALL (b UNION c)` into a flat, fully-distinct
+                        // `a UNION b UNION c`. Wrapping the child in its own
+                        // query isolates the flag and forces parentheses.
+                        if matches!(
+                            input.as_ref(),
+                            LogicalPlan::Distinct(Distinct::All(inner))
+                                if matches!(inner.as_ref(), LogicalPlan::Union(_))
+                        ) {
+                            let mut sub_query = Some(QueryBuilder::default());
+                            let body = self.select_to_sql_expr(input, &mut sub_query)?;
+                            let query =
+                                QueryBuilder::default().body(Box::new(body)).build()?;
+                            Ok(SetExpr::Query(Box::new(query)))
+                        } else {
+                            self.select_to_sql_expr(input, query)
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 assert_or_internal_err!(
