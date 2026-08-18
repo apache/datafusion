@@ -322,15 +322,28 @@ impl ExecutionPlan for CoalesceBatchesExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         let input = ctx.encode_child(self.input())?;
+        let to_wire =
+            |value, field| usize_to_wire::<u32>(value, "CoalesceBatchesExec", field);
+        if self.target_batch_size() == 0 {
+            return datafusion_common::plan_err!(
+                "CoalesceBatchesExec: target_batch_size must be greater than 0"
+            );
+        }
+        let target_batch_size = to_wire(self.target_batch_size(), "target_batch_size")?;
+        let fetch = self
+            .fetch()
+            .map(|fetch| to_wire(fetch, "fetch"))
+            .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches(
                     Box::new(protobuf::CoalesceBatchesExecNode {
                         input: Some(Box::new(input)),
-                        target_batch_size: self.target_batch_size() as u32,
-                        fetch: self.fetch().map(|n| n as u32),
+                        target_batch_size,
+                        fetch,
                     }),
                 ),
             ),
@@ -355,6 +368,7 @@ impl CoalesceBatchesExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let coalesce_batches = crate::expect_plan_variant!(
             node,
@@ -366,9 +380,21 @@ impl CoalesceBatchesExec {
             "CoalesceBatchesExec",
             "input",
         )?;
+        let from_wire =
+            |value, field| usize_from_wire(value, "CoalesceBatchesExec", field);
+        let target_batch_size =
+            from_wire(coalesce_batches.target_batch_size, "target_batch_size")?;
+        if target_batch_size == 0 {
+            return datafusion_common::plan_err!(
+                "CoalesceBatchesExec: target_batch_size must be greater than 0"
+            );
+        }
+        let fetch = coalesce_batches
+            .fetch
+            .map(|fetch| from_wire(fetch, "fetch"))
+            .transpose()?;
         Ok(Arc::new(
-            CoalesceBatchesExec::new(input, coalesce_batches.target_batch_size as usize)
-                .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
+            CoalesceBatchesExec::new(input, target_batch_size).with_fetch(fetch),
         ))
     }
 }

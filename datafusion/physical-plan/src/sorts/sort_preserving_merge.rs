@@ -472,6 +472,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         let input = ctx.encode_child(self.input())?;
         let expr = self
@@ -496,7 +497,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
-                        fetch: self.fetch().map(|f| f as i64).unwrap_or(-1),
+                        fetch: match self.fetch() {
+                            Some(n) => {
+                                usize_to_wire(n, "SortPreservingMergeExec", "fetch")?
+                            }
+                            None => -1, // no limit
+                        },
                     }),
                 ),
             ),
@@ -511,6 +517,7 @@ impl SortPreservingMergeExec {
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use arrow::compute::SortOptions;
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
         use datafusion_proto_models::protobuf;
         let spm = crate::expect_plan_variant!(
@@ -554,7 +561,9 @@ impl SortPreservingMergeExec {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return internal_err!("SortPreservingMergeExec requires an ordering");
         };
-        let fetch = (spm.fetch >= 0).then_some(spm.fetch as usize);
+        let fetch = (spm.fetch >= 0)
+            .then(|| usize_from_wire(spm.fetch, "SortPreservingMergeExec", "fetch"))
+            .transpose()?;
         Ok(Arc::new(
             SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
         ))

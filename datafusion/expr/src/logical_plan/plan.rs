@@ -65,7 +65,7 @@ use datafusion_common::{
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_err, validate_range_split_points,
+    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
 use indexmap::IndexSet;
 use itertools::Itertools as _;
@@ -3704,7 +3704,12 @@ impl Limit {
                     // `skip = NULL` is equivalent to `skip = 0`
                     let s = s.unwrap_or(0);
                     if s >= 0 {
-                        Ok(SkipType::Literal(s as usize))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "OFFSET value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(SkipType::Literal(s))
                     } else {
                         plan_err!("OFFSET must be >=0, '{}' was provided", s)
                     }
@@ -3722,7 +3727,12 @@ impl Limit {
             Some(expr) => match *expr {
                 Expr::Literal(ScalarValue::Int64(Some(s)), _) => {
                     if s >= 0 {
-                        Ok(FetchType::Literal(Some(s as usize)))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "LIMIT value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(FetchType::Literal(Some(s)))
                     } else {
                         plan_err!("LIMIT must be >= 0, '{}' was provided", s)
                     }
@@ -4952,6 +4962,33 @@ mod tests {
             8,
             "CreateFunction should be Box'd inside DdlStatement"
         );
+    }
+
+    #[test]
+    fn limit_literals_use_checked_usize_conversion() -> Result<()> {
+        let value = i64::from(u32::MAX) + 1;
+        let input = Arc::new(LogicalPlanBuilder::empty(false).build()?);
+        let limit = Limit {
+            skip: Some(Box::new(lit(value))),
+            fetch: Some(Box::new(lit(value))),
+            input,
+        };
+
+        if usize::BITS < 64 {
+            assert!(limit.get_skip_type().is_err());
+            assert!(limit.get_fetch_type().is_err());
+        } else {
+            let expected = usize::try_from(value).unwrap();
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                panic!("expected literal skip")
+            };
+            let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
+                panic!("expected literal fetch")
+            };
+            assert_eq!(skip, expected);
+            assert_eq!(fetch, expected);
+        }
+        Ok(())
     }
 
     fn employee_schema() -> Schema {
