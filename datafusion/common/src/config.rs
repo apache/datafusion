@@ -1680,6 +1680,15 @@ config_namespace! {
         /// are left untouched.
         pub join_enumeration: bool, default = true
 
+        /// How much cheaper an enumerated join order must be, in percent, before
+        /// `join_enumeration` replaces the order the planner produced.
+        ///
+        /// Cardinality estimates are often unable to tell two orders apart, and
+        /// a plan swapped on an estimate that close is as likely to be slower as
+        /// faster. A margin keeps the planner's order unless the model is
+        /// confident, at the cost of missing genuinely small wins.
+        pub join_enumeration_min_improvement: u8, default = 10
+
         /// Maximum number of inputs in a join subtree for which
         /// `join_enumeration` runs its exhaustive dynamic programming search.
         /// Larger subtrees fall back to a greedy search. The exhaustive search

@@ -349,9 +349,15 @@ async fn reordered_join_returns_the_same_rows() -> Result<()> {
 fn late_semi_join_plan(anti: bool) -> Result<Arc<dyn ExecutionPlan>> {
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
-    // Ten rows covering ten of the fact table's thousand types, so the semi join
-    // keeps one percent of its input and the anti join the other ninety-nine.
-    let wanted = scan(10, &[("w_type", 10)]);
+    // Sized so that either way round the reducer keeps one percent of the fact
+    // table: ten of its thousand types match for the semi join, and all but ten
+    // match for the anti join. A reducer that kept most of its input would not be
+    // worth moving, and the enumerator would rightly leave it alone.
+    let wanted = if anti {
+        scan(990, &[("w_type", 990)])
+    } else {
+        scan(10, &[("w_type", 10)])
+    };
 
     let joined = join(fact, other, &[("f_id", "o_id")])?;
     let join_type = if anti {
@@ -388,12 +394,11 @@ async fn applies_a_selective_semi_join_first() -> Result<()> {
 #[tokio::test]
 async fn applies_an_anti_join_first() -> Result<()> {
     let optimized = optimize(late_semi_join_plan(true)?, &ConfigOptions::new())?;
-    // The anti join is pushed down the same way. It keeps 99% of the fact table
-    // rather than 1%, so the inner join above it stays partitioned.
+    // The anti join is pushed down the same way.
     assert_snapshot!(formatted(&optimized), @r"
-    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(f_id@0, o_id@0)]
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)]
       HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(w_type@0, f_type@1)]
-        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=1, row_count=Inexact(990)
         StatisticsExec: col_count=2, row_count=Inexact(1000000)
       StatisticsExec: col_count=1, row_count=Inexact(1000000)
     ");

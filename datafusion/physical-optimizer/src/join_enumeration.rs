@@ -1250,11 +1250,17 @@ fn reorder(
         return Ok(None);
     };
 
-    // Keep the planner's order unless the winner is strictly cheaper. The dynamic
-    // program considers the original shape as well, so this only rejects ties
-    // there -- but the greedy search can genuinely lose, and either way it keeps
-    // already-optimal plans byte identical.
-    if solution.cost >= model.tree_cost(&graph.original_nodes) {
+    // Keep the planner's order unless the winner is cheaper by a clear margin.
+    //
+    // The dynamic program considers the original shape too, so its winner is
+    // never *more* expensive under this model -- but "cheaper by a hair" is not
+    // a reason to churn a plan. Where estimates cannot tell orders apart, every
+    // candidate looks about the same and the winner is picked essentially
+    // arbitrarily, which is how TPC-DS q6 lost 37%: a subquery-filtered
+    // `date_dim` is estimated at 14,610 rows against 31 real ones, so no join in
+    // the query appears to reduce anything and all orders tie.
+    let margin = f64::from(config.optimizer.join_enumeration_min_improvement) / 100.0;
+    if solution.cost >= model.tree_cost(&graph.original_nodes) * (1.0 - margin) {
         return Ok(None);
     }
 
