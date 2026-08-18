@@ -1326,6 +1326,27 @@ fn new_empty_schema_batch(schema: &Schema, row_count: usize) -> Result<RecordBat
     )?)
 }
 
+/// If `indices` is a contiguous ascending run — `[k, k+1, ..., k+n-1]` — returns
+/// `k`.
+///
+/// A join where every probe row matches exactly once emits exactly that: the
+/// probe rows in order, none skipped. Taking a column by such indices copies it
+/// element by element to reproduce what it already is, so the caller can slice
+/// instead. The scan is one sequential pass over the indices and is amortised
+/// over every column of the output.
+fn contiguous_run_start(indices: &UInt32Array) -> Option<usize> {
+    if indices.null_count() > 0 {
+        return None;
+    }
+    let values = indices.values();
+    let first = *values.first()? as usize;
+    values
+        .iter()
+        .enumerate()
+        .all(|(offset, &value)| value as usize == first + offset)
+        .then_some(first)
+}
+
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 #[expect(clippy::too_many_arguments)]
@@ -1355,6 +1376,9 @@ pub(crate) fn build_batch_from_indices(
     // 2. based on the pick, `take` items from the different RecordBatches
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
 
+    // Computed once and reused for every probe-side column.
+    let probe_run_start = contiguous_run_start(probe_indices);
+
     for column_index in column_indices {
         let array = if column_index.side == JoinSide::None {
             // For mark joins, the mark column is a true if the indices is not null, otherwise it will be false
@@ -1375,6 +1399,9 @@ pub(crate) fn build_batch_from_indices(
             if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
                 assert_eq!(probe_indices.null_count(), probe_indices.len());
                 new_null_array(array.data_type(), probe_indices.len())
+            } else if let Some(start) = probe_run_start {
+                // The gather would reproduce this range verbatim.
+                array.slice(start, probe_indices.len())
             } else {
                 take(array.as_ref(), probe_indices, None)?
             }
@@ -4966,6 +4993,46 @@ mod tests {
                 }
             ),
             Inexact(10)
+        );
+    }
+
+    #[test]
+    fn contiguous_run_start_detects_runs() {
+        // A run starting at zero, and one starting mid-batch: both sliceable.
+        assert_eq!(
+            contiguous_run_start(&UInt32Array::from(vec![0, 1, 2, 3])),
+            Some(0)
+        );
+        assert_eq!(
+            contiguous_run_start(&UInt32Array::from(vec![5, 6, 7])),
+            Some(5)
+        );
+        assert_eq!(contiguous_run_start(&UInt32Array::from(vec![9])), Some(9));
+
+        // Gaps, repeats and descending order all need a real gather.
+        assert_eq!(
+            contiguous_run_start(&UInt32Array::from(vec![0, 2, 3])),
+            None
+        );
+        assert_eq!(
+            contiguous_run_start(&UInt32Array::from(vec![1, 1, 2])),
+            None
+        );
+        assert_eq!(
+            contiguous_run_start(&UInt32Array::from(vec![3, 2, 1])),
+            None
+        );
+
+        // Nulls mean unmatched probe rows, so the range is not reproducible.
+        assert_eq!(
+            contiguous_run_start(&UInt32Array::from(vec![Some(0), None, Some(2)])),
+            None
+        );
+
+        // Empty emits nothing; there is no offset to slice from.
+        assert_eq!(
+            contiguous_run_start(&UInt32Array::from(Vec::<u32>::new())),
+            None
         );
     }
 }
