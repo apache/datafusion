@@ -1053,7 +1053,9 @@ async fn test_pages_with_null_values() {
 
 fn cast_count_metric(metric: MetricValue) -> Option<usize> {
     match metric {
-        MetricValue::Count { count, .. } => Some(count.value()),
+        MetricValue::Count { count, .. } | MetricValue::BytesCount { count, .. } => {
+            Some(count.value())
+        }
         _ => None,
     }
 }

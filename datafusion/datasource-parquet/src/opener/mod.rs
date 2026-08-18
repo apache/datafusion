@@ -2393,7 +2393,8 @@ mod test {
             .clone_inner()
             .sum_by_name(name)
             .map(|metric| match metric {
-                MetricValue::Count { count, .. } => count.value(),
+                MetricValue::Count { count, .. }
+                | MetricValue::BytesCount { count, .. } => count.value(),
                 _ => 0,
             })
             .unwrap_or(0)
