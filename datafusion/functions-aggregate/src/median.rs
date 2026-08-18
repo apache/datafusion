@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::FieldRef;
 
 use crate::percentile_cont::PercentileCont;
-use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::types::logical_float64;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::function::StateFieldsArgs;
@@ -91,10 +91,9 @@ impl Median {
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Float,
                     )]),
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_float64()),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit_native(
+                        logical_float64(),
                         vec![TypeSignatureClass::Integer],
-                        NativeType::Float64,
                     )]),
                 ],
                 Volatility::Immutable,

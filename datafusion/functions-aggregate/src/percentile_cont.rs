@@ -141,10 +141,9 @@ impl PercentileCont {
                         // value
                         Coercion::new_exact(TypeSignatureClass::Decimal),
                         // percentile
-                        Coercion::new_implicit(
-                            TypeSignatureClass::Native(logical_float64()),
+                        Coercion::new_implicit_native(
+                            logical_float64(),
                             vec![TypeSignatureClass::Numeric],
-                            NativeType::Float64,
                         ),
                     ]),
                     // Float signature: float, percentile
@@ -154,10 +153,9 @@ impl PercentileCont {
                             vec![TypeSignatureClass::Numeric],
                             NativeType::Float64,
                         ),
-                        Coercion::new_implicit(
-                            TypeSignatureClass::Native(logical_float64()),
+                        Coercion::new_implicit_native(
+                            logical_float64(),
                             vec![TypeSignatureClass::Numeric],
-                            NativeType::Float64,
                         ),
                     ]),
                 ],
