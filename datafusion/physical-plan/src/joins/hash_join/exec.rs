@@ -6179,6 +6179,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The braces are part of the expected struct output, not format args"
+    )]
     async fn join_on_struct() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let left =

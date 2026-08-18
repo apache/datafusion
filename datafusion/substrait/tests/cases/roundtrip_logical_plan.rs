@@ -1678,6 +1678,10 @@ async fn roundtrip_literal_named_struct() -> Result<()> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The braces are part of the expected struct output, not format args"
+)]
 async fn roundtrip_literal_renamed_struct() -> Result<()> {
     // This test aims to hit a case where the struct column itself has the expected name, but its
     // inner field needs to be renamed.
@@ -1880,7 +1884,7 @@ async fn new_test_grammar() -> Result<()> {
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
     let ctx = create_context().await?;
-    let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
+    let validation_bytes = b"MockUserDefinedLogicalPlan".to_vec();
     let ext_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(MockUserDefinedLogicalPlan {
             validation_bytes,
