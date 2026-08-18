@@ -216,6 +216,9 @@ impl AggregateUDFImpl for PercentileCont {
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        // Always verify percentiles
+        let percentile = get_percentile(&args)?;
+
         let input_dt = args.expr_fields[0].data_type();
         // Null input evaluates to null
         if input_dt.is_null() {
@@ -226,12 +229,12 @@ impl AggregateUDFImpl for PercentileCont {
             ($t:ty, $i:ty, $dt:expr) => {
                 if args.is_distinct {
                     Ok(Box::new(DistinctPercentileContAccumulator::<$t, $i>::new(
-                        get_percentile(&args)?,
+                        percentile,
                         $dt.clone(),
                     )))
                 } else {
                     Ok(Box::new(PercentileContAccumulator::<$t, $i>::new(
-                        get_percentile(&args)?,
+                        percentile,
                         $dt.clone(),
                     )))
                 }
@@ -264,12 +267,15 @@ impl AggregateUDFImpl for PercentileCont {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        // Always verify percentiles
+        let percentile = get_percentile(&args)?;
+
         let input_dt = args.expr_fields[0].data_type();
 
         macro_rules! helper {
             ($t:ty, $i:ty, $dt:expr) => {
                 Ok(Box::new(PercentileContGroupsAccumulator::<$t, $i>::new(
-                    get_percentile(&args)?,
+                    percentile,
                     $dt.clone(),
                 )))
             };
