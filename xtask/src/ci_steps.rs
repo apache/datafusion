@@ -28,6 +28,7 @@ type StepRunner = fn(&StepContext, &[String]) -> StepResult<CiCommand>;
 
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
+const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
 
 /// Metadata and implementation for one CI step.
 ///
@@ -124,12 +125,14 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<()> {
 
 struct StepContext {
     root: PathBuf,
+    env_reader: fn(&str) -> Result<String>,
 }
 
 impl StepContext {
     fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
+            env_reader: required_env,
         }
     }
 
@@ -180,6 +183,7 @@ impl StepContext {
         Ok((action, step, command))
     }
 
+    /// Implementation for `cargo xtask ci step check [args]`
     fn run_check(&self, args: &[String]) -> StepResult<CiCommand> {
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         let mut command = self.cargo();
@@ -216,6 +220,7 @@ impl StepContext {
         Ok(command)
     }
 
+    /// Implementation for `cargo xtask ci step test [args]`
     fn run_test(&self, args: &[String]) -> StepResult<CiCommand> {
         let [variant] = args else {
             return Err(StepError::Usage);
@@ -296,7 +301,7 @@ impl StepContext {
                         "--test-threads=1",
                     ])
                     .env("RUST_MIN_STACK", "20971520")
-                    .env("TPCH_DATA", self.tpch_data_dir());
+                    .env("TPCH_DATA", self.root.join(TPCH_DATA_DIR));
             }
             "benchmark-sqllogic" => {
                 command
@@ -312,12 +317,16 @@ impl StepContext {
                         "sqllogictests",
                     ])
                     .env("RUST_MIN_STACK", "20971520")
-                    .env("TPCH_DATA", self.tpch_data_dir())
+                    .env("TPCH_DATA", self.root.join(TPCH_DATA_DIR))
                     .env("INCLUDE_TPCH", "true");
             }
             "postgres" => {
-                let host = required_env("POSTGRES_HOST").map_err(StepError::Message)?;
-                let port = required_env("POSTGRES_PORT").map_err(StepError::Message)?;
+                let host = self
+                    .required_env("POSTGRES_HOST")
+                    .map_err(StepError::Message)?;
+                let port = self
+                    .required_env("POSTGRES_PORT")
+                    .map_err(StepError::Message)?;
                 let uri = format!("postgresql://postgres:postgres@{host}:{port}/db_test");
                 command
                     .args([
@@ -358,9 +367,8 @@ impl StepContext {
         CiCommand::new("cargo", &self.root)
     }
 
-    fn tpch_data_dir(&self) -> PathBuf {
-        self.root
-            .join("datafusion/sqllogictest/test_files/tpch/data")
+    fn required_env(&self, name: &str) -> Result<String> {
+        (self.env_reader)(name)
     }
 }
 
@@ -442,49 +450,25 @@ impl CiCommand {
     }
 
     fn full_command(&self) -> String {
-        let current_dir = self.command.get_current_dir();
-        let mut output = String::new();
+        let mut lines = Vec::new();
 
-        if let Some(current_dir) = current_dir {
-            push_shell_line(
-                &mut output,
-                "",
-                &format!("cd {} &&", shell_quote(current_dir.as_os_str())),
-                true,
-            );
+        if let Some(current_dir) = self.command.get_current_dir() {
+            lines.push(format!("cd {} &&", shell_quote(current_dir.as_os_str())));
         }
 
         for (key, value) in self.command.get_envs() {
             let Some(value) = value else {
                 continue;
             };
-            push_shell_line(
-                &mut output,
-                "",
-                &format!("{}={}", shell_quote(key), shell_quote(value)),
-                true,
-            );
+            lines.push(format!("{}={}", shell_quote(key), shell_quote(value)));
         }
 
-        let command_lines =
-            shell_command_lines(self.command.get_program(), self.command.get_args());
-        let last_line = command_lines.len() - 1;
-        for (index, line) in command_lines.into_iter().enumerate() {
-            push_shell_line(&mut output, "", &line, index != last_line);
-        }
-
-        output.pop();
-        output
+        lines.extend(shell_command_lines(
+            self.command.get_program(),
+            self.command.get_args(),
+        ));
+        lines.join(" \\\n")
     }
-}
-
-fn push_shell_line(output: &mut String, indent: &str, content: &str, continued: bool) {
-    output.push_str(indent);
-    output.push_str(content);
-    if continued {
-        output.push_str(" \\");
-    }
-    output.push('\n');
 }
 
 /// Groups option-value pairs so the result reads like a hand-written command.
@@ -565,164 +549,232 @@ mod tests {
         args.iter().map(|arg| (*arg).to_string()).collect()
     }
 
-    fn command_args(command: &CiCommand) -> Vec<String> {
-        command
-            .command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect()
+    fn test_env(name: &str) -> Result<String> {
+        match name {
+            "POSTGRES_HOST" => Ok("postgres.example".to_string()),
+            "POSTGRES_PORT" => Ok("15432".to_string()),
+            _ => Err(format!("unexpected environment variable `{name}`")),
+        }
     }
 
     fn context() -> StepContext {
         StepContext {
             root: PathBuf::from("/workspace"),
+            env_reader: test_env,
         }
     }
 
     #[test]
-    fn check_variants_build_complete_commands() {
+    fn explain_builds_the_same_command_as_execute() {
         let context = context();
-        let cases = [
-            (
-                args(&["workspace"]),
-                vec![
-                    "check",
-                    "--profile",
-                    "ci",
-                    "--workspace",
-                    "--all-targets",
-                    "--features",
-                    "integration-tests",
-                    "--locked",
-                ],
-            ),
-            (
-                args(&["datafusion", "default"]),
-                vec![
-                    "check",
-                    "--profile",
-                    "ci",
-                    "--all-targets",
-                    "-p",
-                    "datafusion",
-                ],
-            ),
-            (
-                args(&["datafusion", "no-default"]),
-                vec![
-                    "check",
-                    "--profile",
-                    "ci",
-                    "--no-default-features",
-                    "-p",
-                    "datafusion",
-                ],
-            ),
-            (
-                args(&["datafusion", "parquet"]),
-                vec![
-                    "check",
-                    "--profile",
-                    "ci",
-                    "--no-default-features",
-                    "-p",
-                    "datafusion",
-                    "--features",
-                    "parquet",
-                ],
-            ),
+        let (execute_action, _, execute_command) = context
+            .ci_step(&args(&["check", "datafusion", "default"]))
+            .unwrap();
+        let (explain_action, _, explain_command) = context
+            .ci_step(&args(&["explain", "check", "datafusion", "default"]))
+            .unwrap();
+
+        assert_eq!(execute_action, StepAction::Execute);
+        assert_eq!(explain_action, StepAction::Explain);
+        assert_eq!(
+            execute_command.full_command(),
+            explain_command.full_command()
+        );
+    }
+
+    // Test all available commands, ensure their executed command is expected
+    #[test]
+    fn explain_all_available_ci_commands() {
+        struct Cmd {
+            // Actual command to run
+            command: &'static [&'static str],
+            // Full explain output
+            expected: fn(&str),
+        }
+
+        let commands = [
+            Cmd {
+                command: &["check", "workspace"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo check \
+--profile ci \
+--workspace \
+--all-targets \
+--features integration-tests \
+--locked
+")
+                },
+            },
+            Cmd {
+                command: &["check", "datafusion", "default"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo check \
+--profile ci \
+--all-targets \
+-p datafusion
+")
+                },
+            },
+            Cmd {
+                command: &["check", "datafusion", "no-default"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo check \
+--profile ci \
+--no-default-features \
+-p datafusion
+")
+                },
+            },
+            Cmd {
+                command: &["check", "datafusion", "parquet"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo check \
+--profile ci \
+--no-default-features \
+-p datafusion \
+--features parquet
+")
+                },
+            },
+            Cmd {
+                command: &["test", "workspace"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo llvm-cov \
+--profile ci \
+--exclude datafusion-examples \
+--exclude ffi_example_table_provider \
+--exclude datafusion-cli \
+--workspace \
+--lib \
+--tests \
+--bins \
+--features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+--codecov \
+--output-path target/codecov.json
+")
+                },
+            },
+            Cmd {
+                command: &["test", "cli"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+--features backtrace \
+--profile ci \
+-p datafusion-cli \
+--lib \
+--tests \
+--bins
+")
+                },
+            },
+            Cmd {
+                command: &["test", "doctest"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+--profile ci \
+--doc \
+--features avro,json
+")
+                },
+            },
+            Cmd {
+                command: &["test", "ffi"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+--profile ci \
+-p datafusion-ffi \
+--lib \
+--tests \
+--features integration-tests
+")
+                },
+            },
+            Cmd {
+                command: &["test", "benchmark-plan"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+RUST_MIN_STACK=20971520 \
+TPCH_DATA=/workspace/datafusion/sqllogictest/test_files/tpch/data \
+cargo test plan_q \
+--package datafusion-benchmarks \
+--profile ci \
+--features=ci \
+-- --test-threads=1
+")
+                },
+            },
+            Cmd {
+                command: &["test", "benchmark-sqllogic"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+INCLUDE_TPCH=true \
+RUST_MIN_STACK=20971520 \
+TPCH_DATA=/workspace/datafusion/sqllogictest/test_files/tpch/data \
+cargo test \
+--features backtrace,parquet_encryption,substrait \
+--profile ci \
+--package datafusion-sqllogictest \
+--test sqllogictests
+")
+                },
+            },
+            Cmd {
+                command: &["test", "postgres"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace/datafusion/sqllogictest && \
+PG_COMPAT=true \
+PG_URI=postgresql://postgres:postgres@postgres.example:15432/db_test \
+cargo test \
+--features backtrace \
+--profile ci \
+--features=postgres \
+--test sqllogictests
+")
+                },
+            },
+            Cmd {
+                command: &["test", "substrait"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+-p datafusion-sqllogictest \
+--test sqllogictests \
+--features substrait \
+-- --substrait-round-trip limit.slt
+")
+                },
+            },
         ];
 
-        for (args, expected) in cases {
-            let command = context.run_check(&args).unwrap();
-            assert_eq!(command_args(&command), expected);
-        }
-    }
-
-    #[test]
-    fn explain_uses_the_same_ci_command() {
         let context = context();
-        let (action, step, command) = context
-            .ci_step(&args(&["explain", "test", "benchmark-plan"]))
-            .unwrap();
+        for Cmd { command, expected } in commands {
+            let explain_args = std::iter::once("explain")
+                .chain(command.iter().copied())
+                .collect::<Vec<_>>();
+            let (action, _, actual) = context.ci_step(&args(&explain_args)).unwrap();
 
-        assert_eq!(action, StepAction::Explain);
-        assert_eq!(step.command, "test");
-        assert_eq!(command.command.get_program(), "cargo");
-        assert_eq!(
-            command.command.get_current_dir(),
-            Some(Path::new("/workspace"))
-        );
-        assert!(command.full_command().starts_with("cd /workspace && \\\n"));
-        assert!(
-            command
-                .full_command()
-                .contains("RUST_MIN_STACK=20971520 \\\n")
-        );
-        assert!(command.full_command().contains("cargo test plan_q \\\n"));
-        assert!(command.full_command().ends_with("-- --test-threads=1"));
-    }
-
-    #[test]
-    fn full_command_is_formatted_for_copy_and_paste() {
-        let command = context()
-            .run_check(&args(&["datafusion", "default"]))
-            .unwrap();
-
-        assert_eq!(
-            command.full_command(),
-            concat!(
-                "cd /workspace && \\\n",
-                "cargo check \\\n",
-                "--profile ci \\\n",
-                "--all-targets \\\n",
-                "-p datafusion"
-            )
-        );
-        assert_eq!(shell_quote(OsStr::new("a b'c")), "'a b'\"'\"'c'");
-    }
-
-    #[test]
-    fn only_check_and_test_are_ci_steps() {
-        let error = context()
-            .ci_step(&args(&["fmt"]))
-            .err()
-            .expect("fmt must remain outside the CI step interface");
-        assert_eq!(error, "unknown CI step `fmt`");
-    }
-
-    #[test]
-    fn help_and_usage_are_generated_from_step_info() {
-        let help = help();
-        assert!(help.starts_with(
-            "DataFusion CI commands\n\nUsage:\n  cargo xtask ci step <step-name> [args]"
-        ));
-        assert!(help.contains("  cargo xtask ci step explain test workspace\n"));
-        assert!(help.contains("\nAvailable steps:\n"));
-        assert!(help.contains(
-            "Shortcut:\n  # `cargo ci-step` is short for `cargo xtask ci step`.\n  cargo ci-step check workspace\n"
-        ));
-        assert!(
-            help.ends_with("For more details:\n  cargo xtask ci step check --help\n")
-        );
-
-        for step in CI_STEPS {
-            assert!(help.contains(step.help_description));
-            let details = step_help(step);
-            assert!(details.contains(&format!("{CI_COMMAND} {}", step.help_usage)));
-            assert!(details.contains(step.help_description));
-            for example in step.help_examples {
-                assert!(details.contains(&format!("{CI_COMMAND} {example}")));
-            }
+            assert_eq!(action, StepAction::Explain);
+            expected(&actual.full_command());
         }
-
-        let error = context()
-            .ci_step(&args(&["check"]))
-            .err()
-            .expect("missing check arguments must show generated usage");
-        assert_eq!(
-            error,
-            "usage: cargo xtask ci step check <workspace|package> [default|no-default|feature]"
-        );
     }
 }

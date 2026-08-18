@@ -2736,6 +2736,9 @@ dependencies = [
 [[package]]
 name = "datafusion-xtask"
 version = "0.1.0"
+dependencies = [
+ "insta",
+]
 
 [[package]]
 name = "deranged"

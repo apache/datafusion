@@ -22,5 +22,8 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[dev-dependencies]
+insta = { workspace = true }
+
 [lints]
 workspace = true
