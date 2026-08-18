@@ -883,8 +883,7 @@ async fn test_metadata_based_window_fn() -> Result<()> {
 
     let no_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(HashMap::new()));
     let with_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect(),
     ));
 

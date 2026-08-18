@@ -1034,8 +1034,7 @@ async fn test_metadata_based_aggregate() -> Result<()> {
     let no_output_meta_udf =
         AggregateUDF::from(MetadataBasedAggregateUdf::new(HashMap::new()));
     let with_output_meta_udf = AggregateUDF::from(MetadataBasedAggregateUdf::new(
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect(),
     ));
 
@@ -1108,8 +1107,7 @@ async fn test_metadata_based_aggregate_as_window() -> Result<()> {
     ));
     let with_output_meta_udf =
         Arc::new(AggregateUDF::from(MetadataBasedAggregateUdf::new(
-            [("output_metatype".to_string(), "custom_value".to_string())]
-                .into_iter()
+            std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
                 .collect(),
         )));
 

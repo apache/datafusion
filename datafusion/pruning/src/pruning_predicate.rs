@@ -755,7 +755,7 @@ impl BoolVecBuilder {
             // `false` for this conjunct means we know for sure no rows could
             // pass the predicate and thus we set the corresponding container
             // location to false.
-            if let Some(false) = new {
+            if new == Some(false) {
                 *cur = false;
             }
         }
@@ -795,14 +795,12 @@ impl BoolVecBuilder {
 
 fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.downcast_ref::<phys_expr::Literal>()
-        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(true))))
-        .unwrap_or_default()
+        .is_some_and(|l| *l.value() == ScalarValue::Boolean(Some(true)))
 }
 
 fn is_always_false(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.downcast_ref::<phys_expr::Literal>()
-        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(false))))
-        .unwrap_or_default()
+        .is_some_and(|l| *l.value() == ScalarValue::Boolean(Some(false)))
 }
 
 /// Describes which columns statistics are necessary to evaluate a
@@ -2304,10 +2302,10 @@ mod tests {
                 .map(|(_values, contained)| Arc::new(contained.clone()) as ArrayRef);
 
             [
-                self.min.as_ref().cloned(),
-                self.max.as_ref().cloned(),
-                self.null_counts.as_ref().cloned(),
-                self.row_counts.as_ref().cloned(),
+                self.min.clone(),
+                self.max.clone(),
+                self.null_counts.clone(),
+                self.row_counts.clone(),
             ]
             .into_iter()
             .flatten()
@@ -2603,11 +2601,10 @@ mod tests {
         let mut fields = HashSet::new();
         for (_col, _ty, field) in p.required_columns().iter() {
             let was_new = fields.insert(field);
-            if !was_new {
-                panic!(
-                    "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
-                );
-            }
+            assert!(
+                was_new,
+                "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
+            )
         }
     }
 

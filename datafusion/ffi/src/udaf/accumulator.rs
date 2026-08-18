@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::ffi::c_void;
-use std::ops::Deref;
 use std::ptr::null_mut;
 
 use arrow::array::ArrayRef;
@@ -96,7 +95,7 @@ impl FFI_Accumulator {
     unsafe fn inner(&self) -> &dyn Accumulator {
         unsafe {
             let private_data = self.private_data as *const AccumulatorPrivateData;
-            (*private_data).accumulator.deref()
+            &*(*private_data).accumulator
         }
     }
 }
@@ -417,8 +416,9 @@ mod tests {
         // Verify local libraries can be downcast to their original
         let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
-                as *const AvgAccumulator);
+            let concrete =
+                &*(std::ptr::from_ref::<dyn Accumulator>(foreign_accum.as_ref())
+                    as *const AvgAccumulator);
             assert_eq!(original_size, concrete.size());
         }
 
@@ -429,8 +429,9 @@ mod tests {
         ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
-                as *const ForeignAccumulator);
+            let concrete =
+                &*(std::ptr::from_ref::<dyn Accumulator>(foreign_accum.as_ref())
+                    as *const ForeignAccumulator);
             assert_eq!(original_size, concrete.size());
         }
 

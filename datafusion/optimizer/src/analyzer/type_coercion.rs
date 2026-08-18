@@ -2660,6 +2660,10 @@ mod test {
         )
     }
 
+    #[expect(
+        clippy::unnecessary_box_returns,
+        reason = "`Case` stores boxed expressions, so returning the box reuses the allocation"
+    )]
     fn cast_if_not_same_type(
         expr: Box<Expr>,
         data_type: &DataType,

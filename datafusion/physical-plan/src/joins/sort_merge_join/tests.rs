@@ -2537,7 +2537,7 @@ async fn spill_join_arrays_memory_accounting() -> Result<()> {
 
     // Memory limit: too small for a full batch, large enough for join_arrays.
     // Every batch hits the Err arm → spills → grow(join_arrays_mem).
-    let memory_limit = (size_estimation + join_arrays_mem) / 2;
+    let memory_limit = usize::midpoint(size_estimation, join_arrays_mem);
     assert!(
         memory_limit < size_estimation && memory_limit > join_arrays_mem,
         "limit {memory_limit} must be between join_arrays_mem {join_arrays_mem} \

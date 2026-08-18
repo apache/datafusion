@@ -129,7 +129,7 @@ logical_plan
 09)----------TableScan: join_t2 projection=[t2_id, t2_int]
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----PiecewiseMergeJoin: operator=GtEq, join_type=Inner, on=(t1_id >= t2_id)
 04)------SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
 05)--------FilterExec: t1_id@0 >= 22
@@ -146,12 +146,12 @@ JOIN join_t2 t2
 WHERE t2.t2_int >= 3
 ORDER BY 1,2;
 ----
-11 55
 11 44
-22 55
+11 55
 22 44
-33 55
+22 55
 33 44
+33 55
 44 55
 
 query TT
@@ -174,7 +174,7 @@ logical_plan
 08)----------TableScan: join_t2 projection=[t2_id, t2_int]
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(t1_id < t2_id)
 04)------SortExec: expr=[t1_id@0 DESC], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -238,11 +238,11 @@ WHERE t1.t1_id IN (11, 44)
   AND t2.t2_name <> 'y'
 ORDER BY 1,2;
 ----
-11 55
-11 44
 11 11
-44 55
+11 44
+11 55
 44 44
+44 55
 
 query TT
 EXPLAIN
@@ -266,7 +266,7 @@ logical_plan
 09)----------TableScan: join_t2 projection=[t2_id, t2_name]
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST, t2_id@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----PiecewiseMergeJoin: operator=LtEq, join_type=Inner, on=(t1_id <= t2_id)
 04)------SortExec: expr=[t1_id@0 DESC], preserve_partitioning=[false]
 05)--------FilterExec: t1_id@0 = 11 OR t1_id@0 = 44
@@ -386,6 +386,34 @@ ORDER BY 1,2;
 10 100
 20 100
 NULL NULL
+
+# Regression test: a range predicate is NOT an equi-key, so an INNER
+# PiecewiseMergeJoin must not report `l.v == r.v` as an output equivalence.
+# Doing so let the optimizer treat a sort on `l.v` as also sorting `r.v` and
+# drop the `ORDER BY r.v` sort, returning wrongly ordered rows.
+statement ok
+CREATE TABLE eq_t1 (v INT);
+
+statement ok
+CREATE TABLE eq_t2 (v INT);
+
+statement ok
+INSERT INTO eq_t1 VALUES (1), (2), (3), (5), (8);
+
+statement ok
+INSERT INTO eq_t2 VALUES (4), (6), (9), (2);
+
+query II
+SELECT t1.v AS lv, t2.v AS rv
+FROM eq_t1 t1
+JOIN eq_t2 t2
+  ON t1.v < t2.v
+WHERE t1.v = 2
+ORDER BY t2.v;
+----
+2 4
+2 6
+2 9
 
 # ------------------------------------------------------------------
 # Existence joins (LeftSemi / LeftAnti) via PiecewiseMergeJoin

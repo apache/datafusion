@@ -320,7 +320,7 @@ impl FileSource for ArrowSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+        Arc::new(self.clone())
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
@@ -408,10 +408,8 @@ impl FileSource for ArrowSource {
         datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
-    /// Emit an `ArrowScan` node wrapping the shared base config.
-    ///
-    /// Decoding defaults to the IPC file format because protobuf does not
-    /// distinguish it from the IPC stream format.
+    /// Emit an `ArrowScan` node wrapping the shared base config and recording
+    /// which Arrow IPC format (file or stream) this source reads.
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -421,10 +419,16 @@ impl FileSource for ArrowSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        let format = match self.format {
+            ArrowFormat::File => protobuf::ArrowIpcFormat::File,
+            ArrowFormat::Stream => protobuf::ArrowIpcFormat::Stream,
+        };
+
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::ArrowScan(
                 protobuf::ArrowScanExecNode {
                     base_conf: Some(base.try_to_proto(ctx)?),
+                    format: format as i32,
                 },
             )),
         }))
@@ -435,8 +439,8 @@ impl FileSource for ArrowSource {
 impl ArrowSource {
     /// Reconstructs a `DataSourceExec` from a protobuf `ArrowScan`.
     ///
-    /// Defaults to the IPC file format because protobuf does not distinguish it
-    /// from the IPC stream format.
+    /// Payloads encoded before the `format` field existed leave it unset;
+    /// those decode as the IPC file format, matching the historical behavior.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -460,9 +464,21 @@ impl ArrowSource {
             )
         })?;
 
+        let format = protobuf::ArrowIpcFormat::try_from(scan.format).map_err(|_| {
+            datafusion_common::internal_datafusion_err!(
+                "Unknown ArrowIpcFormat: {}",
+                scan.format
+            )
+        })?;
+
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
-        let source = Arc::new(ArrowSource::new_file_source(table_schema));
-        let scan_conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
+        let source = match format {
+            protobuf::ArrowIpcFormat::Stream => {
+                ArrowSource::new_stream_file_source(table_schema)
+            }
+            protobuf::ArrowIpcFormat::File => ArrowSource::new_file_source(table_schema),
+        };
+        let scan_conf = FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
 }

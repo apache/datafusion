@@ -1253,57 +1253,52 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        let nullable_then = self
-            .body
-            .when_then_expr
-            .iter()
-            .filter_map(|(w, t)| {
-                let is_nullable = match t.nullable(input_schema) {
-                    // Pass on error determining nullability verbatim
-                    Err(e) => return Some(Err(e)),
-                    Ok(n) => n,
-                };
+        let nullable_then = self.body.when_then_expr.iter().find_map(|(w, t)| {
+            let is_nullable = match t.nullable(input_schema) {
+                // Pass on error determining nullability verbatim
+                Err(e) => return Some(Err(e)),
+                Ok(n) => n,
+            };
 
-                // Branches with a then expression that is not nullable do not impact the
-                // nullability of the case expression.
-                if !is_nullable {
-                    return None;
-                }
+            // Branches with a then expression that is not nullable do not impact the
+            // nullability of the case expression.
+            if !is_nullable {
+                return None;
+            }
 
-                // For case-with-expression assume all 'then' expressions are reachable
-                if self.body.expr.is_some() {
-                    return Some(Ok(()));
-                }
+            // For case-with-expression assume all 'then' expressions are reachable
+            if self.body.expr.is_some() {
+                return Some(Ok(()));
+            }
 
-                // For branches with a nullable 'then' expression, try to determine
-                // if the 'then' expression is ever reachable in the situation where
-                // it would evaluate to null.
+            // For branches with a nullable 'then' expression, try to determine
+            // if the 'then' expression is ever reachable in the situation where
+            // it would evaluate to null.
 
-                // Replace the `then` expression with `NULL` in the `when` expression
-                let with_null = match replace_with_null(
-                    w,
-                    unwrap_certainly_null_expr(t.as_ref()),
-                    input_schema,
-                ) {
-                    Err(e) => return Some(Err(e)),
-                    Ok(e) => e,
-                };
+            // Replace the `then` expression with `NULL` in the `when` expression
+            let with_null = match replace_with_null(
+                w,
+                unwrap_certainly_null_expr(t.as_ref()),
+                input_schema,
+            ) {
+                Err(e) => return Some(Err(e)),
+                Ok(e) => e,
+            };
 
-                // Try to const evaluate the modified `when` expression.
-                let predicate_result = match evaluate_predicate(&with_null) {
-                    Err(e) => return Some(Err(e)),
-                    Ok(b) => b,
-                };
+            // Try to const evaluate the modified `when` expression.
+            let predicate_result = match evaluate_predicate(&with_null) {
+                Err(e) => return Some(Err(e)),
+                Ok(b) => b,
+            };
 
-                match predicate_result {
-                    // Evaluation was inconclusive or true, so the 'then' expression is reachable
-                    None | Some(true) => Some(Ok(())),
-                    // Evaluation proves the branch will never be taken.
-                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                    Some(false) => None,
-                }
-            })
-            .next();
+            match predicate_result {
+                // Evaluation was inconclusive or true, so the 'then' expression is reachable
+                None | Some(true) => Some(Ok(())),
+                // Evaluation proves the branch will never be taken.
+                // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                Some(false) => None,
+            }
+        });
 
         if let Some(nullable_then) = nullable_then {
             // There is at least one reachable nullable 'then' expression, so the case

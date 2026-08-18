@@ -1243,9 +1243,7 @@ impl DefaultPhysicalPlanner {
                     physical_partitioning,
                 )?)
             }
-            LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
-            }) => {
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let sort_exprs = create_physical_sort_exprs(
@@ -3538,7 +3536,7 @@ mod tests {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _projection: Option<&Vec<usize>>,
+            _projection: Option<&[usize]>,
             _filters: &[Expr],
             _limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -5526,7 +5524,7 @@ digraph {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _projection: Option<&Vec<usize>>,
+            _projection: Option<&[usize]>,
             _filters: &[Expr],
             _limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
