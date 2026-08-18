@@ -38,6 +38,13 @@ select range(5),
 query error DataFusion error: Execution error: step can't be 0 for function range\(start \[, stop, step\]\)
 select range(1, 1, 0);
 
+# Range too large to materialize should error instead of panicking
+query error DataFusion error: Execution error: Range too large to materialize
+select range(0, 9223372036854775807);
+
+query error DataFusion error: Execution error: Range too large to materialize
+select range(9223372036854775807);
+
 # Test range with big steps
 query ????
 select
@@ -47,6 +54,16 @@ select
   range(0, 9223372036854775807, 9223372036854775807) as c4;
 ----
 [] [] [0] [0]
+
+# Test range with full-span bounds and large steps
+query ????
+select
+  range(-9223372036854775808, 9223372036854775807, 9223372036854775807) as c1,
+  range(9223372036854775807, -9223372036854775808, -9223372036854775807) as c2,
+  generate_series(-9223372036854775808, 9223372036854775807, 9223372036854775807) as c3,
+  generate_series(9223372036854775807, -9223372036854775808, -9223372036854775807) as c4;
+----
+[-9223372036854775808, -1, 9223372036854775806] [9223372036854775807, 0, -9223372036854775807] [-9223372036854775808, -1, 9223372036854775806] [9223372036854775807, 0, -9223372036854775807]
 
 # Test range for other edge cases
 query ????????
@@ -341,6 +358,13 @@ select generate_series(1, 1, 0);
 # Test generate_series with zero step
 query error DataFusion error: Execution error: Interval argument to generate_series must not be 0
 select generate_series(TIMESTAMP '2000-01-02', TIMESTAMP '2000-01-01', INTERVAL '0' MINUTE);
+
+# Range too large to materialize should error instead of panicking
+query error DataFusion error: Execution error: Range too large to materialize
+select generate_series(0, 9223372036854775807);
+
+query error DataFusion error: Execution error: Range too large to materialize
+select generate_series(-9223372036854775808, 9223372036854775807);
 
 # Test generate_series with big steps
 query ????

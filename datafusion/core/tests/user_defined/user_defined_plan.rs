@@ -67,13 +67,14 @@ use arrow::{
     array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
+use datafusion::catalog::Session;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::as_int64_array,
     common::{DFSchemaRef, arrow_datafusion_err},
     error::{DataFusionError, Result},
     execution::{
-        context::{QueryPlanner, SessionState, TaskContext},
+        context::{QueryPlanner, TaskContext},
         runtime_env::RuntimeEnv,
     },
     logical_expr::{
@@ -98,9 +99,11 @@ use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::AnalyzerRule;
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 
 use async_trait::async_trait;
 use datafusion_common::cast::as_string_view_array;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -468,7 +471,7 @@ impl QueryPlanner for TopKQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Teach the default physical planner how to plan TopK nodes.
         let physical_planner =
@@ -520,7 +523,7 @@ impl OptimizerRule for TopKOptimizerRule {
         if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref()
             && expr.len() == 1
         {
-            // we found a sort with a single sort expr, replace with a a TopK
+            // we found a sort with a single sort expr, replace with a TopK
             return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(TopKPlanNode {
                     k: fetch,
@@ -631,7 +634,8 @@ impl ExtensionPlanner for TopKPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session_state: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
             if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
@@ -710,19 +714,34 @@ impl ExecutionPlan for TopKExec {
         &self.cache
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+    fn input_distribution_requirements(
+        &self,
+    ) -> datafusion_physical_plan::InputDistributionRequirements {
+        datafusion_physical_plan::InputDistributionRequirements::new(vec![
+            Distribution::SinglePartition,
+        ])
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(TopKExec::new(children[0].clone(), self.k)))
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(TopKExec::new(children[0].clone(), self.k)))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     /// Execute one partition and return an iterator over RecordBatch
@@ -747,18 +766,11 @@ impl ExecutionPlan for TopKExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

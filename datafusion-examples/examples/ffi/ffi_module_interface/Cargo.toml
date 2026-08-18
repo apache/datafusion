@@ -25,5 +25,4 @@ publish = false
 workspace = true
 
 [dependencies]
-abi_stable = "0.11.3"
 datafusion-ffi = { workspace = true }

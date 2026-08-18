@@ -67,7 +67,7 @@ name = "datafusion_functions"
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.8", optional = true }
 chrono = { workspace = true }
@@ -78,10 +78,11 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-macros = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
-md-5 = { version = "^0.10.0", optional = true }
+md-5 = { version = "^0.11.0", optional = true }
 memchr = { workspace = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
@@ -96,6 +97,16 @@ ctor = { workspace = true }
 env_logger = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+[[bench]]
+harness = false
+name = "replace_scalar"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "round_dense"
+required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
@@ -154,6 +165,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "regexp_match"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
 name = "regx"
 required-features = ["regex_expressions"]
 
@@ -179,6 +195,11 @@ required-features = ["datetime_expressions"]
 [[bench]]
 harness = false
 name = "date_trunc"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "date_part"
 required-features = ["datetime_expressions"]
 
 [[bench]]
@@ -213,6 +234,11 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "power"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "substr_index"
 required-features = ["unicode_expressions"]
 
@@ -229,6 +255,10 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "upper"
+
+[[bench]]
+harness = false
+name = "upper_unicode"
 required-features = ["string_expressions"]
 
 [[bench]]
@@ -245,6 +275,10 @@ required-features = ["string_expressions"]
 harness = false
 name = "replace"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "overlay"
 
 [[bench]]
 harness = false
@@ -283,12 +317,22 @@ required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
+name = "trunc_precision"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "initcap"
 required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
 name = "find_in_set"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "find_in_set_literal"
 required-features = ["unicode_expressions"]
 
 [[bench]]
@@ -310,6 +354,15 @@ required-features = ["string_expressions"]
 harness = false
 name = "regexp_count"
 required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
+name = "regexp_instr"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
+name = "get_field"
 
 [[bench]]
 harness = false
@@ -350,3 +403,8 @@ required-features = ["math_expressions"]
 harness = false
 name = "round"
 required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "dictionary_encoding"
+required-features = ["string_expressions", "unicode_expressions"]

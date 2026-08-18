@@ -236,6 +236,86 @@ SELECT parse_url('https://example.com', 'PATH');
 (empty)
 
 query T
+SELECT parse_url('https://example.com/', 'PATH');
+----
+/
+
+query T
+SELECT parse_url('https://ex.com/dir%20/pa%20th.HTML', 'PATH');
+----
+/dir%20/pa%20th.HTML
+
+query T
+SELECT parse_url('', 'PATH');
+----
+(empty)
+
+query T
+SELECT parse_url('http://example.com', 'FILE');
+----
+(empty)
+
+query T
+SELECT parse_url('http://example.com/', 'FILE');
+----
+/
+
+query T
+SELECT parse_url('http://example.com?foo=bar', 'FILE');
+----
+?foo=bar
+
+query T
+SELECT parse_url('http://example.com#fragment', 'FILE');
+----
+(empty)
+
+query T
+SELECT parse_url('http://example.com/?foo=bar', 'FILE');
+----
+/?foo=bar
+
+query T
+SELECT parse_url('http://ex.com/?', 'FILE');
+----
+/?
+
+query T
+SELECT parse_url('http://ex.com?', 'FILE');
+----
+?
+
+query T
+SELECT parse_url('https://use%20r:pas%20s@example.com/dir%20/pa%20th.HTML?query=x%20y&q2=2#Ref%20two', 'QUERY');
+----
+query=x%20y&q2=2
+
+query T
+SELECT parse_url('https://use%20r:pas%20s@example.com/dir%20/pa%20th.HTML?query=x%20y&q2=2#Ref%20two', 'QUERY', 'query');
+----
+x%20y
+
+query T
+SELECT parse_url('http://ex.com?key=', 'QUERY', 'key');
+----
+(empty)
+
+query T
+SELECT parse_url('http://ex.com?keyonly', 'QUERY', 'keyonly');
+----
+NULL
+
+query T
+SELECT parse_url('http://ex.com?a=1&a=2', 'QUERY', 'a');
+----
+1
+
+query T
+SELECT parse_url('http://ex.com?a%20b=1', 'QUERY', 'a b');
+----
+NULL
+
+query T
 SELECT parse_url('https://example.com', 'path');
 ----
 NULL

@@ -1,0 +1,8 @@
+subgroup width
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=width
+QPAD=42
+DATASET=markers
+PRED_FILL=170
+NAME=width_q42_xwide

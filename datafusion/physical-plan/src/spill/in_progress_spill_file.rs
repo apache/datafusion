@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use datafusion_common::exec_datafusion_err;
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::spill_file::SpillFile;
 
 use super::{
     IPCStreamWriter, gc_view_arrays,
@@ -37,13 +37,13 @@ pub struct InProgressSpillFile {
     /// Lazily initialized writer
     writer: Option<IPCStreamWriter>,
     /// Lazily initialized in-progress file, it will be moved out when the `finish` method is invoked
-    in_progress_file: Option<RefCountedTempFile>,
+    in_progress_file: Option<Arc<dyn SpillFile>>,
 }
 
 impl InProgressSpillFile {
     pub fn new(
         spill_writer: Arc<SpillManager>,
-        in_progress_file: RefCountedTempFile,
+        in_progress_file: Arc<dyn SpillFile>,
     ) -> Self {
         Self {
             spill_writer,
@@ -79,40 +79,27 @@ impl InProgressSpillFile {
             // when they come from different branches of a UnionExec. The SpillManager's
             // schema represents the canonical schema that all batches should conform to.
             let schema = self.spill_writer.schema();
-            if let Some(in_progress_file) = &mut self.in_progress_file {
+            if let Some(in_progress_file) = &self.in_progress_file {
+                let spill_writer = in_progress_file.open_writer()?;
+
                 self.writer = Some(IPCStreamWriter::new(
-                    in_progress_file.path(),
+                    spill_writer,
                     schema.as_ref(),
                     self.spill_writer.compression,
                 )?);
 
                 // Update metrics
                 self.spill_writer.metrics.spill_file_count.add(1);
-
-                // Update initial size (schema/header)
-                in_progress_file.update_disk_usage()?;
-                let initial_size = in_progress_file.current_disk_usage();
-                self.spill_writer
-                    .metrics
-                    .spilled_bytes
-                    .add(initial_size as usize);
+                let header_bytes = self.writer.as_ref().unwrap().bytes_written();
+                self.spill_writer.metrics.spilled_bytes.add(header_bytes);
             }
         }
         if let Some(writer) = &mut self.writer {
-            let (spilled_rows, _) = writer.write(&gc_batch)?;
-            if let Some(in_progress_file) = &mut self.in_progress_file {
-                let pre_size = in_progress_file.current_disk_usage();
-                in_progress_file.update_disk_usage()?;
-                let post_size = in_progress_file.current_disk_usage();
+            // The writer calculates how many serialized bytes were emitted
+            let (spilled_rows, delta_bytes) = writer.write(&gc_batch)?;
 
-                self.spill_writer.metrics.spilled_rows.add(spilled_rows);
-                self.spill_writer
-                    .metrics
-                    .spilled_bytes
-                    .add((post_size - pre_size) as usize);
-            } else {
-                unreachable!() // Already checked inside current function
-            }
+            self.spill_writer.metrics.spilled_rows.add(spilled_rows);
+            self.spill_writer.metrics.spilled_bytes.add(delta_bytes);
         }
         gc_batch.get_sliced_size()
     }
@@ -126,29 +113,24 @@ impl InProgressSpillFile {
 
     /// Returns a reference to the in-progress file, if it exists.
     /// This can be used to get the file path for creating readers before the file is finished.
-    pub fn file(&self) -> Option<&RefCountedTempFile> {
+    pub fn file(&self) -> Option<&Arc<dyn SpillFile>> {
         self.in_progress_file.as_ref()
     }
 
-    /// Finalizes the file, returning the completed file reference.
+    /// Finalizes the write process, returning the completed `SpillFile`.
     /// If there are no batches spilled before, it returns `None`.
-    pub fn finish(&mut self) -> Result<Option<RefCountedTempFile>> {
-        if let Some(writer) = &mut self.writer {
-            writer.finish()?;
+    pub fn finish(&mut self) -> Result<Option<Arc<dyn SpillFile>>> {
+        if self.in_progress_file.is_none() && self.writer.is_none() {
+            return Err(exec_datafusion_err!(
+                "Finish operation failed: file has already been finalized."
+            ));
+        }
+        if let Some(mut writer) = self.writer.take() {
+            // Finish the writer and capture any final trailing bytes emitted
+            let delta_bytes = writer.finish()?;
+            self.spill_writer.metrics.spilled_bytes.add(delta_bytes);
         } else {
             return Ok(None);
-        }
-
-        // Since spill files are append-only, add the file size to spilled_bytes
-        if let Some(in_progress_file) = &mut self.in_progress_file {
-            // Since writer.finish() writes continuation marker and message length at the end
-            let pre_size = in_progress_file.current_disk_usage();
-            in_progress_file.update_disk_usage()?;
-            let post_size = in_progress_file.current_disk_usage();
-            self.spill_writer
-                .metrics
-                .spilled_bytes
-                .add((post_size - pre_size) as usize);
         }
 
         Ok(self.in_progress_file.take())

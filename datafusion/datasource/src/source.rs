@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
@@ -33,7 +33,8 @@ use datafusion_physical_plan::metrics::{
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use itertools::Itertools;
 
@@ -46,6 +47,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -124,11 +126,21 @@ use datafusion_physical_plan::filter_pushdown::{
 ///    └─────────────────────┘
 /// ```
 pub trait DataSource: Any + Send + Sync + Debug {
+    /// Open the specified output partition and return its stream of
+    /// [`RecordBatch`]es.
+    ///
+    /// This should be used by data sources that do not need any sibling
+    /// coordination. Data sources that want to use per-execution shared state
+    /// (for example, to reorder work across partitions at runtime) should
+    /// implement [`Self::open_with_args`] instead.
+    ///
+    /// [`RecordBatch`]: arrow::record_batch::RecordBatch
     fn open(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
+
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
@@ -220,15 +232,15 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// This includes filter predicates (which may contain dynamic filters) and any
     /// other expressions used during data scanning.
     ///
-    /// Implementations must override this method. If the data source has no expressions,
-    /// return `Ok(TreeNodeRecursion::Continue)` immediately.
+    /// The function `f` should be called once per expression unless the function returns
+    /// [`TreeNodeRecursion::Stop`] to stop iteration.
     ///
     /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
     ///
     /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
 
     /// Injects arbitrary run-time state into this DataSource, returning a new instance
@@ -245,6 +257,86 @@ pub trait DataSource: Any + Send + Sync + Debug {
         _state: Arc<dyn Any + Send + Sync>,
     ) -> Option<Arc<dyn DataSource>> {
         None
+    }
+
+    /// Create per execution state to share across sibling instances of this
+    /// data source during one execution.
+    ///
+    /// `config` is the session configuration, so implementations can honor
+    /// options that disable sibling sharing (returning `None`) for consumers
+    /// that cannot poll all partitions in one process.
+    ///
+    /// Returns `None` (the default) if this data source has
+    /// no sibling-shared execution state.
+    fn create_sibling_state(
+        &self,
+        _config: &ConfigOptions,
+    ) -> Option<Arc<dyn Any + Send + Sync>> {
+        None
+    }
+
+    /// Open a partition using optional sibling-shared execution state.
+    ///
+    /// The default implementation ignores the additional state and delegates to
+    /// [`Self::open`].
+    fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
+        self.open(args.partition, args.context)
+    }
+
+    /// Serialize this data source to a full [`PhysicalPlanNode`] (a
+    /// `DataSourceExec` wrapping this source), if it knows how.
+    ///
+    /// This is the `DataSource` analog of
+    /// [`ExecutionPlan::try_to_proto`].
+    /// [`DataSourceExec::try_to_proto`](crate::source::DataSourceExec) delegates
+    /// to this hook, which for file scans forwards to
+    /// [`FileSource::try_to_proto`]
+    /// through the shared [`FileScanConfig`]
+    /// spine.
+    ///
+    /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller falls
+    ///   back to the central downcast chain in `datafusion-proto`.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
+}
+
+/// Arguments for [`DataSource::open_with_args`]
+#[derive(Debug, Clone)]
+pub struct OpenArgs {
+    /// Which partition to open
+    pub partition: usize,
+    /// The task context for execution
+    pub context: Arc<TaskContext>,
+    /// Optional sibling-shared execution state, see
+    /// [`DataSource::create_sibling_state`] for details.
+    pub sibling_state: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl OpenArgs {
+    /// Create a new OpenArgs with required arguments
+    pub fn new(partition: usize, context: Arc<TaskContext>) -> Self {
+        Self {
+            partition,
+            context,
+            sibling_state: None,
+        }
+    }
+
+    /// Set sibling shared state
+    pub fn with_shared_state(
+        mut self,
+        sibling_state: Option<Arc<dyn Any + Send + Sync>>,
+    ) -> Self {
+        self.sibling_state = sibling_state;
+        self
     }
 }
 
@@ -276,6 +368,12 @@ pub struct DataSourceExec {
     data_source: Arc<dyn DataSource>,
     /// Cached plan properties such as sort order
     cache: Arc<PlanProperties>,
+    /// Per execution state shared across partitions of this plan.
+    ///
+    /// Created by [`DataSource::create_sibling_state`]
+    /// and then passed to
+    /// [`DataSource::open_with_args`].
+    execution_state: Arc<OnceLock<Option<Arc<dyn Any + Send + Sync>>>>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -303,19 +401,30 @@ impl ExecutionPlan for DataSourceExec {
         Vec::new()
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Delegate to the underlying data source
-        self.data_source.apply_expressions(f)
+    fn replace_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
     }
 
     fn with_new_children(
         self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the underlying data source
+        self.data_source.apply_expressions(f)
     }
 
     /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].
@@ -349,8 +458,18 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.data_source.open(partition, Arc::clone(&context))?;
+        let shared_state = self
+            .execution_state
+            .get_or_init(|| {
+                self.data_source
+                    .create_sibling_state(context.session_config().options())
+            })
+            .clone();
+        let args = OpenArgs::new(partition, Arc::clone(&context))
+            .with_shared_state(shared_state);
+        let stream = self.data_source.open_with_args(args)?;
         let batch_size = context.session_config().batch_size();
+
         log::debug!(
             "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
         );
@@ -379,15 +498,24 @@ impl ExecutionPlan for DataSourceExec {
         Some(metrics)
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.data_source.partition_statistics(partition)
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        self.data_source.partition_statistics(args.partition())
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let data_source = self.data_source.with_fetch(limit)?;
         let cache = Arc::clone(&self.cache);
+        let execution_state = Arc::new(OnceLock::new());
 
-        Some(Arc::new(Self { data_source, cache }))
+        Some(Arc::new(Self {
+            data_source,
+            cache,
+            execution_state,
+        }))
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -480,6 +608,24 @@ impl ExecutionPlan for DataSourceExec {
                     as Arc<dyn ExecutionPlan>
             })
     }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut new_exec = Arc::unwrap_or_clone(self);
+        new_exec.execution_state = Arc::new(OnceLock::new());
+        Ok(Arc::new(new_exec))
+    }
+
+    /// Delegates serialization to the wrapped [`DataSource`]. For file scans the
+    /// concrete [`FileSource`] emits the node via its
+    /// own `try_to_proto` hook, keeping the format-specific wire logic in the
+    /// format crate.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.data_source().try_to_proto(ctx)
+    }
 }
 
 impl DataSourceExec {
@@ -493,6 +639,7 @@ impl DataSourceExec {
         Self {
             data_source,
             cache: Arc::new(cache),
+            execution_state: Arc::new(OnceLock::new()),
         }
     }
 
@@ -504,6 +651,7 @@ impl DataSourceExec {
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
+        self.execution_state = Arc::new(OnceLock::new());
         self
     }
 

@@ -33,6 +33,7 @@ use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::expr::BinaryExpr;
 use datafusion::logical_expr::interval_arithmetic::Interval;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
 use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
@@ -57,7 +58,7 @@ use datafusion::prelude::*;
 /// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
 /// 6. Get the types of the expressions: [`expression_type_demo`]
 /// 7. Apply type coercion to expressions: [`type_coercion_demo`]
-pub async fn expr_api() -> Result<()> {
+pub fn expr_api() -> Result<()> {
     // The easiest way to do create expressions is to use the
     // "fluent"-style API:
     let expr = col("a") + lit(5);
@@ -201,7 +202,7 @@ fn simplify_demo() -> Result<()> {
 
     // basic arithmetic simplification
     // i + 1 + 2 => i + 3
-    // (note this is not done if the expr is (col("i") + (lit(1) + lit(2))))
+    // (note this is not done if the expr is (col("i") + lit(1) + lit(2)))
     assert_eq!(
         simplifier.simplify(col("i") + (lit(1) + lit(2)))?,
         col("i") + lit(3)
@@ -263,7 +264,7 @@ fn range_analysis_demo() -> Result<()> {
     // You can provide DataFusion any known boundaries on the values of `date`
     // (for example, maybe you know you only have data up to `2020-09-15`), but
     // in this case, let's say we don't know any boundaries beforehand so we use
-    // `try_new_unknown`
+    // `try_new_unbounded`
     let boundaries = ExprBoundaries::try_new_unbounded(&schema)?;
 
     // Now, we invoke the analysis code to perform the range analysis
@@ -541,8 +542,12 @@ fn type_coercion_demo() -> Result<()> {
 
     // Evaluation with an expression that has not been type coerced cannot succeed.
     let props = ExecutionProps::default();
-    let physical_expr =
-        datafusion::physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
+        &expr,
+        &df_schema,
+        &props,
+        &PhysicalPlanningContext::default(),
+    )?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(
         e.find_root()
@@ -566,6 +571,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &PhysicalPlanningContext::default(),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -578,6 +584,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &PhysicalPlanningContext::default(),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -606,6 +613,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &PhysicalPlanningContext::default(),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 

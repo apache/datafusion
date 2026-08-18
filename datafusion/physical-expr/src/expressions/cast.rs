@@ -179,11 +179,8 @@ impl CastExpr {
                 | (UInt8, UInt16 | UInt32 | UInt64)
                 | (UInt16, UInt32 | UInt64)
                 | (UInt32, UInt64)
-                | (
-                    Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32,
-                    Float32 | Float64
-                )
-                | (Int64 | UInt64, Float64)
+                | (Int8 | Int16 | UInt8 | UInt16, Float32)
+                | (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32, Float64)
                 | (Utf8, LargeUtf8)
         )
     }
@@ -214,8 +211,18 @@ pub(crate) fn cast_expr_properties(
     target_type: &DataType,
 ) -> Result<ExprProperties> {
     let unbounded = Interval::make_unbounded(target_type)?;
-    if is_order_preserving_cast_family(&child.range.data_type(), target_type) {
-        Ok(child.clone().with_range(unbounded))
+    let source_type = child.range.data_type();
+    // A widening cast is additionally one-to-one, so it is strictly
+    // order-preserving; a narrowing cast may collapse distinct values,
+    // breaking the ordering of subsequent sort keys.
+    let bigger_cast = CastExpr::check_bigger_cast(target_type, &source_type);
+    if is_order_preserving_cast_family(&source_type, target_type) || bigger_cast {
+        Ok(child
+            .clone()
+            .with_range(unbounded)
+            .with_strictly_order_preserving(
+                child.strictly_order_preserving && bigger_cast,
+            ))
     } else {
         Ok(ExprProperties::new_unknown().with_range(unbounded))
     }
@@ -297,6 +304,61 @@ impl PhysicalExpr for CastExpr {
         write!(f, " AS {:?}", self.cast_type())?;
 
         write!(f, ")")
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
+                protobuf::PhysicalCastNode {
+                    expr: Some(Box::new(ctx.encode_child(self.expr())?)),
+                    arrow_type: Some(self.cast_type().try_into()?),
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CastExpr {
+    /// Reconstruct a [`CastExpr`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] so the decode signature matches
+    /// other migrated expressions and can inspect outer-node metadata if
+    /// needed in the future.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_common::internal_err;
+        use datafusion_proto_models::protobuf;
+
+        let cast_expr = match &node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::Cast(cast_expr)) => {
+                cast_expr.as_ref()
+            }
+            _ => return internal_err!("PhysicalExprNode is not a CastExpr"),
+        };
+
+        let expr = ctx.decode_required_expression(
+            cast_expr.expr.as_deref(),
+            "CastExpr",
+            "expr",
+        )?;
+        let arrow_type = cast_expr.arrow_type.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("CastExpr is missing required field 'arrow_type'")
+        })?;
+
+        Ok(Arc::new(CastExpr::new(expr, arrow_type.try_into()?, None)))
     }
 }
 
@@ -1152,5 +1214,191 @@ mod tests {
         assert_eq!(sql_string, "CAST(b AS Int32)");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_check_bigger_cast_precision_loss() {
+        use DataType::*;
+
+        // Exact conversions without precision loss
+        assert!(CastExpr::check_bigger_cast(&Int16, &Int8));
+        assert!(CastExpr::check_bigger_cast(&Int64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float32, &Int16));
+        assert!(CastExpr::check_bigger_cast(&Float32, &UInt16));
+        assert!(CastExpr::check_bigger_cast(&Float64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float64, &UInt32));
+        assert!(CastExpr::check_bigger_cast(&LargeUtf8, &Utf8));
+
+        // Precision-losing int-to-float conversions should return false
+        assert!(!CastExpr::check_bigger_cast(&Float32, &Int32));
+        assert!(!CastExpr::check_bigger_cast(&Float32, &UInt32));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &Int64));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &UInt64));
+
+        // Signed <-> Unsigned conversions should return false (not order-preserving due to negative values)
+        assert!(!CastExpr::check_bigger_cast(&UInt16, &Int8));
+        assert!(!CastExpr::check_bigger_cast(&UInt32, &Int16));
+        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt8));
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::datafusion_common::ArrowType;
+    use datafusion_proto_models::protobuf::{
+        PhysicalCastNode, PhysicalExprNode, physical_expr_node,
+    };
+
+    /// A `CastExpr` over an `Int32` column, casting to `Int64`.
+    fn proto_cast_fixture() -> CastExpr {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        CastExpr::new(col("a", &schema).unwrap(), Int64, None)
+    }
+
+    fn proto_int64_arrow_type() -> ArrowType {
+        (&Int64).try_into().unwrap()
+    }
+
+    /// Build a `CastExpr` proto node with the given child and target type.
+    fn proto_cast_node(
+        expr: Option<Box<PhysicalExprNode>>,
+        arrow_type: Option<ArrowType>,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::Cast(Box::new(
+                PhysicalCastNode { expr, arrow_type },
+            ))),
+        }
+    }
+
+    #[test]
+    fn try_to_proto_encodes_cast_expr() {
+        let cast = proto_cast_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = cast
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("CastExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let cast_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::Cast(cast_node)) => *cast_node,
+            other => panic!("expected a Cast node, got {other:?}"),
+        };
+        assert!(cast_node.expr.is_some());
+
+        let arrow_type = cast_node
+            .arrow_type
+            .as_ref()
+            .expect("cast type should be encoded");
+        let data_type: DataType = arrow_type.try_into().unwrap();
+        assert_eq!(data_type, Int64);
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let cast = proto_cast_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let err = cast.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("call 1")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_cast_expr() {
+        let node = proto_cast_node(
+            Some(Box::new(column_node("a"))),
+            Some(proto_int64_arrow_type()),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = CastExpr::try_from_proto(&node, &ctx).unwrap();
+        let cast = decoded
+            .downcast_ref::<CastExpr>()
+            .expect("decoded expr should be a CastExpr");
+
+        assert_eq!(cast.cast_type(), &Int64);
+        assert!(cast.expr().downcast_ref::<Column>().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_cast_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("PhysicalExprNode is not a CastExpr")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = proto_cast_node(None, Some(proto_int64_arrow_type()));
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("CastExpr is missing required field 'expr'")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_arrow_type() {
+        let node = proto_cast_node(Some(Box::new(column_node("a"))), None);
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("CastExpr is missing required field 'arrow_type'")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_child_decode_error() {
+        let node = proto_cast_node(
+            Some(Box::new(column_node("a"))),
+            Some(proto_int64_arrow_type()),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CastExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg) if msg.contains("call 1")
+        ));
     }
 }

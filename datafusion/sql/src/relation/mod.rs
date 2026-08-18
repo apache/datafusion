@@ -389,7 +389,7 @@ fn optimize_subquery_sort(
             LogicalPlan::Sort(s) => {
                 if !has_limit {
                     has_limit = false;
-                    return Ok(Transformed::yes(s.input.as_ref().clone()));
+                    return Ok(Transformed::yes(Arc::unwrap_or_clone(s.input)));
                 }
                 Ok(Transformed::no(LogicalPlan::Sort(s)))
             }

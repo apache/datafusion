@@ -22,6 +22,7 @@ pub mod expr_simplifier;
 mod inlist_simplifier;
 mod linear_aggregates;
 mod regex;
+mod reorder_predicates;
 pub mod simplify_exprs;
 pub mod simplify_literal;
 mod simplify_predicates;
@@ -33,6 +34,7 @@ mod utils;
 pub use datafusion_expr::simplify::SimplifyContext;
 
 pub use expr_simplifier::*;
+pub(crate) use reorder_predicates::reorder_predicates;
 pub use simplify_exprs::*;
 pub use simplify_predicates::simplify_predicates;
 

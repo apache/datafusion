@@ -19,7 +19,7 @@
 
 use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, BinaryArrayType};
 use arrow::datatypes::DataType;
-use blake2::{Blake2b512, Blake2s256, Digest};
+use blake2::{Blake2b512, Blake2s256};
 use blake3::Hasher as Blake3;
 
 use arrow::compute::StringArrayType;
@@ -85,7 +85,8 @@ impl fmt::Display for DigestAlgorithm {
 }
 
 macro_rules! digest_to_array {
-    ($METHOD:ident, $INPUT:expr) => {{
+    ($MODULE:ident, $METHOD:ident, $INPUT:expr) => {{
+        use $MODULE::Digest;
         let binary_array: BinaryArray = $INPUT
             .iter()
             .map(|x| x.map(|x| $METHOD::digest(x)))
@@ -95,20 +96,23 @@ macro_rules! digest_to_array {
 }
 
 macro_rules! digest_to_scalar {
-    ($METHOD: ident, $INPUT:expr) => {{ ScalarValue::Binary($INPUT.map(|v| $METHOD::digest(v).as_slice().to_vec())) }};
+    ($MODULE: ident, $METHOD: ident, $INPUT:expr) => {{
+        use $MODULE::Digest;
+        ScalarValue::Binary($INPUT.map(|v| $METHOD::digest(v).as_slice().to_vec()))
+    }};
 }
 
 impl DigestAlgorithm {
     /// digest an optional string to its hash value, null values are returned as is
     fn digest_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
         ColumnarValue::Scalar(match self {
-            Self::Md5 => digest_to_scalar!(Md5, value),
-            Self::Sha224 => digest_to_scalar!(Sha224, value),
-            Self::Sha256 => digest_to_scalar!(Sha256, value),
-            Self::Sha384 => digest_to_scalar!(Sha384, value),
-            Self::Sha512 => digest_to_scalar!(Sha512, value),
-            Self::Blake2b => digest_to_scalar!(Blake2b512, value),
-            Self::Blake2s => digest_to_scalar!(Blake2s256, value),
+            Self::Md5 => digest_to_scalar!(md5, Md5, value),
+            Self::Sha224 => digest_to_scalar!(sha2, Sha224, value),
+            Self::Sha256 => digest_to_scalar!(sha2, Sha256, value),
+            Self::Sha384 => digest_to_scalar!(sha2, Sha384, value),
+            Self::Sha512 => digest_to_scalar!(sha2, Sha512, value),
+            Self::Blake2b => digest_to_scalar!(blake2, Blake2b512, value),
+            Self::Blake2s => digest_to_scalar!(blake2, Blake2s256, value),
             Self::Blake3 => ScalarValue::Binary(value.map(|v| {
                 let mut digest = Blake3::default();
                 digest.update(v);
@@ -125,13 +129,13 @@ impl DigestAlgorithm {
         StringArrType: StringArrayType<'a>,
     {
         match self {
-            Self::Md5 => digest_to_array!(Md5, input_value),
-            Self::Sha224 => digest_to_array!(Sha224, input_value),
-            Self::Sha256 => digest_to_array!(Sha256, input_value),
-            Self::Sha384 => digest_to_array!(Sha384, input_value),
-            Self::Sha512 => digest_to_array!(Sha512, input_value),
-            Self::Blake2b => digest_to_array!(Blake2b512, input_value),
-            Self::Blake2s => digest_to_array!(Blake2s256, input_value),
+            Self::Md5 => digest_to_array!(md5, Md5, input_value),
+            Self::Sha224 => digest_to_array!(sha2, Sha224, input_value),
+            Self::Sha256 => digest_to_array!(sha2, Sha256, input_value),
+            Self::Sha384 => digest_to_array!(sha2, Sha384, input_value),
+            Self::Sha512 => digest_to_array!(sha2, Sha512, input_value),
+            Self::Blake2b => digest_to_array!(blake2, Blake2b512, input_value),
+            Self::Blake2s => digest_to_array!(blake2, Blake2s256, input_value),
             Self::Blake3 => {
                 let binary_array: BinaryArray = input_value
                     .iter()
@@ -156,13 +160,13 @@ impl DigestAlgorithm {
         BinaryArrType: BinaryArrayType<'a>,
     {
         match self {
-            Self::Md5 => digest_to_array!(Md5, input_value),
-            Self::Sha224 => digest_to_array!(Sha224, input_value),
-            Self::Sha256 => digest_to_array!(Sha256, input_value),
-            Self::Sha384 => digest_to_array!(Sha384, input_value),
-            Self::Sha512 => digest_to_array!(Sha512, input_value),
-            Self::Blake2b => digest_to_array!(Blake2b512, input_value),
-            Self::Blake2s => digest_to_array!(Blake2s256, input_value),
+            Self::Md5 => digest_to_array!(md5, Md5, input_value),
+            Self::Sha224 => digest_to_array!(sha2, Sha224, input_value),
+            Self::Sha256 => digest_to_array!(sha2, Sha256, input_value),
+            Self::Sha384 => digest_to_array!(sha2, Sha384, input_value),
+            Self::Sha512 => digest_to_array!(sha2, Sha512, input_value),
+            Self::Blake2b => digest_to_array!(blake2, Blake2b512, input_value),
+            Self::Blake2s => digest_to_array!(blake2, Blake2s256, input_value),
             Self::Blake3 => {
                 let binary_array: BinaryArray = input_value
                     .iter()

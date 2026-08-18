@@ -1,0 +1,8 @@
+subgroup scale
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=scale
+QPAD=51
+DATASET=mixed
+PRED_ROWS=100000
+NAME=scale_q51_100k

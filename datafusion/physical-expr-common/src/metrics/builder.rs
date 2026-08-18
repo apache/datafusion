@@ -25,13 +25,15 @@ use crate::metrics::{
 };
 
 use super::{
-    Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
+    Count, ExecutionPlanMetricsSet, Gauge, Label, LabelValue, Metric, MetricValue, Time,
+    Timestamp,
 };
 
 /// Structure for constructing metrics, counters, timers, etc.
 ///
 /// Note the use of `Cow<..>` is to avoid allocations in the common
-/// case of constant strings
+/// case of constant strings. Dynamically created label strings are shared when
+/// [`Label`] values are cloned.
 ///
 /// ```rust
 /// use datafusion_physical_expr_common::metrics::*;
@@ -47,6 +49,7 @@ use super::{
 ///     .with_new_label("filename", "my_awesome_file.parquet")
 ///     .counter("num_bytes", partition);
 /// ```
+#[derive(Clone)]
 pub struct MetricBuilder<'a> {
     /// Location that the metric created by this builder will be added do
     metrics: &'a ExecutionPlanMetricsSet,
@@ -108,7 +111,10 @@ impl<'a> MetricBuilder<'a> {
         name: impl Into<Cow<'static, str>>,
         value: impl Into<Cow<'static, str>>,
     ) -> Self {
-        self.with_label(Label::new(name.into(), value.into()))
+        self.with_label(Label::new(
+            LabelValue::from(name.into()),
+            LabelValue::from(value.into()),
+        ))
     }
 
     /// Set the partition of the metric being constructed
@@ -240,6 +246,23 @@ impl<'a> MetricBuilder<'a> {
             name: gauge_name.into(),
             gauge: gauge.clone(),
         });
+        gauge
+    }
+
+    /// Consumes self and creates a new [`Gauge`] for recording peak memory
+    /// usage in bytes.
+    pub fn peak_memory_usage(
+        self,
+        gauge_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
+            .build(MetricValue::PeakMemoryUsage {
+                name: gauge_name.into(),
+                gauge: gauge.clone(),
+            });
         gauge
     }
 

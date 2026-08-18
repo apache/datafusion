@@ -19,7 +19,7 @@
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
-include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
+include = ["benches/*.rs", "src/**/*.md", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
 readme = "../../README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -39,6 +39,13 @@ all-features = true
 workspace = true
 
 [features]
+# Enables the `print_config_docs`, `print_runtime_config_docs` and
+# `print_functions_docs` binaries, which regenerate the docs under
+# `docs/source/user-guide`. Off by default: they are only run by
+# `dev/update_config_docs.sh` and `dev/update_function_docs.sh`, and each one
+# links a ~174MB binary that would otherwise be relinked on every build of this
+# crate.
+docs_generation = []
 nested_expressions = ["datafusion-functions-nested"]
 # This feature is deprecated. Use the `nested_expressions` feature instead.
 array_expressions = ["nested_expressions"]
@@ -144,6 +151,7 @@ datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
 log = { workspace = true }
@@ -162,7 +170,7 @@ zstd = { workspace = true, optional = true }
 async-trait = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
-dashmap = "6.1.0"
+dashmap = "6.2.1"
 datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-macros = { workspace = true }
@@ -172,13 +180,14 @@ bytes = { workspace = true }
 env_logger = { workspace = true }
 glob = { workspace = true }
 insta = { workspace = true }
+half = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.5"
 recursive = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.38.2"
+sysinfo = "0.39.3"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
@@ -186,7 +195,22 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] 
 ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.31.1", features = ["fs"] }
+nix = { version = "0.31.3", features = ["fs"] }
+
+[[bin]]
+name = "print_config_docs"
+path = "src/bin/print_config_docs.rs"
+required-features = ["docs_generation"]
+
+[[bin]]
+name = "print_runtime_config_docs"
+path = "src/bin/print_runtime_config_docs.rs"
+required-features = ["docs_generation"]
+
+[[bin]]
+name = "print_functions_docs"
+path = "src/bin/print_functions_docs.rs"
+required-features = ["docs_generation"]
 
 [[bench]]
 harness = false
@@ -203,6 +227,10 @@ name = "distinct_query_sql"
 [[bench]]
 harness = false
 name = "push_down_filter"
+
+[[bench]]
+harness = false
+name = "pwmj_semi_anti_sql"
 
 [[bench]]
 harness = false
@@ -248,7 +276,22 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_nested_schema_pruning"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "parquet_struct_projection"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
+name = "parquet_struct_shared_prefix_pushdown"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
+name = "cse_projection_pushdown"
 required-features = ["parquet"]
 
 [[bench]]

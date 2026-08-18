@@ -1,0 +1,186 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# End-to-end tests for the `max_row_group_bytes` Parquet writer option:
+# write Parquet files with the option set, then read them back to confirm
+# the option is wired through from config to the writer.
+# See datafusion/common/src/config.rs for the option definition.
+
+statement ok
+CREATE TABLE source_table(id INT, name VARCHAR) AS VALUES
+(1, 'one'), (2, 'two'), (3, 'three'), (4, 'four'), (5, 'five');
+
+# Write with max_row_group_bytes set via COPY format options.
+query I
+COPY source_table
+TO 'test_files/scratch/parquet_max_row_group_bytes/copy_options/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_bytes' 1024);
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE readback_copy_options
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/copy_options/';
+
+query IT
+SELECT id, name FROM readback_copy_options ORDER BY id;
+----
+1 one
+2 two
+3 three
+4 four
+5 five
+
+# The option also applies when set via the session config (not just COPY OPTIONS).
+statement ok
+SET datafusion.execution.parquet.max_row_group_bytes = 2048;
+
+query I
+COPY source_table
+TO 'test_files/scratch/parquet_max_row_group_bytes/session_config/'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+RESET datafusion.execution.parquet.max_row_group_bytes;
+
+statement ok
+CREATE EXTERNAL TABLE readback_session_config
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/session_config/';
+
+query IT
+SELECT id, name FROM readback_session_config ORDER BY id;
+----
+1 one
+2 two
+3 three
+4 four
+5 five
+
+# A zero byte limit is rejected with a clear configuration error.
+query error DataFusion error: Invalid or Unsupported Configuration: max_row_group_bytes must be greater than 0
+COPY source_table
+TO 'test_files/scratch/parquet_max_row_group_bytes/invalid/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_bytes' 0);
+
+# -----------------------------------------------------------------------------
+# Row-group-count verification via EXPLAIN ANALYZE.
+#
+# `row_groups_pruned_statistics=N total` reports the number of row groups in the
+# written file, so it lets us confirm that `max_row_group_bytes` actually
+# changes how the writer splits row groups, and that combining it with
+# `max_row_group_size` flushes on whichever limit is reached first.
+#
+# NOTE: byte-based flushing is currently honored only by the single-threaded
+# Parquet writer (`AsyncArrowWriter`/`ArrowWriter`), which encodes inline and
+# can therefore observe the in-progress row group's encoded size. The
+# multi-threaded (parallel) writer decides row-group boundaries by row count
+# only and ignores `max_row_group_bytes`, so these cases force the
+# single-threaded path with `allow_single_file_parallelism = false`. Extending
+# the parallel writer to honor the byte limit is a follow-up change.
+# -----------------------------------------------------------------------------
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.minimum_parallel_output_files = 1;
+
+statement ok
+set datafusion.execution.batch_size = 1024;
+
+statement ok
+set datafusion.execution.parquet.allow_single_file_parallelism = false;
+
+# Row-count limit only: 4096 rows with max_row_group_size = 1000 -> 5 row groups
+# (four full groups of 1000 plus a remainder of 96).
+statement ok
+COPY (SELECT value AS id FROM range(0, 4096))
+TO 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_only/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 1000);
+
+statement ok
+CREATE EXTERNAL TABLE rg_count_size_only
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_only/';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM rg_count_size_only WHERE id >= 0;
+----
+Plan with Metrics
+01)FilterExec: id@0 >= 0<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=5 total<slt:ignore>
+
+# Both limits set: the byte limit also flushes the sub-1000-row remainders that
+# the row-count limit would otherwise carry into the next batch, so the file is
+# split more finely -> 8 row groups (whichever limit is reached first).
+statement ok
+COPY (SELECT value AS id FROM range(0, 4096))
+TO 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_and_bytes/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 1000, 'format.max_row_group_bytes' 1);
+
+statement ok
+CREATE EXTERNAL TABLE rg_count_size_and_bytes
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/rg_count_size_and_bytes/';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM rg_count_size_and_bytes WHERE id >= 0;
+----
+Plan with Metrics
+01)FilterExec: id@0 >= 0<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=8 total<slt:ignore>
+
+# Byte limit drives alone: the row-count limit is far larger than the data, so
+# only the byte limit splits. Each 1024-row batch fills a fresh (empty) row
+# group, which is never split mid-batch -> 4 row groups.
+statement ok
+COPY (SELECT value AS id FROM range(0, 4096))
+TO 'test_files/scratch/parquet_max_row_group_bytes/rg_count_bytes_only/'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' 100000, 'format.max_row_group_bytes' 1);
+
+statement ok
+CREATE EXTERNAL TABLE rg_count_bytes_only
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_max_row_group_bytes/rg_count_bytes_only/';
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM rg_count_bytes_only WHERE id >= 0;
+----
+Plan with Metrics
+01)FilterExec: id@0 >= 0<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=4 total<slt:ignore>
+
+statement ok
+reset datafusion.execution.parquet.allow_single_file_parallelism;
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+reset datafusion.execution.minimum_parallel_output_files;
+
+statement ok
+set datafusion.execution.target_partitions = 4;

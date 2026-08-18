@@ -32,8 +32,9 @@ use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequire
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream, execute_input_stream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, InputDistributionRequirements, Partitioning, PlanProperties,
+    ReplaceChildrenOptions, SendableRecordBatchStream, execute_input_stream,
 };
 
 use async_trait::async_trait;
@@ -71,6 +72,21 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64>;
+
+    /// Serialize this sink into a full protobuf plan node, if it knows how.
+    ///
+    /// Implementations can use `ctx` to encode the input plan, sink-specific
+    /// expressions, and [`DataSinkExec::encode_sort_order`].
+    ///
+    /// Returning `Ok(None)` lets the caller try its extension codec instead.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _exec: &DataSinkExec,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
 }
 
 impl dyn DataSink {
@@ -145,6 +161,75 @@ impl DataSinkExec {
         &self.sort_order
     }
 
+    /// Encode the optional sink ordering for a protobuf plan node.
+    #[cfg(feature = "proto")]
+    pub fn encode_sort_order(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalSortExprNodeCollection>>
+    {
+        use datafusion_physical_expr::PhysicalSortExpr;
+        use datafusion_proto_models::protobuf;
+
+        self.sort_order
+            .as_ref()
+            .map(|requirements| {
+                requirements
+                    .iter()
+                    .map(|requirement| {
+                        let expr: PhysicalSortExpr = requirement.to_owned().into();
+                        Ok(protobuf::PhysicalSortExprNode {
+                            expr: Some(Box::new(ctx.encode_expr(&expr.expr)?)),
+                            asc: !expr.options.descending,
+                            nulls_first: expr.options.nulls_first,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .map(|physical_sort_expr_nodes| {
+                        protobuf::PhysicalSortExprNodeCollection {
+                            physical_sort_expr_nodes,
+                        }
+                    })
+            })
+            .transpose()
+    }
+
+    /// Decode the optional sink ordering from a protobuf plan node.
+    #[cfg(feature = "proto")]
+    pub fn decode_sort_order(
+        collection: Option<
+            &datafusion_proto_models::protobuf::PhysicalSortExprNodeCollection,
+        >,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+        schema: &Schema,
+    ) -> Result<Option<LexRequirement>> {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr::PhysicalSortExpr;
+
+        let Some(collection) = collection else {
+            return Ok(None);
+        };
+        let sort_exprs = collection
+            .physical_sort_expr_nodes
+            .iter()
+            .map(|node| {
+                let expr = node.expr.as_ref().ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Unexpected empty physical expression"
+                    )
+                })?;
+                Ok(PhysicalSortExpr {
+                    expr: ctx.decode_expr(expr, schema)?,
+                    options: SortOptions {
+                        descending: !node.asc,
+                        nulls_first: node.nulls_first,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LexRequirement::new(sort_exprs.into_iter().map(Into::into)))
+    }
+
     fn create_schema(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
@@ -190,9 +275,16 @@ impl ExecutionPlan for DataSinkExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         // DataSink is responsible for dynamically partitioning its
         // own input at execution time, and so requires a single input partition.
-        vec![Distribution::SinglePartition; self.children().len()]
+        InputDistributionRequirements::new(vec![
+            Distribution::SinglePartition;
+            self.children().len()
+        ])
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -213,9 +305,10 @@ impl ExecutionPlan for DataSinkExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
@@ -224,16 +317,20 @@ impl ExecutionPlan for DataSinkExec {
         )))
     }
 
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Apply to sort order requirements if present
-        if let Some(sort_order) = &self.sort_order {
-            for req in sort_order.iter() {
-                f(req.expr.as_ref())?;
-            }
-        }
         Ok(TreeNodeRecursion::Continue)
     }
 
@@ -273,6 +370,15 @@ impl ExecutionPlan for DataSinkExec {
     /// Returns the metrics of the underlying [DataSink]
     fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
+    }
+
+    /// Delegates protobuf serialization to the underlying sink.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.sink().try_to_proto(self, ctx)
     }
 }
 

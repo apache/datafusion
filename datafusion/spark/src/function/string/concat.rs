@@ -71,8 +71,13 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        // Accept any string types, including zero arguments
-        Ok(arg_types.to_vec())
+        if arg_types.is_empty() {
+            // Spark semantics: allow concat with zero arguments
+            Ok(vec![])
+        } else {
+            // Use concat coercion rules
+            ConcatFunc::new().coerce_types(arg_types)
+        }
     }
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion_common::internal_err!(
@@ -80,19 +85,15 @@ impl ScalarUDFImpl for SparkConcat {
         )
     }
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        use DataType::*;
-
         // Spark semantics: concat returns NULL if ANY input is NULL
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
-        // Determine return type: Utf8View > LargeUtf8 > Utf8
-        let mut dt = &Utf8;
-        for field in args.arg_fields {
-            let data_type = field.data_type();
-            if data_type == &Utf8View || (data_type == &LargeUtf8 && dt != &Utf8View) {
-                dt = data_type;
-            }
-        }
+        let arg_types: Vec<DataType> = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
+        let dt = ConcatFunc::new().return_type(&arg_types)?;
 
         Ok(Arc::new(Field::new("concat", dt.clone(), nullable)))
     }
@@ -113,32 +114,20 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
     // Handle zero-argument case: return empty string
     if arg_values.is_empty() {
         let return_type = return_field.data_type();
-        return match return_type {
-            DataType::Utf8View => Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                String::new(),
-            )))),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(
-                Some(String::new()),
-            ))),
-            _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
-                Some(String::new()),
-            ))),
-        };
+        return Ok(ColumnarValue::Scalar(ScalarValue::new_default(
+            return_type,
+        )?));
     }
 
     // Step 1: Check for NULL mask in incoming args
-    let null_mask = compute_null_mask(&arg_values, number_rows)?;
+    let null_mask = compute_null_mask(&arg_values);
 
     // If all scalars and any is NULL, return NULL immediately
     if matches!(null_mask, NullMaskResolution::ReturnNull) {
         let return_type = return_field.data_type();
-        return match return_type {
-            DataType::Utf8View => Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None))),
-            DataType::LargeUtf8 => {
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
-            }
-            _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-        };
+        return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+            return_type,
+        )?));
     }
 
     // Step 2: Delegate to DataFusion's concat

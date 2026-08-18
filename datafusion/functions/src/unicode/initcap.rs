@@ -17,20 +17,17 @@
 
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, GenericStringArray, GenericStringBuilder, OffsetSizeTrait,
-    StringViewBuilder,
-};
-use arrow::buffer::{Buffer, OffsetBuffer};
+use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait};
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -66,9 +63,10 @@ impl InitcapFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -85,60 +83,71 @@ impl ScalarUDFImpl for InitcapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if let DataType::Utf8View = arg_types[0] {
-            Ok(DataType::Utf8View)
-        } else {
-            utf8_to_str_type(&arg_types[0], "initcap")
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg = &args.args[0];
-
-        // Scalar fast path - handle directly without array conversion
-        if let ColumnarValue::Scalar(scalar) = arg {
-            return match scalar {
-                ScalarValue::Utf8(None)
-                | ScalarValue::LargeUtf8(None)
-                | ScalarValue::Utf8View(None) => Ok(arg.clone()),
-                ScalarValue::Utf8(Some(s)) => {
-                    let mut result = String::new();
-                    initcap_string(s, &mut result);
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
-                }
-                ScalarValue::LargeUtf8(Some(s)) => {
-                    let mut result = String::new();
-                    initcap_string(s, &mut result);
-                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
-                }
-                ScalarValue::Utf8View(Some(s)) => {
-                    let mut result = String::new();
-                    initcap_string(s, &mut result);
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
-                }
-                other => {
-                    exec_err!(
-                        "Unsupported data type {:?} for function `initcap`",
-                        other.data_type()
-                    )
-                }
-            };
-        }
-
-        // Array path
-        let args = &args.args;
-        match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
-            DataType::Utf8View => make_scalar_function(initcap_utf8view, vec![])(args),
-            other => {
-                exec_err!("Unsupported data type {other:?} for function `initcap`")
+        match &args.args[0] {
+            ColumnarValue::Scalar(scalar) => {
+                Ok(ColumnarValue::Scalar(initcap_scalar(scalar)?))
+            }
+            ColumnarValue::Array(array) => {
+                Ok(ColumnarValue::Array(initcap_array(array)?))
             }
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn initcap_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(None)
+        | ScalarValue::LargeUtf8(None)
+        | ScalarValue::Utf8View(None) => Ok(scalar.clone()),
+        ScalarValue::Utf8(Some(s)) => {
+            let mut result = String::new();
+            initcap_string(s, &mut result);
+            Ok(ScalarValue::Utf8(Some(result)))
+        }
+        ScalarValue::LargeUtf8(Some(s)) => {
+            let mut result = String::new();
+            initcap_string(s, &mut result);
+            Ok(ScalarValue::LargeUtf8(Some(result)))
+        }
+        ScalarValue::Utf8View(Some(s)) => {
+            let mut result = String::new();
+            initcap_string(s, &mut result);
+            Ok(ScalarValue::Utf8View(Some(result)))
+        }
+        ScalarValue::Dictionary(key_type, value) => Ok(ScalarValue::Dictionary(
+            key_type.clone(),
+            Box::new(initcap_scalar(value)?),
+        )),
+        other => {
+            exec_err!(
+                "Unsupported data type {:?} for function `initcap`",
+                other.data_type()
+            )
+        }
+    }
+}
+
+fn initcap_array(array: &ArrayRef) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Utf8 => initcap::<i32>(&[Arc::clone(array)]),
+        DataType::LargeUtf8 => initcap::<i64>(&[Arc::clone(array)]),
+        DataType::Utf8View => initcap_utf8view(&[Arc::clone(array)]),
+        DataType::Dictionary(_, _) => {
+            let dictionary = array.as_any_dictionary();
+            let converted = initcap_array(dictionary.values())?;
+            Ok(dictionary.with_values(converted))
+        }
+        other => {
+            exec_err!("Unsupported data type {other:?} for function `initcap`")
+        }
     }
 }
 
@@ -157,21 +166,35 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Ok(initcap_ascii_array(string_array));
     }
 
-    let mut builder = GenericStringBuilder::<T>::with_capacity(
-        string_array.len(),
+    let len = string_array.len();
+    let mut builder = GenericStringArrayBuilder::<T>::with_capacity(
+        len,
         string_array.value_data().len(),
     );
 
     let mut container = String::new();
-    string_array.iter().for_each(|str| match str {
-        Some(s) => {
-            initcap_string(s, &mut container);
-            builder.append_value(&container);
+    let nulls = string_array.nulls().cloned();
+    if let Some(ref n) = nulls {
+        for i in 0..len {
+            if n.is_null(i) {
+                builder.try_append_placeholder()?;
+            } else {
+                // SAFETY: not null per check above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                initcap_string(s, &mut container);
+                builder.try_append_value(&container)?;
+            }
         }
-        None => builder.append_null(),
-    });
+    } else {
+        for i in 0..len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            initcap_string(s, &mut container);
+            builder.try_append_value(&container)?;
+        }
+    }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 /// Fast path for `Utf8` or `LargeUtf8` arrays that are ASCII-only. We can use a
@@ -205,17 +228,10 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
     }
 
     let values = Buffer::from_vec(out);
-    let out_offsets = if first_offset == 0 {
-        offsets.clone()
-    } else {
-        // For sliced arrays, we need to rebase the offsets to reflect that the
-        // output only contains the bytes in the visible slice.
-        let rebased_offsets = offsets
-            .iter()
-            .map(|offset| T::usize_as(offset.as_usize() - first_offset))
-            .collect::<Vec<_>>();
-        OffsetBuffer::<T>::new(rebased_offsets.into())
-    };
+
+    // Rebase offsets for sliced arrays to reflect that the
+    // output only contains the bytes in the visible slice.
+    let out_offsets = offsets.clone().subtract(offsets[0]);
 
     // SAFETY: ASCII case conversion preserves byte length, so the original
     // string boundaries are preserved. `out_offsets` is either identical to
@@ -232,18 +248,32 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
 
 fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_view_array = as_string_view_array(&args[0])?;
-    let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
+    let len = string_view_array.len();
+    let mut builder = StringViewArrayBuilder::with_capacity(len);
     let mut container = String::new();
 
-    string_view_array.iter().for_each(|str| match str {
-        Some(s) => {
+    let nulls = string_view_array.nulls().cloned();
+    if let Some(ref n) = nulls {
+        for i in 0..len {
+            if n.is_null(i) {
+                builder.append_placeholder();
+            } else {
+                // SAFETY: not null per check above.
+                let s = unsafe { string_view_array.value_unchecked(i) };
+                initcap_string(s, &mut container);
+                builder.append_value(&container);
+            }
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_view_array.value_unchecked(i) };
             initcap_string(s, &mut container);
             builder.append_value(&container);
         }
-        None => builder.append_null(),
-    });
+    }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
 fn initcap_string(input: &str, container: &mut String) {

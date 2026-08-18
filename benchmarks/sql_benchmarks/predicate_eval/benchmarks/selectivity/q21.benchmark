@@ -1,0 +1,7 @@
+subgroup selectivity
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=selectivity
+QPAD=21
+DATASET=ints
+NAME=selectivity_q21_selective_first

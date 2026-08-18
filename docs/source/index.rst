@@ -54,6 +54,8 @@ The following related subprojects target end users and have separate documentati
 
 - `DataFusion Python <https://datafusion.apache.org/python/>`_ offers a Python interface for SQL and DataFrame
   queries.
+- `DataFusion Java <https://datafusion.apache.org/java/>`_ offers a Java interface for SQL and DataFrame
+  queries.
 - `DataFusion Comet <https://datafusion.apache.org/comet/>`_ is an accelerator for Apache Spark based on
   DataFusion.
 - `DataFusion Ballista <https://datafusion.apache.org/ballista/>`_ is distributed processing extension for DataFusion.
@@ -124,6 +126,7 @@ To get started, see
    user-guide/sql/index
    user-guide/configs
    user-guide/explain-usage
+   user-guide/parquet-content-defined-chunking
    user-guide/metrics
    user-guide/faq
 
@@ -156,6 +159,7 @@ To get started, see
    :caption: Contributor Guide
 
    contributor-guide/index
+   contributor-guide/pr_review
    contributor-guide/communication
    contributor-guide/development_environment
    contributor-guide/architecture
@@ -178,4 +182,5 @@ To get started, see
 
    DataFusion Ballista <https://datafusion.apache.org/ballista/>
    DataFusion Comet <https://datafusion.apache.org/comet/>
+   DataFusion Java <https://datafusion.apache.org/java/>
    DataFusion Python <https://datafusion.apache.org/python/>

@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::future::ready;
 use std::sync::Arc;
 
 use crate::TableProvider;
@@ -33,11 +34,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
-use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
     LexOrdering, create_physical_expr, create_physical_sort_exprs,
@@ -45,13 +46,13 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PhysicalExpr, PlanProperties, common,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PhysicalExpr, PlanProperties, ReplaceChildrenOptions, collect_partitioned,
 };
 use datafusion_session::Session;
 
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::future::BoxFuture;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
@@ -146,68 +147,28 @@ impl MemTable {
         state: &dyn Session,
     ) -> Result<Self> {
         let schema = t.schema();
-        let constraints = t.constraints();
+        let constraints = t.constraints().cloned().unwrap_or_default();
+
         let exec = t.scan(state, None, &[], None).await?;
-        let partition_count = exec.output_partitioning().partition_count();
+        let data = collect_partitioned(exec, state.task_ctx()).await?;
 
-        let mut join_set = JoinSet::new();
-
-        for part_idx in 0..partition_count {
-            let task = state.task_ctx();
-            let exec = Arc::clone(&exec);
-            join_set.spawn(async move {
-                let stream = exec.execute(part_idx, task)?;
-                common::collect(stream).await
-            });
-        }
-
-        let mut data: Vec<Vec<RecordBatch>> =
-            Vec::with_capacity(exec.output_partitioning().partition_count());
-
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok(res) => data.push(res?),
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
-                    }
-                }
-            }
-        }
-
-        let mut exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
-            &data,
-            Arc::clone(&schema),
-            None,
-        )?));
-        if let Some(cons) = constraints {
-            exec = exec.with_constraints(cons.clone());
-        }
-
-        if let Some(num_partitions) = output_partitions {
+        // Optionally repartition the collected batches.
+        let data = if let Some(num_partitions) = output_partitions {
+            let source = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+                &data,
+                Arc::clone(&schema),
+                None,
+            )?));
             let exec = RepartitionExec::try_new(
-                Arc::new(exec),
+                Arc::new(source),
                 Partitioning::RoundRobinBatch(num_partitions),
             )?;
+            collect_partitioned(Arc::new(exec), state.task_ctx()).await?
+        } else {
+            data
+        };
 
-            // execute and collect results
-            let mut output_partitions = vec![];
-            for i in 0..exec.properties().output_partitioning().partition_count() {
-                // execute this *output* partition and collect all batches
-                let task_ctx = state.task_ctx();
-                let mut stream = exec.execute(i, task_ctx)?;
-                let mut batches = vec![];
-                while let Some(result) = stream.next().await {
-                    batches.push(result?);
-                }
-                output_partitions.push(batches);
-            }
-
-            return MemTable::try_new(Arc::clone(&schema), output_partitions);
-        }
-        MemTable::try_new(Arc::clone(&schema), data)
+        MemTable::try_new(schema, data).map(|table| table.with_constraints(constraints))
     }
 }
 
@@ -225,41 +186,23 @@ impl TableProvider for MemTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut partitions = vec![];
-        for arc_inner_vec in self.batches.iter() {
-            let inner_vec = arc_inner_vec.read().await;
-            partitions.push(inner_vec.clone())
-        }
-
-        let mut source =
-            MemorySourceConfig::try_new(&partitions, self.schema(), projection.cloned())?;
-
-        let show_sizes = state.config_options().explain.show_sizes;
-        source = source.with_show_sizes(show_sizes);
-
-        // add sort information if present
-        let sort_order = self.sort_order.lock();
-        if !sort_order.is_empty() {
-            let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
-
-            let eqp = state.execution_props();
-            let mut file_sort_order = vec![];
-            for sort_exprs in sort_order.iter() {
-                let physical_exprs =
-                    create_physical_sort_exprs(sort_exprs, &df_schema, eqp)?;
-                file_sort_order.extend(LexOrdering::new(physical_exprs));
-            }
-            source = source.try_with_sort_information(file_sort_order)?;
-        }
-
-        Ok(DataSourceExec::from_data_source(source))
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
     }
 
     /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
@@ -276,7 +219,123 @@ impl TableProvider for MemTable {
     /// * A plan that returns the number of rows written.
     ///
     /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
-    async fn insert_into(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn insert_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.insert_into_boxed(state, input, insert_op)
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
+    }
+
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn delete_from<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.delete_from_boxed(state, filters)
+    }
+
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn update<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.update_boxed(state, assignments, filters)
+    }
+}
+
+impl MemTable {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
+        &self,
+        state: &dyn Session,
+        projection: Option<&[usize]>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut partitions = vec![];
+        for arc_inner_vec in self.batches.iter() {
+            let inner_vec = arc_inner_vec.read().await;
+            partitions.push(inner_vec.clone())
+        }
+
+        let mut source = MemorySourceConfig::try_new(
+            &partitions,
+            self.schema(),
+            projection.map(|p| p.to_vec()),
+        )?;
+
+        let show_sizes = state.config_options().explain.show_sizes;
+        source = source.with_show_sizes(show_sizes);
+
+        // add sort information if present
+        let sort_order = self.sort_order.lock();
+        if !sort_order.is_empty() {
+            let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+
+            let eqp = state.execution_props();
+            let mut file_sort_order = vec![];
+            for sort_exprs in sort_order.iter() {
+                let physical_exprs = create_physical_sort_exprs(
+                    sort_exprs,
+                    &df_schema,
+                    eqp,
+                    &PhysicalPlanningContext::default(),
+                )?;
+                file_sort_order.extend(LexOrdering::new(physical_exprs));
+            }
+            source = source.try_with_sort_information(file_sort_order)?;
+        }
+
+        Ok(DataSourceExec::from_data_source(source))
+    }
+
+    fn insert_into_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(ready(self.insert_into_inner(state, input, insert_op)))
+    }
+
+    fn insert_into_inner(
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
@@ -297,11 +356,15 @@ impl TableProvider for MemTable {
         Ok(Arc::new(DataSinkExec::new(input, Arc::new(sink), None)))
     }
 
-    fn get_column_default(&self, column: &str) -> Option<&Expr> {
-        self.column_defaults.get(column)
+    fn delete_from_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.delete_from_inner(state, filters))
     }
 
-    async fn delete_from(
+    async fn delete_from_inner(
         &self,
         state: &dyn Session,
         filters: Vec<Expr>,
@@ -365,7 +428,16 @@ impl TableProvider for MemTable {
         Ok(Arc::new(DmlResultExec::new(total_deleted)))
     }
 
-    async fn update(
+    fn update_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.update_inner(state, assignments, filters))
+    }
+
+    async fn update_inner(
         &self,
         state: &dyn Session,
         assignments: Vec<(String, Expr)>,
@@ -399,8 +471,12 @@ impl TableProvider for MemTable {
         let physical_assignments: HashMap<String, Arc<dyn PhysicalExpr>> = assignments
             .iter()
             .map(|(name, expr)| {
-                let physical_expr =
-                    create_physical_expr(expr, &df_schema, state.execution_props())?;
+                let physical_expr = create_physical_expr(
+                    expr,
+                    &df_schema,
+                    state.execution_props(),
+                    &PhysicalPlanningContext::default(),
+                )?;
                 Ok((name.clone(), physical_expr))
             })
             .collect::<Result<_>>()?;
@@ -513,8 +589,12 @@ fn evaluate_filters_to_mask(
     let mut combined_mask: Option<BooleanArray> = None;
 
     for filter_expr in filters {
-        let physical_expr =
-            create_physical_expr(filter_expr, df_schema, execution_props)?;
+        let physical_expr = create_physical_expr(
+            filter_expr,
+            df_schema,
+            execution_props,
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let result = physical_expr.evaluate(batch)?;
         let array = result.into_array(batch.num_rows())?;
@@ -601,11 +681,22 @@ impl ExecutionPlan for DmlResultExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -630,7 +721,7 @@ impl ExecutionPlan for DmlResultExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
     }

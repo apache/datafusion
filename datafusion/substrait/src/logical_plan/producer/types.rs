@@ -534,4 +534,35 @@ mod tests {
         assert_eq!(schema.as_ref(), &roundtrip_schema);
         Ok(())
     }
+
+    #[test]
+    fn named_struct_unspecified_nullability_is_nullable() -> Result<()> {
+        let named_struct = NamedStruct {
+            names: vec!["unspecified".to_string(), "required".to_string()],
+            r#struct: Some(r#type::Struct {
+                types: vec![
+                    substrait::proto::Type {
+                        kind: Some(r#type::Kind::I32(r#type::I32 {
+                            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                            nullability: r#type::Nullability::Unspecified as i32,
+                        })),
+                    },
+                    substrait::proto::Type {
+                        kind: Some(r#type::Kind::I32(r#type::I32 {
+                            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                            nullability: r#type::Nullability::Required as i32,
+                        })),
+                    },
+                ],
+                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                nullability: r#type::Nullability::Required as i32,
+            }),
+        };
+
+        let schema = from_substrait_named_struct(&test_consumer(), &named_struct)?;
+
+        assert!(schema.field(0).is_nullable());
+        assert!(!schema.field(1).is_nullable());
+        Ok(())
+    }
 }

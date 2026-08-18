@@ -28,6 +28,7 @@
 [![Discord chat][discord-badge]][discord-url]
 [![Linkedin][linkedin-badge]][linkedin-url]
 ![Crates.io MSRV][msrv-badge]
+[![Codecov][codecov-badge]][codecov-url]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -40,11 +41,13 @@
 [commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
 [open-issues-badge]: https://img.shields.io/github/issues-raw/apache/datafusion
 [open-issues-url]: https://github.com/apache/datafusion/issues
-[pending-pr-badge]: https://img.shields.io/github/issues-search/apache/datafusion?query=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess&label=Pending%20PRs&logo=github
-[pending-pr-url]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess+sort%3Aupdated-desc
+[pending-pr-badge]: https://img.shields.io/github/issues-search/apache/datafusion?query=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired&label=Pending%20PRs&logo=github
+[pending-pr-url]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+sort%3Aupdated-desc
 [linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
 [linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
 [msrv-badge]: https://img.shields.io/crates/msrv/datafusion?label=Min%20Rust%20Version
+[codecov-badge]: https://codecov.io/github/apache/datafusion/graph/badge.svg
+[codecov-url]: https://app.codecov.io/github/apache/datafusion/tree/main
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
@@ -63,8 +66,12 @@ See [use cases] for examples. The following related subprojects target end users
 
 - [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
   queries.
+- [DataFusion Java](https://github.com/apache/datafusion-java/) offers a Java interface for SQL and DataFrame
+  queries.
 - [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
   DataFusion.
+- [DataFusion Ballista](https://github.com/apache/datafusion-ballista/) is a distributed query execution engine
+  that scales DataFusion across a cluster of nodes.
 
 "Out of the box,"
 DataFusion offers [SQL](https://datafusion.apache.org/user-guide/sql/index.html) and [DataFrame](https://datafusion.apache.org/user-guide/dataframe.html) APIs, excellent [performance],
@@ -104,8 +111,14 @@ It lets you start quickly from a fully working engine, and then customize those 
 
 Please see the [contributor guide] and [communication] pages for more information.
 
+We discuss our [roadmap] via GitHub issues and invite you
+to join the conversation. The current discussion is the
+[DataFusion 2026 Q3-Q4 Roadmap Discussion].
+
 [contributor guide]: https://datafusion.apache.org/contributor-guide
 [communication]: https://datafusion.apache.org/contributor-guide/communication.html
+[roadmap]: https://datafusion.apache.org/contributor-guide/roadmap.html
+[datafusion 2026 q3-q4 roadmap discussion]: https://github.com/apache/datafusion/issues/22882
 
 ## Crate features
 

@@ -281,7 +281,7 @@ impl DocumentationBuilder {
     ///
     /// The argument is rendered like below if None is passed through:
     ///
-    ///  ```text
+    /// ```text
     /// <arg_name>:
     ///   The expression to operate on. Can be a constant, column, or function, and any combination of operators.
     /// ```

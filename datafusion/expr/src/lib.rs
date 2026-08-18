@@ -37,6 +37,7 @@
 
 extern crate core;
 
+mod higher_order_function;
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -54,6 +55,7 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod extension_types;
 pub mod function;
+pub mod physical_planning_context;
 pub mod select_expr;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;
@@ -67,6 +69,11 @@ pub mod dml {
     pub use crate::logical_plan::dml::*;
 }
 pub mod planner;
+/// Protobuf conversions for [`WindowFrame`], [`WindowFrameBound`],
+/// [`WindowFrameUnits`], [`MergeIntoClauseKind`](dml::MergeIntoClauseKind) and
+/// [`NullTreatment`](expr::NullTreatment), gated on the `proto` feature.
+#[cfg(feature = "proto")]
+mod proto;
 pub mod registry;
 pub mod simplify;
 pub mod sort_properties {
@@ -79,6 +86,8 @@ pub mod statistics {
 mod predicate_bounds;
 pub mod preimage;
 pub mod ptr_eq;
+#[cfg(not(feature = "sql"))]
+pub mod sql;
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
@@ -98,8 +107,8 @@ pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature,
-    TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, EncodingPreservation,
+    Signature, TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
@@ -111,6 +120,11 @@ pub use expr_schema::ExprSchemable;
 pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
+};
+pub use higher_order_function::{
+    HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderTypeSignature, HigherOrderUDF, HigherOrderUDFImpl, LambdaArgument,
+    LambdaParametersProgress, ValueOrLambda,
 };
 pub use literal::{
     Literal, TimestampLiteral, lit, lit_timestamp_nano, lit_with_metadata,
@@ -133,7 +147,7 @@ pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

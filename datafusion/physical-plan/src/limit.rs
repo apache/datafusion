@@ -27,15 +27,16 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions, validate_child_count,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
@@ -54,8 +55,8 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Does the limit have to preserve the order of its input, and if so what is it?
-    /// Some optimizations may reorder the input if no particular sort is required
+    /// Input ordering that must be preserved so limit pushdown does not change
+    /// which rows are returned.
     required_ordering: Option<LexOrdering>,
     cache: Arc<PlanProperties>,
 }
@@ -109,17 +110,6 @@ impl GlobalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for GlobalLimitExec {
@@ -163,7 +153,11 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![Distribution::SinglePartition])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -176,28 +170,50 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Apply to required ordering expressions if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.required_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut new_limit =
+                    GlobalLimitExec::new(children.swap_remove(0), self.skip, self.fetch);
+                new_limit.set_required_ordering(self.required_ordering.clone());
+                Ok(Arc::new(new_limit))
             }
         }
-        Ok(tnr)
     }
 
     fn with_new_children(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(GlobalLimitExec::new(
-            children.swap_remove(0),
-            self.skip,
-            self.fetch,
-        )))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -234,8 +250,16 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
@@ -245,6 +269,68 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let required_ordering = optional_ordering_try_to_proto(
+            self.required_ordering.as_ref(),
+            &ctx.expr_ctx(),
+        )?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
+                    protobuf::GlobalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        skip: self.skip() as u32,
+                        fetch: match self.fetch() {
+                            Some(n) => n as i64,
+                            _ => -1, // no limit
+                        },
+                        required_ordering,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl GlobalLimitExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto;
+        use datafusion_proto_models::protobuf;
+        let limit = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit,
+            "GlobalLimitExec",
+        );
+        let input = ctx.decode_required_child(
+            limit.input.as_deref(),
+            "GlobalLimitExec",
+            "input",
+        )?;
+        let fetch = if limit.fetch >= 0 {
+            Some(limit.fetch as usize)
+        } else {
+            None
+        };
+        let required_ordering = optional_ordering_try_from_proto(
+            &limit.required_ordering,
+            &ctx.expr_ctx(input.schema().as_ref()),
+        )?;
+        let mut exec = GlobalLimitExec::new(input, limit.skip as usize, fetch);
+        exec.set_required_ordering(required_ordering);
+        Ok(Arc::new(exec))
     }
 }
 
@@ -257,8 +343,8 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// If the child plan is a sort node, after the sort node is removed during
-    /// physical optimization, we should add the required ordering to the limit node
+    /// Input ordering that must be preserved so limit pushdown does not change
+    /// which rows are returned.
     required_ordering: Option<LexOrdering>,
     cache: Arc<PlanProperties>,
 }
@@ -306,17 +392,6 @@ impl LocalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for LocalLimitExec {
@@ -360,30 +435,50 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Apply to required ordering expressions if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.required_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut new_limit =
+                    LocalLimitExec::new(children.swap_remove(0), self.fetch);
+                new_limit.set_required_ordering(self.required_ordering.clone());
+                Ok(Arc::new(new_limit))
             }
         }
-        Ok(tnr)
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        match children.len() {
-            1 => Ok(Arc::new(LocalLimitExec::new(
-                Arc::clone(&children[0]),
-                self.fetch,
-            ))),
-            _ => internal_err!("LocalLimitExec wrong number of children"),
-        }
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -411,8 +506,16 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
     }
 
@@ -426,6 +529,56 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let required_ordering = optional_ordering_try_to_proto(
+            self.required_ordering.as_ref(),
+            &ctx.expr_ctx(),
+        )?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
+                    protobuf::LocalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        fetch: self.fetch() as u32,
+                        required_ordering,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl LocalLimitExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto;
+        use datafusion_proto_models::protobuf;
+        let limit = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::LocalLimit,
+            "LocalLimitExec",
+        );
+        let input =
+            ctx.decode_required_child(limit.input.as_deref(), "LocalLimitExec", "input")?;
+        let required_ordering = optional_ordering_try_from_proto(
+            &limit.required_ordering,
+            &ctx.expr_ctx(input.schema().as_ref()),
+        )?;
+        let mut exec = LocalLimitExec::new(input, limit.fetch as usize);
+        exec.set_required_ordering(required_ordering);
+        Ok(Arc::new(exec))
     }
 }
 
@@ -559,13 +712,16 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow::array::RecordBatchOptions;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
     #[tokio::test]
     async fn limit() -> Result<()> {
@@ -755,77 +911,106 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_row_number_statistics_for_global_limit() -> Result<()> {
-        let row_count = row_number_statistics_for_global_limit(0, Some(10)).await?;
+    #[test]
+    fn replace_children_preserves_required_ordering() -> Result<()> {
+        let source = test::scan_partitioned(1);
+        let schema = source.schema();
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("i", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }]);
+
+        let mut global = GlobalLimitExec::new(Arc::clone(&source), 0, Some(10));
+        global.set_required_ordering(ordering.clone());
+        let rebuilt = Arc::new(global).replace_children(
+            vec![test::scan_partitioned(1)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let rebuilt = rebuilt.downcast_ref::<GlobalLimitExec>().unwrap();
+        assert_eq!(rebuilt.required_ordering(), &ordering);
+
+        let mut local = LocalLimitExec::new(source, 10);
+        local.set_required_ordering(ordering.clone());
+        let rebuilt = Arc::new(local).replace_children(
+            vec![test::scan_partitioned(1)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let rebuilt = rebuilt.downcast_ref::<LocalLimitExec>().unwrap();
+        assert_eq!(rebuilt.required_ordering(), &ordering);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_row_number_statistics_for_global_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_global_limit(0, Some(10))?;
         assert_eq!(row_count, Precision::Exact(10));
 
-        let row_count = row_number_statistics_for_global_limit(5, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(5, Some(10))?;
         assert_eq!(row_count, Precision::Exact(10));
 
-        let row_count = row_number_statistics_for_global_limit(400, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(400, Some(10))?;
         assert_eq!(row_count, Precision::Exact(0));
 
-        let row_count = row_number_statistics_for_global_limit(398, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(10))?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count = row_number_statistics_for_global_limit(398, Some(1)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(1))?;
         assert_eq!(row_count, Precision::Exact(1));
 
-        let row_count = row_number_statistics_for_global_limit(398, None).await?;
+        let row_count = row_number_statistics_for_global_limit(398, None)?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count =
-            row_number_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+        let row_count = row_number_statistics_for_global_limit(0, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Exact(400));
 
-        let row_count =
-            row_number_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(0, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(0, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(10));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(5, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(10));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
-        assert_eq!(row_count, Precision::Exact(0));
+        // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
+        // the inexact estimate could be wrong, so we cannot promote 0 to
+        // Exact.
+        let row_count = row_number_inexact_statistics_for_global_limit(400, Some(10))?;
+        assert_eq!(row_count, Precision::Inexact(0));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(2));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(1)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, Some(1))?;
         assert_eq!(row_count, Precision::Inexact(1));
 
-        let row_count = row_number_inexact_statistics_for_global_limit(398, None).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, None)?;
         assert_eq!(row_count, Precision::Inexact(2));
 
         let row_count =
-            row_number_inexact_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+            row_number_inexact_statistics_for_global_limit(0, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Inexact(400));
 
         let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+            row_number_inexact_statistics_for_global_limit(398, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Inexact(2));
 
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_row_number_statistics_for_local_limit() -> Result<()> {
-        let row_count = row_number_statistics_for_local_limit(4, 10).await?;
+    #[test]
+    fn test_row_number_statistics_for_local_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_local_limit(4, 10)?;
         assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())
     }
 
-    async fn row_number_statistics_for_global_limit(
+    fn row_number_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
     ) -> Result<Precision<usize>> {
@@ -837,7 +1022,9 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
+            .num_rows)
     }
 
     pub fn build_group_by(
@@ -851,7 +1038,7 @@ mod tests {
         PhysicalGroupBy::new_single(group_by_expr.clone())
     }
 
-    async fn row_number_inexact_statistics_for_global_limit(
+    fn row_number_inexact_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
     ) -> Result<Precision<usize>> {
@@ -877,10 +1064,12 @@ mod tests {
             fetch,
         );
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
+            .num_rows)
     }
 
-    async fn row_number_statistics_for_local_limit(
+    fn row_number_statistics_for_local_limit(
         num_partitions: usize,
         fetch: usize,
     ) -> Result<Precision<usize>> {
@@ -890,7 +1079,9 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset.partition_statistics(None)?.num_rows)
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
+            .num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

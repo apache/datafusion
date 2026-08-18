@@ -164,12 +164,15 @@ select array_contains(a, b) from array_has order by 1 nulls last;
 true
 NULL
 
-# Expected output (once supported):
-# ----
-# [5, 4, 3, 2, 1]
-query error
-select array_reverse(arrow_cast(make_array(1, 2, 3, 4, 5), 'ListView(Int64)'));
+query ?
+select array_reverse(arrow_cast([1, 2, 3, 4, 5], 'ListView(Int64)'));
+----
+[5, 4, 3, 2, 1]
 
+query ?
+select array_reverse(arrow_cast([1, 2, 3, 4, 5], 'LargeListView(Int64)'));
+----
+[5, 4, 3, 2, 1]
 
 statement ok
 drop table test_create_array_table;

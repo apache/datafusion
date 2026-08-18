@@ -34,18 +34,24 @@ use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
+    SortMergeJoinExec,
 };
+use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, common};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{NullEquality, ScalarValue};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 use itertools::Itertools;
 use rand::Rng;
+use rand::{SeedableRng, rngs::StdRng};
 use test_utils::stagger_batch_with_seed;
 
 // Determines what Fuzz tests needs to run
@@ -1008,14 +1014,12 @@ impl JoinFuzzTestCase {
 
             if join_tests.contains(&HjSmj) {
                 let err_msg_row_cnt = format!(
-                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}",
-                    &batch_size
+                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {batch_size}"
                 );
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
                 let err_msg_contents = format!(
-                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}",
-                    &batch_size
+                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {batch_size}"
                 );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
@@ -1070,10 +1074,10 @@ impl JoinFuzzTestCase {
             let mut file = std::fs::File::create(&file_path).unwrap();
             println!(
                 "{}: Saving batch idx {} rows {} to parquet {}",
-                &out_name,
+                out_name,
                 idx,
                 batch.num_rows(),
-                &file_path
+                file_path
             );
             let mut writer = parquet::arrow::ArrowWriter::try_new(
                 &mut file,
@@ -1348,4 +1352,219 @@ fn make_staggered_batches_binary(
 
     // preserve your existing randomized partitioning
     stagger_batch_with_seed(batch, 42)
+}
+
+// ---- Differential fuzz: PiecewiseMergeJoin existence joins vs NestedLoopJoin ----
+//
+// `PiecewiseMergeJoinExec` takes a range predicate and no equi keys, so it cannot be added to
+// `JoinFuzzTestCase` above (that harness joins on `a` and `b` and folds the equality into the
+// NestedLoopJoin filter). These tests use `NestedLoopJoinExec` with an equivalent filter as
+// the oracle instead.
+//
+// What only randomization reaches: `LeftSemi`/`LeftAnti` record matches in a shared
+// `AtomicUsize` watermark and emit once, from whichever streamed partition finishes last. The
+// streamed side below is spread round-robin over several partitions as one-row batches, so
+// batches arrive in an order no static test pins down, and the counter that gates the final
+// pass is seeded from a partition count that deliberately disagrees with the `num_partitions`
+// argument.
+
+fn pwmj_kv_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
+        arrow::datatypes::Field::new("k", arrow::datatypes::DataType::Int32, true),
+    ]))
+}
+
+fn pwmj_kv_batch(ids: &[i32], keys: &[Option<i32>]) -> RecordBatch {
+    RecordBatch::try_new(
+        pwmj_kv_schema(),
+        vec![
+            Arc::new(Int32Array::from(ids.to_vec())),
+            Arc::new(Int32Array::from(keys.to_vec())),
+        ],
+    )
+    .unwrap()
+}
+
+/// Single-partition, single-batch input: the buffered side, and the oracle's probe side.
+fn pwmj_single_exec(ids: &[i32], keys: &[Option<i32>]) -> Arc<dyn ExecutionPlan> {
+    MemorySourceConfig::try_new_exec(
+        &[vec![pwmj_kv_batch(ids, keys)]],
+        pwmj_kv_schema(),
+        None,
+    )
+    .unwrap()
+}
+
+/// Streamed side spread round-robin across `nparts` partitions, one row per batch.
+fn pwmj_parts_exec(
+    ids: &[i32],
+    keys: &[Option<i32>],
+    nparts: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let nparts = nparts.max(1);
+    let mut partitions: Vec<Vec<RecordBatch>> = vec![Vec::new(); nparts];
+    for (row, (&id, key)) in ids.iter().zip(keys.iter()).enumerate() {
+        partitions[row % nparts].push(pwmj_kv_batch(&[id], &[*key]));
+    }
+    for p in partitions.iter_mut() {
+        if p.is_empty() {
+            p.push(pwmj_kv_batch(&[], &[]));
+        }
+    }
+    MemorySourceConfig::try_new_exec(&partitions, pwmj_kv_schema(), None).unwrap()
+}
+
+fn pwmj_existence_plan(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    op: Operator,
+    join_type: JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    // Matches `PiecewiseMergeJoinExec::required_input_ordering`: descending for `<`/`<=`,
+    // ascending for `>`/`>=`, NULLs first either way.
+    let sort_options = match op {
+        Operator::Lt | Operator::LtEq => SortOptions::new(true, true),
+        Operator::Gt | Operator::GtEq => SortOptions::new(false, true),
+        other => panic!("not a range operator: {other:?}"),
+    };
+    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+        Arc::new(Column::new("k", 1)),
+        sort_options,
+    )])
+    .unwrap();
+    let sorted_left = Arc::new(SortExec::new(ordering, left));
+    let on: (PhysicalExprRef, PhysicalExprRef) =
+        (Arc::new(Column::new("k", 1)), Arc::new(Column::new("k", 1)));
+    // `num_partitions` is 1 while the streamed side has up to 3: the final-pass counter must
+    // come from the streamed side's partition count, not from this argument.
+    Arc::new(
+        PiecewiseMergeJoinExec::try_new(sorted_left, right, on, op, join_type, 1)
+            .unwrap(),
+    )
+}
+
+fn pwmj_nlj_oracle_plan(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    op: Operator,
+    join_type: JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    let intermediate_schema = Schema::new(vec![
+        arrow::datatypes::Field::new("k", arrow::datatypes::DataType::Int32, true),
+        arrow::datatypes::Field::new("k", arrow::datatypes::DataType::Int32, true),
+    ]);
+    let expr = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("k", 0)),
+        op,
+        Arc::new(Column::new("k", 1)),
+    )) as PhysicalExprRef;
+    let column_indices = vec![
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Right,
+        },
+    ];
+    let filter = JoinFilter::new(expr, column_indices, Arc::new(intermediate_schema));
+    Arc::new(
+        NestedLoopJoinExec::try_new(left, right, Some(filter), &join_type, None).unwrap(),
+    )
+}
+
+/// Executes every output partition concurrently and returns the surviving left `id`s, sorted.
+///
+/// Concurrent rather than one partition at a time: the partitions share the watermark and race
+/// to be the one that runs the final pass, which is the part a sequential drain cannot reach.
+async fn pwmj_collect_ids(
+    plan: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Vec<i32> {
+    let streams = (0..plan.output_partitioning().partition_count())
+        .map(|partition| plan.execute(partition, Arc::clone(&task_ctx)).unwrap())
+        .collect::<Vec<_>>();
+    let per_partition =
+        futures::future::join_all(streams.into_iter().map(|stream| {
+            SpawnedTask::spawn(async move { common::collect(stream).await })
+        }))
+        .await;
+
+    let mut ids = Vec::new();
+    for batches in per_partition {
+        for batch in batches.unwrap().unwrap() {
+            let col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            ids.extend((0..col.len()).map(|i| col.value(i)));
+        }
+    }
+    ids.sort();
+    ids
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fuzz_pwmj_existence_matches_nested_loop() {
+    // A small batch size splits the final-pass output across several coalesced batches even
+    // for these tiny inputs, covering that boundary too.
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(3)),
+    );
+    let ops = [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq];
+
+    for seed in 0..60u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let left_len = rng.random_range(0..25usize);
+        let right_len = rng.random_range(0..25usize);
+        // A narrow key range forces duplicates and equal-boundary cases.
+        let key_range = rng.random_range(1..6i32);
+        let nparts = rng.random_range(1..4usize);
+
+        let gen_keys = |n: usize, rng: &mut StdRng| -> Vec<Option<i32>> {
+            (0..n)
+                .map(|_| (!rng.random_bool(0.2)).then(|| rng.random_range(0..key_range)))
+                .collect()
+        };
+
+        let left_ids: Vec<i32> = (0..left_len as i32).collect();
+        let left_keys = gen_keys(left_len, &mut rng);
+        let right_ids: Vec<i32> = (0..right_len as i32).collect();
+        let right_keys = gen_keys(right_len, &mut rng);
+
+        for op in ops {
+            for join_type in [JoinType::LeftSemi, JoinType::LeftAnti] {
+                let got = pwmj_collect_ids(
+                    pwmj_existence_plan(
+                        pwmj_single_exec(&left_ids, &left_keys),
+                        pwmj_parts_exec(&right_ids, &right_keys, nparts),
+                        op,
+                        join_type,
+                    ),
+                    Arc::clone(&task_ctx),
+                )
+                .await;
+                let want = pwmj_collect_ids(
+                    pwmj_nlj_oracle_plan(
+                        pwmj_single_exec(&left_ids, &left_keys),
+                        pwmj_single_exec(&right_ids, &right_keys),
+                        op,
+                        join_type,
+                    ),
+                    Arc::clone(&task_ctx),
+                )
+                .await;
+
+                assert_eq!(
+                    got, want,
+                    "mismatch seed={seed} op={op:?} join_type={join_type:?} \
+                     nparts={nparts} left_keys={left_keys:?} right_keys={right_keys:?}"
+                );
+            }
+        }
+    }
 }

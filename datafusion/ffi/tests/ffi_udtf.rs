@@ -26,7 +26,7 @@ mod tests {
 
     use arrow::array::{ArrayRef, create_array};
     use datafusion::catalog::TableFunctionImpl;
-    use datafusion::error::{DataFusionError, Result};
+    use datafusion::error::Result;
     use datafusion_ffi::tests::utils::get_module;
 
     /// This test validates that we can load an external module and use a scalar
@@ -37,12 +37,7 @@ mod tests {
         let module = get_module()?;
         let (ctx, codec) = super::utils::ctx_and_codec();
 
-        let ffi_table_func = module
-            .create_table_function()
-            .ok_or(DataFusionError::NotImplemented(
-            "External table function provider failed to implement create_table_function"
-                .to_string(),
-        ))?(codec);
+        let ffi_table_func = (module.create_table_function)(codec);
         let foreign_table_func: Arc<dyn TableFunctionImpl> = ffi_table_func.into();
 
         ctx.register_udtf("my_range", foreign_table_func);

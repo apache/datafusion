@@ -74,9 +74,11 @@ impl ScalarUDFImpl for SparkArrayRepeat {
 
         // Coerce the second argument to Int64/UInt64 if it's a numeric type
         let second = match second_type {
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-                DataType::Int64
-            }
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Null => DataType::Int64,
             DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                 DataType::UInt64
             }
@@ -100,7 +102,7 @@ fn spark_array_repeat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
     let return_type = return_field.data_type().clone();
 
     // A NULL element should be repeated into the array, not cause a NULL result.
-    let null_mask = compute_null_mask(&arg_values[1..], number_rows)?;
+    let null_mask = compute_null_mask(&arg_values[1..]);
 
     // If count is null then return NULL immediately
     if matches!(null_mask, NullMaskResolution::ReturnNull) {

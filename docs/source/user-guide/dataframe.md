@@ -122,4 +122,4 @@ async fn main() -> Result<()> {
 [`collect`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.collect
 [library users guide]: ../library-user-guide/using-the-dataframe-api.md
 [api reference on docs.rs]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html
-[expressions reference]: expressions
+[expressions reference]: expressions.md

@@ -34,7 +34,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue, test_util};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-    use datafusion_datasource::{PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchemaBuilder};
     use datafusion_datasource_avro::AvroFormat;
     use datafusion_datasource_avro::source::AvroSource;
     use datafusion_execution::object_store::ObjectStoreUrl;
@@ -223,10 +223,13 @@ mod tests {
         partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
-        let table_schema = TableSchema::new(
-            file_schema.clone(),
-            vec![Arc::new(Field::new("date", DataType::Utf8, false))],
-        );
+        let table_schema = TableSchemaBuilder::from(file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "date",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
         let source = Arc::new(AvroSource::new(table_schema.clone()));
         let conf = FileScanConfigBuilder::new(object_store_url, source)
             // select specific columns of the files as well as the partitioning

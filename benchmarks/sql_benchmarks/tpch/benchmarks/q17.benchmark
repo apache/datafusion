@@ -1,0 +1,35 @@
+name Q17
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run
+select
+        sum(l_extendedprice) / 7.0 as avg_yearly
+from
+    lineitem,
+    part
+where
+        p_partkey = l_partkey
+  and p_brand = 'Brand#23'
+  and p_container = 'MED BOX'
+  and l_quantity < (
+    select
+            0.2 * avg(l_quantity)
+    from
+        lineitem
+    where
+            l_partkey = p_partkey
+);
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q17.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql

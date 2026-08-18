@@ -35,16 +35,19 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, Like, ScalarFunction, SetComparison, Sort, WindowFunction,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
+    HigherOrderFunction, InList, InSubquery, Like, ScalarFunction, SetComparison, Sort,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    comparison_coercion, like_coercion, type_union_coercion,
+    comparison_coercion, like_coercion, regex_coercion, type_union_coercion,
 };
-use datafusion_expr::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use datafusion_expr::type_coercion::functions::{
+    UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
+};
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
     get_coerce_type_for_list,
@@ -54,9 +57,10 @@ use datafusion_expr::type_coercion::{
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, is_false, is_not_false, is_not_true,
-    is_not_unknown, is_true, is_unknown, lit, not,
+    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator,
+    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -125,6 +129,21 @@ fn analyze_internal(
         schema.merge(&source_schema);
     }
 
+    // MERGE expressions (ON / WHEN clauses) reference the target table, which
+    // is not one of `plan.inputs()`. Rebuild the target schema from the DML's
+    // `table_name` and `target` so those columns resolve during coercion.
+    if let LogicalPlan::Dml(DmlStatement {
+        op: WriteOp::MergeInto(_),
+        table_name,
+        target,
+        ..
+    }) = &plan
+    {
+        let target_schema =
+            DFSchema::try_from_qualified_schema(table_name.clone(), &target.schema())?;
+        schema.merge(&target_schema);
+    }
+
     // merge the outer schema for correlated subqueries
     // like case:
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
@@ -174,8 +193,58 @@ impl<'a> TypeCoercionRewriter<'a> {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
+            LogicalPlan::Dml(dml) => self.coerce_dml(dml),
             _ => Ok(plan),
         }
+    }
+
+    fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
+        let WriteOp::MergeInto(merge_op) = &dml.op else {
+            return Ok(LogicalPlan::Dml(dml));
+        };
+
+        let target_schema = DFSchema::try_from_qualified_schema(
+            dml.table_name.clone(),
+            &dml.target.schema(),
+        )?;
+        let mut merge_op = (**merge_op).clone();
+        merge_op.on = self.coerce_predicate(merge_op.on, "MERGE ON condition")?;
+        for clause in &mut merge_op.clauses {
+            clause.predicate = clause
+                .predicate
+                .take()
+                .map(|expr| self.coerce_predicate(expr, "MERGE WHEN condition"))
+                .transpose()?;
+
+            match &mut clause.action {
+                datafusion_expr::dml::MergeIntoAction::Update(assignments) => {
+                    for (column, value) in assignments {
+                        let field = target_schema.field_with_unqualified_name(column)?;
+                        *value = value.clone().cast_to(field.data_type(), self.schema)?;
+                    }
+                }
+                datafusion_expr::dml::MergeIntoAction::Insert { columns, values } => {
+                    if columns.is_empty() {
+                        for (value, field) in
+                            values.iter_mut().zip(target_schema.fields())
+                        {
+                            *value =
+                                value.clone().cast_to(field.data_type(), self.schema)?;
+                        }
+                    } else {
+                        for (column, value) in columns.iter().zip(values) {
+                            let field =
+                                target_schema.field_with_unqualified_name(column)?;
+                            *value =
+                                value.clone().cast_to(field.data_type(), self.schema)?;
+                        }
+                    }
+                }
+                datafusion_expr::dml::MergeIntoAction::Delete => {}
+            }
+        }
+        dml.op = WriteOp::MergeInto(Box::new(merge_op));
+        Ok(LogicalPlan::Dml(dml))
     }
 
     /// Coerce join equality expressions and join filter
@@ -209,7 +278,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         // Join filter must be boolean
         join.filter = join
             .filter
-            .map(|expr| self.coerce_join_filter(expr))
+            .map(|expr| self.coerce_predicate(expr, "Join condition"))
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
@@ -277,12 +346,14 @@ impl<'a> TypeCoercionRewriter<'a> {
         }))
     }
 
-    fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
+    fn coerce_predicate(&self, expr: Expr, description: &str) -> Result<Expr> {
         let expr_type = expr.get_type(self.schema)?;
         match expr_type {
             DataType::Boolean => Ok(expr),
             DataType::Null => expr.cast_to(&DataType::Boolean, self.schema),
-            other => plan_err!("Join condition must be boolean type, but got {other:?}"),
+            other => {
+                plan_err!("{description} must be boolean type, but got {other:?}")
+            }
         }
     }
 
@@ -439,6 +510,38 @@ impl<'a> TypeCoercionRewriter<'a> {
 
         Ok(e)
     }
+
+    /// Coerce the value and pattern expressions of a string pattern matching
+    /// expression (`LIKE`, `ILIKE` or `SIMILAR TO`) to a common type using
+    /// the provided coercion rules. `LIKE` can preserve a dictionary-encoded
+    /// value expression, while regex array kernels require both operands to
+    /// have the same physical string type.
+    fn coerce_like_operands(
+        &self,
+        expr: Expr,
+        pattern: Expr,
+        coercion: fn(&DataType, &DataType) -> Option<DataType>,
+        op_name: &str,
+        preserve_utf8_dictionary: bool,
+    ) -> Result<(Box<Expr>, Box<Expr>)> {
+        let left_type = expr.get_type(self.schema)?;
+        let right_type = pattern.get_type(self.schema)?;
+        let coerced_type = coercion(&left_type, &right_type).ok_or_else(|| {
+            plan_datafusion_err!(
+                "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
+            )
+        })?;
+        let expr = match left_type {
+            DataType::Dictionary(_, inner)
+                if preserve_utf8_dictionary && *inner == DataType::Utf8 =>
+            {
+                Box::new(expr)
+            }
+            _ => Box::new(expr.cast_to(&coerced_type, self.schema)?),
+        };
+        let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
+        Ok((expr, pattern))
+    }
 }
 
 impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
@@ -585,24 +688,41 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 escape_char,
                 case_insensitive,
             }) => {
-                let left_type = expr.get_type(self.schema)?;
-                let right_type = pattern.get_type(self.schema)?;
-                let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
-                    let op_name = if case_insensitive {
-                        "ILIKE"
-                    } else {
-                        "LIKE"
-                    };
-                    plan_datafusion_err!(
-                        "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
-                    )
-                })?;
-                let expr = match left_type {
-                    DataType::Dictionary(_, inner) if *inner == DataType::Utf8 => expr,
-                    _ => Box::new(expr.cast_to(&coerced_type, self.schema)?),
-                };
-                let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
+                let op_name = if case_insensitive { "ILIKE" } else { "LIKE" };
+                let (expr, pattern) = self.coerce_like_operands(
+                    *expr,
+                    *pattern,
+                    like_coercion,
+                    op_name,
+                    true,
+                )?;
                 Ok(Transformed::yes(Expr::Like(Like::new(
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                ))))
+            }
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                // `SIMILAR TO` is planned as a regex operator, so its operands
+                // must be coerced to a common string type using the same
+                // coercion rules as the physical regex operators. Otherwise
+                // mismatched operand types panic during execution.
+                let (expr, pattern) = self.coerce_like_operands(
+                    *expr,
+                    *pattern,
+                    regex_coercion,
+                    "SIMILAR TO",
+                    false,
+                )?;
+                Ok(Transformed::yes(Expr::SimilarTo(Like::new(
                     negated,
                     expr,
                     pattern,
@@ -712,6 +832,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }) => {
                 let new_expr =
                     coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
+
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
+
                 Ok(Transformed::yes(Expr::AggregateFunction(
                     expr::AggregateFunction::new_udf(
                         func,
@@ -749,6 +875,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     }
                 };
 
+                let filter = filter
+                    .map(|filter| filter.cast_to(&DataType::Boolean, self.schema))
+                    .transpose()?
+                    .map(Box::new);
+
                 let new_expr = Expr::from(WindowFunction {
                     fun,
                     params: expr::WindowFunctionParams {
@@ -763,13 +894,41 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 });
                 Ok(Transformed::yes(new_expr))
             }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+                let current_fields = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(lambda) => Ok(ValueOrLambda::Lambda(
+                            lambda.body.to_field(self.schema)?.1,
+                        )),
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(self.schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &current_fields,
+                    func.as_ref(),
+                )?;
+
+                let new_args = std::iter::zip(args, new_fields)
+                    .map(|(arg, new_field)| match (&arg, new_field) {
+                        (Expr::Lambda(_lambda), ValueOrLambda::Lambda(_)) => Ok(arg),
+                        (Expr::Lambda(_lambda), ValueOrLambda::Value(_)) => internal_err!("value_fields_with_higher_order_udf returned a value for a lambda argument"),
+                        (_, ValueOrLambda::Value(new_field)) => arg.cast_to(new_field.data_type(), self.schema),
+                        (_, ValueOrLambda::Lambda(_)) => internal_err!("value_fields_with_higher_order_udf returned a lambda for a value argument"),
+                    })
+                    .collect::<Result<_>>()?;
+
+                Ok(Transformed::yes(Expr::HigherOrderFunction(
+                    HigherOrderFunction::new(func, new_args),
+                )))
+            }
             // TODO: remove the next line after `Expr::Wildcard` is removed
             #[expect(deprecated)]
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _)
-            | Expr::SimilarTo(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
             | Expr::Cast(_)
@@ -777,7 +936,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::OuterReferenceColumn(_, _) => Ok(Transformed::no(expr)),
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => Ok(Transformed::no(expr)),
         }
     }
 }
@@ -1277,7 +1438,9 @@ mod test {
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
+    use datafusion_common::{
+        DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference,
+    };
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
@@ -1288,7 +1451,6 @@ mod test {
         col, create_udaf, is_true, lit,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
-    use datafusion_sql::TableReference;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1439,6 +1601,88 @@ mod test {
             EmptyRelation: rows=0
         "
         )
+    }
+
+    #[test]
+    fn merge_into_resolves_and_coerces_target_and_source_columns() -> Result<()> {
+        use datafusion_expr::dml::{
+            MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+        };
+        use datafusion_expr::logical_plan::table_scan;
+        use datafusion_expr::{DmlStatement, WriteOp};
+
+        // Target table `target(id: UInt32)`.
+        let target_table_name = TableReference::bare("target");
+        let target_arrow_schema =
+            Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
+        let target_plan =
+            table_scan(Some(target_table_name.clone()), &target_arrow_schema, None)?
+                .build()?;
+        let target_source = match &target_plan {
+            LogicalPlan::TableScan(ts) => Arc::clone(&ts.source),
+            _ => unreachable!("table_scan() always builds a TableScan"),
+        };
+
+        // Source plan `source(id: Int64)` — deliberately a different numeric
+        // type than `target.id` so the `ON` comparison needs a CAST.
+        let source_arrow_schema =
+            Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let source_plan =
+            table_scan(Some("source"), &source_arrow_schema, None)?.build()?;
+
+        // `ON target.id = source.id`. Resolving `target.id` requires the
+        // target schema to be visible to the analyzer, which only sees
+        // `plan.inputs()` (the source plan) by default.
+        let on = col("target.id").eq(col("source.id"));
+        let merge_op = MergeIntoOp {
+            on,
+            clauses: vec![
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::Matched,
+                    predicate: None,
+                    action: MergeIntoAction::Update(vec![(
+                        "id".to_string(),
+                        col("source.id"),
+                    )]),
+                },
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::NotMatched,
+                    predicate: None,
+                    action: MergeIntoAction::Insert {
+                        columns: vec!["id".to_string()],
+                        values: vec![col("source.id")],
+                    },
+                },
+            ],
+        };
+        let plan = LogicalPlan::Dml(DmlStatement::new(
+            target_table_name,
+            target_source,
+            WriteOp::MergeInto(Box::new(merge_op)),
+            Arc::new(source_plan),
+        ));
+
+        let analyzed = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(plan, &ConfigOptions::default(), |_, _| {})?;
+        let LogicalPlan::Dml(dml) = analyzed else {
+            panic!("expected Dml");
+        };
+        let WriteOp::MergeInto(merge_op) = dml.op else {
+            panic!("expected MergeInto");
+        };
+        assert_eq!(
+            merge_op.on.to_string(),
+            "CAST(target.id AS Int64) = source.id"
+        );
+        let MergeIntoAction::Update(assignments) = &merge_op.clauses[0].action else {
+            panic!("expected UPDATE");
+        };
+        assert_eq!(assignments[0].1.to_string(), "CAST(source.id AS UInt32)");
+        let MergeIntoAction::Insert { values, .. } = &merge_op.clauses[1].action else {
+            panic!("expected INSERT");
+        };
+        assert_eq!(values[0].to_string(), "CAST(source.id AS UInt32)");
+        Ok(())
     }
 
     #[test]
@@ -1727,6 +1971,31 @@ mod test {
 
         fn signature(&self) -> &Signature {
             &self.signature
+        }
+
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(Utf8)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+        }
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct TestArrayElementUDF;
+
+    impl ScalarUDFImpl for TestArrayElementUDF {
+        fn name(&self) -> &str {
+            "TestArrayElementUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            static SIGNATURE: std::sync::LazyLock<Signature> =
+                std::sync::LazyLock::new(|| {
+                    Signature::array_and_index(Volatility::Immutable)
+                });
+            &SIGNATURE
         }
 
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
@@ -2164,6 +2433,113 @@ mod test {
         assert_type_coercion_error(
             plan,
             "There isn't a common type to coerce Int64 and Utf8 in ILIKE expression",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn similar_to_for_type_coercion() -> Result<()> {
+        // similar to : utf8 similar to "abc"
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(Utf8);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a SIMILAR TO Utf8("abc")
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // NULL pattern is coerced to a typed NULL instead of panicking
+        // (https://github.com/apache/datafusion/issues/22886)
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::Null));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(Utf8);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r"
+        Projection: a SIMILAR TO CAST(NULL AS Utf8)
+          EmptyRelation: rows=0
+        "
+        )?;
+
+        // Utf8View value and Utf8 pattern are coerced to Utf8View
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(DataType::Utf8View);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a SIMILAR TO CAST(Utf8("abc") AS Utf8View)
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // Utf8 value and Utf8View pattern are coerced to Utf8View
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::Utf8View(Some("abc".to_string()))));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(Utf8);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: CAST(a AS Utf8View) SIMILAR TO Utf8View("abc")
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // Dictionary values are coerced to the common regex operand type
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(Utf8),
+        ));
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: CAST(a AS Utf8) SIMILAR TO Utf8("abc")
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // incompatible types are a planning error, not a panic
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(DataType::Int64);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        assert_type_coercion_error(
+            plan,
+            "There isn't a common type to coerce Int64 and Utf8 in SIMILAR TO expression",
         )?;
 
         Ok(())
@@ -2630,6 +3006,33 @@ mod test {
             plan,
             @r#"
         Projection: a = CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))
+          EmptyRelation: rows=0
+        "#
+        )
+    }
+
+    #[test]
+    fn array_element_preserves_parquet_list_field_name() -> Result<()> {
+        let list_type = DataType::List(Arc::new(Field::new(
+            "element",
+            DataType::Struct(
+                vec![
+                    Field::new("id", Utf8, true),
+                    Field::new("prim", DataType::Boolean, true),
+                ]
+                .into(),
+            ),
+            true,
+        )));
+
+        let expr = ScalarUDF::from(TestArrayElementUDF).call(vec![col("a"), lit(1_i64)]);
+        let empty = empty_with_type(list_type);
+        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: TestArrayElementUDF(a, Int64(1))
           EmptyRelation: rows=0
         "#
         )

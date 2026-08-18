@@ -114,11 +114,10 @@ select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList
 []
 
 # array_union scalar function #7
-# re-enable when https://github.com/apache/arrow-rs/issues/9227 is fixed
-# query ?
-# select array_union([[null]], []);
-# ----
-# [[]]
+query ?
+select array_union([[null]], []);
+----
+[[NULL]]
 
 query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_union' function:
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));
@@ -235,6 +234,66 @@ query ?
 select array_except([1, 2], arrow_cast(null, 'List(Int64)'));
 ----
 NULL
+
+
+# Negative zero (-0.0) and positive zero (+0.0) compare equal under
+# IEEE 754, but their bit patterns differ. array_union and array_intersect
+# must normalize the sign for dedup / matching; the canonical
+# representative is +0.0. PostgreSQL / IEEE 754 expected output below.
+
+# array_union with +0.0 / -0.0
+query ?
+select array_union([0.0], [-0.0]);
+----
+[0.0]
+
+query ?
+select array_union([0.0, 1.0], [-0.0]);
+----
+[0.0, 1.0]
+
+query ?
+select array_union([0.0, -0.0, 1.0], [-0.0, 1.0]);
+----
+[0.0, 1.0]
+
+# Float32 list.
+query ?
+select array_union(arrow_cast([0.0], 'List(Float32)'), arrow_cast([-0.0], 'List(Float32)'));
+----
+[0.0]
+
+# LargeList(Float64).
+query ?
+select array_union(arrow_cast([0.0], 'LargeList(Float64)'), arrow_cast([-0.0], 'LargeList(Float64)'));
+----
+[0.0]
+
+
+# array_intersect with +0.0 / -0.0
+# +0.0 in lhs matches -0.0 in rhs.
+query ?
+select array_intersect([0.0, 1.0], [-0.0]);
+----
+[0.0]
+
+# Either +0.0 or -0.0 in lhs matches +0.0 in rhs (canonicalized to +0.0).
+query ?
+select array_intersect([0.0, -0.0], [0.0]);
+----
+[0.0]
+
+# Same with -0.0 in rhs.
+query ?
+select array_intersect([0.0, -0.0], [-0.0]);
+----
+[0.0]
+
+# Float32 list.
+query ?
+select array_intersect(arrow_cast([0.0], 'List(Float32)'), arrow_cast([-0.0], 'List(Float32)'));
+----
+[0.0]
 
 
 include ./cleanup.slt.part

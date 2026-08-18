@@ -21,12 +21,93 @@ mod tests {
     use arrow::datatypes::Schema;
     use arrow_schema::DataType;
     use datafusion_common::DataFusionError;
-    use datafusion_ffi::execution_plan::FFI_ExecutionPlan;
-    use datafusion_ffi::execution_plan::ForeignExecutionPlan;
-    use datafusion_ffi::execution_plan::{ExecutionPlanPrivateData, tests::EmptyExec};
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_ffi::execution_plan::{
+        ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
+        tests::EmptyExec,
+    };
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::execution_plan::InvariantLevel;
+    use datafusion_physical_plan::{
+        ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+    };
     use std::sync::Arc;
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_ffi_execution_plan_partition_statistics_cross_library()
+    -> Result<(), DataFusionError> {
+        let module = get_module()?;
+
+        // Producer: plan with no explicit statistics → expects Statistics::new_unknown.
+        let bare = (module.create_empty_exec)();
+        let bare: Arc<dyn ExecutionPlan> = (&bare).try_into()?;
+        assert!(bare.is::<ForeignExecutionPlan>());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+        let bare_stats = bare.partition_statistics(None)?;
+        assert_eq!(
+            bare_stats.as_ref(),
+            &datafusion_common::Statistics::new_unknown(&schema),
+        );
+
+        // Producer: plan with known statistics — round-trip through the cdylib boundary.
+        let expected = datafusion_ffi::tests::make_test_statistics();
+        let with_stats = (module.create_exec_with_statistics)();
+        let with_stats: Arc<dyn ExecutionPlan> = (&with_stats).try_into()?;
+        assert!(with_stats.is::<ForeignExecutionPlan>());
+
+        // Both None (all-partition aggregate) and Some(idx) must return the
+        // same statistics because EmptyExec ignores the partition argument.
+        let observed_all = with_stats.partition_statistics(None)?;
+        assert_eq!(observed_all.as_ref(), &expected);
+
+        let observed_part = with_stats.partition_statistics(Some(0))?;
+        assert_eq!(observed_part.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_expressions_cross_library() -> Result<(), DataFusionError>
+    {
+        let module = get_module()?;
+        let plan = (module.create_exec_with_expressions)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+
+        let mut retained = None;
+        plan.apply_expressions(&mut |expr| {
+            retained = Some(Arc::clone(expr));
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        drop(plan);
+
+        assert!(
+            retained
+                .as_ref()
+                .and_then(|expr| expr.expression_id())
+                .is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_dynamic_expressions_cross_library()
+    -> Result<(), DataFusionError> {
+        let module = get_module()?;
+        let plan = (module.create_exec_with_dynamic_expressions)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+        plan.check_invariants(InvariantLevel::Always)?;
+
+        let produced = plan.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        assert!(produced[0].expression_id().is_some());
+        drop(plan);
+        assert!(produced[0].expression_id().is_some());
+        Ok(())
+    }
 
     #[test]
     fn test_ffi_execution_plan_new_sets_runtimes_on_children()
@@ -49,12 +130,7 @@ mod tests {
             Arc::new(EmptyExec::new(schema))
         }
 
-        let child_plan =
-            module
-                .create_empty_exec()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External module failed to implement create_empty_exec".to_string(),
-                ))?();
+        let child_plan = (module.create_empty_exec)();
         let child_plan: Arc<dyn ExecutionPlan> = (&child_plan)
             .try_into()
             .expect("should be able create plan");
@@ -62,7 +138,10 @@ mod tests {
 
         let grandchild_plan = generate_local_plan();
 
-        let child_plan = child_plan.with_new_children(vec![grandchild_plan])?;
+        let child_plan = child_plan.replace_children(
+            vec![grandchild_plan],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
 
         unsafe {
             // Originally the runtime is not set. We go through the unsafe casting
@@ -77,7 +156,10 @@ mod tests {
             assert!((*grandchild_private_data).runtime.is_none());
         }
 
-        let parent_plan = generate_local_plan().with_new_children(vec![child_plan])?;
+        let parent_plan = generate_local_plan().replace_children(
+            vec![child_plan],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
 
         // Adding the grandchild beneath this FFI plan should get the runtime passed down.
         let runtime = tokio::runtime::Builder::new_current_thread()

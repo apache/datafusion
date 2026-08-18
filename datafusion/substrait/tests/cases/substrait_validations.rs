@@ -62,7 +62,7 @@ mod tests {
                 read_json("tests/testdata/test_plans/simple_select.substrait.json");
             // this is the exact schema of the Substrait plan
             let df_schema =
-                vec![("a", DataType::Int32, false), ("b", DataType::Int32, true)];
+                vec![("a", DataType::Int32, true), ("b", DataType::Int32, false)];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
@@ -83,8 +83,8 @@ mod tests {
                 read_json("tests/testdata/test_plans/simple_select.substrait.json");
             // the DataFusion schema { b, a, c } contains the Substrait schema { a, b }
             let df_schema = vec![
-                ("b", DataType::Int32, true),
-                ("a", DataType::Int32, false),
+                ("b", DataType::Int32, false),
+                ("a", DataType::Int32, true),
                 ("c", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
@@ -148,6 +148,23 @@ mod tests {
                 generate_context_with_table("DATA", vec![("a", DataType::Date32, true)])?;
             let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
             assert!(res.is_err());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn reject_plans_with_incompatible_field_nullability() -> Result<()> {
+            let proto_plan =
+                read_json("tests/testdata/test_plans/simple_select.substrait.json");
+            let df_schema =
+                vec![("a", DataType::Int32, true), ("b", DataType::Int32, true)];
+
+            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
+
+            assert_snapshot!(
+                res.unwrap_err().strip_backtrace(),
+                @r#"Substrait error: Field 'b' is nullable in the DataFusion schema but not nullable in the Substrait schema."#
+            );
             Ok(())
         }
     }

@@ -15,11 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{
+    Array, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringArrayType,
+    StringViewArray,
+};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 
+use crate::strings::{
+    BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringWriter,
+};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
@@ -112,145 +117,215 @@ impl ScalarUDFImpl for OverlayFunc {
     }
 }
 
-macro_rules! process_overlay {
-    // For the three-argument case
-    ($string_array:expr, $characters_array:expr, $pos_num:expr) => {{
-        $string_array
-        .iter()
-        .zip($characters_array.iter())
-        .zip($pos_num.iter())
-        .map(|((string, characters), start_pos)| {
-            match (string, characters, start_pos) {
-                (Some(string), Some(characters), Some(start_pos)) => {
-                    let string_len = string.chars().count();
-                    let characters_len = characters.chars().count();
-                    let replace_len = characters_len as i64;
-                    let mut res =
-                        String::with_capacity(string_len.max(characters_len));
+/// Computes the byte ranges of `string` to keep around the replaced span: the
+/// prefix is `string[..prefix_end]` and the suffix is `string[suffix_start..]`.
+///
+/// `start_pos` is a 1-based character position; the caller must ensure it is
+/// `>= 1`. `replace_len` is the number of characters of `string` to replace,
+/// and may be negative (in which case `suffix_start <= prefix_end` and the
+/// result re-emits part of the original string).
+///
+/// Matches PostgreSQL semantics for codepoint indices past the end of
+/// `string`: `prefix_end` and `suffix_start` clamp to `string.len()`.
+fn overlay_bounds(string: &str, start_pos: i64, replace_len: i64) -> (usize, usize) {
+    let start_char_idx = start_pos - 1;
+    let end_char_idx = start_char_idx.saturating_add(replace_len);
 
-                    //as sql replace index start from 1 while string index start from 0
-                    if start_pos > 1 && start_pos - 1 < string_len as i64 {
-                        let start = (start_pos - 1) as usize;
-                        res.push_str(&string[..start]);
-                    }
-                    res.push_str(characters);
-                    // if start + replace_len - 1 >= string_length, just to string end
-                    if start_pos + replace_len - 1 < string_len as i64 {
-                        let end = (start_pos + replace_len - 1) as usize;
-                        res.push_str(&string[end..]);
-                    }
-                    Ok(Some(res))
-                }
-                _ => Ok(None),
-            }
-        })
-        .collect::<Result<GenericStringArray<T>>>()
-    }};
+    if string.is_ascii() {
+        // ASCII fast path: byte index == codepoint index.
+        let len = string.len() as i64;
+        let prefix_end = start_char_idx.clamp(0, len) as usize;
+        let suffix_start = end_char_idx.clamp(0, len) as usize;
+        return (prefix_end, suffix_start);
+    }
 
-    // For the four-argument case
-    ($string_array:expr, $characters_array:expr, $pos_num:expr, $len_num:expr) => {{
-        $string_array
-        .iter()
-        .zip($characters_array.iter())
-        .zip($pos_num.iter())
-        .zip($len_num.iter())
-        .map(|(((string, characters), start_pos), len)| {
-            match (string, characters, start_pos, len) {
-                (Some(string), Some(characters), Some(start_pos), Some(len)) => {
-                    let string_len = string.chars().count();
-                    let characters_len = characters.chars().count();
-                    let replace_len = len.min(string_len as i64);
-                    let mut res =
-                        String::with_capacity(string_len.max(characters_len));
+    let prefix_target = usize::try_from(start_char_idx).unwrap_or(usize::MAX);
+    let suffix_target = usize::try_from(end_char_idx.max(0)).unwrap_or(usize::MAX);
+    let target_max = prefix_target.max(suffix_target);
 
-                    //as sql replace index start from 1 while string index start from 0
-                    if start_pos > 1 && start_pos - 1 < string_len as i64 {
-                        let start = (start_pos - 1) as usize;
-                        res.push_str(&string[..start]);
-                    }
-                    res.push_str(characters);
-                    // if start + replace_len - 1 >= string_length, just to string end
-                    if start_pos + replace_len - 1 < string_len as i64 {
-                        let end = (start_pos + replace_len - 1) as usize;
-                        res.push_str(&string[end..]);
-                    }
-                    Ok(Some(res))
-                }
-                _ => Ok(None),
-            }
-        })
-        .collect::<Result<GenericStringArray<T>>>()
-    }};
+    // Single forward pass over codepoint boundaries records both targets.
+    // Either target falls through to `string.len()` if past the codepoint
+    // count.
+    let mut prefix_byte = string.len();
+    let mut suffix_byte = string.len();
+    for (count, (byte_idx, _)) in string.char_indices().enumerate() {
+        if count == prefix_target {
+            prefix_byte = byte_idx;
+        }
+        if count == suffix_target {
+            suffix_byte = byte_idx;
+        }
+        if count == target_max {
+            break;
+        }
+    }
+    (prefix_byte, suffix_byte)
 }
 
-/// OVERLAY(string1 PLACING string2 FROM integer FOR integer2)
-/// Replaces a substring of string1 with string2 starting at the integer bit
-/// pgsql overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas
-/// overlay('Txxxxas' placing 'hom' from 2) -> Thomxas, without for option, str2's len is instead
-fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let use_string_view = args[0].data_type() == &DataType::Utf8View;
-    if use_string_view {
-        string_view_overlay::<T>(args)
+/// Appends the overlay result for one non-null row into `builder`.
+#[inline]
+fn apply_overlay<B: BulkNullStringArrayBuilder>(
+    string: &str,
+    characters: &str,
+    start_pos: i64,
+    replace_len: i64,
+    builder: &mut B,
+) -> Result<()> {
+    if start_pos < 1 {
+        return exec_err!("overlay start position must be at least 1: {start_pos}");
+    }
+    let (prefix_end, suffix_start) = overlay_bounds(string, start_pos, replace_len);
+    builder.append_with(|w| {
+        w.write_str(&string[..prefix_end]);
+        w.write_str(characters);
+        w.write_str(&string[suffix_start..]);
+    });
+    Ok(())
+}
+
+#[inline]
+fn char_count(characters: &str) -> i64 {
+    if characters.is_ascii() {
+        characters.len() as i64
     } else {
-        string_overlay::<T>(args)
+        characters.chars().count() as i64
     }
 }
 
-fn string_overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        3 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-            let pos_num = as_int64_array(&args[2])?;
+/// `OVERLAY(string PLACING substring FROM start [FOR count])`
+///
+/// Replaces a region of `string` with `substring`, starting at the 1-based
+/// character position `start`. If `count` is supplied, that many characters
+/// of `string` are replaced; otherwise `count` defaults to the character
+/// length of `substring`.
+///
+/// ```text
+/// overlay('Txxxxas' placing 'hom' from 2 for 4) → 'Thomas'
+/// overlay('Txxxxas' placing 'hom' from 2)       → 'Thomxas'
+/// ```
+fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if !matches!(args.len(), 3 | 4) {
+        return exec_err!(
+            "overlay was called with {} arguments. It requires 3 or 4.",
+            args.len()
+        );
+    }
+    let pos_array = as_int64_array(&args[2])?;
+    let len_array = if args.len() == 4 {
+        Some(as_int64_array(&args[3])?)
+    } else {
+        None
+    };
 
-            let result = process_overlay!(string_array, characters_array, pos_num)?;
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        4 => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
-            let pos_num = as_int64_array(&args[2])?;
-            let len_num = as_int64_array(&args[3])?;
-
-            let result =
-                process_overlay!(string_array, characters_array, pos_num, len_num)?;
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => {
-            exec_err!("overlay was called with {other} arguments. It requires 3 or 4.")
-        }
+    if args[0].data_type() == &DataType::Utf8View {
+        let string_array = as_string_view_array(&args[0])?;
+        let characters_array = as_string_view_array(&args[1])?;
+        let data_capacity = visible_view_bytes(string_array)
+            .saturating_add(visible_view_bytes(characters_array));
+        let builder = GenericStringArrayBuilder::<i32>::with_capacity(
+            string_array.len(),
+            data_capacity,
+        );
+        overlay_inner(
+            string_array,
+            characters_array,
+            pos_array,
+            len_array,
+            builder,
+        )
+    } else {
+        let string_array = as_generic_string_array::<T>(&args[0])?;
+        let characters_array = as_generic_string_array::<T>(&args[1])?;
+        let data_capacity = visible_offset_bytes(string_array)
+            .saturating_add(visible_offset_bytes(characters_array));
+        let builder = GenericStringArrayBuilder::<T>::with_capacity(
+            string_array.len(),
+            data_capacity,
+        );
+        overlay_inner(
+            string_array,
+            characters_array,
+            pos_array,
+            len_array,
+            builder,
+        )
     }
 }
 
-fn string_view_overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        3 => {
-            let string_array = as_string_view_array(&args[0])?;
-            let characters_array = as_string_view_array(&args[1])?;
-            let pos_num = as_int64_array(&args[2])?;
+/// Drives the per-row OVERLAY computation. A null in any input array
+/// produces a null output.
+fn overlay_inner<'a, V, B>(
+    string_array: V,
+    characters_array: V,
+    pos_array: &Int64Array,
+    len_array: Option<&Int64Array>,
+    mut builder: B,
+) -> Result<ArrayRef>
+where
+    V: StringArrayType<'a, Item = &'a str> + Copy,
+    B: BulkNullStringArrayBuilder,
+{
+    let len = string_array.len();
+    let nulls = NullBuffer::union_many([
+        string_array.nulls(),
+        characters_array.nulls(),
+        pos_array.nulls(),
+        len_array.and_then(|a| a.nulls()),
+    ]);
 
-            let result = process_overlay!(string_array, characters_array, pos_num)?;
-            Ok(Arc::new(result) as ArrayRef)
+    if let Some(nulls_ref) = nulls.as_ref() {
+        for i in 0..len {
+            if nulls_ref.is_null(i) {
+                builder.append_placeholder();
+                continue;
+            }
+            // SAFETY: `i < len`, and null bitmap check implies not-null
+            let string = unsafe { string_array.value_unchecked(i) };
+            let characters = unsafe { characters_array.value_unchecked(i) };
+            let start_pos = unsafe { pos_array.value_unchecked(i) };
+            let replace_len = match len_array {
+                Some(arr) => unsafe { arr.value_unchecked(i) },
+                None => char_count(characters),
+            };
+            apply_overlay(string, characters, start_pos, replace_len, &mut builder)?;
         }
-        4 => {
-            let string_array = as_string_view_array(&args[0])?;
-            let characters_array = as_string_view_array(&args[1])?;
-            let pos_num = as_int64_array(&args[2])?;
-            let len_num = as_int64_array(&args[3])?;
-
-            let result =
-                process_overlay!(string_array, characters_array, pos_num, len_num)?;
-            Ok(Arc::new(result) as ArrayRef)
-        }
-        other => {
-            exec_err!("overlay was called with {other} arguments. It requires 3 or 4.")
+    } else {
+        for i in 0..len {
+            // SAFETY: `i < len`, and no null bitmap means no nulls
+            let string = unsafe { string_array.value_unchecked(i) };
+            let characters = unsafe { characters_array.value_unchecked(i) };
+            let start_pos = unsafe { pos_array.value_unchecked(i) };
+            let replace_len = match len_array {
+                Some(arr) => unsafe { arr.value_unchecked(i) },
+                None => char_count(characters),
+            };
+            apply_overlay(string, characters, start_pos, replace_len, &mut builder)?;
         }
     }
+    builder.finish(nulls)
+}
+
+/// Bytes referenced by the visible window of `array`, computed from the
+/// per-view lengths.
+fn visible_view_bytes(array: &StringViewArray) -> usize {
+    array.lengths().map(|l| l as usize).sum()
+}
+
+/// Bytes referenced by the visible window of `array`, derived from the offset
+/// buffer.
+fn visible_offset_bytes<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> usize {
+    let offsets = array.value_offsets();
+    // `value_offsets()` always has `array.len() + 1` entries (≥1).
+    let first = offsets.first().copied().unwrap_or_default();
+    let last = offsets.last().copied().unwrap_or_default();
+    last.as_usize() - first.as_usize()
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Int64Array, StringArray};
+    use std::sync::Arc;
+
+    use arrow::array::StringArray;
 
     use super::*;
 
@@ -265,7 +340,9 @@ mod tests {
 
         let res = overlay::<i32>(&[string, replace_string, start, end]).unwrap();
         let result = as_generic_string_array::<i32>(&res).unwrap();
-        let expected = StringArray::from(vec!["abc", "qwertyasdfg", "ijkz", "Thomas"]);
+        // First row: start=4 is past the end of "123" (len 3). PostgreSQL
+        // takes the whole string as prefix and appends the replacement.
+        let expected = StringArray::from(vec!["123abc", "qwertyasdfg", "ijkz", "Thomas"]);
         assert_eq!(&expected, result);
 
         Ok(())

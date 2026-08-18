@@ -28,7 +28,7 @@ use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, normalize_float_zero};
 use datafusion_common::{
     Result, assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
 };
@@ -351,21 +351,28 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
+    // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
+    // and treats ±0 as distinct) groups them together. Use the normalized
+    // arrays for both row conversion and the final output values.
+    let l_values_norm = normalize_float_zero(l.values());
+    let r_values_norm = normalize_float_zero(r.values());
+
     // Only convert the visible portion of the values array. For sliced
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let l_first = l.offsets()[0].as_usize();
     let l_len = l.offsets()[l.len()].as_usize() - l_first;
-    let rows_l = converter.convert_columns(&[l.values().slice(l_first, l_len)])?;
+    let l_values = l_values_norm.slice(l_first, l_len);
+    let rows_l = converter.convert_columns(&[Arc::clone(&l_values)])?;
 
     let r_first = r.offsets()[0].as_usize();
     let r_len = r.offsets()[r.len()].as_usize() - r_first;
-    let rows_r = converter.convert_columns(&[r.values().slice(r_first, r_len)])?;
+    let r_values = r_values_norm.slice(r_first, r_len);
+    let rows_r = converter.convert_columns(&[Arc::clone(&r_values)])?;
 
-    // Combine the *sliced* value arrays so 0-based indices from the row
-    // converter map directly into the concatenated array.
-    let l_values = l.values().slice(l_first, l_len);
-    let r_values = r.values().slice(r_first, r_len);
+    // Indices from the row converter are 0-based in the per-side slice;
+    // concatenating those same slices lets indices map directly into the
+    // combined values array.
     let combined_values = concat(&[l_values.as_ref(), r_values.as_ref()])?;
     let r_offset = l_len;
 
@@ -558,13 +565,18 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
 
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
 
+    // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
+    // and treats ±0 as distinct) groups them together, and so the output
+    // carries the canonical sign.
+    let values_norm = normalize_float_zero(array.values());
+
     // Only convert the visible portion of the values array. For sliced
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let first_offset = value_offsets[0].as_usize();
     let visible_len = value_offsets[array.len()].as_usize() - first_offset;
     let rows =
-        converter.convert_columns(&[array.values().slice(first_offset, visible_len)])?;
+        converter.convert_columns(&[values_norm.slice(first_offset, visible_len)])?;
 
     let mut indices: Vec<usize> = Vec::with_capacity(rows.num_rows());
     let mut seen = HashSet::new();
@@ -593,19 +605,19 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     }
 
     // Gather distinct values in a single pass, using the computed `indices`.
-    // Indices are absolute positions in array.values() (first_offset was added
-    // back when collecting them), so we can take directly from the full values.
+    // Indices are absolute positions in the (normalized) values array, so we
+    // can take directly from the full values.
     // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
     let final_values = if indices.is_empty() {
         new_empty_array(&dt)
     } else if OffsetSize::IS_LARGE {
         let indices =
             UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
-        take(array.values().as_ref(), &indices, None)?
+        take(values_norm.as_ref(), &indices, None)?
     } else {
         let indices =
             UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
-        take(array.values().as_ref(), &indices, None)?
+        take(values_norm.as_ref(), &indices, None)?
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(

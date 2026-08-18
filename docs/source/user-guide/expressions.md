@@ -287,7 +287,7 @@ select log(-1), log(0), sqrt(-1);
 
 | Syntax                                                                          | Description                                                                                                                                              |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| avg(expr)                                                                       | Сalculates the average value for `expr`.                                                                                                                 |
+| avg(expr)                                                                       | Calculates the average value for `expr`.                                                                                                                 |
 | avg_distinct(expr)                                                              | Creates an expression to represent the avg(distinct) aggregate function                                                                                  |
 | approx_distinct(expr)                                                           | Calculates an approximate count of the number of distinct values for `expr`.                                                                             |
 | approx_median(expr)                                                             | Calculates an approximation of the median for `expr`.                                                                                                    |
@@ -303,10 +303,10 @@ select log(-1), log(0), sqrt(-1);
 | cube(exprs)                                                                     | Creates a grouping set for all combination of `exprs`                                                                                                    |
 | grouping_set(exprs)                                                             | Create a grouping set.                                                                                                                                   |
 | max(expr)                                                                       | Finds the maximum value of `expr`.                                                                                                                       |
-| median(expr)                                                                    | Сalculates the median of `expr`.                                                                                                                         |
+| median(expr)                                                                    | Calculates the median of `expr`.                                                                                                                         |
 | min(expr)                                                                       | Finds the minimum value of `expr`.                                                                                                                       |
 | rollup(exprs)                                                                   | Creates a grouping set for rollup sets.                                                                                                                  |
-| sum(expr)                                                                       | Сalculates the sum of `expr`.                                                                                                                            |
+| sum(expr)                                                                       | Calculates the sum of `expr`.                                                                                                                            |
 | sum_distinct(expr)                                                              | Creates an expression to represent the sum(distinct) aggregate function                                                                                  |
 
 ## Aggregate Function Builder

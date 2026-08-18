@@ -77,7 +77,7 @@ We then publish the code in the approved artifacts to crates.io.
 
 ### 1. Create Release Branch
 
-First create a new release branch from `main` in the apache repository.
+First create a new release branch from `main` in the `apache` repository.
 
 For example, to create the `branch-50` branch for the `50.x.y` release series:
 
@@ -88,11 +88,28 @@ git checkout -b branch-50    # create local branch
 git push -u apache branch-50 # push branch to apache remote
 ```
 
-### 2. Add a protection to release candidate branch
+### 2. Prepare PR to Update the Release Version
 
-To protect a release candidate branch from accidental merges, run:
+Manually update the DataFusion version in the root `Cargo.toml` to
+reflect the new release version. Ensure `Cargo.lock` is updated accordingly by
+running:
 
 ```shell
+cargo check -p datafusion
+```
+
+Then commit the changes and create a PR targeting the release branch `branch-N`.
+
+```shell
+git commit -a -m 'Update version'
+```
+
+### 3. Protect Release Branch
+
+To protect a release candidate branch from accidental merges, create PR against `main`:
+
+```shell
+git fetch apache && git checkout -b protect_branch_50
 ./dev/release/add-branch-protection.sh 50
 ```
 
@@ -104,28 +121,22 @@ branch-50:
     required_approving_review_count: 1
 ```
 
-- Create a PR.
+- Commit changes
+- Push to `origin/protect_branch_50`
+- Create a PR against `main`.
 - Merge to `main`.
+- Notify community in Discord/Slack that release branch is created
 
-### 3. Prepare PR to Update Changelog and the Release Version
+### 4. Backporting urgent changes
 
-First, prepare a PR to update the changelog and versions to reflect the planned
-release. See [#18173](https://github.com/apache/datafusion/pull/18173) for an example.
+After release branch `branch-N` created, protected and got its version updated, please check if there are any backports expected from the community.
+Please refer to [Backport Flow](../../docs/source/contributor-guide/release_management.md#backport-workflow) for more details.
 
-- This PR should be the last one merged before creating a release
-  candidate, so the changelog includes all changes.
-- If there are code changes between RCs, create and merge a new PR to update
-  the changelog before creating the next RC.
+Backports are important and sometimes unexpected, so please proceed to next release steps once all expected backports are applied.
 
-**Step 1**: Manually update the DataFusion version in the root `Cargo.toml` to
-reflect the new release version. Ensure `Cargo.lock` is updated accordingly by
-running:
+### 5. Prepare PR to Update Changelog
 
-```shell
-cargo check -p datafusion
-```
-
-**Step 2**: Update the [changelog] in `dev/changelog/`. Each release has its
+Update the changelog in `dev/changelog/`. Each release has its
 own file, such as `dev/changelog/50.0.0.md`, which should include all changes
 since the previous release.
 
@@ -168,14 +179,12 @@ prettier -w dev/changelog/51.0.0.md
 Then commit the changes and create a PR targeting the release branch.
 
 ```shell
-git commit -a -m 'Update version'
+git commit -a -m 'Update changelog'
 ```
 
-Remember to merge any fixes back to the `main` branch as well.
+### 6. Prepare Release Candidate Artifacts
 
-### 4. Prepare Release Candidate Artifacts
-
-After the PR gets merged, you are ready to create release artifacts based off the
+After the changelog updates merged to `branch-N`, you are ready to create release artifacts based off the
 merged commit.
 
 - You must be a committer to run these scripts because they upload to the
@@ -191,26 +200,20 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 While the official release artifacts are signed tarballs and zip files, we also
 tag the commit it was created from for convenience and code archaeology. Release tags
-look like `38.0.0`, and release candidate tags look like `38.0.0-rc0`. See [the list of existing
+look like `50.3.0`, and release candidate tags look like `50.3.0-rc1`. See [the list of existing
 tags].
 
 [the list of existing tags]: https://github.com/apache/datafusion/tags
 
-Create and push the RC tag:
-
-```shell
-git fetch apache
-git tag <version>-rc<rc> apache/branch-X
-git push apache <version>-rc<rc>
-```
-
-For example, to create the `50.3.0-rc1` tag from `branch-50`, use:
+Create and push the RC tag, for example, to create the `50.3.0-rc1` tag from `branch-50`, use:
 
 ```shell
 git fetch apache
 git tag 50.3.0-rc1 apache/branch-50
 git push apache 50.3.0-rc1
 ```
+
+Please make sure the format is correct, tools like Homebrew listens for tags and in case of malformed tags users would be notified for non-existent version
 
 #### Create, Sign, and Upload Artifacts
 
@@ -219,19 +222,19 @@ Run the `create-tarball.sh` script with the `<version>` tag and `<rc>` number yo
 For example, to create the `50.3.0-rc1` artifacts:
 
 ```shell
-GH_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 50.3.0 1
+GITHUB_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 50.3.0 1
 ```
 
 The `create-tarball.sh` script
 
 1. Creates and uploads all release candidate artifacts to the [datafusion
    dev](https://dist.apache.org/repos/dist/dev/datafusion) location on the
-   apache distribution SVN server
+   Apache distribution SVN server
 
 2. Provides you an email template to
    send to `dev@datafusion.apache.org` for release voting.
 
-### 5. Vote on Release Candidate Artifacts
+### 7. Vote on Release Candidate Artifacts
 
 Send the email output from the script to `dev@datafusion.apache.org`.
 
@@ -248,19 +251,13 @@ review the release candidate.
 ./dev/release/verify-release-candidate.sh 50.3.0 1
 ```
 
-#### If the Release is not Approved
+#### If Changes Are Requested
 
-If the release is not approved, fix whatever the problem is, make a new release
-candidate and try again.
-
-Reminders:
-
-1. Update the changelog and create a new PR if there are any code changes, and merge it before creating the next RC.
-2. Merge any fixes back to the `main` branch as well.
+If the release is not approved or urgent backports requested, please start over from [here](#4-backporting-urgent-changes)
 
 #### If the Vote Passes: Announce the Result
 
-Call the vote on the Arrow dev list by replying to the RC voting thread. The
+Call the vote on the Datafusion dev list by replying to the RC voting thread. The
 reply should have a new subject constructed by adding the `[RESULT]` prefix to the
 old subject line.
 
@@ -271,11 +268,9 @@ The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
 with the release verification.
 ```
 
-### 6. Finalize the Release
+### 8. Finalize the Release
 
-NOTE: steps in this section can only be done by PMC members.
-
-#### After the release is approved
+NOTE: steps in this section can only be done by PMC members after release is approved.
 
 Move artifacts to the release location in SVN, e.g.
 https://dist.apache.org/repos/dist/release/datafusion/datafusion-50.3.0/, using
@@ -287,17 +282,17 @@ the `release-tarball.sh` script:
 
 Congratulations! The release is now official!
 
-### 7. Create Release git tags
+### 9. Create Release git tags
 
 Tag the same release candidate commit with the final release tag
 
 ```shell
-git co apache/50.3.0-rc1
+git checkout 50.3.0-rc1
 git tag 50.3.0
 git push apache 50.3.0
 ```
 
-### 8. Publish on Crates.io
+### 10. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
 crates.io, in order to conform to Apache Software Foundation
@@ -314,48 +309,61 @@ to all DataFusion crates.
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "38.0.0"`) and then publish the crates by running the following commands
+(e.g. `version = "50.3.0"`) and then publish the crates by running the following commands
 
 ```shell
-(cd datafusion/doc && cargo publish)
-(cd datafusion/common-runtime && cargo publish)
 (cd datafusion/common && cargo publish)
-(cd datafusion/proto-common && cargo publish)
-(cd datafusion/macros && cargo publish)
+(cd datafusion/common-runtime && cargo publish)
+(cd datafusion/doc && cargo publish)
 (cd datafusion/expr-common && cargo publish)
+(cd datafusion/macros && cargo publish)
+(cd datafusion/proto-common && cargo publish)
 (cd datafusion/physical-expr-common && cargo publish)
-(cd datafusion/functions-window-common && cargo publish)
 (cd datafusion/functions-aggregate-common && cargo publish)
+(cd datafusion/functions-window-common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/execution && cargo publish)
-(cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions && cargo publish)
-(cd datafusion/functions-window && cargo publish)
+(cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions-aggregate && cargo publish)
+(cd datafusion/functions-window && cargo publish)
 (cd datafusion/physical-expr-adapter && cargo publish)
-(cd datafusion/physical-plan && cargo publish)
 (cd datafusion/functions-nested && cargo publish)
+(cd datafusion/physical-plan && cargo publish)
 (cd datafusion/session && cargo publish)
-(cd datafusion/datasource && cargo publish)
-(cd datafusion/catalog && cargo publish)
-(cd datafusion/spark && cargo publish)
 (cd datafusion/sql && cargo publish)
+(cd datafusion/datasource && cargo publish)
 (cd datafusion/optimizer && cargo publish)
-(cd datafusion/functions-table && cargo publish)
-(cd datafusion/datasource-json && cargo publish)
-(cd datafusion/datasource-csv && cargo publish)
-(cd datafusion/datasource-avro && cargo publish)
+(cd datafusion/catalog && cargo publish)
 (cd datafusion/datasource-arrow && cargo publish)
+(cd datafusion/datasource-avro && cargo publish)
+(cd datafusion/datasource-csv && cargo publish)
+(cd datafusion/datasource-json && cargo publish)
 (cd datafusion/pruning && cargo publish)
 (cd datafusion/datasource-parquet && cargo publish)
-(cd datafusion/catalog-listing && cargo publish)
+(cd datafusion/functions-table && cargo publish)
 (cd datafusion/physical-optimizer && cargo publish)
+(cd datafusion/catalog-listing && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion-cli && cargo publish)
-(cd datafusion/substrait && cargo publish)
-(cd datafusion/sqllogictest && cargo publish)
 (cd datafusion/proto && cargo publish)
+(cd datafusion/spark && cargo publish)
+(cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
+(cd datafusion/sqllogictest && cargo publish)
+```
+
+Crates.io publishing depends on crates dependency tree, this list might contain wrong order.
+If it happens crates.io fails with wrong dependency message like below, just rerun all publishing commands.
+
+```shell
+error: failed to prepare local package for uploading
+
+Caused by:
+  failed to select a version for the requirement `datafusion-proto = "^53.1.0"`
+  candidate versions found which didn't match: 53.0.0, 52.5.0, 52.4.0, ...
+  location searched: crates.io index
+  required by package `datafusion-ffi v53.1.0 (/private/tmp/apache-datafusion-53.1.0/datafusion/ffi)`
 ```
 
 ### Publish datafusion-cli on Homebrew
@@ -363,7 +371,22 @@ Verify that the Cargo.toml in the tarball contains the correct version
 Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### 9: Add the release to Apache Reporter
+### 11. Sync Changelog and Version to main
+
+To sync changelog version and create PR against `main`:
+
+```shell
+git fetch apache && git checkout -b sync_change_log_version
+```
+
+- Cherry-pick or patch the version updates from step 2
+- Cherry-pick or patch the changelog updates from step 5
+- Commit changes, `git commit -a -m 'Sync changelog and version to main'`
+- Push to `origin/sync_change_log_version`
+- Create a PR against `main`.
+- Merge to `main`.
+
+### 12. Add the release to Apache Reporter
 
 When you have published the release, please help the project by adding the release to
 [Apache Reporter](https://reporter.apache.org/). The reporter system should
@@ -374,7 +397,7 @@ the examples from previous releases.
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### 10: Delete Old RCs and Releases
+### 13. Delete Old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
@@ -409,11 +432,3 @@ To delete a release:
 ```shell
 svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-50.0.0
 ```
-
-### 11. Forward-port changelog to `main`
-
-After the release is published, forward port the version update and changelog to
-`main` so that it is up to date for the next release. See [#21053] for an
-example PR that forward-ports the changelog to `main`.
-
-[#21053]: https://github.com/apache/datafusion/pull/21053

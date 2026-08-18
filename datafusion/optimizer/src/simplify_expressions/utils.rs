@@ -17,54 +17,12 @@
 
 //! Utility functions for expression simplification
 
-use arrow::datatypes::i256;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     Case, Expr, Like, Operator,
     expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, or},
 };
-
-pub static POWS_OF_TEN: [i128; 38] = [
-    1,
-    10,
-    100,
-    1000,
-    10000,
-    100000,
-    1000000,
-    10000000,
-    100000000,
-    1000000000,
-    10000000000,
-    100000000000,
-    1000000000000,
-    10000000000000,
-    100000000000000,
-    1000000000000000,
-    10000000000000000,
-    100000000000000000,
-    1000000000000000000,
-    10000000000000000000,
-    100000000000000000000,
-    1000000000000000000000,
-    10000000000000000000000,
-    100000000000000000000000,
-    1000000000000000000000000,
-    10000000000000000000000000,
-    100000000000000000000000000,
-    1000000000000000000000000000,
-    10000000000000000000000000000,
-    100000000000000000000000000000,
-    1000000000000000000000000000000,
-    10000000000000000000000000000000,
-    100000000000000000000000000000000,
-    1000000000000000000000000000000000,
-    10000000000000000000000000000000000,
-    100000000000000000000000000000000000,
-    1000000000000000000000000000000000000,
-    10000000000000000000000000000000000000,
-];
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
@@ -139,54 +97,26 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
 }
 
 pub fn is_zero(s: &Expr) -> bool {
-    match s {
-        Expr::Literal(ScalarValue::Int8(Some(0)), _)
-        | Expr::Literal(ScalarValue::Int16(Some(0)), _)
-        | Expr::Literal(ScalarValue::Int32(Some(0)), _)
-        | Expr::Literal(ScalarValue::Int64(Some(0)), _)
-        | Expr::Literal(ScalarValue::UInt8(Some(0)), _)
-        | Expr::Literal(ScalarValue::UInt16(Some(0)), _)
-        | Expr::Literal(ScalarValue::UInt32(Some(0)), _)
-        | Expr::Literal(ScalarValue::UInt64(Some(0)), _) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v)), _) if *v == 0. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v)), _) if *v == 0. => true,
-        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s), _) if *v == 0 => true,
-        Expr::Literal(ScalarValue::Decimal256(Some(v), _p, _s), _)
-            if *v == i256::ZERO =>
-        {
-            true
-        }
-        _ => false,
+    if let Expr::Literal(sv, _) = s
+        && sv.data_type().is_numeric()
+    {
+        // unwrap safe since numeric types always have a 0 value
+        sv == &ScalarValue::new_zero(&sv.data_type()).unwrap()
+    } else {
+        false
     }
 }
 
 pub fn is_one(s: &Expr) -> bool {
-    match s {
-        Expr::Literal(ScalarValue::Int8(Some(1)), _)
-        | Expr::Literal(ScalarValue::Int16(Some(1)), _)
-        | Expr::Literal(ScalarValue::Int32(Some(1)), _)
-        | Expr::Literal(ScalarValue::Int64(Some(1)), _)
-        | Expr::Literal(ScalarValue::UInt8(Some(1)), _)
-        | Expr::Literal(ScalarValue::UInt16(Some(1)), _)
-        | Expr::Literal(ScalarValue::UInt32(Some(1)), _)
-        | Expr::Literal(ScalarValue::UInt64(Some(1)), _) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v)), _) if *v == 1. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v)), _) if *v == 1. => true,
-        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, s), _) => {
-            *s >= 0
-                && POWS_OF_TEN
-                    .get(*s as usize)
-                    .map(|x| x == v)
-                    .unwrap_or_default()
-        }
-        Expr::Literal(ScalarValue::Decimal256(Some(v), _p, s), _) => {
-            *s >= 0
-                && match i256::from(10).checked_pow(*s as u32) {
-                    Some(res) => res == *v,
-                    None => false,
-                }
-        }
-        _ => false,
+    if let Expr::Literal(sv, _) = s
+        && sv.data_type().is_numeric()
+        // there are edge cases like negative scale decimals not being able to
+        // create a one value so this can fail
+        && let Ok(one) = ScalarValue::new_one(&sv.data_type())
+    {
+        sv == &one
+    } else {
+        false
     }
 }
 

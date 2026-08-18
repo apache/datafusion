@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
+//! FFI types for the deprecated Statistics V2 [`Distribution`] framework.
+//!
+//! These FFI types mirror the deprecated probabilistic distribution types.
+//! See <https://github.com/apache/datafusion/pull/22071> for details.
+
+#![allow(deprecated)]
+
 use datafusion_common::DataFusionError;
 use datafusion_expr::statistics::{
     BernoulliDistribution, Distribution, ExponentialDistribution, GaussianDistribution,
@@ -28,7 +34,7 @@ use crate::expr::interval::FFI_Interval;
 /// A stable struct for sharing [`Distribution`] across FFI boundaries.
 /// See ['Distribution'] for the meaning of each variant.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 #[expect(clippy::large_enum_variant)]
 pub enum FFI_Distribution {
     Uniform(FFI_UniformDistribution),
@@ -67,13 +73,13 @@ impl TryFrom<FFI_Distribution> for Distribution {
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_UniformDistribution {
     interval: FFI_Interval,
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_ExponentialDistribution {
     rate: WrappedArray,
     offset: WrappedArray,
@@ -81,20 +87,20 @@ pub struct FFI_ExponentialDistribution {
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_GaussianDistribution {
     mean: WrappedArray,
     variance: WrappedArray,
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_BernoulliDistribution {
     p: WrappedArray,
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_GenericDistribution {
     mean: WrappedArray,
     median: WrappedArray,

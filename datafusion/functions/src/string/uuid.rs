@@ -17,12 +17,12 @@
 
 use std::sync::Arc;
 
-use arrow::array::GenericStringBuilder;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
 use rand::Rng;
 use uuid::Uuid;
 
+use crate::strings::GenericStringArrayBuilder;
 use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
@@ -87,7 +87,7 @@ impl ScalarUDFImpl for UuidFunc {
         let mut randoms = vec![0u128; args.number_rows];
         rng.fill(&mut randoms[..]);
 
-        let mut builder = GenericStringBuilder::<i32>::with_capacity(
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(
             args.number_rows,
             args.number_rows * 36,
         );
@@ -101,7 +101,7 @@ impl ScalarUDFImpl for UuidFunc {
             builder.append_value(fmt.encode_lower(&mut buffer));
         }
 
-        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+        Ok(ColumnarValue::Array(Arc::new(builder.finish(None)?)))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

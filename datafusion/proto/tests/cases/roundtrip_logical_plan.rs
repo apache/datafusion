@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
+    ArrayRef, FixedSizeListArray, Int32Builder, LargeListViewArray, ListViewArray,
+    MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DataType, Field, FieldRef, Fields, Int32Type,
@@ -44,6 +45,7 @@ use std::vec;
 
 use datafusion::catalog::{TableProvider, TableProviderFactory};
 use datafusion::datasource::DefaultTableSource;
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
@@ -67,23 +69,32 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
+use datafusion_common::format::{
+    ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
+};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
+    TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
-use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
-    ScalarFunction, Unnest, WildcardOptions,
+use datafusion_expr::dml::{
+    MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
-use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
+use datafusion_expr::expr::{
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, LambdaVariable, Like,
+    NullTreatment, ScalarFunction, Unnest, WildcardOptions,
+};
+use datafusion_expr::logical_plan::{
+    ExplainOption, Extension, UserDefinedLogicalNodeCore,
+};
 use datafusion_expr::{
-    Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable,
-    LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator, PartitionEvaluator,
-    ScalarUDF, Signature, TryCast, Volatility, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
+    ExprSchemable, HigherOrderUDF, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder,
+    Operator, PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature,
+    TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, WindowUDF, WindowUDFImpl, WriteOp,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
@@ -107,7 +118,10 @@ use datafusion_proto::logical_plan::{
 };
 use datafusion_proto::protobuf;
 
-use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
+use crate::cases::{
+    MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF, MyHigherOrderUdfNode,
+    MyRegexUdf, MyRegexUdfNode,
+};
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -133,9 +147,10 @@ fn roundtrip_expr_test_with_codec(
 ) {
     let proto: protobuf::LogicalExprNode = serialize_expr(&initial_struct, codec)
         .unwrap_or_else(|e| panic!("Error serializing expression: {e:?}"));
-    let round_trip: Expr = from_proto::parse_expr(&proto, &ctx, codec).unwrap();
+    let round_trip: Expr =
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), codec).unwrap();
 
-    assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
+    assert_eq!(format!("{initial_struct:?}"), format!("{round_trip:?}"));
 
     roundtrip_json_test(&proto);
 }
@@ -276,6 +291,95 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_explain_format_tree() -> Result<()> {
+    let ctx = SessionContext::new();
+    let plan = ctx
+        .state()
+        .create_logical_plan("EXPLAIN FORMAT TREE SELECT 1")
+        .await?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    match logical_round_trip {
+        LogicalPlan::Explain(explain) => {
+            assert_eq!(explain.explain_format, ExplainFormat::Tree);
+        }
+        plan => panic!("expected Explain plan, got {plan:?}"),
+    }
+
+    Ok(())
+}
+
+/// Build an `EXPLAIN`/`EXPLAIN ANALYZE` plan with statement-level overrides
+/// set directly via the builder, then assert the proto round-trip preserves
+/// every field. Going through the builder avoids depending on parser support
+/// for the parenthesized option syntax in this test crate.
+async fn assert_explain_roundtrip(option: ExplainOption) -> Result<()> {
+    let ctx = SessionContext::new();
+    let input = ctx.sql("SELECT 1 AS x").await?.into_optimized_plan()?;
+    let plan = LogicalPlanBuilder::from(input)
+        .explain_option_format(option)?
+        .build()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, round_trip);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_explain_show_statistics_override() -> Result<()> {
+    for show_statistics in [None, Some(true), Some(false)] {
+        assert_explain_roundtrip(
+            ExplainOption::default()
+                .with_format(ExplainFormat::Indent)
+                .with_show_statistics(show_statistics),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_analyze_level_override() -> Result<()> {
+    for analyze_level in [None, Some(MetricType::Summary), Some(MetricType::Dev)] {
+        assert_explain_roundtrip(
+            ExplainOption::default()
+                .with_analyze(true)
+                .with_analyze_level(analyze_level),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_analyze_categories_override() -> Result<()> {
+    let cases = [
+        None,
+        Some(ExplainAnalyzeCategories::All),
+        Some(ExplainAnalyzeCategories::Only(vec![])),
+        Some(ExplainAnalyzeCategories::Only(vec![MetricCategory::Rows])),
+        Some(ExplainAnalyzeCategories::Only(vec![
+            MetricCategory::Rows,
+            MetricCategory::Bytes,
+            MetricCategory::Timing,
+            MetricCategory::Uncategorized,
+        ])),
+    ];
+    for analyze_categories in cases {
+        assert_explain_roundtrip(
+            ExplainOption::default()
+                .with_analyze(true)
+                .with_analyze_categories(analyze_categories),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_custom_listing_tables() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -300,6 +404,129 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
     // Use exact matching to verify everything. Make sure during round-trip,
     // information like constraints, column defaults, and other aspects of the plan are preserved.
     assert_eq!(plan, logical_round_trip);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Planning a CREATE EXTERNAL TABLE does not read the referenced files, so
+    // the paths need not exist. Multiple locations must survive the round-trip
+    // through the `repeated locations` proto field.
+    let query = "CREATE EXTERNAL TABLE t (a INTEGER, b INTEGER)
+            STORED AS CSV
+            LOCATION ('file_a.csv', 'file_b.csv')
+            OPTIONS ('format.has_header' 'true')";
+
+    let plan = ctx.state().create_logical_plan(query).await?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
+        .expect("failed to decode CreateExternalTable proto");
+    #[cfg(feature = "json")]
+    {
+        let json = serde_json::to_string(&protobuf_plan).unwrap();
+        assert!(!json.contains("\"location\":"));
+        assert!(json.contains("\"locations\":[\"file_a.csv\",\"file_b.csv\"]"));
+    }
+    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+        create_external_table,
+    )) = protobuf_plan.logical_plan_type
+    else {
+        panic!("expected a CreateExternalTable proto");
+    };
+    assert!(create_external_table.location.is_empty());
+    assert_eq!(
+        create_external_table.locations,
+        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
+    );
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, logical_round_trip);
+
+    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
+        logical_round_trip
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        rt.locations,
+        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_create_external_table_single_location_legacy_field() -> Result<()> {
+    let ctx = SessionContext::new();
+    let query = "CREATE EXTERNAL TABLE t (a INTEGER)
+            STORED AS CSV
+            LOCATION 'file.csv'";
+
+    let plan = ctx.state().create_logical_plan(query).await?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
+        .expect("failed to decode CreateExternalTable proto");
+    #[cfg(feature = "json")]
+    {
+        let json = serde_json::to_string(&protobuf_plan).unwrap();
+        assert!(json.contains("\"location\":\"file.csv\""));
+        assert!(!json.contains("\"locations\""));
+    }
+    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+        create_external_table,
+    )) = protobuf_plan.logical_plan_type
+    else {
+        panic!("expected a CreateExternalTable proto");
+    };
+    assert_eq!(create_external_table.location, "file.csv");
+    assert!(create_external_table.locations.is_empty());
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, logical_round_trip);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_create_external_table_legacy_location() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = DFSchema::empty();
+    let create_external_table = protobuf::CreateExternalTableNode {
+        name: Some(protobuf::TableReference::from(TableReference::bare("t"))),
+        location: "legacy.csv".to_string(),
+        locations: vec![],
+        file_type: "CSV".to_string(),
+        schema: Some((&schema).try_into()?),
+        table_partition_cols: vec![],
+        if_not_exists: false,
+        or_replace: false,
+        temporary: false,
+        definition: String::new(),
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Some(Constraints::default().into()),
+        column_defaults: HashMap::new(),
+    };
+    let protobuf_plan = protobuf::LogicalPlanNode {
+        logical_plan_type: Some(
+            protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+                create_external_table,
+            ),
+        ),
+    };
+    let bytes = protobuf_plan.encode_to_vec();
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
+        logical_round_trip
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(rt.locations, vec!["legacy.csv".to_string()]);
 
     Ok(())
 }
@@ -426,6 +653,181 @@ async fn roundtrip_logical_plan_dml() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_dml_merge_into() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let scan = ctx.table("t1").await?.into_optimized_plan()?;
+    let target = match &scan {
+        LogicalPlan::TableScan(t) => Arc::clone(&t.source),
+        other => panic!("expected TableScan, got {other:?}"),
+    };
+
+    let merge = WriteOp::MergeInto(Box::new(MergeIntoOp {
+        on: col("a").eq(lit(1_i64)),
+        clauses: vec![
+            MergeIntoClause {
+                kind: MergeIntoClauseKind::Matched,
+                predicate: Some(col("b").gt(lit(ScalarValue::Decimal128(
+                    Some(0),
+                    15,
+                    2,
+                )))),
+                action: MergeIntoAction::Update(vec![("b".to_string(), col("b"))]),
+            },
+            MergeIntoClause {
+                kind: MergeIntoClauseKind::NotMatched,
+                predicate: None,
+                action: MergeIntoAction::Insert {
+                    columns: vec!["a".to_string(), "b".to_string()],
+                    values: vec![col("a"), col("b")],
+                },
+            },
+            MergeIntoClause {
+                kind: MergeIntoClauseKind::NotMatchedByTarget,
+                predicate: None,
+                action: MergeIntoAction::Insert {
+                    columns: vec![],
+                    values: vec![col("a"), col("b")],
+                },
+            },
+            MergeIntoClause {
+                kind: MergeIntoClauseKind::NotMatchedBySource,
+                predicate: Some(col("a").eq(lit(2_i64))),
+                action: MergeIntoAction::Delete,
+            },
+        ],
+    }));
+
+    let plan = LogicalPlan::Dml(DmlStatement::new(
+        "t1".into(),
+        target,
+        merge,
+        Arc::new(scan),
+    ));
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan}"), format!("{round_trip}"));
+    Ok(())
+}
+
+#[test]
+fn parse_write_op_merge_into_without_payload_errors() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let node = protobuf::DmlNode {
+        dml_type: protobuf::dml_node::Type::MergeInto.into(),
+        ..Default::default()
+    };
+    let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
+        .expect_err("MergeInto tag without payload must fail");
+    assert!(
+        err.to_string().contains("merge_into"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Build a `DmlNode` whose `merge_into` payload is exactly the supplied
+/// `MergeIntoOpNode`. Used by the error-path tests below.
+fn dml_node_with_merge_payload(payload: protobuf::MergeIntoOpNode) -> protobuf::DmlNode {
+    protobuf::DmlNode {
+        dml_type: protobuf::dml_node::Type::MergeInto.into(),
+        merge_into: Some(Box::new(payload)),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn parse_merge_into_op_missing_on_errors() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
+        on: None,
+        clauses: vec![],
+    });
+    let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
+        .expect_err("missing `on` must fail");
+    assert!(err.to_string().contains("`on`"), "unexpected error: {err}");
+}
+
+#[test]
+fn parse_merge_into_clause_unknown_kind_errors() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let on = serialize_expr(&lit(true), &codec).unwrap();
+    let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
+        on: Some(Box::new(on)),
+        clauses: vec![protobuf::MergeIntoClauseNode {
+            kind: 999, // unknown enum tag
+            predicate: None,
+            action: Some(protobuf::MergeIntoActionNode {
+                action: Some(protobuf::merge_into_action_node::Action::Delete(
+                    protobuf::MergeDeleteAction {},
+                )),
+            }),
+        }],
+    });
+    let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
+        .expect_err("unknown clause kind tag must fail");
+    assert!(
+        err.to_string().contains("unknown kind tag"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_merge_into_clause_missing_action_errors() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let on = serialize_expr(&lit(true), &codec).unwrap();
+    let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
+        on: Some(Box::new(on)),
+        clauses: vec![protobuf::MergeIntoClauseNode {
+            kind: protobuf::merge_into_clause_node::Kind::Matched.into(),
+            predicate: None,
+            action: None,
+        }],
+    });
+    let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
+        .expect_err("missing clause `action` must fail");
+    assert!(
+        err.to_string().contains("missing required `action`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_merge_into_action_missing_oneof_errors() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let on = serialize_expr(&lit(true), &codec).unwrap();
+    let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
+        on: Some(Box::new(on)),
+        clauses: vec![protobuf::MergeIntoClauseNode {
+            kind: protobuf::merge_into_clause_node::Kind::Matched.into(),
+            predicate: None,
+            action: Some(protobuf::MergeIntoActionNode { action: None }),
+        }],
+    });
+    let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
+        .expect_err("missing action oneof must fail");
+    assert!(
+        err.to_string().contains("missing the `action` oneof"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -1300,7 +1702,7 @@ pub mod proto {
         pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
@@ -1530,267 +1932,316 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
             .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        if name == "higher_order_udf" {
+            let proto = MyHigherOrderUdfNode::decode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to decode higher_order_udf: {err}")
+            })?;
+
+            Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                MyHigherOrderUDF::new(proto.payload),
+            )))
+        } else {
+            not_impl_err!("unrecognized higher order UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        node: &HigherOrderUDF,
+        buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        let hof = (node.inner().as_ref() as &dyn Any)
+            .downcast_ref::<MyHigherOrderUDF>()
+            .unwrap();
+        let proto = MyHigherOrderUdfNode {
+            payload: hof.payload.clone(),
+        };
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode hof: {err}"))?;
+        Ok(())
+    }
 }
 
 #[test]
 fn round_trip_scalar_values_and_data_types() {
-    let should_pass: Vec<ScalarValue> = vec![
-        ScalarValue::Boolean(None),
-        ScalarValue::Float32(None),
-        ScalarValue::Float64(None),
-        ScalarValue::Int8(None),
-        ScalarValue::Int16(None),
-        ScalarValue::Int32(None),
-        ScalarValue::Int64(None),
-        ScalarValue::UInt8(None),
-        ScalarValue::UInt16(None),
-        ScalarValue::UInt32(None),
-        ScalarValue::UInt64(None),
-        ScalarValue::Utf8(None),
-        ScalarValue::LargeUtf8(None),
-        ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
-        ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
-        ScalarValue::Date32(None),
-        ScalarValue::Boolean(Some(true)),
-        ScalarValue::Boolean(Some(false)),
-        ScalarValue::Float32(Some(1.0)),
-        ScalarValue::Float32(Some(f32::MAX)),
-        ScalarValue::Float32(Some(f32::MIN)),
-        ScalarValue::Float32(Some(-2000.0)),
-        ScalarValue::Float64(Some(1.0)),
-        ScalarValue::Float64(Some(f64::MAX)),
-        ScalarValue::Float64(Some(f64::MIN)),
-        ScalarValue::Float64(Some(-2000.0)),
-        ScalarValue::Int8(Some(i8::MIN)),
-        ScalarValue::Int8(Some(i8::MAX)),
-        ScalarValue::Int8(Some(0)),
-        ScalarValue::Int8(Some(-15)),
-        ScalarValue::Int16(Some(i16::MIN)),
-        ScalarValue::Int16(Some(i16::MAX)),
-        ScalarValue::Int16(Some(0)),
-        ScalarValue::Int16(Some(-15)),
-        ScalarValue::Int32(Some(i32::MIN)),
-        ScalarValue::Int32(Some(i32::MAX)),
-        ScalarValue::Int32(Some(0)),
-        ScalarValue::Int32(Some(-15)),
-        ScalarValue::Int64(Some(i64::MIN)),
-        ScalarValue::Int64(Some(i64::MAX)),
-        ScalarValue::Int64(Some(0)),
-        ScalarValue::Int64(Some(-15)),
-        ScalarValue::UInt8(Some(u8::MAX)),
-        ScalarValue::UInt8(Some(0)),
-        ScalarValue::UInt16(Some(u16::MAX)),
-        ScalarValue::UInt16(Some(0)),
-        ScalarValue::UInt32(Some(u32::MAX)),
-        ScalarValue::UInt32(Some(0)),
-        ScalarValue::UInt64(Some(u64::MAX)),
-        ScalarValue::UInt64(Some(0)),
-        ScalarValue::Utf8(Some(String::from("Test string   "))),
-        ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
-        ScalarValue::Utf8View(Some(String::from("Test stringview"))),
-        ScalarValue::BinaryView(Some(b"binaryview".to_vec())),
-        ScalarValue::Date32(Some(0)),
-        ScalarValue::Date32(Some(i32::MAX)),
-        ScalarValue::Date32(None),
-        ScalarValue::Date64(Some(0)),
-        ScalarValue::Date64(Some(i64::MAX)),
-        ScalarValue::Date64(None),
-        ScalarValue::Time32Second(Some(0)),
-        ScalarValue::Time32Second(Some(i32::MAX)),
-        ScalarValue::Time32Second(None),
-        ScalarValue::Time32Millisecond(Some(0)),
-        ScalarValue::Time32Millisecond(Some(i32::MAX)),
-        ScalarValue::Time32Millisecond(None),
-        ScalarValue::Time64Microsecond(Some(0)),
-        ScalarValue::Time64Microsecond(Some(i64::MAX)),
-        ScalarValue::Time64Microsecond(None),
-        ScalarValue::Time64Nanosecond(Some(0)),
-        ScalarValue::Time64Nanosecond(Some(i64::MAX)),
-        ScalarValue::Time64Nanosecond(None),
-        ScalarValue::TimestampNanosecond(Some(0), None),
-        ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
-        ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampNanosecond(None, None),
-        ScalarValue::TimestampMicrosecond(Some(0), None),
-        ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
-        ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampMicrosecond(None, None),
-        ScalarValue::TimestampMillisecond(Some(0), None),
-        ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
-        ScalarValue::TimestampMillisecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampMillisecond(None, None),
-        ScalarValue::TimestampSecond(Some(0), None),
-        ScalarValue::TimestampSecond(Some(i64::MAX), None),
-        ScalarValue::TimestampSecond(Some(0), Some("UTC".into())),
-        ScalarValue::TimestampSecond(None, None),
-        ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
-        ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
-        ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
-            i32::MAX,
-            i32::MAX,
-        ))),
-        ScalarValue::IntervalDayTime(None),
-        ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-            0, 0, 0,
-        ))),
-        ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-            1, 2, 3,
-        ))),
-        ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-            i32::MAX,
-            i32::MAX,
-            i64::MAX,
-        ))),
-        ScalarValue::IntervalMonthDayNano(None),
-        ScalarValue::List(ScalarValue::new_list_nullable(
-            &[
-                ScalarValue::Float32(Some(-213.1)),
-                ScalarValue::Float32(None),
-                ScalarValue::Float32(Some(5.5)),
-                ScalarValue::Float32(Some(2.0)),
-                ScalarValue::Float32(Some(1.0)),
-            ],
-            &DataType::Float32,
-        )),
-        ScalarValue::LargeList(ScalarValue::new_large_list(
-            &[
-                ScalarValue::Float32(Some(-213.1)),
-                ScalarValue::Float32(None),
-                ScalarValue::Float32(Some(5.5)),
-                ScalarValue::Float32(Some(2.0)),
-                ScalarValue::Float32(Some(1.0)),
-            ],
-            &DataType::Float32,
-        )),
-        ScalarValue::List(ScalarValue::new_list_nullable(
-            &[
-                ScalarValue::List(ScalarValue::new_list_nullable(
-                    &[],
-                    &DataType::Float32,
-                )),
-                ScalarValue::List(ScalarValue::new_list_nullable(
-                    &[
-                        ScalarValue::Float32(Some(-213.1)),
-                        ScalarValue::Float32(None),
-                        ScalarValue::Float32(Some(5.5)),
-                        ScalarValue::Float32(Some(2.0)),
-                        ScalarValue::Float32(Some(1.0)),
-                    ],
-                    &DataType::Float32,
-                )),
-            ],
-            &DataType::List(new_arc_field("item", DataType::Float32, true)),
-        )),
-        ScalarValue::LargeList(ScalarValue::new_large_list(
-            &[
-                ScalarValue::LargeList(ScalarValue::new_large_list(
-                    &[],
-                    &DataType::Float32,
-                )),
-                ScalarValue::LargeList(ScalarValue::new_large_list(
-                    &[
-                        ScalarValue::Float32(Some(-213.1)),
-                        ScalarValue::Float32(None),
-                        ScalarValue::Float32(Some(5.5)),
-                        ScalarValue::Float32(Some(2.0)),
-                        ScalarValue::Float32(Some(1.0)),
-                    ],
-                    &DataType::Float32,
-                )),
-            ],
-            &DataType::LargeList(new_arc_field("item", DataType::Float32, true)),
-        )),
-        ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::from_iter_primitive::<
-            Int32Type,
-            _,
-            _,
-        >(
-            vec![Some(vec![Some(1), Some(2), Some(3)])],
-            3,
-        ))),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::from("foo")),
-        ),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::Utf8(None)),
-        ),
-        ScalarValue::RunEndEncoded(
-            Field::new("run_ends", DataType::Int32, false).into(),
-            Field::new("values", DataType::Utf8, true).into(),
-            Box::new(ScalarValue::from("foo")),
-        ),
-        ScalarValue::RunEndEncoded(
-            Field::new("run_ends", DataType::Int32, false).into(),
-            Field::new("values", DataType::Utf8, true).into(),
-            Box::new(ScalarValue::Utf8(None)),
-        ),
-        ScalarValue::Binary(Some(b"bar".to_vec())),
-        ScalarValue::Binary(None),
-        ScalarValue::LargeBinary(Some(b"bar".to_vec())),
-        ScalarValue::LargeBinary(None),
-        ScalarStructBuilder::new()
-            .with_scalar(
-                Field::new("a", DataType::Int32, true),
-                ScalarValue::from(23i32),
-            )
-            .with_scalar(
-                Field::new("b", DataType::Boolean, false),
-                ScalarValue::from(false),
-            )
-            .build()
-            .unwrap(),
-        ScalarStructBuilder::new()
-            .with_scalar(
-                Field::new("a", DataType::Int32, true),
-                ScalarValue::from(23i32),
-            )
-            .with_scalar(
-                Field::new("b", DataType::Boolean, false),
-                ScalarValue::from(false),
-            )
-            .build()
-            .unwrap(),
-        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Boolean, false),
-        ])))
-        .unwrap(),
-        ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Boolean, false),
-        ])))
-        .unwrap(),
-        ScalarValue::try_from(&DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Int32, true),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
+    let should_pass: Vec<ScalarValue> =
+        vec![
+            ScalarValue::Boolean(None),
+            ScalarValue::Float32(None),
+            ScalarValue::Float64(None),
+            ScalarValue::Int8(None),
+            ScalarValue::Int16(None),
+            ScalarValue::Int32(None),
+            ScalarValue::Int64(None),
+            ScalarValue::UInt8(None),
+            ScalarValue::UInt16(None),
+            ScalarValue::UInt32(None),
+            ScalarValue::UInt64(None),
+            ScalarValue::Utf8(None),
+            ScalarValue::LargeUtf8(None),
+            ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
+            ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
+            ScalarValue::Date32(None),
+            ScalarValue::Boolean(Some(true)),
+            ScalarValue::Boolean(Some(false)),
+            ScalarValue::Float32(Some(1.0)),
+            ScalarValue::Float32(Some(f32::MAX)),
+            ScalarValue::Float32(Some(f32::MIN)),
+            ScalarValue::Float32(Some(-2000.0)),
+            ScalarValue::Float64(Some(1.0)),
+            ScalarValue::Float64(Some(f64::MAX)),
+            ScalarValue::Float64(Some(f64::MIN)),
+            ScalarValue::Float64(Some(-2000.0)),
+            ScalarValue::Int8(Some(i8::MIN)),
+            ScalarValue::Int8(Some(i8::MAX)),
+            ScalarValue::Int8(Some(0)),
+            ScalarValue::Int8(Some(-15)),
+            ScalarValue::Int16(Some(i16::MIN)),
+            ScalarValue::Int16(Some(i16::MAX)),
+            ScalarValue::Int16(Some(0)),
+            ScalarValue::Int16(Some(-15)),
+            ScalarValue::Int32(Some(i32::MIN)),
+            ScalarValue::Int32(Some(i32::MAX)),
+            ScalarValue::Int32(Some(0)),
+            ScalarValue::Int32(Some(-15)),
+            ScalarValue::Int64(Some(i64::MIN)),
+            ScalarValue::Int64(Some(i64::MAX)),
+            ScalarValue::Int64(Some(0)),
+            ScalarValue::Int64(Some(-15)),
+            ScalarValue::UInt8(Some(u8::MAX)),
+            ScalarValue::UInt8(Some(0)),
+            ScalarValue::UInt16(Some(u16::MAX)),
+            ScalarValue::UInt16(Some(0)),
+            ScalarValue::UInt32(Some(u32::MAX)),
+            ScalarValue::UInt32(Some(0)),
+            ScalarValue::UInt64(Some(u64::MAX)),
+            ScalarValue::UInt64(Some(0)),
+            ScalarValue::Utf8(Some(String::from("Test string   "))),
+            ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
+            ScalarValue::Utf8View(Some(String::from("Test stringview"))),
+            ScalarValue::BinaryView(Some(b"binaryview".to_vec())),
+            ScalarValue::Date32(Some(0)),
+            ScalarValue::Date32(Some(i32::MAX)),
+            ScalarValue::Date32(None),
+            ScalarValue::Date64(Some(0)),
+            ScalarValue::Date64(Some(i64::MAX)),
+            ScalarValue::Date64(None),
+            ScalarValue::Time32Second(Some(0)),
+            ScalarValue::Time32Second(Some(i32::MAX)),
+            ScalarValue::Time32Second(None),
+            ScalarValue::Time32Millisecond(Some(0)),
+            ScalarValue::Time32Millisecond(Some(i32::MAX)),
+            ScalarValue::Time32Millisecond(None),
+            ScalarValue::Time64Microsecond(Some(0)),
+            ScalarValue::Time64Microsecond(Some(i64::MAX)),
+            ScalarValue::Time64Microsecond(None),
+            ScalarValue::Time64Nanosecond(Some(0)),
+            ScalarValue::Time64Nanosecond(Some(i64::MAX)),
+            ScalarValue::Time64Nanosecond(None),
+            ScalarValue::TimestampNanosecond(Some(0), None),
+            ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
+            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampNanosecond(None, None),
+            ScalarValue::TimestampMicrosecond(Some(0), None),
+            ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
+            ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampMicrosecond(None, None),
+            ScalarValue::TimestampMillisecond(Some(0), None),
+            ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
+            ScalarValue::TimestampMillisecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampMillisecond(None, None),
+            ScalarValue::TimestampSecond(Some(0), None),
+            ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            ScalarValue::TimestampSecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampSecond(None, None),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
+            ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(
+                i32::MAX,
+                i32::MAX,
+            ))),
+            ScalarValue::IntervalDayTime(None),
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(0, 0, 0),
             )),
-            false,
-        ))
-        .unwrap(),
-        ScalarValue::try_from(&DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Int32, true),
-                    Field::new("value", DataType::Utf8, true),
-                ])),
-                false,
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(1, 2, 3),
             )),
-            true,
-        ))
-        .unwrap(),
-        ScalarValue::Map(Arc::new(create_map_array_test_case())),
-        ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
-        ScalarValue::FixedSizeBinary(0, None),
-        ScalarValue::FixedSizeBinary(5, None),
-    ];
+            ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNanoType::make_value(i32::MAX, i32::MAX, i64::MAX),
+            )),
+            ScalarValue::IntervalMonthDayNano(None),
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::Float32(Some(-213.1)),
+                    ScalarValue::Float32(None),
+                    ScalarValue::Float32(Some(5.5)),
+                    ScalarValue::Float32(Some(2.0)),
+                    ScalarValue::Float32(Some(1.0)),
+                ],
+                &DataType::Float32,
+            )),
+            ScalarValue::LargeList(ScalarValue::new_large_list(
+                &[
+                    ScalarValue::Float32(Some(-213.1)),
+                    ScalarValue::Float32(None),
+                    ScalarValue::Float32(Some(5.5)),
+                    ScalarValue::Float32(Some(2.0)),
+                    ScalarValue::Float32(Some(1.0)),
+                ],
+                &DataType::Float32,
+            )),
+            ScalarValue::List(ScalarValue::new_list_nullable(
+                &[
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[],
+                        &DataType::Float32,
+                    )),
+                    ScalarValue::List(ScalarValue::new_list_nullable(
+                        &[
+                            ScalarValue::Float32(Some(-213.1)),
+                            ScalarValue::Float32(None),
+                            ScalarValue::Float32(Some(5.5)),
+                            ScalarValue::Float32(Some(2.0)),
+                            ScalarValue::Float32(Some(1.0)),
+                        ],
+                        &DataType::Float32,
+                    )),
+                ],
+                &DataType::List(new_arc_field("item", DataType::Float32, true)),
+            )),
+            ScalarValue::LargeList(ScalarValue::new_large_list(
+                &[
+                    ScalarValue::LargeList(ScalarValue::new_large_list(
+                        &[],
+                        &DataType::Float32,
+                    )),
+                    ScalarValue::LargeList(ScalarValue::new_large_list(
+                        &[
+                            ScalarValue::Float32(Some(-213.1)),
+                            ScalarValue::Float32(None),
+                            ScalarValue::Float32(Some(5.5)),
+                            ScalarValue::Float32(Some(2.0)),
+                            ScalarValue::Float32(Some(1.0)),
+                        ],
+                        &DataType::Float32,
+                    )),
+                ],
+                &DataType::LargeList(new_arc_field("item", DataType::Float32, true)),
+            )),
+            ScalarValue::FixedSizeList(Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    vec![Some(vec![Some(1), Some(2), Some(3)])],
+                    3,
+                ),
+            )),
+            ScalarValue::ListView(Arc::new(ListViewArray::from_iter_primitive::<
+                Int32Type,
+                _,
+                _,
+            >(vec![Some(vec![
+                Some(1),
+                None,
+                Some(3),
+            ])]))),
+            ScalarValue::LargeListView(Arc::new(
+                LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(
+                    vec![Some(1), None, Some(3)],
+                )]),
+            )),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(None)),
+            ),
+            ScalarValue::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", DataType::Utf8, true).into(),
+                Box::new(ScalarValue::from("foo")),
+            ),
+            ScalarValue::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", DataType::Utf8, true).into(),
+                Box::new(ScalarValue::Utf8(None)),
+            ),
+            ScalarValue::Binary(Some(b"bar".to_vec())),
+            ScalarValue::Binary(None),
+            ScalarValue::LargeBinary(Some(b"bar".to_vec())),
+            ScalarValue::LargeBinary(None),
+            ScalarStructBuilder::new()
+                .with_scalar(
+                    Field::new("a", DataType::Int32, true),
+                    ScalarValue::from(23i32),
+                )
+                .with_scalar(
+                    Field::new("b", DataType::Boolean, false),
+                    ScalarValue::from(false),
+                )
+                .build()
+                .unwrap(),
+            ScalarStructBuilder::new()
+                .with_scalar(
+                    Field::new("a", DataType::Int32, true),
+                    ScalarValue::from(23i32),
+                )
+                .with_scalar(
+                    Field::new("b", DataType::Boolean, false),
+                    ScalarValue::from(false),
+                )
+                .build()
+                .unwrap(),
+            ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Boolean, false),
+            ])))
+            .unwrap(),
+            ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Boolean, false),
+            ])))
+            .unwrap(),
+            ScalarValue::try_from(&DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int32, false),
+                        Field::new("value", DataType::Utf8, false),
+                    ])),
+                    false,
+                )),
+                false,
+            ))
+            .unwrap(),
+            ScalarValue::try_from(&DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int32, false),
+                        Field::new("value", DataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                true,
+            ))
+            .unwrap(),
+            ScalarValue::Map(Arc::new(create_map_array_test_case())),
+            ScalarValue::FixedSizeBinary(
+                b"bar".to_vec().len() as i32,
+                Some(b"bar".to_vec()),
+            ),
+            ScalarValue::FixedSizeBinary(0, None),
+            ScalarValue::FixedSizeBinary(5, None),
+        ];
 
     // ScalarValue directly
     for test_case in should_pass.iter() {
@@ -2064,7 +2515,7 @@ fn roundtrip_null_scalar_values() {
     for test_case in test_types.into_iter() {
         let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
         let returned_scalar: ScalarValue = (&proto_scalar).try_into().unwrap();
-        assert_eq!(format!("{:?}", &test_case), format!("{returned_scalar:?}"));
+        assert_eq!(format!("{test_case:?}"), format!("{returned_scalar:?}"));
     }
 }
 
@@ -2283,6 +2734,18 @@ fn roundtrip_inlist() {
 fn roundtrip_unnest() {
     let test_expr = Expr::Unnest(Unnest {
         expr: Box::new(col("col")),
+        outer: false,
+    });
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_unnest_outer() {
+    let test_expr = Expr::Unnest(Unnest {
+        expr: Box::new(col("col")),
+        outer: true,
     });
 
     let ctx = SessionContext::new();
@@ -2556,9 +3019,10 @@ fn roundtrip_scalar_udf_extension_codec() {
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
     let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
 
-    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -2569,9 +3033,119 @@ fn roundtrip_aggregate_udf_extension_codec() {
     let ctx = SessionContext::new();
     let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
     let round_trip =
-        from_proto::parse_expr(&proto, &ctx, &UDFExtensionCodec).expect("parse expr");
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
 
-    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
+    roundtrip_json_test(&proto);
+}
+
+fn dummy_higher_order_function_args() -> Vec<Expr> {
+    let list = ScalarValue::List(ScalarValue::new_list_nullable(
+        &[ScalarValue::Int32(Some(1))],
+        &DataType::Int32,
+    ));
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
+        "x".to_string(),
+        Some(Arc::new(Field::new("x", DataType::Int32, true))),
+    ));
+    let lambda_var_without_field =
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
+    let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
+    vec![Expr::Literal(list, None), lambda]
+}
+
+#[test]
+fn roundtrip_higher_order_function() {
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let test_expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        Arc::clone(&hof),
+        dummy_higher_order_function_args(),
+    ));
+
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
+
+    roundtrip_expr_test(test_expr.clone(), ctx);
+
+    // Now test loading the HOF without registering it in the context, but rather creating it
+    // in the extension codec.
+    #[derive(Debug)]
+    struct DummyHigherOrderUDFExtensionCodec;
+
+    impl LogicalExtensionCodec for DummyHigherOrderUDFExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[LogicalPlan],
+            _ctx: &TaskContext,
+        ) -> Result<Extension> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            _buf: &[u8],
+            _table_ref: &TableReference,
+            _schema: SchemaRef,
+            _ctx: &TaskContext,
+        ) -> Result<Arc<dyn TableProvider>> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _table_ref: &TableReference,
+            _node: Arc<dyn TableProvider>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_higher_order_function(
+            &self,
+            name: &str,
+            _buf: &[u8],
+        ) -> Result<Arc<HigherOrderUDF>> {
+            if name == "higher_order_udf" {
+                Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                    MyHigherOrderUDF::new("payload".to_string()),
+                )))
+            } else {
+                Err(internal_datafusion_err!("HOF {name} not found"))
+            }
+        }
+    }
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test_with_codec(test_expr, ctx, &DummyHigherOrderUDFExtensionCodec)
+}
+
+#[test]
+fn roundtrip_higher_order_udf_extension_codec() {
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let test_expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        hof,
+        dummy_higher_order_function_args(),
+    ));
+
+    let ctx = SessionContext::new();
+    let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
+    let round_trip =
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
+
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -3079,5 +3653,220 @@ async fn roundtrip_mixed_case_table_reference() -> Result<()> {
         format!("{}", server_logical_plan.display_indent_schema())
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let plan = ctx
+        .table("empty")
+        .await?
+        .select_columns(&["name"])?
+        .into_optimized_plan()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
+
+// Regression test for https://github.com/apache/datafusion/issues/22065:
+// the decoder must preserve `null_aware = true` (NOT IN semantics)
+// across a to_proto -> from_proto round trip. `null_equality` is at
+// its default (`NullEqualsNothing`).
+#[tokio::test]
+async fn roundtrip_join_null_aware() -> Result<()> {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::JoinType;
+
+    let ctx = SessionContext::new();
+    let sql = "
+        SELECT id
+        FROM (VALUES (1), (2), (3)) AS t1(id)
+        WHERE id NOT IN (
+            SELECT bad_id
+            FROM (VALUES (CAST(1 AS INT)), (CAST(NULL AS INT))) AS excludes(bad_id)
+        )
+    ";
+
+    let df = ctx.sql(sql).await?;
+    let plan = ctx.state().optimize(df.logical_plan())?;
+
+    let mut found_null_aware = false;
+    plan.apply(|n| {
+        if let LogicalPlan::Join(j) = n
+            && j.join_type == JoinType::LeftAnti
+            && j.null_aware
+        {
+            found_null_aware = true;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert!(found_null_aware);
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+// Regression test for `null_equality` round-trip (related to #22065):
+// the decoder must preserve a non-default `null_equality`
+// (`NullEqualsNull`) across a to_proto -> from_proto round trip.
+// `null_aware` is at its default (`false`).
+#[tokio::test]
+async fn roundtrip_join_null_equality() -> Result<()> {
+    use datafusion_common::NullEquality;
+    use datafusion_expr::JoinType;
+    use datafusion_expr::logical_plan::{Join, JoinConstraint};
+
+    let ctx = SessionContext::new();
+
+    let left_schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let right_schema =
+        Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+    ctx.register_table("t1", Arc::new(EmptyTable::new(left_schema)))?;
+    ctx.register_table("t2", Arc::new(EmptyTable::new(right_schema)))?;
+    let left = ctx.table("t1").await?.into_optimized_plan()?;
+    let right = ctx.table("t2").await?.into_optimized_plan()?;
+
+    let join = LogicalPlan::Join(Join::try_new(
+        Arc::new(left),
+        Arc::new(right),
+        vec![(col("t1.a"), col("t2.b"))],
+        None,
+        JoinType::Inner,
+        JoinConstraint::On,
+        NullEquality::NullEqualsNull,
+        false,
+    )?);
+
+    let bytes = logical_plan_to_bytes(&join)?;
+    let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{join:?}"), format!("{rt:?}"));
+
+    Ok(())
+}
+
+// Single column, single split point range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_single_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("id").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+// Multi-column compound key with multiple split points for range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_multi_col() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int64, false),
+        Field::new("region", DataType::Utf8, false),
+    ]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("ts").sort(true, true), col("region").sort(true, true)],
+            vec![
+                SplitPoint::new(vec![
+                    ScalarValue::Int64(Some(1000)),
+                    ScalarValue::Utf8(Some("east".to_string())),
+                ]),
+                SplitPoint::new(vec![
+                    ScalarValue::Int64(Some(2000)),
+                    ScalarValue::Utf8(Some("west".to_string())),
+                ]),
+            ],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+// Non-default sort options: descending with nulls last for range partitioning
+#[tokio::test]
+async fn roundtrip_range_partitioning_desc_nulls_last() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "score",
+        DataType::Float64,
+        true,
+    )]));
+    let table = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("empty", table)?;
+
+    let scan_plan = ctx.table("empty").await?.into_optimized_plan()?;
+    let plan = LogicalPlan::Repartition(Repartition {
+        input: Arc::new(scan_plan),
+        partitioning_scheme: Partitioning::Range(RangePartitioning::try_new(
+            vec![col("score").sort(false, false)],
+            vec![SplitPoint::new(vec![ScalarValue::Float64(Some(50.0))])],
+        )?),
+    });
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }

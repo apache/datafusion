@@ -23,6 +23,7 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 
+use crate::aggregate::groups_accumulator::nulls::filter_to_validity;
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
 /// If the input has nulls, then the accumulator must potentially
@@ -471,7 +472,7 @@ pub fn accumulate<T, F>(
 ///
 /// This method assumes that for any input record index, if any of the value column
 /// is null, or it's filtered out by `opt_filter`, then the record would be ignored.
-/// (won't be accumulated by `value_fn`)
+/// (Won't be accumulated by `value_fn`)
 ///
 /// # Arguments
 ///
@@ -491,33 +492,26 @@ pub fn accumulate_multiple<T, F>(
     T: ArrowPrimitiveType + Send,
     F: FnMut(usize, usize, &[&PrimitiveArray<T>]) + Send,
 {
-    // Calculate `valid_indices` to accumulate, non-valid indices are ignored.
-    // `valid_indices` is a bit mask corresponding to the `group_indices`. An index
-    // is considered valid if:
-    // 1. All columns are non-null at this index.
-    // 2. Not filtered out by `opt_filter`
-
-    // Take AND from all null buffers of `value_columns`.
-    let combined_nulls = value_columns
-        .iter()
-        .map(|arr| arr.logical_nulls())
-        .fold(None, |acc, nulls| {
-            NullBuffer::union(acc.as_ref(), nulls.as_ref())
-        });
-
-    // Take AND from previous combined nulls and `opt_filter`.
-    let valid_indices = match (combined_nulls, opt_filter) {
-        (None, None) => None,
-        (None, Some(filter)) => Some(filter.clone()),
-        (Some(nulls), None) => Some(BooleanArray::new(nulls.inner().clone(), None)),
-        (Some(nulls), Some(filter)) => {
-            let combined = nulls.inner() & filter.values();
-            Some(BooleanArray::new(combined, None))
-        }
-    };
-
     for col in value_columns.iter() {
         debug_assert_eq!(col.len(), group_indices.len());
+    }
+
+    // Start with rows where all value columns are non-null.
+    let mut valid_indices =
+        NullBuffer::union_many(value_columns.iter().map(|arr| arr.nulls()))
+            .map(NullBuffer::into_inner);
+
+    // Restrict to rows where the optional filter is Some(true). Keep the filter
+    // as a raw BooleanBuffer to avoid computing a NullBuffer null_count just to
+    // test row validity below.
+    if let Some(filter) = opt_filter {
+        debug_assert_eq!(filter.len(), group_indices.len());
+        let filter_validity = filter_to_validity(filter);
+        if let Some(valid_indices) = valid_indices.as_mut() {
+            *valid_indices &= &filter_validity;
+        } else {
+            valid_indices = Some(filter_validity);
+        }
     }
 
     match valid_indices {
@@ -562,7 +556,8 @@ pub fn accumulate_indices<F>(
         (None, Some(filter)) => {
             debug_assert_eq!(filter.len(), group_indices.len());
             let group_indices_chunks = group_indices.chunks_exact(64);
-            let bit_chunks = filter.values().bit_chunks();
+            let filter_validity = filter_to_validity(filter);
+            let bit_chunks = filter_validity.bit_chunks();
 
             let group_indices_remainder = group_indices_chunks.remainder();
 
@@ -636,7 +631,8 @@ pub fn accumulate_indices<F>(
 
             let group_indices_chunks = group_indices.chunks_exact(64);
             let valid_bit_chunks = valids.inner().bit_chunks();
-            let filter_bit_chunks = filter.values().bit_chunks();
+            let filter_validity = filter_to_validity(filter);
+            let filter_bit_chunks = filter_validity.bit_chunks();
 
             let group_indices_remainder = group_indices_chunks.remainder();
 
@@ -1184,6 +1180,68 @@ mod test {
         );
 
         // Only rows where filter is true should be accumulated
+        let expected = vec![(0, vec![1, 10]), (0, vec![3, 30])];
+        assert_eq!(accumulated, expected);
+    }
+
+    #[test]
+    fn test_accumulate_indices_with_null_filter() {
+        let group_indices = vec![0, 1, 0, 1];
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true, true, false]),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+
+        let mut accumulated = vec![];
+        accumulate_indices(&group_indices, None, Some(&filter), |group_idx| {
+            accumulated.push(group_idx);
+        });
+
+        // A NULL filter value should be treated the same as false, even if the
+        // underlying BooleanBuffer value is true.
+        let expected = vec![0, 0];
+        assert_eq!(accumulated, expected);
+
+        let value_validity = NullBuffer::from(vec![true, true, false, true]);
+        let mut accumulated = vec![];
+        accumulate_indices(
+            &group_indices,
+            Some(&value_validity),
+            Some(&filter),
+            |group_idx| {
+                accumulated.push(group_idx);
+            },
+        );
+
+        let expected = vec![0];
+        assert_eq!(accumulated, expected);
+    }
+
+    #[test]
+    fn test_accumulate_multiple_with_null_filter() {
+        let group_indices = vec![0, 1, 0, 1];
+        let values1 = Int32Array::from(vec![1, 2, 3, 4]);
+        let values2 = Int32Array::from(vec![10, 20, 30, 40]);
+        let value_columns = [values1, values2];
+
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true, true, false]),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+
+        let mut accumulated = vec![];
+        accumulate_multiple(
+            &group_indices,
+            &value_columns.iter().collect::<Vec<_>>(),
+            Some(&filter),
+            |group_idx, batch_idx, columns| {
+                let values = columns.iter().map(|col| col.value(batch_idx)).collect();
+                accumulated.push((group_idx, values));
+            },
+        );
+
+        // A NULL filter value should be treated the same as false, even if the
+        // underlying BooleanBuffer value is true.
         let expected = vec![(0, vec![1, 10]), (0, vec![3, 30])];
         assert_eq!(accumulated, expected);
     }

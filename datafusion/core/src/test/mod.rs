@@ -103,7 +103,7 @@ pub fn scan_partitioned_csv(
         quote: b'"',
         ..Default::default()
     };
-    let table_schema = TableSchema::from_file_schema(schema);
+    let table_schema = TableSchema::from(schema);
     let source = Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
     let config =
         FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)

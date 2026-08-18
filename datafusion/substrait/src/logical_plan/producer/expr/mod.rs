@@ -19,6 +19,8 @@ mod aggregate_function;
 mod cast;
 mod field_reference;
 mod if_then;
+mod lambda;
+mod lambda_variable;
 mod literal;
 mod placeholder;
 mod scalar_function;
@@ -30,6 +32,8 @@ pub use aggregate_function::*;
 pub use cast::*;
 pub use field_reference::*;
 pub use if_then::*;
+pub use lambda::*;
+pub use lambda_variable::*;
 pub use literal::*;
 pub use placeholder::*;
 pub use scalar_function::*;
@@ -151,6 +155,11 @@ pub fn to_substrait_rex(
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::HigherOrderFunction(expr) => {
+            producer.handle_higher_order_function(expr, schema)
+        }
+        Expr::Lambda(expr) => producer.handle_lambda(expr, schema),
+        Expr::LambdaVariable(expr) => producer.handle_lambda_variable(expr, schema),
     }
 }
 

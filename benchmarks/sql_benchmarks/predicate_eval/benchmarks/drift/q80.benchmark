@@ -1,0 +1,7 @@
+subgroup drift
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=drift
+QPAD=80
+DATASET=drift
+NAME=drift_q80_a_then_b

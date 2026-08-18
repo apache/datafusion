@@ -94,6 +94,13 @@ impl TryFrom<&CsvOptions> for CsvWriterOptions {
         if let Some(v) = &value.double_quote {
             builder = builder.with_double_quote(*v)
         }
+        builder = builder.with_quote_style(value.quote_style.into());
+        if let Some(v) = &value.ignore_leading_whitespace {
+            builder = builder.with_ignore_leading_whitespace(*v)
+        }
+        if let Some(v) = &value.ignore_trailing_whitespace {
+            builder = builder.with_ignore_trailing_whitespace(*v)
+        }
         Ok(CsvWriterOptions {
             writer_options: builder,
             compression: value.compression,

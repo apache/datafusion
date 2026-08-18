@@ -1,6 +1,7 @@
 disallowed-methods = [
     { path = "tokio::task::spawn", reason = "To provide cancel-safety, use `SpawnedTask::spawn` instead (https://github.com/apache/datafusion/issues/6513)" },
     { path = "tokio::task::spawn_blocking", reason = "To provide cancel-safety, use `SpawnedTask::spawn_blocking` instead (https://github.com/apache/datafusion/issues/6513)" },
+    { path = "std::vec::Vec::reserve", reason = "Use `Vec::try_reserve` so allocation failures can be reported instead of panicking", replacement = "try_reserve" },
 ]
 
 disallowed-types = [

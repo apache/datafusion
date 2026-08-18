@@ -1,0 +1,7 @@
+subgroup costsel
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=costsel
+QPAD=01
+DATASET=markers
+NAME=costsel_q01_regexp_selective_last

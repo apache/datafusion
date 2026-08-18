@@ -21,7 +21,10 @@ use clap::Args;
 use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
-        memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool},
+        memory_pool::{
+            FairSpillPool, GreedyMemoryPool, MemoryPool, PeakRecordingPool,
+            TrackConsumersPool,
+        },
         object_store::ObjectStoreUrl,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
@@ -37,38 +40,38 @@ use super::latency_object_store::LatencyObjectStore;
 #[derive(Debug, Args, Clone)]
 pub struct CommonOpt {
     /// Number of iterations of each test run
-    #[arg(short = 'i', long = "iterations", default_value = "3")]
+    #[arg(short = 'i', long = "iterations", default_value = "3", env)]
     pub iterations: usize,
 
     /// Number of partitions to process in parallel. Defaults to number of available cores.
-    #[arg(short = 'n', long = "partitions")]
+    #[arg(short = 'n', long = "partitions", env)]
     pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
-    #[arg(short = 's', long = "batch-size")]
+    #[arg(short = 's', long = "batch-size", env)]
     pub batch_size: Option<usize>,
 
     /// The memory pool type to use, should be one of "fair" or "greedy"
-    #[arg(long = "mem-pool-type", default_value = "fair")]
+    #[arg(long = "mem-pool-type", default_value = "fair", env)]
     pub mem_pool_type: String,
 
     /// Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query
     /// if there's any, otherwise run with no memory limit.
-    #[arg(long = "memory-limit", value_parser = parse_capacity_limit)]
+    #[arg(long = "memory-limit", value_parser = parse_capacity_limit, env)]
     pub memory_limit: Option<usize>,
 
     /// The amount of memory to reserve for sort spill operations. DataFusion's default value will be used
     /// if not specified.
-    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_capacity_limit)]
+    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_capacity_limit, env)]
     pub sort_spill_reservation_bytes: Option<usize>,
 
     /// Activate debug mode to see more details
-    #[arg(short, long)]
+    #[arg(short, long, env)]
     pub debug: bool,
 
     /// Simulate object store latency to mimic remote storage (e.g. S3).
     /// Adds random latency in the range 20-200ms to each object store operation.
-    #[arg(long = "simulate-latency")]
+    #[arg(long = "simulate-latency", env)]
     pub simulate_latency: bool,
 }
 
@@ -125,6 +128,9 @@ impl CommonOpt {
                     )));
                 }
             };
+            // Record the peak reservation so benchmarks can report it next to
+            // peak RSS. Purely observational: every call is delegated.
+            let pool: Arc<dyn MemoryPool> = Arc::new(PeakRecordingPool::new(pool));
             rt_builder = rt_builder
                 .with_memory_pool(pool)
                 .with_disk_manager_builder(DiskManagerBuilder::default());

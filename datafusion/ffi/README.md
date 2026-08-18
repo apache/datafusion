@@ -65,13 +65,38 @@ to work across Rust libraries. In general, you can use Rust's [FFI] to
 operate across different programming languages, but that is not the design
 intent of this crate. Instead, we are using external crates that provide
 stable interfaces that closely mirror the Rust native approach. To learn more
-about this approach see the [abi_stable] and [async-ffi] crates.
+about this approach see the [stabby] and [async-ffi] crates.
 
 If you have a library in another language that you wish to interface to
 DataFusion the recommendation is to create a Rust wrapper crate to interface
 with your library and then to connect it to DataFusion using this crate.
 Alternatively, you could use [bindgen] to interface directly to the [FFI] provided
 by this crate, but that is currently not supported.
+
+## Stabby Usage
+
+This crate uses [stabby] for ABI-stable types like `stabby::string::String` and
+`stabby::vec::Vec`.
+
+We intentionally use `#[repr(C)]` for our struct definitions instead of stabby's
+`#[stabby::stabby]` macro for the following reasons:
+
+1. **Build time**: The heavy macro use greatly increases build time, especially
+   given our many interdependent types.
+
+2. **Code complexity**: Creating stabby dyn pointers for trait objects leads to
+   more complex code patterns with very little added benefit.
+
+3. **Arrow types**: Arrow's FFI types like `FFI_ArrowSchema` do not implement
+   `IStable`, and adding such implementations would be laborious and error-prone.
+
+4. **FFI_Option and FFI_Result**: We provide our own `FFI_Option<T>` and
+   `FFI_Result<T>` types using `#[repr(C, u8)]` because stabby's `Option`
+   and `Result` require inner types to be `IStable`.
+
+Instead, we use stabby for its convenient ABI-stable collection types like
+`stabby::string::String` and `stabby::vec::Vec`, while retaining flexibility
+for our complex FFI struct layouts.
 
 ## FFI Boundary
 
@@ -197,6 +222,7 @@ and it is easy to implement on any struct that implements `Session`.
 [api docs]: http://docs.rs/datafusion-ffi/latest
 [rust abi]: https://doc.rust-lang.org/reference/abi.html
 [ffi]: https://doc.rust-lang.org/nomicon/ffi.html
+[stabby]: https://crates.io/crates/stabby
 [abi_stable]: https://crates.io/crates/abi_stable
 [async-ffi]: https://crates.io/crates/async-ffi
 [bindgen]: https://crates.io/crates/bindgen

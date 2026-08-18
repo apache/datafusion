@@ -224,3 +224,127 @@ query I
 SELECT SUM(v1) FROM generate_series(10) AS t1(v1) GROUP BY GROUPING SETS(())
 ----
 55
+
+# grouping_sets_empty_input: GROUPING SETS (()) must produce one NULL row on empty input
+# (standard SQL: the empty grouping set always defines exactly one group)
+query I
+SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS(())
+----
+NULL
+
+# grouping_sets_empty_input_avg: AVG returns NULL for the empty group
+query R
+SELECT AVG(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS(())
+----
+NULL
+
+# grouping_sets_empty_input_count: COUNT returns 0 for the empty group, not a missing row
+query I
+SELECT COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS(())
+----
+0
+
+# rollup_empty_input: ROLLUP includes the empty grouping set and must produce one row
+query II
+SELECT SUM(v1), COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY ROLLUP(v1)
+----
+NULL 0
+
+# cube_empty_input: CUBE includes the empty grouping set and must produce one row
+query II
+SELECT SUM(v1), COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY CUBE(v1)
+----
+NULL 0
+
+# grouping_sets_mixed_empty_and_non_empty: only the empty set (()) produces a row on empty input
+query II
+SELECT SUM(v1), COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((), (v1))
+----
+NULL 0
+
+# rollup_empty_input_outer_count: an outer COUNT(*) over ROLLUP is answered from the inner row-count statistics
+query I
+SELECT COUNT(*) FROM (SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY ROLLUP(v1))
+----
+1
+
+# cube_empty_input_outer_count: an outer COUNT(*) over CUBE is answered from the inner row-count statistics
+query I
+SELECT COUNT(*) FROM (SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY CUBE(v1))
+----
+1
+
+# grouping_sets_empty_input_outer_count: an outer COUNT(*) over GROUPING SETS is answered from the inner row-count statistics
+query I
+SELECT COUNT(*) FROM (SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((), (v1)))
+----
+1
+
+# duplicate_empty_grouping_sets_empty_input: each empty grouping set emits its own grand-total row
+query I
+SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((v1), (), ())
+----
+NULL
+NULL
+
+# duplicate_empty_grouping_sets_empty_input_outer_count: the row-count statistics must match those two rows
+query I
+SELECT COUNT(*) FROM (SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((v1), (), ()))
+----
+2
+
+# duplicate_empty_grouping_sets_empty_input_limit: LIMIT applies to the grand-total rows, so one of
+# the two is returned
+query I
+SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((v1), (), ()) LIMIT 1
+----
+NULL
+
+# duplicate_empty_grouping_sets_empty_input_limit_outer_count: the outer COUNT(*) is answered from
+# the inner row-count statistics, which must agree with the rows the limit lets through
+query I
+SELECT COUNT(*) FROM (SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((v1), (), ()) LIMIT 1)
+----
+1
+
+# duplicate_empty_grouping_sets_empty_input_limit_above_row_count_outer_count: a limit above the row
+# count leaves both grand-total rows
+query I
+SELECT COUNT(*) FROM (SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS((v1), (), ()) LIMIT 5)
+----
+2
+
+# An empty Hive-partitioned file has no rows and exact partition-column statistics, the
+# combination an outer MIN/MAX needs to be answered from statistics.
+statement ok
+COPY (SELECT * FROM (VALUES (1)) v(a) WHERE false)
+TO 'test_files/scratch/grouping/p=x/empty.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE hive_partitioned_empty (a INT, p VARCHAR)
+STORED AS PARQUET PARTITIONED BY (p)
+LOCATION 'test_files/scratch/grouping/';
+
+# rollup_empty_input_grand_total_row: the single row ROLLUP emits holds NULL in the grouping column
+query T
+SELECT p FROM hive_partitioned_empty GROUP BY ROLLUP(p)
+----
+NULL
+
+# rollup_empty_input_outer_min_max: the only row is the NULL grand-total row, so MIN/MAX are NULL
+query TT
+SELECT MIN(p), MAX(p) FROM (SELECT p FROM hive_partitioned_empty GROUP BY ROLLUP(p))
+----
+NULL NULL
+
+# cube_empty_input_outer_min_max: the only row is the NULL grand-total row, so MIN/MAX are NULL
+query TT
+SELECT MIN(p), MAX(p) FROM (SELECT p FROM hive_partitioned_empty GROUP BY CUBE(p))
+----
+NULL NULL
+
+# group_by_empty_input_outer_min_max: a plain GROUP BY emits no rows, so MIN/MAX are NULL
+query TT
+SELECT MIN(p), MAX(p) FROM (SELECT p FROM hive_partitioned_empty GROUP BY p)
+----
+NULL NULL

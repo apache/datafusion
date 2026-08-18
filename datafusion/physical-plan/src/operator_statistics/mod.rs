@@ -86,15 +86,15 @@
 //! let stats = registry.compute(plan.as_ref())?;
 //! ```
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+use datafusion_common::extensions::Extensions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
+use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 // ============================================================================
 // ExtendedStatistics: Statistics with type-safe extensions
@@ -128,7 +128,7 @@ pub struct ExtendedStatistics {
     /// Standard statistics (num_rows, byte_size, column stats)
     base: Arc<Statistics>,
     /// Type-erased extensions for custom statistics
-    extensions: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    extensions: Extensions,
 }
 
 impl ExtendedStatistics {
@@ -136,7 +136,7 @@ impl ExtendedStatistics {
     pub fn new(base: Statistics) -> Self {
         Self {
             base: Arc::new(base),
-            extensions: HashMap::new(),
+            extensions: Extensions::new(),
         }
     }
 
@@ -144,7 +144,7 @@ impl ExtendedStatistics {
     pub fn new_arc(base: Arc<Statistics>) -> Self {
         Self {
             base,
-            extensions: HashMap::new(),
+            extensions: Extensions::new(),
         }
     }
 
@@ -160,26 +160,22 @@ impl ExtendedStatistics {
 
     /// Get a reference to a custom statistics extension by type.
     pub fn get_extension<T: 'static + Send + Sync>(&self) -> Option<&T> {
-        self.extensions
-            .get(&TypeId::of::<T>())
-            .and_then(|ext| ext.downcast_ref())
+        self.extensions.get::<T>()
     }
 
     /// Set a custom statistics extension.
     pub fn set_extension<T: 'static + Send + Sync>(&mut self, value: T) {
-        self.extensions.insert(TypeId::of::<T>(), Arc::new(value));
+        self.extensions.insert(value);
     }
 
     /// Check if an extension of the given type exists.
     pub fn has_extension<T: 'static + Send + Sync>(&self) -> bool {
-        self.extensions.contains_key(&TypeId::of::<T>())
+        self.extensions.contains::<T>()
     }
 
     /// Merge extensions from another ExtendedStatistics (other's extensions take precedence).
     pub fn merge_extensions(&mut self, other: &ExtendedStatistics) {
-        for (type_id, ext) in &other.extensions {
-            self.extensions.insert(*type_id, Arc::clone(ext));
-        }
+        self.extensions.merge(&other.extensions);
     }
 }
 
@@ -271,7 +267,7 @@ impl StatisticsProvider for DefaultStatisticsProvider {
         plan: &dyn ExecutionPlan,
         _child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        let base = plan.partition_statistics(None)?;
+        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
         Ok(StatisticsResult::Computed(ExtendedStatistics::new_arc(
             base,
         )))
@@ -363,7 +359,7 @@ impl StatisticsRegistry {
     pub fn compute(&self, plan: &dyn ExecutionPlan) -> Result<ExtendedStatistics> {
         // Fast path: no providers registered, skip the walk entirely
         if self.providers.is_empty() {
-            let base = plan.partition_statistics(None)?;
+            let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
             return Ok(ExtendedStatistics::new_arc(base));
         }
 
@@ -387,7 +383,7 @@ impl StatisticsRegistry {
             }
         }
         // Fallback: use plan's built-in stats
-        let base = plan.partition_statistics(None)?;
+        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
         Ok(ExtendedStatistics::new_arc(base))
     }
 
@@ -510,7 +506,9 @@ fn computed_with_row_count(
     plan: &dyn ExecutionPlan,
     num_rows: Precision<usize>,
 ) -> Result<StatisticsResult> {
-    let mut base = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
+    let mut base = Arc::unwrap_or_clone(
+        StatisticsContext::new().compute(plan, &StatisticsArgs::new())?,
+    );
     rescale_byte_size(&mut base, num_rows);
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
@@ -814,11 +812,8 @@ impl StatisticsProvider for JoinStatisticsProvider {
                     _ => return left_rows.saturating_mul(right_rows),
                 }
             }
-            if ndv_divisor > 0 {
-                left_rows.saturating_mul(right_rows) / ndv_divisor
-            } else {
-                left_rows.saturating_mul(right_rows)
-            }
+            let max_rows = left_rows.saturating_mul(right_rows);
+            max_rows.checked_div(ndv_divisor).unwrap_or(max_rows)
         }
 
         let (inner_estimate, is_exact_cartesian, join_type) = if let Some(hash_join) =
@@ -1031,7 +1026,11 @@ mod tests {
     use super::*;
     use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
-    use crate::{DisplayAs, DisplayFormatType, PlanProperties};
+    use crate::statistics::StatisticsArgs;
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, DisplayFormatType, PlanProperties,
+        ReplaceChildrenOptions,
+    };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
@@ -1111,11 +1110,22 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
-            _children: Vec<Arc<dyn ExecutionPlan>>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {
@@ -1124,7 +1134,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }
@@ -1137,9 +1147,10 @@ mod tests {
             unimplemented!()
         }
 
-        fn partition_statistics(
+        fn statistics_from_inputs(
             &self,
-            _partition: Option<usize>,
+            _input_stats: &[Arc<Statistics>],
+            _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             Ok(Arc::new(self.stats.clone()))
         }
@@ -1217,13 +1228,24 @@ mod tests {
             vec![&self.input]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(CustomExec {
                 input: Arc::clone(&children[0]),
             }))
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {
@@ -1232,7 +1254,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }

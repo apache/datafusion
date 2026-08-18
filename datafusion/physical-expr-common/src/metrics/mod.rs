@@ -20,6 +20,7 @@
 mod baseline;
 mod builder;
 mod custom;
+mod elapsed_compute;
 mod expression;
 mod value;
 
@@ -29,7 +30,9 @@ use parking_lot::Mutex;
 use std::{
     borrow::Cow,
     fmt::{self, Debug, Display},
+    hash::{Hash, Hasher},
     sync::Arc,
+    vec::IntoIter,
 };
 
 // public exports
@@ -37,6 +40,7 @@ use std::{
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
+pub use elapsed_compute::{ElapsedComputeFuture, ElapsedComputeFutureExt};
 pub use expression::ExpressionEvaluatorMetrics;
 pub use value::{
     Count, Gauge, MetricValue, PruningMetrics, RatioMergeStrategy, RatioMetrics,
@@ -305,6 +309,7 @@ impl MetricsSet {
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
+            MetricValue::PeakMemoryUsage { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
             MetricValue::PruningMetrics { name, .. } => name == metric_name,
@@ -413,6 +418,21 @@ impl MetricsSet {
             .collect::<Vec<_>>();
         Self { metrics }
     }
+
+    /// Returns a new `MetricsSet` filtered by metric name.
+    /// Only metrics with the names appearing the list will be kept.
+    pub fn filter_by_names(self, names: &[String]) -> Self {
+        if names.is_empty() {
+            return Self { metrics: vec![] };
+        }
+
+        let metrics = self
+            .metrics
+            .into_iter()
+            .filter(|metric| names.iter().any(|name| name == metric.value().name()))
+            .collect::<Vec<_>>();
+        Self { metrics }
+    }
 }
 
 impl Display for MetricsSet {
@@ -429,6 +449,38 @@ impl Display for MetricsSet {
             write!(f, "{i}")?;
         }
         Ok(())
+    }
+}
+
+impl IntoIterator for MetricsSet {
+    type Item = Arc<Metric>;
+    type IntoIter = IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a MetricsSet {
+    type Item = &'a Arc<Metric>;
+    type IntoIter = std::slice::Iter<'a, Arc<Metric>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.metrics.iter()
+    }
+}
+
+impl Extend<Arc<Metric>> for MetricsSet {
+    fn extend<I: IntoIterator<Item = Arc<Metric>>>(&mut self, iter: I) {
+        self.metrics.extend(iter);
+    }
+}
+
+impl FromIterator<Arc<Metric>> for MetricsSet {
+    fn from_iter<T: IntoIterator<Item = Arc<Metric>>>(iter: T) -> Self {
+        Self {
+            metrics: iter.into_iter().collect(),
+        }
     }
 }
 
@@ -465,6 +517,14 @@ impl ExecutionPlanMetricsSet {
     }
 }
 
+impl From<MetricsSet> for ExecutionPlanMetricsSet {
+    fn from(metrics: MetricsSet) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(metrics)),
+        }
+    }
+}
+
 /// `name=value` pairs identifying a metric. This concept is called various things
 /// in various different systems:
 ///
@@ -476,20 +536,19 @@ impl ExecutionPlanMetricsSet {
 /// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/data-model.md>,
 /// etc.
 ///
-/// As the name and value are expected to mostly be constant strings,
-/// use a [`Cow`] to avoid copying / allocations in this common case.
+/// As the name and value are expected to often be constant strings, borrowed
+/// static strings avoid allocations in that common case. Dynamic strings are
+/// stored behind [`Arc<str>`] so cloning labels does not copy the underlying
+/// string data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label {
-    name: Cow<'static, str>,
-    value: Cow<'static, str>,
+    name: LabelValue,
+    value: LabelValue,
 }
 
 impl Label {
     /// Create a new [`Label`]
-    pub fn new(
-        name: impl Into<Cow<'static, str>>,
-        value: impl Into<Cow<'static, str>>,
-    ) -> Self {
+    pub fn new(name: impl Into<LabelValue>, value: impl Into<LabelValue>) -> Self {
         let name = name.into();
         let value = value.into();
         Self { name, value }
@@ -497,18 +556,101 @@ impl Label {
 
     /// Returns the name of this label
     pub fn name(&self) -> &str {
-        self.name.as_ref()
+        self.name.as_str()
     }
 
     /// Returns the value of this label
     pub fn value(&self) -> &str {
-        self.value.as_ref()
+        self.value.as_str()
     }
 }
 
 impl Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}={}", self.name, self.value)
+    }
+}
+
+/// A label name or value.
+///
+/// String literals preserve the existing allocation-free path. Dynamic strings
+/// can be stored behind [`Arc<str>`], so cloning a [`Label`] only increments an
+/// atomic reference count and does not allocate or copy the underlying string
+/// data.
+#[derive(Clone)]
+pub struct LabelValue(LabelValueInner);
+
+/// Internal representation for label names and values.
+///
+/// `LabelValue` is public because `Label::new` accepts it, but these storage
+/// variants are implementation details. Keeping them private prevents external
+/// code from constructing or matching on `Static` and `Shared` directly.
+#[derive(Clone)]
+enum LabelValueInner {
+    Static(&'static str),
+    Shared(Arc<str>),
+}
+
+impl LabelValue {
+    /// Return this label value as a string slice.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            LabelValueInner::Static(value) => value,
+            LabelValueInner::Shared(value) => value.as_ref(),
+        }
+    }
+}
+
+impl From<&'static str> for LabelValue {
+    fn from(value: &'static str) -> Self {
+        Self(LabelValueInner::Static(value))
+    }
+}
+
+impl From<String> for LabelValue {
+    fn from(value: String) -> Self {
+        Self(LabelValueInner::Shared(Arc::from(value)))
+    }
+}
+
+impl From<Arc<str>> for LabelValue {
+    fn from(value: Arc<str>) -> Self {
+        Self(LabelValueInner::Shared(value))
+    }
+}
+
+impl From<Cow<'static, str>> for LabelValue {
+    fn from(value: Cow<'static, str>) -> Self {
+        match value {
+            Cow::Borrowed(value) => value.into(),
+            Cow::Owned(value) => value.into(),
+        }
+    }
+}
+
+impl PartialEq for LabelValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for LabelValue {}
+
+impl Hash for LabelValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl Debug for LabelValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl Display for LabelValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(self.as_str(), f)
     }
 }
 
@@ -564,6 +706,18 @@ mod tests {
         let metric = Metric::new_with_labels(value, partition, vec![label]);
 
         assert_eq!("output_rows{partition=2, foo=bar}=66", metric.to_string())
+    }
+
+    #[test]
+    fn test_label_owned_and_borrowed_values_are_equal() {
+        let borrowed = Label::new("foo", "bar");
+        let owned = Label::new("foo".to_string(), "bar".to_string());
+        let shared = Label::new("foo", Arc::<str>::from("bar"));
+
+        assert_eq!(borrowed, owned);
+        assert_eq!(borrowed, shared);
+        assert_eq!(borrowed.to_string(), owned.to_string());
+        assert_eq!(borrowed.to_string(), shared.to_string());
     }
 
     #[test]
@@ -753,6 +907,52 @@ mod tests {
     }
 
     #[test]
+    fn test_extend() {
+        let mut metrics = MetricsSet::new();
+        let m1 = Arc::new(Metric::new(MetricValue::OutputRows(Count::new()), None));
+        let m2 = Arc::new(Metric::new(MetricValue::SpillCount(Count::new()), None));
+
+        metrics.extend([Arc::clone(&m1), Arc::clone(&m2)]);
+        assert_eq!(metrics.iter().count(), 2);
+
+        let m3 = Arc::new(Metric::new(MetricValue::SpilledBytes(Count::new()), None));
+        metrics.extend(std::iter::once(Arc::clone(&m3)));
+        assert_eq!(metrics.iter().count(), 3);
+    }
+
+    #[test]
+    fn test_collect() {
+        let m1 = Arc::new(Metric::new(MetricValue::OutputRows(Count::new()), None));
+        let m2 = Arc::new(Metric::new(MetricValue::SpillCount(Count::new()), None));
+
+        let metrics: MetricsSet =
+            vec![Arc::clone(&m1), Arc::clone(&m2)].into_iter().collect();
+        assert_eq!(metrics.iter().count(), 2);
+
+        let empty: MetricsSet = std::iter::empty().collect();
+        assert_eq!(empty.iter().count(), 0);
+    }
+
+    #[test]
+    fn test_into_iterator_by_ref() {
+        let mut metrics = MetricsSet::new();
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::OutputRows(Count::new()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::SpillCount(Count::new()),
+            None,
+        )));
+
+        let mut count = 0;
+        for _m in &metrics {
+            count += 1;
+        }
+        assert_eq!(count, 2);
+    }
+
+    #[test]
     fn test_sorted_for_display() {
         let metrics = ExecutionPlanMetricsSet::new();
         MetricBuilder::new(&metrics).end_timestamp(0);
@@ -779,6 +979,31 @@ mod tests {
         assert_eq!(
             "output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp",
             metric_names(&metrics)
+        );
+    }
+
+    #[test]
+    fn test_filter_by_names() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics).output_rows(0);
+        MetricBuilder::new(&metrics).counter("custom_counter", 0);
+
+        assert!(
+            metrics
+                .clone_inner()
+                .filter_by_names(&[])
+                .iter()
+                .next()
+                .is_none()
+        );
+
+        let names = vec!["output_rows".to_string()];
+        let filtered = metrics.clone_inner().filter_by_names(&names);
+
+        assert_eq!(filtered.iter().count(), 1);
+        assert_eq!(
+            filtered.iter().next().unwrap().value().name(),
+            "output_rows"
         );
     }
 }

@@ -21,9 +21,8 @@
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::Float64Array;
-    use datafusion::common::record_batch;
-    use datafusion::error::{DataFusionError, Result};
+    use arrow::array::{Float64Array, record_batch};
+    use datafusion::error::Result;
     use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
     use datafusion::prelude::{SessionContext, col};
     use datafusion_catalog::MemTable;
@@ -34,12 +33,7 @@ mod tests {
     async fn test_ffi_udaf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_sum_func =
-            module
-                .create_sum_udaf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_udaf".to_string(),
-                ))?();
+        let ffi_sum_func = (module.create_sum_udaf)();
         let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
 
         let udaf = AggregateUDF::new_from_shared_impl(foreign_sum_func);
@@ -72,16 +66,27 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_supports_null_handling_clause() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_first_value_func = (module.create_first_value_udaf)();
+        let foreign_first_value_func: Arc<dyn AggregateUDFImpl> =
+            (&ffi_first_value_func).into();
+        assert!(foreign_first_value_func.supports_null_handling_clause());
+
+        let ffi_sum_func = (module.create_sum_udaf)();
+        let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
+        assert!(!foreign_sum_func.supports_null_handling_clause());
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_ffi_grouping_udaf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_stddev_func =
-            module
-                .create_stddev_udaf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_udaf".to_string(),
-                ))?();
+        let ffi_stddev_func = (module.create_stddev_udaf)();
         let foreign_stddev_func: Arc<dyn AggregateUDFImpl> = (&ffi_stddev_func).into();
 
         let udaf = AggregateUDF::new_from_shared_impl(foreign_stddev_func);
@@ -137,25 +142,14 @@ mod tests {
     async fn udf_as_input_to_udf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_abs_func =
-            module
-                .create_scalar_udf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_scalar_udf"
-                        .to_string(),
-                ))?();
+        let ffi_abs_func = (module.create_scalar_udf)();
         let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).into();
         let abs_udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
 
         let ctx = SessionContext::new();
         ctx.deregister_udf("abs");
 
-        let ffi_sum_func =
-            module
-                .create_sum_udaf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_udaf".to_string(),
-                ))?();
+        let ffi_sum_func = (module.create_sum_udaf)();
         let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
 
         let udaf = AggregateUDF::new_from_shared_impl(foreign_sum_func);

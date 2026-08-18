@@ -15,75 +15,111 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use abi_stable::library::RootModule;
 use datafusion_common::{DataFusionError, Result};
 
-use crate::tests::ForeignLibraryModuleRef;
+use crate::tests::ForeignLibraryModule;
 
-/// Compute the path to the library. It would be preferable to simply use
-/// abi_stable::library::development_utils::compute_library_path however
-/// our current CI pipeline has a `ci` profile that we need to use to
-/// find the library.
-pub fn compute_library_path<M: RootModule>(
-    target_path: &Path,
-) -> std::io::Result<std::path::PathBuf> {
-    let debug_dir = target_path.join("debug");
-    let release_dir = target_path.join("release");
-    let ci_dir = target_path.join("ci");
+/// Find the cdylib file for datafusion_ffi in the given directory.
+fn find_cdylib(deps_dir: &Path) -> Result<PathBuf> {
+    let lib_prefix = if cfg!(target_os = "windows") {
+        ""
+    } else {
+        "lib"
+    };
+    let lib_ext = if cfg!(target_os = "macos") {
+        "dylib"
+    } else if cfg!(target_os = "windows") {
+        "dll"
+    } else {
+        "so"
+    };
 
-    let debug_path = M::get_library_path(&debug_dir.join("deps"));
-    let release_path = M::get_library_path(&release_dir.join("deps"));
-    let ci_path = M::get_library_path(&ci_dir.join("deps"));
+    let pattern = format!("{lib_prefix}datafusion_ffi.{lib_ext}");
+    let lib_path = deps_dir.join(&pattern);
 
-    let all_paths = vec![
-        (debug_dir.clone(), debug_path),
-        (release_dir, release_path),
-        (ci_dir, ci_path),
-    ];
+    if lib_path.exists() {
+        return Ok(lib_path);
+    }
 
-    let best_path = all_paths
-        .into_iter()
-        .filter(|(_, path)| path.exists())
-        .filter_map(|(dir, path)| path.metadata().map(|m| (dir, m)).ok())
-        .filter_map(|(dir, meta)| meta.modified().map(|m| (dir, m)).ok())
-        .max_by_key(|(_, date)| *date)
-        .map(|(dir, _)| dir)
-        .unwrap_or(debug_dir);
-
-    Ok(best_path)
+    Err(DataFusionError::External(
+        format!("Could not find library at {}", lib_path.display()).into(),
+    ))
 }
 
-pub fn get_module() -> Result<ForeignLibraryModuleRef> {
+/// Locate the built `datafusion_ffi` cdylib.
+///
+/// The cdylib sits next to the running test binary, so this follows Cargo's
+/// actual output directory and is robust to the active profile and a custom
+/// `--target-dir` (e.g. `cargo llvm-cov`).
+fn find_library() -> Result<PathBuf> {
+    let exe =
+        std::env::current_exe().map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let deps_dir = exe.parent().ok_or_else(|| {
+        DataFusionError::External("Failed to find test binary directory".into())
+    })?;
+    find_cdylib(deps_dir)
+}
+
+fn load_module(lib_path: &Path) -> Result<ForeignLibraryModule> {
     let expected_version = crate::version();
 
-    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = crate_root
-        .parent()
-        .expect("Failed to find crate parent")
-        .parent()
-        .expect("Failed to find workspace root")
-        .join("target");
-
-    // Find the location of the library. This is specific to the build environment,
-    // so you will need to change the approach here based on your use case.
-    // let target: &std::path::Path = "../../../../target/".as_ref();
-    let library_path =
-        compute_library_path::<ForeignLibraryModuleRef>(target_dir.as_path())
+    // Load the library using libloading
+    let lib = unsafe {
+        libloading::Library::new(lib_path)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .join("deps");
+    };
 
-    // Load the module
-    let module = ForeignLibraryModuleRef::load_from_directory(&library_path)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let get_module: libloading::Symbol<extern "C" fn() -> ForeignLibraryModule> = unsafe {
+        lib.get(b"datafusion_ffi_get_module")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
 
-    assert_eq!(
-        module
-            .version()
-            .expect("Unable to call version on FFI module")(),
-        expected_version
-    );
+    let module = get_module();
+
+    assert_eq!((module.version)(), expected_version);
+
+    // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
+    std::mem::forget(lib);
 
     Ok(module)
+}
+
+pub fn get_module() -> Result<ForeignLibraryModule> {
+    load_module(&find_library()?)
+}
+
+/// Load an independent copy of the integration-test cdylib.
+///
+/// Copying to a unique path makes the dynamic loader create a separate image
+/// with its own library marker and Rust object graph.
+pub fn get_module_copy(name: &str) -> Result<ForeignLibraryModule> {
+    let source = find_library()?;
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| DataFusionError::External("Invalid cdylib filename".into()))?;
+    // Windows cannot remove a loaded DLL, so use a stable name that bounds the
+    // retained test artifacts to one file per library role.
+    #[cfg(target_os = "windows")]
+    let destination = source.with_file_name(format!("{name}_{file_name}"));
+    #[cfg(not(target_os = "windows"))]
+    let destination =
+        source.with_file_name(format!("{}_{}_{}", std::process::id(), name, file_name));
+
+    std::fs::copy(&source, &destination)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    match load_module(&destination) {
+        Ok(module) => {
+            #[cfg(not(target_os = "windows"))]
+            let _ = std::fs::remove_file(destination);
+            Ok(module)
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(destination);
+            Err(error)
+        }
+    }
 }

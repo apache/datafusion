@@ -1,0 +1,39 @@
+name Q04
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run
+select
+    o_orderpriority,
+    count(*) as order_count
+from
+    orders
+where
+        o_orderdate >= '1993-07-01'
+  and o_orderdate < date '1993-07-01' + interval '3' month
+  and exists (
+        select
+            *
+        from
+            lineitem
+        where
+                l_orderkey = o_orderkey
+          and l_commitdate < l_receiptdate
+    )
+group by
+    o_orderpriority
+order by
+    o_orderpriority;
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q04.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql

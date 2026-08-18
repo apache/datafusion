@@ -19,8 +19,6 @@ use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RString, RVec};
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
@@ -28,35 +26,41 @@ use arrow::ffi::{FFI_ArrowSchema, from_ffi, to_ffi};
 use arrow_schema::FieldRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature,
+    ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature,
 };
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
 };
 
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
+
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 use crate::config::FFI_ConfigOptions;
 use crate::expr::columnar_value::FFI_ColumnarValue;
+use crate::expr::expr_properties::FFI_ExprProperties;
+use crate::placement::FFI_ExpressionPlacement;
 use crate::util::{
-    FFIResult, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
+    FFI_Option, FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
 };
 use crate::volatility::FFI_Volatility;
-use crate::{df_result, rresult, rresult_return};
+use crate::{df_result, sresult, sresult_return};
 
 pub mod return_type_args;
 
 /// A stable struct for sharing a [`ScalarUDF`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_ScalarUDF {
     /// FFI equivalent to the `name` of a [`ScalarUDF`]
-    pub name: RString,
+    pub name: SString,
 
     /// FFI equivalent to the `aliases` of a [`ScalarUDF`]
-    pub aliases: RVec<RString>,
+    pub aliases: SVec<SString>,
 
     /// FFI equivalent to the `volatility` of a [`ScalarUDF`]
     pub volatility: FFI_Volatility,
@@ -65,18 +69,18 @@ pub struct FFI_ScalarUDF {
     pub return_field_from_args: unsafe extern "C" fn(
         udf: &Self,
         args: FFI_ReturnFieldArgs,
-    ) -> FFIResult<WrappedSchema>,
+    ) -> FFI_Result<WrappedSchema>,
 
     /// Execute the underlying [`ScalarUDF`] and return the result as a `FFI_ArrowArray`
     /// within an AbiStable wrapper.
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
-        args: RVec<WrappedArray>,
-        arg_fields: RVec<WrappedSchema>,
+        args: SVec<WrappedArray>,
+        arg_fields: SVec<WrappedSchema>,
         num_rows: usize,
         return_field: WrappedSchema,
         config_options: FFI_ConfigOptions,
-    ) -> FFIResult<FFI_ColumnarValue>,
+    ) -> FFI_Result<FFI_ColumnarValue>,
 
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
@@ -87,8 +91,16 @@ pub struct FFI_ScalarUDF {
     /// appropriate calls on the underlying [`ScalarUDF`]
     pub coerce_types: unsafe extern "C" fn(
         udf: &Self,
-        arg_types: RVec<WrappedSchema>,
-    ) -> FFIResult<RVec<WrappedSchema>>,
+        arg_types: SVec<WrappedSchema>,
+    ) -> FFI_Result<SVec<WrappedSchema>>,
+
+    /// FFI equivalent to the `placement` of a [`ScalarUDFImpl`]. Returns the
+    /// placement hint for the underlying [`ScalarUDF`] given each argument's
+    /// placement. Infallible, so it returns the value directly, not an `FFI_Result`.
+    pub placement: unsafe extern "C" fn(
+        udf: &Self,
+        args: SVec<FFI_ExpressionPlacement>,
+    ) -> FFI_ExpressionPlacement,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -105,6 +117,19 @@ pub struct FFI_ScalarUDF {
     /// the foreign interface. See [`crate::get_library_marker_id`] and
     /// the crate's `README.md` for more information.
     pub library_marker_id: extern "C" fn() -> usize,
+
+    /// FFI equivalent to [`ScalarUDFImpl::preserves_lex_ordering`].
+    pub preserves_lex_ordering: unsafe extern "C" fn(
+        udf: &Self,
+        inputs: SVec<FFI_ExprProperties>,
+    ) -> FFI_Result<bool>,
+
+    /// FFI equivalent to [`ScalarUDFImpl::with_updated_config`].
+    pub with_updated_config:
+        unsafe extern "C" fn(
+            udf: &Self,
+            config: FFI_ConfigOptions,
+        ) -> FFI_Result<FFI_Option<FFI_ScalarUDF>>,
 }
 
 unsafe impl Send for FFI_ScalarUDF {}
@@ -124,8 +149,8 @@ impl FFI_ScalarUDF {
 unsafe extern "C" fn return_field_from_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
     args: FFI_ReturnFieldArgs,
-) -> FFIResult<WrappedSchema> {
-    let args: ForeignReturnFieldArgsOwned = rresult_return!((&args).try_into());
+) -> FFI_Result<WrappedSchema> {
+    let args: ForeignReturnFieldArgsOwned = sresult_return!((&args).try_into());
     let args_ref: ForeignReturnFieldArgs = (&args).into();
 
     let return_type = udf
@@ -134,36 +159,76 @@ unsafe extern "C" fn return_field_from_args_fn_wrapper(
         .and_then(|f| FFI_ArrowSchema::try_from(&f).map_err(DataFusionError::from))
         .map(WrappedSchema);
 
-    rresult!(return_type)
+    sresult!(return_type)
 }
 
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udf: &FFI_ScalarUDF,
-    arg_types: RVec<WrappedSchema>,
-) -> FFIResult<RVec<WrappedSchema>> {
-    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
+    arg_types: SVec<WrappedSchema>,
+) -> FFI_Result<SVec<WrappedSchema>> {
+    let arg_types = sresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
     let arg_fields = arg_types
         .iter()
         .map(|dt| Arc::new(Field::new("f", dt.clone(), true)))
         .collect::<Vec<_>>();
     let return_types =
-        rresult_return!(fields_with_udf(&arg_fields, udf.inner().as_ref()))
+        sresult_return!(fields_with_udf(&arg_fields, udf.inner().as_ref()))
             .into_iter()
             .map(|f| f.data_type().to_owned())
             .collect::<Vec<_>>();
 
-    rresult!(vec_datatype_to_rvec_wrapped(&return_types))
+    sresult!(vec_datatype_to_rvec_wrapped(&return_types))
+}
+
+unsafe extern "C" fn placement_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    args: SVec<FFI_ExpressionPlacement>,
+) -> FFI_ExpressionPlacement {
+    let args = args
+        .into_iter()
+        .map(ExpressionPlacement::from)
+        .collect::<Vec<_>>();
+
+    udf.inner().placement(&args).into()
+}
+
+unsafe extern "C" fn preserves_lex_ordering_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    inputs: SVec<FFI_ExprProperties>,
+) -> FFI_Result<bool> {
+    let result = inputs
+        .into_iter()
+        .map(ExprProperties::try_from)
+        .collect::<Result<Vec<_>>>()
+        .and_then(|inputs| udf.inner().preserves_lex_ordering(&inputs));
+
+    sresult!(result)
+}
+
+unsafe extern "C" fn with_updated_config_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    config: FFI_ConfigOptions,
+) -> FFI_Result<FFI_Option<FFI_ScalarUDF>> {
+    let config = sresult_return!(ConfigOptions::try_from(config));
+
+    let updated: Option<FFI_ScalarUDF> = udf
+        .inner()
+        .inner()
+        .with_updated_config(&config)
+        .map(|updated| Arc::new(updated).into());
+
+    FFI_Result::Ok(updated.into())
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
     udf: &FFI_ScalarUDF,
-    args: RVec<WrappedArray>,
-    arg_fields: RVec<WrappedSchema>,
+    args: SVec<WrappedArray>,
+    arg_fields: SVec<WrappedSchema>,
     number_rows: usize,
     return_field: WrappedSchema,
     config_options: FFI_ConfigOptions,
-) -> FFIResult<FFI_ColumnarValue> {
+) -> FFI_Result<FFI_ColumnarValue> {
     unsafe {
         let args = args
             .into_iter()
@@ -173,8 +238,8 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
             })
             .collect::<std::result::Result<_, _>>();
 
-        let args = rresult_return!(args);
-        let return_field = rresult_return!(Field::try_from(&return_field.0)).into();
+        let args = sresult_return!(args);
+        let return_field = sresult_return!(Field::try_from(&return_field.0)).into();
 
         let arg_fields = arg_fields
             .into_iter()
@@ -184,8 +249,8 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
                     .map_err(DataFusionError::from)
             })
             .collect::<Result<Vec<FieldRef>>>();
-        let arg_fields = rresult_return!(arg_fields);
-        let config_options = rresult_return!(ConfigOptions::try_from(config_options));
+        let arg_fields = sresult_return!(arg_fields);
+        let config_options = sresult_return!(ConfigOptions::try_from(config_options));
         let config_options = Arc::new(config_options);
 
         let args = ScalarFunctionArgs {
@@ -196,7 +261,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
             config_options,
         };
 
-        rresult!(
+        sresult!(
             udf.inner()
                 .invoke_with_args(args)
                 .and_then(FFI_ColumnarValue::try_from)
@@ -249,10 +314,13 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             invoke_with_args: invoke_with_args_fn_wrapper,
             return_field_from_args: return_field_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
+            placement: placement_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
+            preserves_lex_ordering: preserves_lex_ordering_fn_wrapper,
+            with_updated_config: with_updated_config_fn_wrapper,
         }
     }
 }
@@ -279,6 +347,21 @@ pub struct ForeignScalarUDF {
 
 unsafe impl Send for ForeignScalarUDF {}
 unsafe impl Sync for ForeignScalarUDF {}
+
+impl ForeignScalarUDF {
+    fn new(udf: FFI_ScalarUDF) -> Self {
+        let name = udf.name.to_string();
+        let signature = Signature::user_defined((&udf.volatility).into());
+        let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
+
+        Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        }
+    }
+}
 
 impl PartialEq for ForeignScalarUDF {
     fn eq(&self, other: &Self) -> bool {
@@ -311,22 +394,22 @@ impl Hash for ForeignScalarUDF {
     }
 }
 
+impl From<FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
+    fn from(udf: FFI_ScalarUDF) -> Self {
+        if (udf.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(udf.inner().inner())
+        } else {
+            Arc::new(ForeignScalarUDF::new(udf))
+        }
+    }
+}
+
 impl From<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
     fn from(udf: &FFI_ScalarUDF) -> Self {
         if (udf.library_marker_id)() == crate::get_library_marker_id() {
             Arc::clone(udf.inner().inner())
         } else {
-            let name = udf.name.to_owned().into();
-            let signature = Signature::user_defined((&udf.volatility).into());
-
-            let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
-
-            Arc::new(ForeignScalarUDF {
-                name,
-                udf: udf.clone(),
-                aliases,
-                signature,
-            })
+            Arc::new(ForeignScalarUDF::new(udf.clone()))
         }
     }
 }
@@ -379,7 +462,8 @@ impl ScalarUDFImpl for ForeignScalarUDF {
                 })
             })
             .collect::<std::result::Result<Vec<_>, ArrowError>>()?
-            .into();
+            .into_iter()
+            .collect();
 
         let arg_fields_wrapped = arg_fields
             .iter()
@@ -389,9 +473,9 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         let arg_fields = arg_fields_wrapped
             .into_iter()
             .map(WrappedSchema)
-            .collect::<RVec<_>>();
+            .collect::<SVec<_>>();
 
-        let return_field = return_field.as_ref().clone();
+        let return_field = Arc::unwrap_or_clone(return_field);
         let return_field = WrappedSchema(FFI_ArrowSchema::try_from(return_field)?);
         let config_options = config_options.as_ref().into();
 
@@ -425,11 +509,100 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
     }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        let args = args
+            .iter()
+            .map(|p| FFI_ExpressionPlacement::from(*p))
+            .collect::<SVec<_>>();
+
+        let result = unsafe { (self.udf.placement)(&self.udf, args) };
+
+        result.into()
+    }
+
+    fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        inputs
+            .iter()
+            .map(FFI_ExprProperties::try_from)
+            .collect::<Result<SVec<_>>>()
+            .and_then(|inputs| {
+                let result =
+                    unsafe { (self.udf.preserves_lex_ordering)(&self.udf, inputs) };
+                df_result!(result)
+            })
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        let config: FFI_ConfigOptions = config.into();
+
+        let result = unsafe { (self.udf.with_updated_config)(&self.udf, config) };
+
+        let updated = match df_result!(result) {
+            Ok(updated) => updated.into_option()?,
+            Err(error) => {
+                log::warn!("Unable to update scalar UDF configuration over FFI: {error}");
+                return None;
+            }
+        };
+
+        Some(ScalarUDF::new_from_shared_impl(updated.into()))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct PlacementUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for PlacementUDF {
+        fn name(&self) -> &str {
+            "placement_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            internal_err!("placement_udf is not meant to be invoked")
+        }
+
+        fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+            // Push to the leaves only for a (Column, Literal) pairing, so the
+            // test catches dropped, reordered, or truncated arguments.
+            if matches!(
+                args,
+                [ExpressionPlacement::Column, ExpressionPlacement::Literal]
+            ) {
+                ExpressionPlacement::MoveTowardsLeafNodes
+            } else {
+                ExpressionPlacement::KeepInPlace
+            }
+        }
+
+        fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+            if inputs.is_empty() {
+                return internal_err!("preserves_lex_ordering requires an input");
+            }
+
+            Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
+        }
+
+        fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+            Some(ScalarUDF::from(Self {
+                signature: self.signature.clone(),
+            }))
+        }
+    }
 
     #[test]
     fn test_round_trip_scalar_udf() -> Result<()> {
@@ -442,6 +615,11 @@ mod tests {
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).into();
 
         assert_eq!(original_udf.name(), foreign_udf.name());
+        assert!(
+            foreign_udf
+                .with_updated_config(&ConfigOptions::default())
+                .is_none()
+        );
 
         Ok(())
     }
@@ -462,6 +640,68 @@ mod tests {
         ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(foreign_udf.is::<ForeignScalarUDF>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udf_placement_round_trip() -> Result<()> {
+        use datafusion_expr::Volatility;
+
+        let original_udf = Arc::new(ScalarUDF::from(PlacementUDF {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Int64],
+                Volatility::Immutable,
+            ),
+        }));
+
+        let mut ffi_udf = FFI_ScalarUDF::from(original_udf);
+
+        // Force the foreign path so the call travels through the FFI vtable
+        // rather than downcasting back to the original local type.
+        ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+        assert!(foreign_udf.is::<ForeignScalarUDF>());
+
+        // Without the plumbing the override is dropped and every call is
+        // KeepInPlace. The three cases also check the arguments survive the
+        // round trip in order.
+        assert_eq!(
+            foreign_udf
+                .placement(&[ExpressionPlacement::Column, ExpressionPlacement::Literal]),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
+        assert_eq!(
+            foreign_udf
+                .placement(&[ExpressionPlacement::Literal, ExpressionPlacement::Column]),
+            ExpressionPlacement::KeepInPlace
+        );
+        assert_eq!(foreign_udf.placement(&[]), ExpressionPlacement::KeepInPlace);
+
+        let preserves = ExprProperties::new_unknown().with_preserves_lex_ordering(true);
+        let does_not_preserve = ExprProperties::new_unknown();
+
+        assert!(
+            foreign_udf
+                .preserves_lex_ordering(std::slice::from_ref(&preserves))
+                .unwrap()
+        );
+        assert!(
+            !foreign_udf
+                .preserves_lex_ordering(&[preserves, does_not_preserve])
+                .unwrap()
+        );
+        assert!(foreign_udf.preserves_lex_ordering(&[]).is_err());
+
+        let updated = foreign_udf
+            .with_updated_config(&ConfigOptions::default())
+            .expect("provider should return an updated UDF");
+        assert_eq!(
+            updated
+                .placement(&[ExpressionPlacement::Column, ExpressionPlacement::Literal]),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
 
         Ok(())
     }

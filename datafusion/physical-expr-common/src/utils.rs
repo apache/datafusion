@@ -83,18 +83,18 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     };
 
     let output_len = mask.len();
-    let count = mask.true_count();
 
     // Fast path: no true values mean all-null object
-    if count == 0 {
+    if !mask.has_true() {
         return Ok(new_null_array(truthy.data_type(), output_len));
     }
 
     // Fast path: all true means output = truthy
-    if count == output_len {
+    if mask.null_count() == 0 && !mask.has_false() {
         return Ok(truthy.slice(0, truthy.len()));
     }
 
+    let count = mask.true_count();
     let selectivity = count as f64 / output_len as f64;
     let mask_buffer = mask.values();
 
@@ -370,21 +370,21 @@ fn scatter_fallback(
     let mut true_pos = 0;
 
     let mask_array = BooleanArray::new(mask.clone(), None);
-    SlicesIterator::new(&mask_array).for_each(|(start, end)| {
+    for (start, end) in SlicesIterator::new(&mask_array) {
         // the gap needs to be filled with nulls
         if start > filled {
-            mutable.extend_nulls(start - filled);
+            mutable.try_extend_nulls(start - filled)?;
         }
         // fill with truthy values
         let len = end - start;
-        mutable.extend(0, true_pos, true_pos + len);
+        mutable.try_extend(0, true_pos, true_pos + len)?;
         true_pos += len;
         filled = end;
-    });
+    }
 
     // the remaining part is falsy
     if filled < output_len {
-        mutable.extend_nulls(output_len - filled);
+        mutable.try_extend_nulls(output_len - filled)?;
     }
 
     let data = mutable.freeze();
@@ -614,11 +614,9 @@ mod tests {
 
     #[test]
     fn scatter_fixed_size_binary_test() -> Result<()> {
-        let truthy = Arc::new(FixedSizeBinaryArray::from(vec![
-            &[1u8, 2][..],
-            &[3, 4][..],
-            &[5, 6][..],
-        ]));
+        let truthy = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            vec![&[1u8, 2][..], &[3, 4][..], &[5, 6][..]].into_iter(),
+        )?);
         let mask = BooleanArray::from(vec![true, false, true, false, true]);
 
         let result = scatter(&mask, truthy.as_ref())?;

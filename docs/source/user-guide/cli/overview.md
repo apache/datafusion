@@ -41,5 +41,5 @@ DataFusion CLI v37.0.0
 Elapsed 1.969 seconds.
 ```
 
-For more information, see the [Installation](installation), [Usage Guide](usage)
-and [Data Sources](datasources) sections.
+For more information, see the [Installation](installation.md), [Usage Guide](usage.md)
+and [Data Sources](datasources.md) sections.

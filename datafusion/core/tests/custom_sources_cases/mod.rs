@@ -40,9 +40,12 @@ use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_plan::PlanProperties;
+use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, PlanProperties, ReplaceChildrenOptions,
+};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -164,11 +167,22 @@ impl ExecutionPlan for CustomExecutionPlan {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -179,8 +193,12 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_some() {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
             return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
         }
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
@@ -208,18 +226,11 @@ impl ExecutionPlan for CustomExecutionPlan {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -236,11 +247,13 @@ impl TableProvider for CustomTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CustomExecutionPlan::new(projection.cloned())))
+        Ok(Arc::new(CustomExecutionPlan::new(
+            projection.map(|p| p.to_vec()),
+        )))
     }
 }
 

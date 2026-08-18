@@ -25,7 +25,10 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
-//! Interfaces and default implementations of catalogs and schemas.
+//! Default implementations of catalogs and schemas.
+//!
+//! The catalog interfaces are defined in [`datafusion_session`] and re-exported
+//! by this crate.
 //!
 //! Implementations
 //! * Information schema: [`information_schema`]
@@ -34,6 +37,7 @@
 
 pub mod cte_worktable;
 pub mod default_table_source;
+pub mod empty;
 pub mod information_schema;
 pub mod listing_schema;
 pub mod memory;
@@ -56,8 +60,3 @@ pub use memory::{
 };
 pub use schema::*;
 pub use table::*;
-
-// For backwards compatibility,
-mod session {
-    pub use datafusion_session::Session;
-}

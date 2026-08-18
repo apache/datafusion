@@ -28,14 +28,15 @@ CREATE TABLE cdc_source AS VALUES
     (5, 'eve', 500.99)
 
 #
-# Test 1: Enable CDC with 'true' (uses default options)
+# Test 1: Enable CDC with the explicit `content_defined_chunking.enabled` key
+# (uses default chunking parameters).
 #
 
 query I
 COPY cdc_source TO 'test_files/scratch/parquet_cdc/enabled_true/'
 STORED AS PARQUET
 OPTIONS (
-    'format.use_content_defined_chunking' 'true'
+    'format.content_defined_chunking.enabled' 'true'
 )
 ----
 5
@@ -68,15 +69,14 @@ SELECT SUM(column3) FROM cdc_enabled_true_read
 1502.49
 
 #
-# Test 2: Disable CDC with 'false' (same as default behavior)
+# Test 2: CDC is disabled by default (no content_defined_chunking options set).
+# It can also be turned off explicitly with
+# `content_defined_chunking.enabled` = 'false'.
 #
 
 query I
 COPY cdc_source TO 'test_files/scratch/parquet_cdc/disabled_false/'
 STORED AS PARQUET
-OPTIONS (
-    'format.use_content_defined_chunking' 'false'
-)
 ----
 5
 
@@ -95,16 +95,17 @@ SELECT * FROM cdc_disabled_false_read
 5 eve 500.99
 
 #
-# Test 3: Enable CDC with custom sub-field options
+# Test 3: Enable CDC with custom chunking parameters
 #
 
 query I
 COPY cdc_source TO 'test_files/scratch/parquet_cdc/custom_chunks/'
 STORED AS PARQUET
 OPTIONS (
-    'format.use_content_defined_chunking.min_chunk_size' '1024',
-    'format.use_content_defined_chunking.max_chunk_size' '4096',
-    'format.use_content_defined_chunking.norm_level' '1'
+    'format.content_defined_chunking.enabled' 'true',
+    'format.content_defined_chunking.min_chunk_size' '1024',
+    'format.content_defined_chunking.max_chunk_size' '4096',
+    'format.content_defined_chunking.norm_level' '1'
 )
 ----
 5
@@ -135,7 +136,7 @@ CREATE EXTERNAL TABLE cdc_external_write (
 )
 STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_cdc/external_table/' OPTIONS (
-    'format.use_content_defined_chunking' 'true'
+    'format.content_defined_chunking.enabled' 'true'
 )
 
 query I
@@ -169,7 +170,7 @@ query I
 COPY cdc_large_source TO 'test_files/scratch/parquet_cdc/large/'
 STORED AS PARQUET
 OPTIONS (
-    'format.use_content_defined_chunking' 'true'
+    'format.content_defined_chunking.enabled' 'true'
 )
 ----
 1000
@@ -213,7 +214,7 @@ query I
 COPY cdc_types_source TO 'test_files/scratch/parquet_cdc/types/'
 STORED AS PARQUET
 OPTIONS (
-    'format.use_content_defined_chunking' 'true'
+    'format.content_defined_chunking.enabled' 'true'
 )
 ----
 3

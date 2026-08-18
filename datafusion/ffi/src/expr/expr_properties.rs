@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
 use arrow_schema::SortOptions;
 use datafusion_common::DataFusionError;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -25,11 +24,12 @@ use crate::expr::interval::FFI_Interval;
 /// A stable struct for sharing [`ExprProperties`] across FFI boundaries.
 /// See [`ExprProperties`] for the meaning of each field.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_ExprProperties {
     sort_properties: FFI_SortProperties,
     range: FFI_Interval,
     preserves_lex_ordering: bool,
+    strictly_order_preserving: bool,
 }
 
 impl TryFrom<&ExprProperties> for FFI_ExprProperties {
@@ -42,6 +42,7 @@ impl TryFrom<&ExprProperties> for FFI_ExprProperties {
             sort_properties,
             range,
             preserves_lex_ordering: value.preserves_lex_ordering,
+            strictly_order_preserving: value.strictly_order_preserving,
         })
     }
 }
@@ -55,12 +56,13 @@ impl TryFrom<FFI_ExprProperties> for ExprProperties {
             sort_properties,
             range,
             preserves_lex_ordering: value.preserves_lex_ordering,
+            strictly_order_preserving: value.strictly_order_preserving,
         })
     }
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub enum FFI_SortProperties {
     Ordered(FFI_SortOptions),
     Unordered,
@@ -88,7 +90,7 @@ impl From<&FFI_SortProperties> for SortProperties {
 }
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_SortOptions {
     pub descending: bool,
     pub nulls_first: bool,

@@ -18,11 +18,11 @@
 use arrow::datatypes::DataType;
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 
-use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
 use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
+use datafusion_physical_expr_common::datum::compare_with_eq;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
@@ -111,25 +111,29 @@ impl ScalarUDFImpl for NullIfFunc {
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let [lhs, rhs] = take_function_args("nullif", args)?;
+    let is_nested = lhs.data_type().is_nested();
 
     match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
             let rhs = rhs.to_scalar()?;
-            let array = nullif(lhs, &eq(&lhs, &rhs)?)?;
+            let eq_array = compare_with_eq(lhs, &rhs, is_nested)?;
+            let array = nullif(lhs, &eq_array)?;
 
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Array(lhs), ColumnarValue::Array(rhs)) => {
-            let array = nullif(lhs, &eq(&lhs, &rhs)?)?;
+            let eq_array = compare_with_eq(lhs, rhs, is_nested)?;
+            let array = nullif(lhs, &eq_array)?;
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Array(rhs)) => {
             let lhs_s = lhs.to_scalar()?;
             let lhs_a = lhs.to_array_of_size(rhs.len())?;
+            let eq_array = compare_with_eq(&lhs_s, rhs, is_nested)?;
             let array = nullif(
                 // nullif in arrow-select does not support Datum, so we need to convert to array
                 lhs_a.as_ref(),
-                &eq(&lhs_s, &rhs)?,
+                &eq_array,
             )?;
             Ok(ColumnarValue::Array(array))
         }
@@ -148,7 +152,12 @@ fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::*;
+    use arrow::{
+        array::*,
+        buffer::NullBuffer,
+        datatypes::{Field, Fields, Int64Type},
+    };
+    use datafusion_common::DataFusionError;
 
     use super::*;
 
@@ -248,6 +257,104 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(expected.as_ref(), result.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn nullif_struct() -> Result<()> {
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        let lhs_a = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let lhs_b = Arc::new(StringArray::from(vec![Some("1"), Some("2"), None]));
+        let lhs_nulls = Some(NullBuffer::from(vec![true, true, false]));
+        let lhs = ColumnarValue::Array(Arc::new(StructArray::new(
+            fields.clone(),
+            vec![lhs_a, lhs_b],
+            lhs_nulls,
+        )));
+
+        let rhs_a = Arc::new(Int64Array::from(vec![Some(1), Some(9), None]));
+        let rhs_b = Arc::new(StringArray::from(vec![Some("1"), Some("2"), None]));
+        let rhs_nulls = Some(NullBuffer::from(vec![true, true, false]));
+        let rhs = ColumnarValue::Array(Arc::new(StructArray::new(
+            fields.clone(),
+            vec![rhs_a, rhs_b],
+            rhs_nulls,
+        )));
+
+        let result = nullif_func(&[lhs, rhs])?;
+        let result = result.into_array(0).expect("Failed to convert to array");
+
+        let expected_arrays = vec![
+            Arc::new(Int64Array::from(vec![None, Some(2), None])) as ArrayRef,
+            Arc::new(StringArray::from(vec![None, Some("2"), None])) as ArrayRef,
+        ];
+        let expected_nulls = NullBuffer::from(vec![false, true, false]);
+
+        let expected = Arc::new(StructArray::try_new(
+            fields,
+            expected_arrays,
+            Some(expected_nulls),
+        )?) as ArrayRef;
+
+        assert_eq!(expected.as_ref(), result.as_ref());
+
+        Ok(())
+    }
+
+    #[test]
+    fn nullif_list() -> Result<()> {
+        let lhs = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3)]),
+            Some(vec![]),
+            Some(vec![Some(5), Some(6), Some(7)]),
+            None,
+        ]));
+        let lhs = ColumnarValue::Array(lhs);
+
+        let rhs = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+        ]));
+        let rhs = ColumnarValue::Scalar(ScalarValue::List(rhs));
+
+        let result = nullif_func(&[lhs, rhs])?;
+        let result = result.into_array(0).expect("Failed to convert to array");
+
+        let expected = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            None,
+            Some(vec![Some(3)]),
+            Some(vec![]),
+            Some(vec![Some(5), Some(6), Some(7)]),
+            None,
+        ])) as ArrayRef;
+
+        assert_eq!(expected.as_ref(), result.as_ref());
+
+        Ok(())
+    }
+
+    #[test]
+    fn nullif_compare_nested_to_unnested() -> Result<()> {
+        let lhs = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3)]),
+            Some(vec![]),
+            Some(vec![Some(5), Some(6), Some(7)]),
+            None,
+        ]));
+        let lhs = ColumnarValue::Array(lhs);
+
+        let rhs = Arc::new(Int64Array::from(vec![Some(1), Some(3), None, None, None]));
+        let rhs = ColumnarValue::Array(rhs);
+
+        let result = nullif_func(&[lhs, rhs]);
+
+        assert!(matches!(result, Err(DataFusionError::ArrowError(_, _))));
+
         Ok(())
     }
 

@@ -118,11 +118,25 @@ SELECT
 ----
 {outer_key1: {inner_a: 1, inner_b: 2}, outer_key2: {inner_x: 10, inner_y: 20, inner_z: 30}}
 
-# Test with duplicate keys
-query ?
+# Test with duplicate keys: raises DUPLICATED_MAP_KEY under Spark's default policy
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key true was found
 SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
-----
-{false: NULL, true: b}
+
+# Integer keys with a duplicate also raise DUPLICATED_MAP_KEY.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key 1 was found
+SELECT map_from_arrays(array(1, 2, 1), array('a', 'b', 'c'));
+
+# String keys with a duplicate also raise DUPLICATED_MAP_KEY.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key k was found
+SELECT map_from_arrays(array('k', 'k', 'k'), array(1, 2, 3));
+
+# Multi-row: a clean row and a duplicate row still errors.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key 1 was found
+SELECT map_from_arrays(a, b)
+FROM values
+    (array[1, 2], array['a', 'b']),
+    (array[1, 1], array['x', 'y'])
+AS tab(a, b);
 
 # Tests with different list types
 query ?
@@ -134,3 +148,40 @@ query ?
 SELECT map_from_arrays(arrow_cast(array('a', 'b', 'c'), 'FixedSizeList(3, Utf8)'), arrow_cast(array(1, 2, 3), 'LargeList(Int32)'));
 ----
 {a: 1, b: 2, c: 3}
+
+# LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
+statement ok
+set datafusion.spark.map_key_dedup_policy = 'LAST_WIN';
+
+query ?
+SELECT map_from_arrays(array(1, 2, 1), array('a', 'b', 'c'));
+----
+{1: c, 2: b}
+
+query ?
+SELECT map_from_arrays(array('k', 'k', 'k'), array(1, 2, 3));
+----
+{k: 3}
+
+query ?
+SELECT map_from_arrays(array(true, false, true), array('a', NULL, 'b'));
+----
+{true: b, false: NULL}
+
+# Multi-row mix under LAST_WIN: clean, duplicate, empty and NULL rows all work.
+query ?
+SELECT map_from_arrays(a, b)
+FROM values
+    (array[1, 2], array['a', 'b']),
+    (array[1, 1], array['x', 'y']),
+    (array[], array[]),
+    (NULL, NULL)
+AS tab(a, b);
+----
+{1: a, 2: b}
+{1: y}
+{}
+NULL
+
+statement ok
+set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';

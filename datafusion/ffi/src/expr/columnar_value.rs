@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
@@ -23,8 +22,8 @@ use crate::arrow_wrappers::WrappedArray;
 
 /// A stable struct for sharing [`ColumnarValue`] across FFI boundaries.
 /// Scalar values are passed as an Arrow array of length 1.
-#[repr(C)]
-#[derive(Debug, StableAbi)]
+#[repr(C, u8)]
+#[derive(Debug)]
 pub enum FFI_ColumnarValue {
     Array(WrappedArray),
     Scalar(WrappedArray),

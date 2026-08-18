@@ -267,7 +267,7 @@ mod tests {
             &mut [lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
-        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_vals = ScalarValue::iter_to_array(merged_vals)?;
         let merged_ts = (0..merged_ts[0].len())
             .map(|col_idx| {
                 ScalarValue::iter_to_array(
@@ -334,7 +334,7 @@ mod tests {
             &mut [lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
-        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_vals = ScalarValue::iter_to_array(merged_vals)?;
         let merged_ts = (0..merged_ts[0].len())
             .map(|col_idx| {
                 ScalarValue::iter_to_array(

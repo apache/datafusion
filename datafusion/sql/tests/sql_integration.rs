@@ -28,8 +28,13 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
+    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
+    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
+    LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ValueOrLambda, Volatility, col,
+    expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
+    lambda,
+    logical_plan::LogicalPlan,
     test::function_stub::sum_udaf,
 };
 use datafusion_functions::{string, unicode};
@@ -51,7 +56,9 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
-use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+use sqlparser::dialect::{
+    DatabricksDialect, Dialect, GenericDialect, HiveDialect, MySqlDialect,
+};
 use sqlparser::parser::Parser;
 
 mod cases;
@@ -93,7 +100,7 @@ fn parse_decimals_3() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),1,1)
+    Projection: Decimal128(0.1,1,1)
       EmptyRelation: rows=1
     "
     );
@@ -107,7 +114,7 @@ fn parse_decimals_4() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),2,2)
+    Projection: Decimal128(0.01,2,2)
       EmptyRelation: rows=1
     "
     );
@@ -121,7 +128,7 @@ fn parse_decimals_5() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(10),2,1)
+    Projection: Decimal128(1.0,2,1)
       EmptyRelation: rows=1
     "
     );
@@ -135,7 +142,7 @@ fn parse_decimals_6() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1001),4,2)
+    Projection: Decimal128(10.01,4,2)
       EmptyRelation: rows=1
     "
     );
@@ -149,7 +156,7 @@ fn parse_decimals_7() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1000000000000000000000),22,2)
+    Projection: Decimal128(10000000000000000000.00,22,2)
       EmptyRelation: rows=1
     "
     );
@@ -177,7 +184,7 @@ fn parse_decimals_9() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(18446744073709551616),20,0)
+    Projection: Decimal128(18446744073709551616,20,0)
       EmptyRelation: rows=1
     "
     );
@@ -718,7 +725,7 @@ fn plan_insert_no_target_columns() {
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named nonexistent. \
+    "Schema error: No field named nonexistent.\n\
     Valid fields are id, price."
 )]
 #[case::target_column_count_mismatch(
@@ -860,17 +867,25 @@ fn select_filter_cannot_use_alias() {
 
 #[test]
 fn select_neg_filter() {
+    // NOT requires a boolean expression; applying it to a Utf8 column is an error
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE NOT state";
-    let plan = logical_plan(sql).unwrap();
-    assert_snapshot!(
-        plan,
-        @r"
-    Projection: person.id, person.first_name, person.last_name
-      Filter: NOT person.state
-        TableScan: person
-    "
+    let err = logical_plan(sql).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Unary operator 'NOT' requires a boolean expression"),
+        "unexpected error: {err}"
     );
+}
+
+#[test]
+fn select_not_bool_filter() {
+    let sql = "SELECT order_id FROM orders WHERE NOT delivered";
+    let plan = logical_plan(sql).unwrap();
+    let expected = "Projection: orders.order_id\
+        \n  Filter: NOT orders.delivered\
+        \n    TableScan: orders";
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -1489,6 +1504,113 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
     );
 }
 
+/// Asserts that placeholder `id` (e.g. `"$1"`) was inferred as `expected` type
+/// somewhere in `plan`.
+fn assert_placeholder_type(plan: &LogicalPlan, id: &str, expected: DataType) {
+    let param_types = plan.get_parameter_types().unwrap();
+    assert_eq!(param_types.get(id), Some(&Some(expected)));
+}
+
+/// An expression containing a placeholder, written in both the SELECT list and
+/// the GROUP BY, has to be recognised as one expression the way its literal
+/// equivalent is. Otherwise the columns inside it read as ungrouped, because the
+/// SELECT list has its placeholder types inferred and the grouping key does not.
+#[test]
+fn select_aggregate_with_group_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+        TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a grouping expression repeated in HAVING.
+#[test]
+fn select_aggregate_with_having_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   HAVING CASE WHEN age < $1 THEN 'young' ELSE 'old' END = 'young'";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Filter: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END = Utf8("young")
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a grouping expression repeated in ORDER BY.
+#[test]
+fn select_aggregate_with_order_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Sort: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST
+      Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+/// The same, for a window expression repeated in QUALIFY. Here the two spellings
+/// of the window expression collide by name instead, since they print alike but
+/// do not compare equal.
+#[test]
+fn select_window_with_qualify_placeholder_expression() {
+    let sql = "SELECT first_name,
+                          row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END)
+                   FROM person
+                   QUALIFY row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END) = 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.first_name, row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      Filter: row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = Int64(1)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+          TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+#[test]
+fn select_distinct_on_with_order_by_placeholder_expression() {
+    let sql =
+        "SELECT DISTINCT ON (CASE WHEN age < $1 THEN 'young' ELSE 'old' END) first_name
+                   FROM person
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    DistinctOn: on_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], select_expr=[[person.first_name]], sort_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST]]
+      TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
 #[test]
 fn select_binary_expr() {
     let sql = "SELECT age + salary from person";
@@ -1674,7 +1796,10 @@ fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() 
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @r#"Schema error: No field named doesnotexist. Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀"."#
+        @r#"
+Schema error: No field named doesnotexist.
+Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀".
+"#
     );
 }
 
@@ -1750,6 +1875,81 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     assert_snapshot!(
         err2.strip_backtrace(),
         @"Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2"
+    );
+}
+
+#[test]
+fn select_nested_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age)) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+
+    let err = logical_plan("SELECT state, sum(count(age)) FROM person GROUP BY state")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'count(person.age)' is nested inside 'sum(count(person.age))'"
+    );
+
+    let err =
+        logical_plan("SELECT state FROM person GROUP BY state HAVING sum(sum(age)) > 0")
+            .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+}
+
+#[test]
+fn select_window_function_inside_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot contain window function calls: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)'"
+    );
+}
+
+#[test]
+fn select_nested_window_function() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) OVER () FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    let err = logical_plan(
+        "SELECT rank() OVER (ORDER BY rank() OVER (ORDER BY age)) FROM person",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW' is nested inside 'rank() ORDER BY [rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW'"
+    );
+}
+
+#[test]
+fn select_aggregate_inside_window_function() {
+    // an aggregate as the argument of a window function is legal: the window
+    // function is evaluated on top of the aggregate
+    let plan =
+        logical_plan("SELECT state, sum(sum(age)) OVER () FROM person GROUP BY state")
+            .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.state, sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      WindowAggr: windowExpr=[[sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        Aggregate: groupBy=[[person.state]], aggr=[[sum(person.age)]]
+          TableScan: person
+    "
     );
 }
 
@@ -2055,6 +2255,16 @@ fn select_where_compound_identifiers() {
 }
 
 #[test]
+fn select_unknown_deep_compound_identifier_returns_error() {
+    let err = logical_plan("SELECT a.b.c.d.e.f")
+        .expect_err("six-part compound identifier should be unsupported");
+    assert_contains!(
+        err.to_string(),
+        "This feature is not implemented: compound identifier: [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"]"
+    );
+}
+
+#[test]
 fn select_order_by_index() {
     let sql = "SELECT id FROM person ORDER BY 1";
     let plan = logical_plan(sql).unwrap();
@@ -2248,6 +2458,29 @@ fn create_external_table_csv() {
         plan,
         @r#"CreateExternalTable: Bare { table: "t" }"#
     );
+}
+
+#[test]
+fn create_external_table_multiple_locations() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION ('foo.csv', 'bar.csv')";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        cmd.locations,
+        vec!["foo.csv".to_string(), "bar.csv".to_string()]
+    );
+}
+
+#[test]
+fn create_external_table_location_with_literal_comma() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo,bar.csv'";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.locations, vec!["foo,bar.csv".to_string()]);
 }
 
 #[test]
@@ -3474,6 +3707,104 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
     );
 }
 
+#[test]
+fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+    let plan = logical_plan(
+        "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
+         WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
+         WHEN NOT MATCHED THEN INSERT (id, \"Age\") VALUES (s.j2_id, 42)",
+    )
+    .unwrap();
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected Dml, got {plan:?}");
+    };
+    let datafusion_expr::WriteOp::MergeInto(merge_op) = &dml.op else {
+        panic!("expected MergeInto, got {:?}", dml.op);
+    };
+
+    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+
+    let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
+        &merge_op.clauses[0].action
+    else {
+        panic!("expected UPDATE");
+    };
+    assert_eq!(assignments[0].0, "First Name");
+    assert_eq!(assignments[0].1.to_string(), "s.j2_string");
+
+    let datafusion_expr::dml::MergeIntoAction::Insert { columns, values } =
+        &merge_op.clauses[1].action
+    else {
+        panic!("expected INSERT");
+    };
+    assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
+    assert_eq!(values[0].to_string(), "s.j2_id");
+}
+
+#[rstest]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = j2.j2_string WHERE false",
+    "MERGE UPDATE WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = j2.j2_string DELETE WHERE false",
+    "MERGE UPDATE DELETE WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN NOT MATCHED THEN INSERT (j1_id, j1_string) \
+     VALUES (j2.j2_id, j2.j2_string) WHERE false",
+    "MERGE INSERT WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = 'a', j1_string = 'b'",
+    "Duplicate column 'j1_string' in MERGE UPDATE"
+)]
+#[case(
+    "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
+     WHEN MATCHED THEN UPDATE SET s.j1_string = s.j2_string",
+    "MERGE assignment target 's.j1_string' must reference target table 't'"
+)]
+#[case(
+    "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
+     WHEN NOT MATCHED THEN INSERT (s.j1_id) VALUES (s.j2_id)",
+    "MERGE assignment target 's.j1_id' must reference target table 't'"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id",
+    "MERGE INTO requires at least one WHEN clause"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN NOT MATCHED THEN INSERT (j1_id, J1_ID) VALUES (1, 2)",
+    "Duplicate column 'j1_id' in MERGE INSERT"
+)]
+#[case(
+    "MERGE INTO j1() USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target table modifiers are not supported"
+)]
+#[case(
+    "MERGE INTO j1 PARTITION (p0) USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target table modifiers are not supported"
+)]
+#[case(
+    "MERGE INTO j1 AS t(a) USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target alias column lists are not supported"
+)]
+fn plan_merge_into_rejects_invalid_actions_and_structure(
+    #[case] sql: &str,
+    #[case] expected: &str,
+) {
+    let err = logical_plan(sql).unwrap_err();
+    assert!(
+        err.strip_backtrace().contains(expected),
+        "unexpected error: {err}"
+    );
+}
+
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
@@ -3491,7 +3822,13 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+    let state = MockSessionState::default()
+        .with_aggregate_function(sum_udaf())
+        .with_higher_order_function(Arc::new(HigherOrderUDF::new_from_impl(
+            MockArrayReduce::new(),
+        )))
+        .with_scalar_function(make_array_udf())
+        .with_expr_planner(Arc::new(CustomExprPlanner {})); // plan array literal
     let context = MockContextProvider { state };
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -4955,7 +5292,7 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
 }
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
@@ -5319,4 +5656,160 @@ Sort: customer.c_custkey ASC NULLS LAST
       TableScan: customer
 "#
     );
+}
+
+#[test]
+fn test_progressive_lambda_parameters() {
+    let sql = "select array_reduce([1.0, 2.0], 0, (acc, v) -> acc + v, v -> -v)";
+
+    let expr = logical_plan_with_dialect(sql, &DatabricksDialect)
+        .unwrap()
+        .head_output_expr()
+        .unwrap()
+        .unwrap();
+
+    // taking into account the user defined coercion that coerced the List(Float64) to List(Float32),
+    // test that merge accumulator parameter and finish parameter correctly got the type of the merge
+    // lambda output (Float32 instead of Float64), and not the initial value type (Int64)
+    assert_eq!(
+        expr,
+        Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(MockArrayReduce::new())),
+            vec![
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    make_array_udf(),
+                    // note the array being reduced is List(Float64)
+                    vec![
+                        Expr::Literal(1.0f64.into(), None),
+                        Expr::Literal(2.0f64.into(), None)
+                    ]
+                )),
+                Expr::Literal(0i64.into(), None),
+                lambda(
+                    ["acc", "v"],
+                    // lambda vars are Float32
+                    resolved_lambda_var("acc", DataType::Float32)
+                        + resolved_lambda_var("v", DataType::Float32)
+                ),
+                lambda(["v"], -resolved_lambda_var("v", DataType::Float32)),
+            ]
+        ))
+    )
+}
+
+fn resolved_lambda_var(name: &str, dt: DataType) -> Expr {
+    Expr::LambdaVariable(LambdaVariable::new(
+        name.to_string(),
+        Some(Arc::new(Field::new(name.to_string(), dt, true))),
+    ))
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct MockArrayReduce {
+    signature: HigherOrderSignature,
+}
+
+impl MockArrayReduce {
+    #[expect(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            signature: HigherOrderSignature::user_defined(Volatility::Immutable),
+        }
+    }
+}
+
+impl HigherOrderUDFImpl for MockArrayReduce {
+    fn name(&self) -> &str {
+        "array_reduce"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn signature(&self) -> &HigherOrderSignature {
+        &self.signature
+    }
+
+    fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [_list, initial] = arg_types else {
+            unreachable!()
+        };
+
+        Ok(vec![
+            DataType::new_list(DataType::Float32, true),
+            initial.clone(),
+        ])
+    }
+
+    fn lambda_parameters(
+        &self,
+        step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress> {
+        // optional finish not supported for simplicity
+        let [
+            ValueOrLambda::Value(list),
+            ValueOrLambda::Value(initial_value),
+            ValueOrLambda::Lambda(merge),
+            ValueOrLambda::Lambda(_finish),
+        ] = fields
+        else {
+            unreachable!()
+        };
+
+        let list_field = match list.data_type() {
+            DataType::List(field) => field,
+            _ => unreachable!(),
+        };
+
+        Ok(match (step, merge) {
+            (0, None) => {
+                // at the first step, we use the initial_value as merge accumulator,
+                // and return None for finish since we don't know the output of merge
+                LambdaParametersProgress::Partial(vec![
+                    // merge
+                    Some(vec![Arc::clone(initial_value), Arc::clone(list_field)]),
+                    // finish
+                    None,
+                ])
+            }
+            (1, Some(accumulator)) | (0, Some(accumulator)) => {
+                // now we can use the merge output as it's accumulator and
+                // as the finish parameter
+                LambdaParametersProgress::Complete(vec![
+                    // merge
+                    vec![Arc::clone(accumulator), Arc::clone(list_field)],
+                    // finish
+                    vec![Arc::clone(accumulator)],
+                ])
+            }
+            (1, None) => {
+                unreachable!()
+            }
+            _ => todo!(),
+        })
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: HigherOrderReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        // optional finish not supported for simplicity
+        let [
+            ValueOrLambda::Value(_list),
+            ValueOrLambda::Value(_initial_value),
+            ValueOrLambda::Lambda(_merge),
+            ValueOrLambda::Lambda(finish),
+        ] = args.arg_fields
+        else {
+            unreachable!()
+        };
+
+        Ok(Arc::clone(finish))
+    }
+
+    fn invoke_with_args(&self, _args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        unreachable!()
+    }
 }

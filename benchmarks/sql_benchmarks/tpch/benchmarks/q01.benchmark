@@ -1,0 +1,34 @@
+name Q01
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run
+select l_returnflag,
+        l_linestatus,
+        sum(l_quantity)                                       as sum_qty,
+        sum(l_extendedprice)                                  as sum_base_price,
+        sum(l_extendedprice * (1 - l_discount))               as sum_disc_price,
+        sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+        avg(l_quantity)                                       as avg_qty,
+        avg(l_extendedprice)                                  as avg_price,
+        avg(l_discount)                                       as avg_disc,
+        count(*)                                              as count_order
+ from lineitem
+ where l_shipdate <= date '1998-12-01' - interval '90' day
+ group by l_returnflag,
+          l_linestatus
+ order by l_returnflag,
+          l_linestatus;
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q01.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql

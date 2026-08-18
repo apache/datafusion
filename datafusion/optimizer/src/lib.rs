@@ -70,6 +70,7 @@ pub mod rewrite_set_comparison;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
+pub mod unions_to_filter;
 pub mod utils;
 
 #[cfg(test)]
@@ -84,7 +85,7 @@ pub(crate) mod join_key_set;
 mod plan_signature;
 
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init() {
     // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();

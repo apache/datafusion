@@ -18,8 +18,9 @@
 //! Functions for creating logical expressions
 
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery, Lambda,
+    LambdaVariable, NullTreatment, Placeholder, TryCast, Unnest, WildcardOptions,
+    WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -385,10 +386,11 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
-/// Create a Unnest expression
+/// Create a Unnest expression with default (non-outer) semantics.
 pub fn unnest(expr: Expr) -> Expr {
     Expr::Unnest(Unnest {
         expr: Box::new(expr),
+        outer: false,
     })
 }
 
@@ -717,6 +719,25 @@ pub fn interval_datetime_lit(value: &str) -> Expr {
 pub fn interval_month_day_nano_lit(value: &str) -> Expr {
     let interval = parse_interval_month_day_nano(value).ok();
     Expr::Literal(ScalarValue::IntervalMonthDayNano(interval), None)
+}
+
+/// Create a lambda expression
+pub fn lambda(params: impl IntoIterator<Item = impl Into<String>>, body: Expr) -> Expr {
+    Expr::Lambda(Lambda::new(
+        params.into_iter().map(Into::into).collect(),
+        body,
+    ))
+}
+
+/// Create an unresolved lambda variable expression
+///
+/// The expression tree or [`LogicalPlan`] which
+/// owns this variable must be resolved before usage with either
+/// [`Expr::resolve_lambda_variables`] or [`LogicalPlan::resolve_lambda_variables`].
+///
+/// [LogicalPlan::resolve_lambda_variables]: crate::LogicalPlan::resolve_lambda_variables
+pub fn lambda_var(name: impl Into<String>) -> Expr {
+    Expr::LambdaVariable(LambdaVariable::new(name.into(), None))
 }
 
 /// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]

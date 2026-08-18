@@ -26,11 +26,13 @@ pub mod from_utc_timestamp;
 pub mod last_day;
 pub mod make_dt_interval;
 pub mod make_interval;
+pub mod monthname;
 pub mod next_day;
 pub mod time_trunc;
 pub mod to_utc_timestamp;
 pub mod trunc;
 pub mod unix;
+pub mod weekday;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -52,11 +54,13 @@ make_udf_function!(extract::SparkSecond, second);
 make_udf_function!(last_day::SparkLastDay, last_day);
 make_udf_function!(make_dt_interval::SparkMakeDtInterval, make_dt_interval);
 make_udf_function!(make_interval::SparkMakeInterval, make_interval);
+make_udf_function!(monthname::SparkMonthName, monthname);
 make_udf_function!(next_day::SparkNextDay, next_day);
 make_udf_function!(time_trunc::SparkTimeTrunc, time_trunc);
 make_udf_function!(to_utc_timestamp::SparkToUtcTimestamp, to_utc_timestamp);
 make_udf_function!(trunc::SparkTrunc, trunc);
 make_udf_function!(unix::SparkUnixDate, unix_date);
+make_udf_function!(weekday::SparkWeekDay, weekday);
 make_udf_function!(
     unix::SparkUnixTimestamp,
     unix_micros,
@@ -116,6 +120,11 @@ pub mod expr_fn {
         make_interval,
         "Make interval from years, months, weeks, days, hours, mins and secs.",
         years months weeks days hours mins secs
+    ));
+    export_functions!((
+        monthname,
+        "Returns the three-letter abbreviated month name from a date or timestamp.",
+        arg1
     ));
     // TODO: add once ANSI support is added:
     // "When both of the input parameters are not NULL and day_of_week is an invalid input, the function throws SparkIllegalArgumentException if spark.sql.ansi.enabled is set to true, otherwise NULL."
@@ -179,6 +188,11 @@ pub mod expr_fn {
         "Returns the number of seconds since epoch (1970-01-01 00:00:00 UTC) for the given timestamp `ts`.",
         ts
     ));
+    export_functions!((
+        weekday,
+        "Returns the day of the week for date/timestamp as an integer where Monday = 0, Tuesday = 1, ..., Sunday = 6.",
+        arg1
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -195,6 +209,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_dt_interval(),
         make_interval(),
         minute(),
+        monthname(),
         next_day(),
         second(),
         time_trunc(),
@@ -204,5 +219,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         unix_micros(),
         unix_millis(),
         unix_seconds(),
+        weekday(),
     ]
 }

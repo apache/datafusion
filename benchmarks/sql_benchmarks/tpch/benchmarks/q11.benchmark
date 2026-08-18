@@ -1,0 +1,45 @@
+name Q11
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run
+select
+    ps_partkey,
+    sum(ps_supplycost * ps_availqty) as value
+from
+    partsupp,
+    supplier,
+    nation
+where
+    ps_suppkey = s_suppkey
+  and s_nationkey = n_nationkey
+  and n_name = 'GERMANY'
+group by
+    ps_partkey having
+    sum(ps_supplycost * ps_availqty) > (
+    select
+    sum(ps_supplycost * ps_availqty) * (0.0001/${BENCH_SIZE:-1})
+    from
+    partsupp,
+    supplier,
+    nation
+    where
+    ps_suppkey = s_suppkey
+                  and s_nationkey = n_nationkey
+                  and n_name = 'GERMANY'
+    )
+order by
+    value desc;
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q11.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql

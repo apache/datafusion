@@ -19,7 +19,6 @@ use datafusion_common::internal_datafusion_err;
 use std::collections::VecDeque;
 use std::task::{Context, Poll};
 
-use crate::PartitionedFile;
 use crate::morsel::{Morsel, MorselPlanner, Morselizer, PendingMorselPlanner};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
@@ -27,6 +26,7 @@ use datafusion_physical_plan::metrics::ScopedTimerGuard;
 use futures::stream::BoxStream;
 use futures::{FutureExt as _, StreamExt as _};
 
+use super::work_source::WorkSource;
 use super::{FileStreamMetrics, OnError};
 
 /// State [`FileStreamState::Scan`].
@@ -45,7 +45,7 @@ use super::{FileStreamMetrics, OnError};
 /// # State Transitions
 ///
 /// ```text
-/// file_iter
+/// work_source
 ///    |
 ///    v
 /// morselizer.plan_file(file)
@@ -62,8 +62,8 @@ use super::{FileStreamMetrics, OnError};
 ///
 /// [`FileStreamState::Scan`]: super::FileStreamState::Scan
 pub(super) struct ScanState {
-    /// Files that still need to be planned.
-    file_iter: VecDeque<PartitionedFile>,
+    /// Unopened files that still need to be planned for this stream.
+    work_source: WorkSource,
     /// Remaining row limit, if any.
     remain: Option<usize>,
     /// The morselizer used to plan files.
@@ -76,7 +76,10 @@ pub(super) struct ScanState {
     ready_morsels: VecDeque<Box<dyn Morsel>>,
     /// The active reader, if any.
     reader: Option<BoxStream<'static, Result<RecordBatch>>>,
-    /// The currently outstanding I/O, if any.
+    /// The single planner currently blocked on I/O, if any.
+    ///
+    /// Once the I/O completes, yields the next planner and is pushed back
+    /// onto `ready_planners`.
     pending_planner: Option<PendingMorselPlanner>,
     /// Metrics for the active scan queues.
     metrics: FileStreamMetrics,
@@ -84,15 +87,14 @@ pub(super) struct ScanState {
 
 impl ScanState {
     pub(super) fn new(
-        file_iter: impl Into<VecDeque<PartitionedFile>>,
+        work_source: WorkSource,
         remain: Option<usize>,
         morselizer: Box<dyn Morselizer>,
         on_error: OnError,
         metrics: FileStreamMetrics,
     ) -> Self {
-        let file_iter = file_iter.into();
         Self {
-            file_iter,
+            work_source,
             remain,
             morselizer,
             on_error,
@@ -170,7 +172,7 @@ impl ScanState {
                                 (batch, false)
                             } else {
                                 let batch = batch.slice(0, *remain);
-                                let done = 1 + self.file_iter.len();
+                                let done = 1 + self.work_source.skipped_on_limit();
                                 self.metrics.files_processed.add(done);
                                 *remain = 0;
                                 (batch, true)
@@ -263,8 +265,8 @@ impl ScanState {
             };
         }
 
-        // No outstanding work remains, so morselize the next unopened file.
-        let part_file = match self.file_iter.pop_front() {
+        // No outstanding work remains, so begin planning the next unopened file.
+        let part_file = match self.work_source.pop_front() {
             Some(part_file) => part_file,
             None => return ScanAndReturn::Done(None),
         };

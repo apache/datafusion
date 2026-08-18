@@ -23,9 +23,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_common::{DFSchemaRef, Result, TableReference, internal_err};
 
-use crate::{LogicalPlan, TableSource};
+use crate::{Expr, LogicalPlan, TableSource};
 
 /// Operator that copies the contents of a database to file(s)
 #[derive(Clone)]
@@ -227,7 +227,11 @@ impl PartialOrd for DmlStatement {
 /// The type of DML operation to perform.
 ///
 /// See [`DmlStatement`] for more details.
+///
+/// Marked `#[non_exhaustive]` so adding new variants in future releases is
+/// not a SemVer break for downstream matchers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[non_exhaustive]
 pub enum WriteOp {
     /// `INSERT INTO` operation
     Insert(InsertOp),
@@ -239,6 +243,8 @@ pub enum WriteOp {
     Ctas,
     /// `TRUNCATE` operation
     Truncate,
+    /// `MERGE INTO` operation
+    MergeInto(Box<MergeIntoOp>),
 }
 
 impl WriteOp {
@@ -250,6 +256,7 @@ impl WriteOp {
             WriteOp::Update => "Update",
             WriteOp::Ctas => "Ctas",
             WriteOp::Truncate => "Truncate",
+            WriteOp::MergeInto(_) => "MergeInto",
         }
     }
 }
@@ -291,10 +298,300 @@ impl Display for InsertOp {
     }
 }
 
+/// Describes a MERGE INTO operation's parameters.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct MergeIntoOp {
+    /// The join condition from `ON <expr>`.
+    pub on: Expr,
+    /// The WHEN clauses, in the order they appeared in the SQL.
+    pub clauses: Vec<MergeIntoClause>,
+}
+
+impl MergeIntoOp {
+    /// Count of top-level [`Expr`]s owned by this operation (no allocation).
+    ///
+    /// Matches the length of [`Self::exprs`] and the `exprs` vec consumed by
+    /// [`Self::with_new_exprs`].
+    fn expr_count(&self) -> usize {
+        1 + self
+            .clauses
+            .iter()
+            .map(|c| {
+                c.predicate.is_some() as usize
+                    + match &c.action {
+                        MergeIntoAction::Update(a) => a.len(),
+                        MergeIntoAction::Insert { values, .. } => values.len(),
+                        MergeIntoAction::Delete => 0,
+                    }
+            })
+            .sum::<usize>()
+    }
+
+    /// Top-level [`Expr`]s in stable order: `on`, then per-clause predicate
+    /// (if any) and action value expressions.
+    pub fn exprs(&self) -> Vec<&Expr> {
+        let mut out = Vec::with_capacity(self.expr_count());
+        out.push(&self.on);
+        for clause in &self.clauses {
+            if let Some(predicate) = &clause.predicate {
+                out.push(predicate);
+            }
+            match &clause.action {
+                MergeIntoAction::Update(assignments) => {
+                    out.extend(assignments.iter().map(|(_, value)| value));
+                }
+                MergeIntoAction::Insert { values, .. } => {
+                    out.extend(values.iter());
+                }
+                MergeIntoAction::Delete => {}
+            }
+        }
+        out
+    }
+
+    /// Rebuild this `MergeIntoOp` from a flat vector of new expressions, in
+    /// the same order produced by [`Self::exprs`]. The clause kinds, action
+    /// kinds, column lists, and presence/absence of each predicate are
+    /// preserved from `self`.
+    pub fn with_new_exprs(&self, exprs: Vec<Expr>) -> Result<Self> {
+        let expected = self.expr_count();
+        if exprs.len() != expected {
+            return internal_err!(
+                "MergeIntoOp::with_new_exprs expected {expected} expressions, got {}",
+                exprs.len()
+            );
+        }
+        let mut iter = exprs.into_iter();
+        let on = iter.next().expect("non-empty by length check");
+        let clauses = self
+            .clauses
+            .iter()
+            .map(|clause| {
+                let predicate = clause
+                    .predicate
+                    .is_some()
+                    .then(|| iter.next().expect("non-empty by length check"));
+                let action = match &clause.action {
+                    MergeIntoAction::Update(assignments) => {
+                        let assignments = assignments
+                            .iter()
+                            .map(|(name, _)| {
+                                (
+                                    name.clone(),
+                                    iter.next().expect("non-empty by length check"),
+                                )
+                            })
+                            .collect();
+                        MergeIntoAction::Update(assignments)
+                    }
+                    MergeIntoAction::Insert { columns, values } => {
+                        let values = values
+                            .iter()
+                            .map(|_| iter.next().expect("non-empty by length check"))
+                            .collect();
+                        MergeIntoAction::Insert {
+                            columns: columns.clone(),
+                            values,
+                        }
+                    }
+                    MergeIntoAction::Delete => MergeIntoAction::Delete,
+                };
+                MergeIntoClause {
+                    kind: clause.kind,
+                    predicate,
+                    action,
+                }
+            })
+            .collect();
+        Ok(Self { on, clauses })
+    }
+}
+
+/// A single WHEN clause within a MERGE INTO statement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct MergeIntoClause {
+    /// Whether this fires on matched or unmatched rows.
+    pub kind: MergeIntoClauseKind,
+    /// Optional additional predicate (`AND <expr>`).
+    pub predicate: Option<Expr>,
+    /// The action to take.
+    pub action: MergeIntoAction,
+}
+
+/// Which rows a MERGE WHEN clause applies to.
+///
+/// Mirrors `sqlparser::ast::MergeClauseKind` so that the SQL spelling is
+/// preserved through the logical plan.
+///
+/// **Note on `NotMatched` vs `NotMatchedByTarget`:** these two variants are
+/// semantically identical — both describe a source row that has no matching
+/// target row. `NotMatched` is the SQL standard short form (used by
+/// Snowflake, Postgres, SQL Server); `NotMatchedByTarget` is BigQuery's
+/// explicit form added for symmetry with `NotMatchedBySource`. Downstream
+/// consumers (planners, table providers, optimizers) MUST treat the two
+/// variants identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum MergeIntoClauseKind {
+    /// `WHEN MATCHED`
+    Matched,
+    /// `WHEN NOT MATCHED` — see type-level note for the equivalence with
+    /// [`NotMatchedByTarget`](Self::NotMatchedByTarget).
+    NotMatched,
+    /// `WHEN NOT MATCHED BY TARGET` — see type-level note for the
+    /// equivalence with [`NotMatched`](Self::NotMatched).
+    NotMatchedByTarget,
+    /// `WHEN NOT MATCHED BY SOURCE`
+    NotMatchedBySource,
+}
+
+impl MergeIntoClauseKind {
+    /// True if this clause fires on a source row that has no matching target
+    /// row. Returns `true` for both [`NotMatched`](Self::NotMatched) and
+    /// [`NotMatchedByTarget`](Self::NotMatchedByTarget) (see the type-level
+    /// note explaining why those two variants are semantically identical).
+    ///
+    /// Prefer this predicate over hand-written `matches!` arms so the
+    /// `NotMatched`/`NotMatchedByTarget` equivalence is enforced in one place.
+    pub fn is_not_matched_by_target(&self) -> bool {
+        matches!(self, Self::NotMatched | Self::NotMatchedByTarget)
+    }
+
+    /// Collapse the SQL-spelling variants into the canonical three semantic
+    /// categories: [`Matched`](Self::Matched),
+    /// [`NotMatchedByTarget`](Self::NotMatchedByTarget) (covering both
+    /// "NOT MATCHED" spellings), and
+    /// [`NotMatchedBySource`](Self::NotMatchedBySource).
+    ///
+    /// Use this in downstream `match` expressions when the SQL spelling
+    /// distinction does not matter — e.g. in planners, optimizers, or
+    /// table-provider dispatch.
+    pub fn canonical(self) -> Self {
+        match self {
+            Self::NotMatched => Self::NotMatchedByTarget,
+            other => other,
+        }
+    }
+}
+
+/// The action for a single WHEN clause.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum MergeIntoAction {
+    /// `UPDATE SET col1 = expr1, col2 = expr2, ...`, stored as
+    /// `(column_name, value_expr)` pairs.
+    Update(Vec<(String, Expr)>),
+    /// `INSERT (col1, col2, ...) VALUES (expr1, expr2, ...)`. `columns` may
+    /// be empty, meaning all columns.
+    Insert {
+        columns: Vec<String>,
+        values: Vec<Expr>,
+    },
+    Delete,
+}
+
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
         Schema::new(vec![Field::new("count", DataType::UInt64, false)])
             .try_into()
             .unwrap(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{col, lit};
+
+    #[test]
+    fn write_op_merge_into_name_and_display() {
+        let op = WriteOp::MergeInto(Box::new(MergeIntoOp {
+            on: col("id").eq(col("source_id")),
+            clauses: vec![MergeIntoClause {
+                kind: MergeIntoClauseKind::Matched,
+                predicate: Some(col("qty").gt(lit(0_i64))),
+                action: MergeIntoAction::Update(vec![(
+                    "qty".to_string(),
+                    col("source_qty"),
+                )]),
+            }],
+        }));
+        assert_eq!(op.name(), "MergeInto");
+        assert_eq!(format!("{op}"), "MergeInto");
+    }
+
+    #[test]
+    fn merge_into_clause_kind_is_not_matched_by_target() {
+        assert!(!MergeIntoClauseKind::Matched.is_not_matched_by_target());
+        assert!(MergeIntoClauseKind::NotMatched.is_not_matched_by_target());
+        assert!(MergeIntoClauseKind::NotMatchedByTarget.is_not_matched_by_target());
+        assert!(!MergeIntoClauseKind::NotMatchedBySource.is_not_matched_by_target());
+    }
+
+    #[test]
+    fn merge_into_clause_kind_canonical_collapses_not_matched() {
+        assert_eq!(
+            MergeIntoClauseKind::NotMatched.canonical(),
+            MergeIntoClauseKind::NotMatchedByTarget
+        );
+        assert_eq!(
+            MergeIntoClauseKind::NotMatchedByTarget.canonical(),
+            MergeIntoClauseKind::NotMatchedByTarget
+        );
+        assert_eq!(
+            MergeIntoClauseKind::Matched.canonical(),
+            MergeIntoClauseKind::Matched
+        );
+        assert_eq!(
+            MergeIntoClauseKind::NotMatchedBySource.canonical(),
+            MergeIntoClauseKind::NotMatchedBySource
+        );
+    }
+
+    #[test]
+    fn merge_into_op_exprs_round_trip() {
+        let op = MergeIntoOp {
+            on: col("id").eq(col("source_id")),
+            clauses: vec![
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::Matched,
+                    predicate: Some(col("qty").gt(lit(0_i64))),
+                    action: MergeIntoAction::Update(vec![
+                        ("qty".to_string(), col("source_qty")),
+                        ("price".to_string(), col("source_price")),
+                    ]),
+                },
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::NotMatched,
+                    predicate: None,
+                    action: MergeIntoAction::Insert {
+                        columns: vec!["id".to_string(), "qty".to_string()],
+                        values: vec![col("source_id"), col("source_qty")],
+                    },
+                },
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::NotMatchedBySource,
+                    predicate: Some(col("active").eq(lit(true))),
+                    action: MergeIntoAction::Delete,
+                },
+            ],
+        };
+        let exprs = op.exprs();
+        assert_eq!(exprs.len(), 7);
+
+        let owned: Vec<Expr> = exprs.into_iter().cloned().collect();
+        let rebuilt = op.with_new_exprs(owned).unwrap();
+        assert_eq!(op, rebuilt);
+    }
+
+    #[test]
+    fn merge_into_op_with_new_exprs_length_mismatch() {
+        let op = MergeIntoOp {
+            on: col("id").eq(col("source_id")),
+            clauses: vec![],
+        };
+        let err = op.with_new_exprs(vec![]).unwrap_err();
+        assert!(
+            err.to_string().contains("expected 1 expressions, got 0"),
+            "unexpected error: {err}"
+        );
+    }
 }

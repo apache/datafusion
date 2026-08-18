@@ -43,7 +43,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let values = rows
             .into_iter()
             .map(|row| {
-                row.into_iter()
+                row.content
+                    .into_iter()
                     .map(|v| self.sql_to_expr(v, &empty_schema, planner_context))
                     .collect::<Result<Vec<_>>>()
             })

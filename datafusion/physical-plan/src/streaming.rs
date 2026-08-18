@@ -30,13 +30,17 @@ use crate::projection::{
     ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use crate::{
+    ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
+};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::projection::ProjectionMapping;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
@@ -77,7 +81,7 @@ impl StreamingTableExec {
     pub fn try_new(
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
         limit: Option<usize>,
@@ -102,19 +106,38 @@ impl StreamingTableExec {
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             projected_output_ordering.clone(),
-            &partitions,
+            Partitioning::UnknownPartitioning(partitions.len()),
             infinite,
         );
         Ok(Self {
             partitions,
             projected_schema,
-            projection: projection.cloned().map(Into::into),
+            projection: projection.map(|p| p.to_vec().into()),
             projected_output_ordering,
             infinite,
             limit,
             cache: Arc::new(cache),
             metrics: ExecutionPlanMetricsSet::new(),
         })
+    }
+
+    /// Declares the output partitioning of this stream.
+    ///
+    /// `output_partitioning` must describe this plan's current output and have
+    /// the same number of partitions as the stream.
+    pub fn with_output_partitioning(
+        mut self,
+        output_partitioning: Partitioning,
+    ) -> Result<Self> {
+        if output_partitioning.partition_count() != self.partitions.len() {
+            return plan_err!(
+                "Output partitioning has {} partitions but stream has {} partitions",
+                output_partitioning.partition_count(),
+                self.partitions.len()
+            );
+        }
+        Arc::make_mut(&mut self.cache).partitioning = output_partitioning;
+        Ok(self)
     }
 
     pub fn partitions(&self) -> &Vec<Arc<dyn PartitionStream>> {
@@ -149,14 +172,12 @@ impl StreamingTableExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: Vec<LexOrdering>,
-        partitions: &[Arc<dyn PartitionStream>],
+        output_partitioning: Partitioning,
         infinite: bool,
     ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
-        // Get output partitioning:
-        let output_partitioning = Partitioning::UnknownPartitioning(partitions.len());
         let boundedness = if infinite {
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
@@ -206,6 +227,16 @@ impl DisplayAs for StreamingTableExec {
                 if let Some(fetch) = self.limit {
                     write!(f, ", fetch={fetch}")?;
                 }
+                if !matches!(
+                    self.cache.output_partitioning(),
+                    Partitioning::UnknownPartitioning(_)
+                ) {
+                    write!(
+                        f,
+                        ", output_partitioning={}",
+                        self.cache.output_partitioning()
+                    )?;
+                }
 
                 display_orderings(f, &self.projected_output_ordering)?;
 
@@ -247,20 +278,31 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
             Ok(self)
         } else {
             internal_err!("Children cannot be replaced in {self:?}")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -315,6 +357,17 @@ impl ExecutionPlan for StreamingTableExec {
             };
             lex_orderings.push(ordering);
         }
+        let projection_mapping = ProjectionMapping::try_new(
+            projection
+                .expr()
+                .iter()
+                .map(|expr| (Arc::clone(&expr.expr), expr.alias.clone())),
+            &self.schema(),
+        )?;
+        let output_partitioning = self
+            .cache
+            .output_partitioning()
+            .project(&projection_mapping, self.cache.equivalence_properties());
 
         StreamingTableExec::try_new(
             Arc::clone(self.partition_schema()),
@@ -324,6 +377,7 @@ impl ExecutionPlan for StreamingTableExec {
             self.is_infinite(),
             self.limit(),
         )
+        .and_then(|exec| exec.with_output_partitioning(output_partitioning))
         .map(|e| Some(Arc::new(e) as _))
     }
 
@@ -421,7 +475,7 @@ mod test {
             StreamingTableExec::try_new(
                 self.schema.unwrap(),
                 self.partitions,
-                self.projection.as_ref(),
+                self.projection.as_deref(),
                 self.projected_output_ordering,
                 self.infinite,
                 self.limit,

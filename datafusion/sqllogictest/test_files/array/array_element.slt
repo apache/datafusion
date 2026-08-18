@@ -231,6 +231,22 @@ NULL
 NULL
 55
 
+# array_element with null index from column
+query I
+select array_element(column1, column2) from slices where column2 is NULL;
+----
+NULL
+
+query I
+select array_element(arrow_cast(column1, 'LargeList(Int64)'), column2) from slices where column2 is NULL;
+----
+NULL
+
+query I
+select array_element(column1, column2) from fixed_slices where column2 is NULL;
+----
+NULL
+
 # array_element with columns and scalars
 query II
 select array_element(make_array(1, 2, 3, 4, 5), column2), array_element(column1, 3) from slices;

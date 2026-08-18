@@ -233,7 +233,7 @@ impl LiteralGuarantee {
                             builder = builder.aggregate_multi_conjunct(
                                 col,
                                 Guarantee::In,
-                                literals.into_iter(),
+                                literals,
                             );
                         }
 

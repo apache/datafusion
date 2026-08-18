@@ -34,6 +34,14 @@ all-features = true
 backtrace = ["datafusion-common/backtrace"]
 compression = ["async-compression", "liblzma", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
+# Enables protobuf conversions for datasource types, source serialization hooks,
+# and the shared `FileScanConfig` <-> proto conversion. Off by default so
+# consumers that never serialize plans pay nothing. Mirrors the `proto` feature
+# on `datafusion-physical-plan`.
+proto = [
+    "dep:datafusion-proto-models",
+    "datafusion-physical-plan/proto",
+]
 
 [dependencies]
 arrow = { workspace = true }
@@ -56,6 +64,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-proto-models = { workspace = true, optional = true }
 datafusion-session = { workspace = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
@@ -64,6 +73,7 @@ itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
 log = { workspace = true }
 object_store = { workspace = true }
+parking_lot = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }
@@ -73,6 +83,7 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+datafusion-functions = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 

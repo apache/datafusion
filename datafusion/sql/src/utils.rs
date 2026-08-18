@@ -35,7 +35,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
-    ColumnUnnestList, Expr, ExprSchemable, LogicalPlan, col, expr_vec_fmt,
+    ColumnUnnestList, Expr, ExprSchemable, LogicalPlan, SortExpr, col, expr_vec_fmt,
 };
 
 use indexmap::IndexMap;
@@ -98,6 +98,7 @@ pub(crate) enum CheckColumnsMustReferenceAggregatePurpose {
     Having,
     Qualify,
     OrderBy,
+    DistinctOn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +120,9 @@ impl CheckColumnsSatisfyExprsPurpose {
             }
             Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::OrderBy) => {
                 "Column in ORDER BY must be in GROUP BY or an aggregate function"
+            }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::DistinctOn) => {
+                "Column in DISTINCT ON must be in GROUP BY or an aggregate function"
             }
         }
     }
@@ -200,6 +204,42 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
             _ => None,
         })
         .collect::<HashMap<String, Expr>>()
+}
+
+/// If `expr` is a bare unqualified `Column` whose name matches a SELECT
+/// alias, swap it for the alias's underlying expression. Nested occurrences
+/// are left alone: PostgreSQL only resolves a top-level identifier as an
+/// output alias in clauses like ORDER BY and DISTINCT ON.
+pub(crate) fn substitute_top_level_alias(
+    expr: Expr,
+    aliases: &HashMap<String, Expr>,
+) -> Expr {
+    if let Expr::Column(col) = &expr
+        && col.relation.is_none()
+        && let Some(underlying) = aliases.get(&col.name)
+    {
+        return underlying.clone();
+    }
+
+    expr
+}
+
+/// Applies [`substitute_top_level_alias`] to each sort expression.
+pub(crate) fn substitute_top_level_aliases_in_sorts(
+    sort_exprs: Vec<SortExpr>,
+    aliases: &HashMap<String, Expr>,
+) -> Vec<SortExpr> {
+    if aliases.is_empty() {
+        return sort_exprs;
+    }
+
+    sort_exprs
+        .into_iter()
+        .map(|sort_expr| {
+            sort_expr
+                .with_expr(substitute_top_level_alias(sort_expr.expr.clone(), aliases))
+        })
+        .collect()
 }
 
 /// Given an expression that's literal int encoding position, lookup the corresponding expression

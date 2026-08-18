@@ -24,9 +24,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-#[cfg(not(feature = "sql"))]
-use crate::expr::Ident;
 use crate::expr::Sort;
+#[cfg(not(feature = "sql"))]
+use crate::sql::Ident;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
@@ -38,8 +38,10 @@ use sqlparser::ast::Ident;
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum DdlStatement {
-    /// Creates an external table.
-    CreateExternalTable(CreateExternalTable),
+    /// Creates an external table. Boxed to keep `LogicalPlan` enum size down
+    /// — `CreateExternalTable` is ~312 bytes, dwarfing every other variant
+    /// in the plan tree and forcing the whole enum to that width.
+    CreateExternalTable(Box<CreateExternalTable>),
     /// Creates an in memory table.
     CreateMemoryTable(CreateMemoryTable),
     /// Creates a new view.
@@ -56,8 +58,9 @@ pub enum DdlStatement {
     DropView(DropView),
     /// Drops a catalog schema
     DropCatalogSchema(DropCatalogSchema),
-    /// Create function statement
-    CreateFunction(CreateFunction),
+    /// Create function statement. Boxed for the same reason as
+    /// [`Self::CreateExternalTable`] (~288 bytes).
+    CreateFunction(Box<CreateFunction>),
     /// Drop function statement
     DropFunction(DropFunction),
 }
@@ -66,9 +69,7 @@ impl DdlStatement {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
         match self {
-            DdlStatement::CreateExternalTable(CreateExternalTable { schema, .. }) => {
-                schema
-            }
+            DdlStatement::CreateExternalTable(ce) => &ce.schema,
             DdlStatement::CreateMemoryTable(CreateMemoryTable { input, .. })
             | DdlStatement::CreateView(CreateView { input, .. }) => input.schema(),
             DdlStatement::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
@@ -79,7 +80,7 @@ impl DdlStatement {
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
             DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
-            DdlStatement::CreateFunction(CreateFunction { schema, .. }) => schema,
+            DdlStatement::CreateFunction(cf) => &cf.schema,
             DdlStatement::DropFunction(DropFunction { schema, .. }) => schema,
         }
     }
@@ -131,11 +132,9 @@ impl DdlStatement {
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
-                    DdlStatement::CreateExternalTable(CreateExternalTable {
-                        name,
-                        constraints,
-                        ..
-                    }) => {
+                    DdlStatement::CreateExternalTable(ce) => {
+                        let name = &ce.name;
+                        let constraints = &ce.constraints;
                         if constraints.is_empty() {
                             write!(f, "CreateExternalTable: {name:?}")
                         } else {
@@ -191,7 +190,8 @@ impl DdlStatement {
                             "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}"
                         )
                     }
-                    DdlStatement::CreateFunction(CreateFunction { name, .. }) => {
+                    DdlStatement::CreateFunction(cf) => {
+                        let name = &cf.name;
                         write!(f, "CreateFunction: name {name:?}")
                     }
                     DdlStatement::DropFunction(DropFunction { name, .. }) => {
@@ -211,8 +211,12 @@ pub struct CreateExternalTable {
     pub schema: DFSchemaRef,
     /// The table name
     pub name: TableReference,
-    /// The physical location
-    pub location: String,
+    /// The physical locations of the table files.
+    ///
+    /// More than one location may be supplied (for example
+    /// `CREATE EXTERNAL TABLE ... LOCATION ('a.parquet', 'b.parquet')`), in which
+    /// case the files are read together as a single table.
+    pub locations: Vec<String>,
     /// The file type of physical file
     pub file_type: String,
     /// Partition Columns
@@ -266,7 +270,7 @@ impl CreateExternalTable {
     ) -> CreateExternalTableBuilder {
         CreateExternalTableBuilder {
             name: name.into(),
-            location: location.into(),
+            locations: vec![location.into()],
             file_type: file_type.into(),
             schema,
             table_partition_cols: vec![],
@@ -289,7 +293,7 @@ impl CreateExternalTable {
 #[derive(Debug, Clone)]
 pub struct CreateExternalTableBuilder {
     name: TableReference,
-    location: String,
+    locations: Vec<String>,
     file_type: String,
     schema: DFSchemaRef,
     table_partition_cols: Vec<String>,
@@ -308,6 +312,16 @@ impl CreateExternalTableBuilder {
     /// Set the partition columns
     pub fn with_partition_cols(mut self, cols: Vec<String>) -> Self {
         self.table_partition_cols = cols;
+        self
+    }
+
+    /// Set the physical locations of the table files, replacing the single
+    /// location supplied to [`CreateExternalTable::builder`].
+    ///
+    /// When more than one location is provided the files are read together as
+    /// a single table.
+    pub fn with_locations(mut self, locations: Vec<String>) -> Self {
+        self.locations = locations;
         self
     }
 
@@ -373,7 +387,7 @@ impl CreateExternalTableBuilder {
         CreateExternalTable {
             schema: self.schema,
             name: self.name,
-            location: self.location,
+            locations: self.locations,
             file_type: self.file_type,
             table_partition_cols: self.table_partition_cols,
             if_not_exists: self.if_not_exists,
@@ -394,7 +408,7 @@ impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.schema.hash(state);
         self.name.hash(state);
-        self.location.hash(state);
+        self.locations.hash(state);
         self.file_type.hash(state);
         self.table_partition_cols.hash(state);
         self.if_not_exists.hash(state);
@@ -413,8 +427,8 @@ impl PartialOrd for CreateExternalTable {
         struct ComparableCreateExternalTable<'a> {
             /// The table name
             pub name: &'a TableReference,
-            /// The physical location
-            pub location: &'a String,
+            /// The physical locations
+            pub locations: &'a Vec<String>,
             /// The file type of physical file
             pub file_type: &'a String,
             /// Partition Columns
@@ -432,7 +446,7 @@ impl PartialOrd for CreateExternalTable {
         }
         let comparable_self = ComparableCreateExternalTable {
             name: &self.name,
-            location: &self.location,
+            locations: &self.locations,
             file_type: &self.file_type,
             table_partition_cols: &self.table_partition_cols,
             if_not_exists: &self.if_not_exists,
@@ -443,7 +457,7 @@ impl PartialOrd for CreateExternalTable {
         };
         let comparable_other = ComparableCreateExternalTable {
             name: &other.name,
-            location: &other.location,
+            locations: &other.locations,
             file_type: &other.file_type,
             table_partition_cols: &other.table_partition_cols,
             if_not_exists: &other.if_not_exists,

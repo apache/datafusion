@@ -1,0 +1,189 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## inner_product
+
+# Orthogonal vectors: dot product = 0
+query R
+select inner_product([1.0, 0.0], [0.0, 1.0]);
+----
+0
+
+# General case: 1*4 + 2*5 + 3*6 = 32
+query R
+select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
+----
+32
+
+# Self dot product: [1,2,3]·[1,2,3] = 14
+query R
+select inner_product([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]);
+----
+14
+
+# Opposite vectors: negative
+query R
+select inner_product([1.0, 0.0], [-1.0, 0.0]);
+----
+-1
+
+# Zero vector returns 0 (not NULL — inner product with zero is well-defined)
+query R
+select inner_product([0.0, 0.0], [1.0, 2.0]);
+----
+0
+
+# Both zero vectors: 0
+query R
+select inner_product([0.0, 0.0], [0.0, 0.0]);
+----
+0
+
+# Bare NULL input returns NULL
+query R
+select inner_product(NULL, [1.0, 2.0]);
+----
+NULL
+
+# NULL in second position returns NULL
+query R
+select inner_product([1.0, 2.0], NULL);
+----
+NULL
+
+# Both NULL returns NULL
+query R
+select inner_product(NULL, NULL);
+----
+NULL
+
+# Mismatched lengths error
+query error inner_product requires both list inputs to have the same length
+select inner_product([1.0, 2.0], [1.0]);
+
+# NULL element inside a list returns NULL for that row
+query R
+select inner_product([1.0, 2.0, NULL], [1.0, 2.0, 3.0]);
+----
+NULL
+
+# LargeList support
+query R
+select inner_product(
+    arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'),
+    arrow_cast([4.0, 5.0, 6.0], 'LargeList(Float64)')
+);
+----
+32
+
+# Mixed List + LargeList: widens to LargeList
+query R
+select inner_product([1.0, 2.0, 3.0], arrow_cast([4.0, 5.0, 6.0], 'LargeList(Float64)'));
+----
+32
+
+# Reverse order: LargeList + List also widens
+query R
+select inner_product(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'), [4.0, 5.0, 6.0]);
+----
+32
+
+# FixedSizeList inputs (coerced to List)
+query R
+select inner_product(
+    arrow_cast([1.0, 2.0, 3.0], 'FixedSizeList(3, Float64)'),
+    arrow_cast([4.0, 5.0, 6.0], 'FixedSizeList(3, Float64)')
+);
+----
+32
+
+# FixedSizeList + LargeList: widens to LargeList
+query R
+select inner_product(
+    arrow_cast([1.0, 2.0, 3.0], 'FixedSizeList(3, Float64)'),
+    arrow_cast([4.0, 5.0, 6.0], 'LargeList(Float64)')
+);
+----
+32
+
+# Float32 inner type (coerced to Float64)
+query R
+select inner_product(arrow_cast([1.0, 2.0, 3.0], 'List(Float32)'), [4.0, 5.0, 6.0]);
+----
+32
+
+# Int64 inner type (coerced to Float64)
+query R
+select inner_product(arrow_cast([1, 2, 3], 'List(Int64)'), arrow_cast([4, 5, 6], 'List(Int64)'));
+----
+32
+
+# Integer literals (coerced to Float64)
+query R
+select inner_product([1, 2, 3], [4, 5, 6]);
+----
+32
+
+# Unsupported non-list input (plan error)
+query error inner_product does not support type
+select inner_product(1, 2);
+
+# Multi-row query with NULL row propagation
+query R
+select inner_product(column1, column2) from (values
+    (make_array(1.0, 0.0), make_array(0.0, 1.0)),
+    (make_array(1.0, 2.0, 3.0), make_array(4.0, 5.0, 6.0)),
+    (make_array(1.0, 0.0), make_array(-1.0, 0.0)),
+    (make_array(1.0, 0.0), NULL)
+) as t(column1, column2);
+----
+0
+32
+-1
+NULL
+
+# Empty arrays: inner product of empty vectors = 0
+query R
+select inner_product(arrow_cast(make_array(), 'List(Float64)'), arrow_cast(make_array(), 'List(Float64)'));
+----
+0
+
+# No arguments error
+query error inner_product function requires 2 arguments, got 0
+select inner_product();
+
+# Return type is Float64
+query RT
+select inner_product([1.0, 2.0], [3.0, 4.0]), arrow_typeof(inner_product([1.0, 2.0], [3.0, 4.0]));
+----
+11 Float64
+
+# dot_product alias produces the same result
+query R
+select dot_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
+----
+32
+
+# dot_product alias with NULL row propagates correctly
+query R
+select dot_product(column1, column2) from (values
+    (make_array(1.0, 0.0), make_array(0.0, 1.0)),
+    (make_array(1.0, 0.0), NULL)
+) as t(column1, column2);
+----
+0
+NULL

@@ -241,6 +241,25 @@ These queries test the performance of the `FIRST_VALUE` aggregation function wit
 | Q12   | `WatchID`            | `Int64`     | `OS`            | `Int16`       | 91               |
 
 
+### Q13: Filter-only URL Range Match
+
+**Question**: "What is the sum of counter IDs for page views with URLs in the normal URL string range?"
+
+**Important Query Properties**: Filter-only string range match. The `URL`
+column is used only by the pushed-down filter and is not projected or
+aggregated. This makes the query useful for measuring optimizations that can
+skip RowFilter evaluation when Parquet row group statistics prove that all rows
+in a row group satisfy the string predicate. The output-side aggregation is
+intentionally lightweight so the scan-time filter evaluation cost remains
+visible. Run this query with Parquet filter pushdown enabled, for example
+`dfbench clickbench --pushdown --query 13`.
+
+```sql
+SELECT SUM("CounterID") AS counter_id_sum
+FROM hits
+WHERE "URL" < 'zzzz';
+```
+
 
 
 

@@ -30,7 +30,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
-use datafusion_expr::expr::{Alias, ScalarFunction};
+use datafusion_expr::expr::{Alias, HigherOrderFunction, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -586,8 +586,12 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
-                // manner.
-                plan.map_children(|c| self.rewrite(c, config))?
+                // manner. Process uncorrelated subqueries in expressions
+                // (e.g., Expr::ScalarSubquery), then direct children.
+                plan.map_uncorrelated_subqueries(|c| self.rewrite(c, config))?
+                    .transform_sibling(|plan| {
+                        plan.map_children(|c| self.rewrite(c, config))
+                    })?
             }
         };
 
@@ -647,10 +651,13 @@ impl CSEController for ExprCSEController<'_> {
 
     fn conditional_children(node: &Expr) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
         match node {
-            // In case of `ScalarFunction`s we don't know which children are surely
+            // In case of `ScalarFunction`s and `HigherOrderFunction`s we don't know which children are surely
             // executed so start visiting all children conditionally and stop the
             // recursion with `TreeNodeRecursion::Jump`.
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                func.conditional_arguments(args)
+            }
+            Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
                 func.conditional_arguments(args)
             }
 
@@ -693,6 +700,7 @@ impl CSEController for ExprCSEController<'_> {
 
     fn is_valid(node: &Expr) -> bool {
         !node.is_volatile_node()
+            && !matches!(node, Expr::Lambda(_) | Expr::LambdaVariable(_))
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
@@ -722,6 +730,8 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Wildcard { .. }
+                | Expr::Lambda(_)
+                | Expr::LambdaVariable(_)
         );
 
         let is_aggr = matches!(node, Expr::AggregateFunction(..));
@@ -816,6 +826,9 @@ fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
             let col = Column::new(qualifier, field_name);
             result.push(Expr::Column(col))
         }
+        result.push(Expr::Column(Column::from_name(
+            Aggregate::INTERNAL_GROUPING_ID,
+        )));
     } else {
         let (qualifier, field_name) = expr.qualified_name();
         let col = Column::new(qualifier, field_name);
@@ -1097,6 +1110,27 @@ mod test {
     }
 
     #[test]
+    fn common_aggregate_grouping_set_preserves_internal_id() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .aggregate(
+                vec![grouping_set(vec![vec![col("a")]])],
+                vec![avg(col("b")).alias("first"), avg(col("b")).alias("second")],
+            )?
+            .filter(col(Aggregate::INTERNAL_GROUPING_ID).eq(lit(0_u8)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: __grouping_id = UInt8(0)
+          Projection: test.a, __grouping_id, __common_expr_1 AS first, __common_expr_1 AS second
+            Aggregate: groupBy=[[GROUPING SETS ((test.a))]], aggr=[[avg(test.b) AS __common_expr_1]]
+              TableScan: test
+        "
+        )
+    }
+
+    #[test]
     fn subexpr_in_same_order() -> Result<()> {
         let table_scan = test_table_scan()?;
 
@@ -1278,20 +1312,31 @@ mod test {
 
     #[test]
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
-        let mut result = Vec::with_capacity(3);
+        let mut result = Vec::with_capacity(4);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
         extract_expressions(&grouping, &mut result);
 
-        assert!(result.len() == 3);
+        assert_eq!(
+            result,
+            vec![
+                col("a"),
+                col("b"),
+                col("c"),
+                col(Aggregate::INTERNAL_GROUPING_ID),
+            ]
+        );
         Ok(())
     }
 
     #[test]
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
-        let mut result = Vec::with_capacity(2);
+        let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
         extract_expressions(&grouping, &mut result);
-        assert!(result.len() == 2);
+        assert_eq!(
+            result,
+            vec![col("a"), col("b"), col(Aggregate::INTERNAL_GROUPING_ID),]
+        );
         Ok(())
     }
 

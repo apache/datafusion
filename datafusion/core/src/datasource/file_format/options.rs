@@ -17,6 +17,7 @@
 
 //! User facing options for the file formats readers
 
+use std::future::ready;
 use std::sync::Arc;
 
 #[cfg(feature = "avro")]
@@ -34,6 +35,7 @@ use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_catalog_listing::SchemaSource;
 use datafusion_common::config::{ConfigFileDecryptionProperties, TableOptions};
 use datafusion_common::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
@@ -43,6 +45,7 @@ use datafusion_common::{
 use async_trait::async_trait;
 use datafusion_datasource_json::file_format::JsonFormat;
 use datafusion_expr::SortExpr;
+use futures::future::BoxFuture;
 
 /// Options that control the reading of CSV files.
 ///
@@ -595,32 +598,50 @@ pub trait ReadOptions<'a> {
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef>;
 
+    /// Returns whether the read schema was inferred or specified.
+    fn schema_source(&self) -> SchemaSource {
+        SchemaSource::Specified
+    }
+
     /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
-    async fn _get_resolved_schema(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn _get_resolved_schema<'life0, 'async_trait>(
         &'a self,
-        config: &SessionConfig,
+        config: &'life0 SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
         schema: Option<&'a Schema>,
-    ) -> Result<SchemaRef>
+    ) -> BoxFuture<'async_trait, Result<SchemaRef>>
     where
         'a: 'async_trait,
+        'life0: 'async_trait,
+        Self: 'async_trait,
     {
         if let Some(s) = schema {
-            return Ok(Arc::new(s.to_owned()));
+            return Box::pin(ready(Ok(Arc::new(s.to_owned()))));
         }
 
-        self.to_listing_options(config, state.default_table_options())
-            .infer_schema(&state, &table_path)
-            .await
+        let listing_options =
+            self.to_listing_options(config, state.default_table_options());
+        infer_schema_boxed(listing_options, state, table_path)
     }
+}
+
+/// Infers a schema from `table_path`, boxed for [`ReadOptions::_get_resolved_schema`].
+fn infer_schema_boxed(
+    listing_options: ListingOptions,
+    state: SessionState,
+    table_path: ListingTableUrl,
+) -> BoxFuture<'static, Result<SchemaRef>> {
+    Box::pin(async move { listing_options.infer_schema(&state, &table_path).await })
 }
 
 #[async_trait]
 impl ReadOptions<'_> for CsvReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = CsvFormat::default()
@@ -639,19 +660,28 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
-    async fn get_resolved_schema(
-        &self,
-        config: &SessionConfig,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn get_resolved_schema<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        config: &'life1 SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
-    ) -> Result<SchemaRef> {
+    ) -> BoxFuture<'async_trait, Result<SchemaRef>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
         self._get_resolved_schema(config, state, table_path, self.schema)
-            .await
+    }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
     }
 }
 
@@ -660,7 +690,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
         let mut options = table_options.parquet;
@@ -685,17 +715,26 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
-            .with_session_config_options(config)
     }
 
-    async fn get_resolved_schema(
-        &self,
-        config: &SessionConfig,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn get_resolved_schema<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        config: &'life1 SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
-    ) -> Result<SchemaRef> {
+    ) -> BoxFuture<'async_trait, Result<SchemaRef>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
         self._get_resolved_schema(config, state, table_path, self.schema)
-            .await
+    }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
     }
 }
 
@@ -703,7 +742,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 impl ReadOptions<'_> for JsonReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = JsonFormat::default()
@@ -714,19 +753,28 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
-    async fn get_resolved_schema(
-        &self,
-        config: &SessionConfig,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn get_resolved_schema<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        config: &'life1 SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
-    ) -> Result<SchemaRef> {
+    ) -> BoxFuture<'async_trait, Result<SchemaRef>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
         self._get_resolved_schema(config, state, table_path, self.schema)
-            .await
+    }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
     }
 }
 
@@ -735,25 +783,34 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
 impl ReadOptions<'_> for AvroReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         _table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = AvroFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
-    async fn get_resolved_schema(
-        &self,
-        config: &SessionConfig,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn get_resolved_schema<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        config: &'life1 SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
-    ) -> Result<SchemaRef> {
+    ) -> BoxFuture<'async_trait, Result<SchemaRef>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
         self._get_resolved_schema(config, state, table_path, self.schema)
-            .await
+    }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
     }
 }
 
@@ -761,24 +818,41 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 impl ReadOptions<'_> for ArrowReadOptions<'_> {
     fn to_listing_options(
         &self,
-        config: &SessionConfig,
+        _config: &SessionConfig,
         _table_options: TableOptions,
     ) -> ListingOptions {
         let file_format = ArrowFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_session_config_options(config)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
-    async fn get_resolved_schema(
-        &self,
-        config: &SessionConfig,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn get_resolved_schema<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        config: &'life1 SessionConfig,
         state: SessionState,
         table_path: ListingTableUrl,
-    ) -> Result<SchemaRef> {
+    ) -> BoxFuture<'async_trait, Result<SchemaRef>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
         self._get_resolved_schema(config, state, table_path, self.schema)
-            .await
+    }
+
+    fn schema_source(&self) -> SchemaSource {
+        schema_source_from_option(self.schema)
+    }
+}
+
+fn schema_source_from_option(schema: Option<&Schema>) -> SchemaSource {
+    if schema.is_some() {
+        SchemaSource::Specified
+    } else {
+        SchemaSource::Inferred
     }
 }

@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fmt::Formatter;
+use std::time::Duration;
 
 use arrow::datatypes::SchemaRef;
 
@@ -28,8 +29,10 @@ use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
-use crate::metrics::{MetricCategory, MetricType};
+use crate::metrics::{MetricCategory, MetricType, MetricValue};
 use crate::render_tree::RenderTree;
+
+use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
@@ -75,7 +78,7 @@ pub enum DisplayFormatType {
     /// │    partition_sizes: [1]   │
     /// │          Parquet          │
     /// └───────────────────────────┘
-    ///  ```
+    /// ```
     TreeRender,
 }
 
@@ -126,8 +129,22 @@ pub struct DisplayableExecutionPlan<'a> {
     /// Optional filter by semantic category (rows / bytes / timing).
     /// `None` means show all categories; `Some(vec![])` means plan-only.
     metric_categories: Option<Vec<MetricCategory>>,
+    /// Optional filter by metric names. Only metric names in this list
+    /// will be rendered.
+    metric_names: Option<Vec<String>>,
     // (TreeRender) Maximum total width of the rendered tree
     tree_maximum_render_width: usize,
+    /// Optional summary totals (currently only used by `pgjson`) — the total
+    /// row count and wall-clock duration of the `AnalyzeExec` execution.
+    summary: Option<AnalyzeSummary>,
+}
+
+/// Summary information attached to the root of an `EXPLAIN ANALYZE`
+/// pgjson render.
+#[derive(Debug, Clone, Copy)]
+struct AnalyzeSummary {
+    total_rows: Option<usize>,
+    duration: Option<Duration>,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
@@ -145,7 +162,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
+            metric_names: None,
             tree_maximum_render_width: 240,
+            summary: None,
         }
     }
 
@@ -160,7 +179,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
+            metric_names: None,
             tree_maximum_render_width: 240,
+            summary: None,
         }
     }
 
@@ -175,7 +196,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
+            metric_names: None,
             tree_maximum_render_width: 240,
+            summary: None,
         }
     }
 
@@ -217,9 +240,36 @@ impl<'a> DisplayableExecutionPlan<'a> {
         self
     }
 
+    /// Specify which metric names to include.
+    ///
+    /// - An empty vector means plan-only — suppress all metrics.
+    /// - `vec!["metric_1"]` means show only the metric named `metric_1`.
+    ///
+    /// Name filtering is intersected with other types of filters, like metric
+    /// category and metric type.
+    pub fn set_metric_names(mut self, metric_names: Vec<String>) -> Self {
+        self.metric_names = Some(metric_names);
+        self
+    }
+
     /// Set the maximum render width for the tree format
     pub fn set_tree_maximum_render_width(mut self, width: usize) -> Self {
         self.tree_maximum_render_width = width;
+        self
+    }
+
+    /// Attach an `EXPLAIN ANALYZE` summary (total output rows and duration)
+    /// to the rendered output. Currently only used by [`Self::pgjson`], which
+    /// serializes the summary alongside the root plan object.
+    pub fn set_summary(
+        mut self,
+        total_rows: Option<usize>,
+        duration: Option<Duration>,
+    ) -> Self {
+        self.summary = Some(AnalyzeSummary {
+            total_rows,
+            duration,
+        });
         self
     }
 
@@ -247,6 +297,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -259,6 +310,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -271,6 +323,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -292,6 +345,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -304,6 +358,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_statistics: self.show_statistics,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                     graphviz_builder: GraphvizBuilder::default(),
                     parents: Vec::new(),
                 };
@@ -323,6 +378,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: self.show_statistics,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -349,6 +405,78 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
     }
 
+    /// Returns a `format`able structure that produces PostgreSQL-style JSON
+    /// output, mirroring the logical-plan pgjson format.
+    ///
+    /// Each node is rendered as a JSON object with:
+    /// - `"Node Type"` — `ExecutionPlan::name()`
+    /// - `"Details"` — the one-line `DisplayAs::Default` rendering
+    /// - `"Output"` — schema column names (when `set_show_schema(true)`)
+    /// - `"Actual Rows"` / `"Actual Total Time"` — PG-canonical metric keys
+    ///   populated from `output_rows` / `elapsed_compute` when available
+    /// - `"Extras"` — remaining metrics keyed by DataFusion metric name
+    /// - `"Plans"` — array of child nodes
+    ///
+    /// When a summary has been set via [`Self::set_summary`], `"Total Rows"`
+    /// and `"Duration"` fields are attached at the root.
+    pub fn pgjson(&self, verbose: bool) -> impl fmt::Display + 'a {
+        struct Wrapper<'a> {
+            plan: &'a dyn ExecutionPlan,
+            verbose: bool,
+            show_metrics: ShowMetrics,
+            show_schema: bool,
+            metric_types: Vec<MetricType>,
+            metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
+            summary: Option<AnalyzeSummary>,
+        }
+        impl fmt::Display for Wrapper<'_> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                let mut visitor = PgJsonExecutionPlanVisitor {
+                    verbose: self.verbose,
+                    show_metrics: self.show_metrics,
+                    show_schema: self.show_schema,
+                    metric_types: &self.metric_types,
+                    metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
+                    objects: HashMap::new(),
+                    parent_ids: Vec::new(),
+                    next_id: 0,
+                    root: None,
+                };
+                accept(self.plan, &mut visitor).map_err(|_| fmt::Error)?;
+                let root = visitor.root.ok_or(fmt::Error)?;
+                let mut root_entry = serde_json::json!({ "Plan": root });
+                if let Some(summary) = self.summary {
+                    if let Some(total_rows) = summary.total_rows {
+                        root_entry["Total Rows"] = serde_json::Value::from(total_rows);
+                    }
+                    if let Some(duration) = summary.duration {
+                        root_entry["Duration"] =
+                            serde_json::Value::from(format!("{duration:?}"));
+                    }
+                }
+                let doc = serde_json::Value::Array(vec![root_entry]);
+                write!(
+                    f,
+                    "{}",
+                    serde_json::to_string_pretty(&doc).map_err(|_| fmt::Error)?
+                )
+            }
+        }
+
+        Wrapper {
+            plan: self.inner,
+            verbose,
+            show_metrics: self.show_metrics,
+            show_schema: self.show_schema,
+            metric_types: self.metric_types.clone(),
+            metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
+            summary: self.summary,
+        }
+    }
+
     /// Return a single-line summary of the root of the plan
     /// Example: `ProjectionExec: expr=[a@0 as a]`.
     pub fn one_line(&self) -> impl fmt::Display + 'a {
@@ -359,6 +487,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
 
         impl fmt::Display for Wrapper<'_> {
@@ -372,6 +501,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                 };
                 visitor.pre_visit(self.plan)?;
                 Ok(())
@@ -385,6 +515,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -443,6 +574,8 @@ struct IndentVisitor<'a, 'b> {
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category (rows / bytes / timing).
     metric_categories: Option<&'a [MetricCategory]>,
+    /// Optional filter by metric name.
+    metric_names: Option<&'a [String]>,
 }
 
 impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
@@ -462,6 +595,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -473,6 +609,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -480,7 +619,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
+            let stats = StatisticsContext::new()
+                .compute(plan, &StatisticsArgs::new())
+                .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
         }
         if self.show_schema {
@@ -513,6 +654,8 @@ struct GraphvizVisitor<'a, 'b> {
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category
     metric_categories: Option<&'a [MetricCategory]>,
+    /// Optional filter by metric name.
+    metric_names: Option<&'a [String]>,
 
     graphviz_builder: GraphvizBuilder,
     /// Used to record parent node ids when visiting a plan.
@@ -557,6 +700,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -568,6 +714,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -576,7 +725,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
+            let stats = StatisticsContext::new()
+                .compute(plan, &StatisticsArgs::new())
+                .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
         } else {
             "".to_string()
@@ -607,6 +758,192 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 
     fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         self.parents.pop();
+        Ok(true)
+    }
+}
+
+/// Formats physical plans into PostgreSQL-style JSON output with live
+/// per-operator metrics.
+///
+/// This visitor mirrors the logical-plan `PgJsonVisitor` in
+/// `datafusion-expr`: during `pre_visit` it assembles a JSON object for the
+/// current node; during `post_visit` it attaches that object into its
+/// parent's `"Plans"` array (or stores it as the root).
+struct PgJsonExecutionPlanVisitor<'a> {
+    verbose: bool,
+    show_metrics: ShowMetrics,
+    show_schema: bool,
+    metric_types: &'a [MetricType],
+    metric_categories: Option<&'a [MetricCategory]>,
+    metric_names: Option<&'a [String]>,
+    objects: HashMap<u32, serde_json::Value>,
+    parent_ids: Vec<u32>,
+    next_id: u32,
+    root: Option<serde_json::Value>,
+}
+
+impl PgJsonExecutionPlanVisitor<'_> {
+    /// Produce the one-line `DisplayAs::Default` rendering of a node.
+    fn one_line_details(plan: &dyn ExecutionPlan) -> String {
+        struct One<'b>(&'b dyn ExecutionPlan);
+        impl fmt::Display for One<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+                self.0.fmt_as(DisplayFormatType::Default, f)
+            }
+        }
+        // Some operators include internal newlines; collapse them so the
+        // rendered JSON value stays on a single line.
+        format!("{}", One(plan))
+            .replace('\n', " ")
+            .trim()
+            .to_string()
+    }
+
+    /// Render the given `MetricValue` into the most natural `serde_json::Value`
+    /// we can produce: a number for simple counts/gauges/times, a float-ms for
+    /// `ElapsedCompute`, and a string fallback for anything else.
+    fn metric_value_to_json(value: &MetricValue) -> serde_json::Value {
+        match value {
+            MetricValue::OutputRows(c) => serde_json::Value::from(c.value()),
+            MetricValue::SpillCount(c)
+            | MetricValue::OutputBatches(c)
+            | MetricValue::SpilledRows(c) => serde_json::Value::from(c.value()),
+            MetricValue::SpilledBytes(c) | MetricValue::OutputBytes(c) => {
+                serde_json::Value::from(c.value())
+            }
+            MetricValue::CurrentMemoryUsage(g) => serde_json::Value::from(g.value()),
+            MetricValue::ElapsedCompute(t) => {
+                // Emit as float milliseconds to align with PG's
+                // `"Actual Total Time"` convention. DataFusion tracks compute
+                // time (summed across partitions), not wall time — visualizers
+                // should be read with that caveat in mind.
+                let ms = (t.value() as f64) / 1_000_000.0;
+                serde_json::Value::from(ms)
+            }
+            MetricValue::Count { count, .. } => serde_json::Value::from(count.value()),
+            MetricValue::Gauge { gauge, .. } => serde_json::Value::from(gauge.value()),
+            MetricValue::PeakMemoryUsage { gauge, .. } => {
+                serde_json::Value::from(gauge.value())
+            }
+            MetricValue::Time { time, .. } => {
+                let ms = (time.value() as f64) / 1_000_000.0;
+                serde_json::Value::from(ms)
+            }
+            // Timestamps, PruningMetrics, Ratio, Custom: fall back to Display.
+            other => serde_json::Value::String(format!("{other}")),
+        }
+    }
+
+    /// Populate `"Actual Rows"`, `"Actual Total Time"`, and `"Extras"` for
+    /// the given node from its aggregated `MetricsSet`, honoring the same
+    /// filtering pipeline used by `IndentVisitor`.
+    fn attach_metrics(&self, plan: &dyn ExecutionPlan, object: &mut serde_json::Value) {
+        if matches!(self.show_metrics, ShowMetrics::None) {
+            return;
+        }
+        let Some(metrics) = plan.metrics() else {
+            return;
+        };
+
+        let metrics = match self.show_metrics {
+            ShowMetrics::None => return,
+            ShowMetrics::Aggregated => metrics
+                .filter_by_metric_types(self.metric_types)
+                .aggregate_by_name()
+                .sorted_for_display()
+                .timestamps_removed(),
+            ShowMetrics::Full => metrics.filter_by_metric_types(self.metric_types),
+        };
+        let metrics = if let Some(cats) = self.metric_categories {
+            metrics.filter_by_categories(cats)
+        } else {
+            metrics
+        };
+
+        let metrics = if let Some(names) = self.metric_names {
+            metrics.filter_by_names(names)
+        } else {
+            metrics
+        };
+
+        // Build the Extras bucket, while extracting PG-canonical keys to the
+        // top level.
+        let mut extras = serde_json::Map::new();
+        for metric in metrics.iter() {
+            let value = metric.value();
+            match value {
+                MetricValue::OutputRows(c) => {
+                    object["Actual Rows"] = serde_json::Value::from(c.value());
+                }
+                MetricValue::ElapsedCompute(t) => {
+                    let ms = (t.value() as f64) / 1_000_000.0;
+                    object["Actual Total Time"] = serde_json::Value::from(ms);
+                }
+                _ => {
+                    extras.insert(
+                        value.name().to_string(),
+                        Self::metric_value_to_json(value),
+                    );
+                }
+            }
+        }
+        if !extras.is_empty() {
+            object["Extras"] = serde_json::Value::Object(extras);
+        }
+    }
+}
+
+impl ExecutionPlanVisitor for PgJsonExecutionPlanVisitor<'_> {
+    type Error = fmt::Error;
+
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        // Build fields in reading order: Node Type, Details, (schema),
+        // (metrics), Plans last — so the JSON output reads top-down like a
+        // PostgreSQL plan.
+        let mut object = serde_json::json!({
+            "Node Type": plan.name(),
+            "Details": Self::one_line_details(plan),
+        });
+
+        if self.show_schema || self.verbose {
+            // Always include output columns when a caller asked for schema;
+            // also include them in verbose mode so the pgjson output mirrors
+            // the extra context shown by indent's verbose flag.
+            let columns: Vec<serde_json::Value> = plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| serde_json::Value::String(f.name().to_string()))
+                .collect();
+            object["Output"] = serde_json::Value::Array(columns);
+        }
+
+        self.attach_metrics(plan, &mut object);
+
+        object["Plans"] = serde_json::Value::Array(vec![]);
+
+        self.objects.insert(id, object);
+        self.parent_ids.push(id);
+        Ok(true)
+    }
+
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+        let id = self.parent_ids.pop().ok_or(fmt::Error)?;
+        let current = self.objects.remove(&id).ok_or(fmt::Error)?;
+
+        if let Some(parent_id) = self.parent_ids.last() {
+            let parent = self.objects.get_mut(parent_id).ok_or(fmt::Error)?;
+            let plans = parent
+                .get_mut("Plans")
+                .and_then(|p| p.as_array_mut())
+                .ok_or(fmt::Error)?;
+            plans.push(current);
+        } else {
+            self.root = Some(current);
+        }
         Ok(true)
     }
 }
@@ -727,7 +1064,7 @@ impl TreeRenderVisitor<'_, '_> {
                     continue;
                 }
                 // there are nodes next to this, fill the space
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;
@@ -917,13 +1254,13 @@ impl TreeRenderVisitor<'_, '_> {
                 )?;
                 write!(self.f, "{}", Self::RDCORNER)?;
             } else if root.has_node(x, y + 1) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 write!(self.f, "{}", Self::VERTICAL)?;
                 if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                    write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                    write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 }
             } else if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;
@@ -1173,7 +1510,11 @@ mod tests {
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_physical_expr::PhysicalExpr;
 
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::statistics::StatisticsArgs;
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, ExecutionPlan, PlanProperties,
+        ReplaceChildrenOptions,
+    };
 
     use super::DisplayableExecutionPlan;
 
@@ -1207,18 +1548,29 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -1229,11 +1581,12 @@ mod tests {
             todo!()
         }
 
-        fn partition_statistics(
+        fn statistics_from_inputs(
             &self,
-            partition: Option<usize>,
+            _input_stats: &[Arc<Statistics>],
+            args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
-            if partition.is_some() {
+            if args.partition().is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }
             match self {
@@ -1284,5 +1637,250 @@ mod tests {
     #[test]
     fn test_display_when_stats_ok_with_show_stats() {
         test_stats_display(TestStatsExecPlan::Ok, false);
+    }
+
+    mod pgjson {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use arrow::datatypes::{DataType, Field, Schema};
+        use insta::assert_snapshot;
+
+        use super::super::DisplayableExecutionPlan;
+        use crate::empty::EmptyExec;
+        use crate::filter::FilterExec;
+        use crate::projection::ProjectionExec;
+        use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
+        use datafusion_physical_expr::expressions::{binary, col, lit};
+        use datafusion_physical_expr::{Partitioning, PhysicalExpr};
+
+        fn sample_plan() -> Arc<dyn ExecutionPlan> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ]));
+            let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+            let predicate = binary(
+                col("a", &schema).unwrap(),
+                datafusion_expr::Operator::Gt,
+                lit(5i32),
+                &schema,
+            )
+            .unwrap();
+            let filter = Arc::new(FilterExec::try_new(predicate, empty).unwrap());
+            let proj_expr: Vec<(Arc<dyn PhysicalExpr>, String)> =
+                vec![(col("a", &schema).unwrap(), "a".to_string())];
+            let _ = Partitioning::UnknownPartitioning(1);
+            Arc::new(ProjectionExec::try_new(proj_expr, filter).unwrap())
+        }
+
+        #[test]
+        fn pgjson_renders_plan_without_metrics() {
+            let plan = sample_plan();
+            let out = DisplayableExecutionPlan::new(plan.as_ref())
+                .pgjson(false)
+                .to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            // Root is an array with one {"Plan": ...} entry.
+            let root = value
+                .as_array()
+                .expect("root array")
+                .first()
+                .expect("root entry")
+                .get("Plan")
+                .expect("plan object");
+            assert_eq!(root["Node Type"].as_str(), Some("ProjectionExec"));
+            assert!(root.get("Actual Rows").is_none());
+            assert!(root.get("Extras").is_none());
+            let plans = root["Plans"].as_array().expect("Plans array");
+            assert_eq!(plans.len(), 1);
+            assert_eq!(plans[0]["Node Type"].as_str(), Some("FilterExec"));
+        }
+
+        #[test]
+        fn pgjson_emits_pg_canonical_metric_keys() {
+            use crate::metrics::{Count, Metric, MetricValue, MetricsSet, Time};
+            use crate::{DisplayFormatType, ExecutionPlan, PlanProperties};
+            use datafusion_common::Result;
+            use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+
+            // Wrap `sample_plan()` with an adapter node that exposes a
+            // hand-crafted `MetricsSet` so we can assert the PG key mapping
+            // without running anything.
+            #[derive(Debug)]
+            struct WithMetrics {
+                inner: Arc<dyn ExecutionPlan>,
+                metrics: MetricsSet,
+            }
+            impl crate::DisplayAs for WithMetrics {
+                fn fmt_as(
+                    &self,
+                    _t: DisplayFormatType,
+                    f: &mut std::fmt::Formatter,
+                ) -> std::fmt::Result {
+                    write!(f, "WithMetrics")
+                }
+            }
+            impl ExecutionPlan for WithMetrics {
+                fn name(&self) -> &'static str {
+                    "WithMetrics"
+                }
+                fn properties(&self) -> &Arc<PlanProperties> {
+                    self.inner.properties()
+                }
+                fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+                    vec![&self.inner]
+                }
+                fn apply_expressions(
+                    &self,
+                    _f: &mut dyn FnMut(
+                        &Arc<dyn PhysicalExpr>,
+                    ) -> Result<
+                        datafusion_common::tree_node::TreeNodeRecursion,
+                    >,
+                ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>
+                {
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                }
+
+                fn replace_children(
+                    self: Arc<Self>,
+                    _: Vec<Arc<dyn ExecutionPlan>>,
+                    _: ReplaceChildrenOptions,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    unimplemented!()
+                }
+                fn with_new_children(
+                    self: Arc<Self>,
+                    children: Vec<Arc<dyn ExecutionPlan>>,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    self.replace_children(
+                        children,
+                        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                    )
+                }
+                fn execute(
+                    &self,
+                    _: usize,
+                    _: Arc<TaskContext>,
+                ) -> Result<SendableRecordBatchStream> {
+                    unimplemented!()
+                }
+                fn metrics(&self) -> Option<MetricsSet> {
+                    Some(self.metrics.clone())
+                }
+            }
+
+            let mut metrics = MetricsSet::new();
+            let rows = Count::new();
+            rows.add(42);
+            metrics.push(Arc::new(Metric::new(MetricValue::OutputRows(rows), None)));
+            let elapsed = Time::new();
+            elapsed.add_duration(Duration::from_millis(5));
+            metrics.push(Arc::new(Metric::new(
+                MetricValue::ElapsedCompute(elapsed),
+                None,
+            )));
+            let batches = Count::new();
+            batches.add(7);
+            metrics.push(Arc::new(Metric::new(
+                MetricValue::OutputBatches(batches),
+                None,
+            )));
+
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(WithMetrics {
+                inner: sample_plan(),
+                metrics,
+            });
+
+            let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                .pgjson(false)
+                .to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let root = value[0].get("Plan").expect("plan");
+            assert_eq!(root["Actual Rows"].as_u64(), Some(42));
+            assert_eq!(root["Actual Total Time"].as_f64(), Some(5.0));
+            assert_eq!(root["Extras"]["output_batches"].as_u64(), Some(7));
+
+            let metric_names = vec!["output_rows".to_string()];
+            for rendered in [
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+            ] {
+                assert!(rendered.contains("output_rows"));
+                assert!(!rendered.contains("elapsed_compute"));
+                assert!(!rendered.contains("output_batches"));
+            }
+
+            let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                .set_metric_names(metric_names)
+                .pgjson(false)
+                .to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let root = value[0].get("Plan").expect("plan");
+            assert_eq!(root["Actual Rows"].as_u64(), Some(42));
+            assert!(root.get("Actual Total Time").is_none());
+            assert!(root.get("Extras").is_none());
+        }
+
+        #[test]
+        fn pgjson_includes_summary_when_set() {
+            let plan = sample_plan();
+            let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                .set_summary(Some(42), Some(Duration::from_millis(7)))
+                .pgjson(false)
+                .to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let entry = &value.as_array().unwrap()[0];
+            assert_eq!(entry["Total Rows"].as_u64(), Some(42));
+            assert!(entry["Duration"].is_string());
+        }
+
+        #[test]
+        fn pgjson_snapshot_of_sample_plan() {
+            let plan = sample_plan();
+            let out = DisplayableExecutionPlan::new(plan.as_ref())
+                .pgjson(false)
+                .to_string();
+            // This snapshot assumes `serde_json` is built with the
+            // `preserve_order` feature (enabled via this crate's dev-deps).
+            assert_snapshot!(out, @r#"
+            [
+              {
+                "Plan": {
+                  "Node Type": "ProjectionExec",
+                  "Details": "ProjectionExec: expr=[a@0 as a]",
+                  "Plans": [
+                    {
+                      "Node Type": "FilterExec",
+                      "Details": "FilterExec: a@0 > 5",
+                      "Plans": [
+                        {
+                          "Node Type": "EmptyExec",
+                          "Details": "EmptyExec",
+                          "Plans": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+            "#);
+        }
     }
 }

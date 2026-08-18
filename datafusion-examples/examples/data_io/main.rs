@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
+//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|object_store_spill|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -35,6 +35,9 @@
 //!
 //! - `json_shredding`
 //!   (file: json_shredding.rs, desc: Implement filter rewriting for JSON shredding)
+//!
+//! - `object_store_spill`
+//!   (file: object_store_spill.rs, desc: Use ObjectStore-backed spill files)
 //!
 //! - `parquet_adv_idx`
 //!   (file: parquet_advanced_index.rs, desc: Create a secondary index across multiple parquet files)
@@ -54,6 +57,9 @@
 //! - `parquet_idx`
 //!   (file: parquet_index.rs, desc: Create a secondary index)
 //!
+//! - `partitioned_file_schema`
+//!   (file: partitioned_file_schema.rs, desc: Provide an explicit arrow schema for a PartitionedFile)
+//!
 //! - `query_http_csv`
 //!   (file: query_http_csv.rs, desc: Query CSV files via HTTP)
 //!
@@ -63,12 +69,14 @@
 mod catalog;
 mod in_memory_object_store;
 mod json_shredding;
+mod object_store_spill;
 mod parquet_advanced_index;
 mod parquet_embedded_index;
 mod parquet_encrypted;
 mod parquet_encrypted_with_kms;
 mod parquet_exec_visitor;
 mod parquet_index;
+mod partitioned_file_schema;
 mod query_http_csv;
 mod remote_catalog;
 
@@ -83,12 +91,14 @@ enum ExampleKind {
     Catalog,
     InMemoryObjectStore,
     JsonShredding,
+    ObjectStoreSpill,
     ParquetAdvIdx,
     ParquetEmbIdx,
     ParquetEnc,
     ParquetEncWithKms,
     ParquetExecVisitor,
     ParquetIdx,
+    PartitionedFileSchema,
     QueryHttpCsv,
     RemoteCatalog,
 }
@@ -113,6 +123,9 @@ impl ExampleKind {
                 in_memory_object_store::in_memory_object_store().await?
             }
             ExampleKind::JsonShredding => json_shredding::json_shredding().await?,
+            ExampleKind::ObjectStoreSpill => {
+                object_store_spill::object_store_spill().await?
+            }
             ExampleKind::ParquetAdvIdx => {
                 parquet_advanced_index::parquet_advanced_index().await?
             }
@@ -127,6 +140,9 @@ impl ExampleKind {
                 parquet_exec_visitor::parquet_exec_visitor().await?
             }
             ExampleKind::ParquetIdx => parquet_index::parquet_index().await?,
+            ExampleKind::PartitionedFileSchema => {
+                partitioned_file_schema::read_partitioned_file().await?
+            }
             ExampleKind::QueryHttpCsv => query_http_csv::query_http_csv().await?,
             ExampleKind::RemoteCatalog => remote_catalog::remote_catalog().await?,
         }

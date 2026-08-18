@@ -21,7 +21,6 @@
 //! This file is organized as:
 //! - Test runners that spawn individual test processes
 //! - Test cases that contain the actual validation logic
-use std::{process::Command, str};
 
 use crate::memory_limit::memory_limit_validation::utils;
 
@@ -32,67 +31,40 @@ use crate::memory_limit::memory_limit_validation::utils;
 
 #[test]
 fn memory_limit_validation_runner_works_runner() {
-    spawn_test_process("memory_limit_validation_runner_works");
+    utils::spawn_test_process(
+        "sort_mem_validation",
+        "memory_limit_validation_runner_works",
+    );
 }
 
 #[test]
 fn sort_no_mem_limit_runner() {
-    spawn_test_process("sort_no_mem_limit");
+    utils::spawn_test_process("sort_mem_validation", "sort_no_mem_limit");
 }
 
 #[test]
 fn sort_with_mem_limit_1_runner() {
-    spawn_test_process("sort_with_mem_limit_1");
+    utils::spawn_test_process("sort_mem_validation", "sort_with_mem_limit_1");
 }
 
 #[test]
 fn sort_with_mem_limit_2_runner() {
-    spawn_test_process("sort_with_mem_limit_2");
+    utils::spawn_test_process("sort_mem_validation", "sort_with_mem_limit_2");
 }
 
 #[test]
 fn sort_with_mem_limit_3_runner() {
-    spawn_test_process("sort_with_mem_limit_3");
+    utils::spawn_test_process("sort_mem_validation", "sort_with_mem_limit_3");
 }
 
 #[test]
 fn sort_with_mem_limit_2_cols_1_runner() {
-    spawn_test_process("sort_with_mem_limit_2_cols_1");
+    utils::spawn_test_process("sort_mem_validation", "sort_with_mem_limit_2_cols_1");
 }
 
 #[test]
 fn sort_with_mem_limit_2_cols_2_runner() {
-    spawn_test_process("sort_with_mem_limit_2_cols_2");
-}
-
-/// Helper function that executes a test in a separate process with the required
-/// environment variable set. Re-invokes the current test binary directly,
-/// avoiding cargo overhead and recompilation.
-fn spawn_test_process(test: &str) {
-    let test_path =
-        format!("memory_limit::memory_limit_validation::sort_mem_validation::{test}");
-
-    let exe = std::env::current_exe().expect("Failed to get test binary path");
-
-    let output = Command::new(exe)
-        .arg(&test_path)
-        .arg("--exact")
-        .arg("--nocapture")
-        .env("DATAFUSION_TEST_MEM_LIMIT_VALIDATION", "1")
-        .output()
-        .expect("Failed to execute test command");
-
-    let stdout = str::from_utf8(&output.stdout).unwrap_or("");
-    let stderr = str::from_utf8(&output.stderr).unwrap_or("");
-
-    assert!(
-        output.status.success(),
-        "Test '{}' failed with status: {}\nstdout:\n{}\nstderr:\n{}",
-        test,
-        output.status,
-        stdout,
-        stderr
-    );
+    utils::spawn_test_process("sort_mem_validation", "sort_with_mem_limit_2_cols_2");
 }
 
 // ===========================================================================

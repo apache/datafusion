@@ -57,12 +57,15 @@
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::buffer::BufferExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
@@ -104,8 +107,12 @@ impl PhysicalOptimizerRule for PushdownSort {
                 let required_ordering = sort_child.expr();
                 match sort_input.try_pushdown_sort(required_ordering)? {
                     SortOrderPushdownResult::Exact { inner } => {
+                        // Preserve fetch (LIMIT) from the eliminated SortExec.
+                        // Use LocalLimitExec (not Global) since input is multi-partition.
                         let inner = if let Some(fetch) = sort_child.fetch() {
-                            inner.with_fetch(Some(fetch)).unwrap_or(inner)
+                            inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
+                                Arc::new(LocalLimitExec::new(inner, fetch))
+                            })
                         } else {
                             inner
                         };
@@ -128,7 +135,15 @@ impl PhysicalOptimizerRule for PushdownSort {
                             Arc::new(new_sort),
                         )
                         .with_fetch(spm.fetch());
-                        return Ok(Transformed::yes(Arc::new(new_spm)));
+                        // The replacement already has the required
+                        // `SortPreservingMergeExec` parent. Do not descend
+                        // into its `SortExec` child and treat it as a
+                        // standalone TopK.
+                        return Ok(Transformed::new(
+                            Arc::new(new_spm),
+                            true,
+                            TreeNodeRecursion::Jump,
+                        ));
                     }
                     SortOrderPushdownResult::Unsupported => {
                         return Ok(Transformed::no(plan));
@@ -149,26 +164,53 @@ impl PhysicalOptimizerRule for PushdownSort {
             match sort_input.try_pushdown_sort(required_ordering)? {
                 SortOrderPushdownResult::Exact { inner } => {
                     // Data source guarantees perfect ordering - remove the Sort operator.
-                    // Preserve the fetch (LIMIT) from the original SortExec so the
-                    // data source can stop reading early.
-                    let inner = if let Some(fetch) = sort_exec.fetch() {
-                        inner.with_fetch(Some(fetch)).unwrap_or(inner)
+                    //
+                    // If the SortExec carried a fetch (LIMIT), we must preserve it.
+                    // First try pushing the limit into the source via `with_fetch()`.
+                    // If the source doesn't support `with_fetch`, fall back to
+                    // wrapping with GlobalLimitExec.
+                    if let Some(fetch) = sort_exec.fetch() {
+                        let inner = inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
+                            Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                        });
+                        Ok(Transformed::yes(inner))
                     } else {
-                        inner
-                    };
-                    Ok(Transformed::yes(inner))
+                        Ok(Transformed::yes(inner))
+                    }
                 }
                 SortOrderPushdownResult::Inexact { inner } => {
                     // Data source is optimized for the ordering but not perfectly sorted
                     // Keep the Sort operator but use the optimized input
                     // Benefits: TopK queries can terminate early, better cache locality
-                    Ok(Transformed::yes(Arc::new(
+                    // A standalone multi-partition TopK still needs a global
+                    // merge; otherwise a later coalesce can concatenate
+                    // locally sorted partitions.
+                    let preserve_partitioning = sort_exec.preserve_partitioning();
+                    let needs_global_topk =
+                        preserve_partitioning && sort_exec.fetch().is_some();
+                    let input_partitions = inner.output_partitioning().partition_count();
+                    let new_sort: Arc<dyn ExecutionPlan> = Arc::new(
                         SortExec::new(required_ordering.clone(), inner)
                             .with_fetch(sort_exec.fetch())
-                            .with_preserve_partitioning(
-                                sort_exec.preserve_partitioning(),
-                            ),
-                    )))
+                            .with_preserve_partitioning(preserve_partitioning),
+                    );
+                    if needs_global_topk && input_partitions > 1 {
+                        let new_spm = SortPreservingMergeExec::new(
+                            required_ordering.clone(),
+                            new_sort,
+                        )
+                        .with_fetch(sort_exec.fetch());
+                        // Do not descend into the newly inserted
+                        // `SortExec`, or this standalone branch will wrap it
+                        // in another `SortPreservingMergeExec`.
+                        Ok(Transformed::new(
+                            Arc::new(new_spm),
+                            true,
+                            TreeNodeRecursion::Jump,
+                        ))
+                    } else {
+                        Ok(Transformed::yes(new_sort))
+                    }
                 }
                 SortOrderPushdownResult::Unsupported => {
                     // Cannot optimize for this ordering - no change

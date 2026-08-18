@@ -1,0 +1,192 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## array_scale
+
+# General case: scale vector by positive scalar
+query ?
+select array_scale([1.0, 2.0, 3.0], 2.0);
+----
+[2.0, 4.0, 6.0]
+
+# Scale by 1 returns the same array
+query ?
+select array_scale([1.0, 2.0, 3.0], 1.0);
+----
+[1.0, 2.0, 3.0]
+
+# Scale by 0 returns zeros
+query ?
+select array_scale([1.0, 2.0, 3.0], 0.0);
+----
+[0.0, 0.0, 0.0]
+
+# Scale by negative scalar
+query ?
+select array_scale([1.0, 2.0, 3.0], -1.0);
+----
+[-1.0, -2.0, -3.0]
+
+# Scale by fractional scalar
+query ?
+select array_scale([2.0, 4.0, 6.0], 0.5);
+----
+[1.0, 2.0, 3.0]
+
+# Single-element array
+query ?
+select array_scale([5.0], 3.0);
+----
+[15.0]
+
+# Bare NULL array returns NULL
+query ?
+select array_scale(NULL, 2.0);
+----
+NULL
+
+# NULL scalar returns NULL row (whole-row null because the scalar applies uniformly)
+query ?
+select array_scale([1.0, 2.0, 3.0], NULL);
+----
+NULL
+
+# Both NULL returns NULL
+query ?
+select array_scale(NULL, NULL);
+----
+NULL
+
+# NULL element in array propagates only to that position
+query ?
+select array_scale([1.0, NULL, 3.0], 2.0);
+----
+[2.0, NULL, 6.0]
+
+# All-NULL elements with valid scalar: each position remains NULL
+query ?
+select array_scale([NULL, NULL], 5.0);
+----
+[NULL, NULL]
+
+# LargeList support
+query ?
+select array_scale(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'), 2.0);
+----
+[2.0, 4.0, 6.0]
+
+# FixedSizeList input (coerced to List)
+query ?
+select array_scale(arrow_cast([1.0, 2.0, 3.0], 'FixedSizeList(3, Float64)'), 2.0);
+----
+[2.0, 4.0, 6.0]
+
+# Float32 inner type (coerced to Float64)
+query ?
+select array_scale(arrow_cast([1.0, 2.0, 3.0], 'List(Float32)'), 2.0);
+----
+[2.0, 4.0, 6.0]
+
+# Int64 inner type (coerced to Float64)
+query ?
+select array_scale(arrow_cast([1, 2, 3], 'List(Int64)'), 2);
+----
+[2.0, 4.0, 6.0]
+
+# Integer literals on both sides (coerced to Float64)
+query ?
+select array_scale([1, 2, 3], 2);
+----
+[2.0, 4.0, 6.0]
+
+# Integer scalar with Float64 list
+query ?
+select array_scale([1.0, 2.0, 3.0], 3);
+----
+[3.0, 6.0, 9.0]
+
+# Unsupported non-numeric scalar (plan error)
+query error array_scale second argument must be numeric
+select array_scale([1.0, 2.0, 3.0], 'foo');
+
+# Unsupported non-list first argument (plan error)
+query error array_scale first argument must be a list type
+select array_scale(1.0, 2.0);
+
+# Multi-row query: constant scalar broadcast across rows
+query ?
+select array_scale(column1, 2.0) from (values
+    (make_array(1.0, 2.0, 3.0)),
+    (make_array(0.0, 0.0)),
+    (make_array(1.0, NULL, 3.0)),
+    (NULL)
+) as t(column1);
+----
+[2.0, 4.0, 6.0]
+[0.0, 0.0]
+[2.0, NULL, 6.0]
+NULL
+
+# Multi-row query: scalar from a column (varies per row)
+query ?
+select array_scale(column1, column2) from (values
+    (make_array(1.0, 2.0, 3.0), 2.0),
+    (make_array(1.0, 2.0), 0.5),
+    (make_array(1.0, 2.0), arrow_cast(NULL, 'Float64')),
+    (NULL, 3.0)
+) as t(column1, column2);
+----
+[2.0, 4.0, 6.0]
+[0.5, 1.0]
+NULL
+NULL
+
+# Empty array: array_scale of an empty array yields an empty array
+query ?
+select array_scale(arrow_cast(make_array(), 'List(Float64)'), 2.0);
+----
+[]
+
+# Wrong arity (zero args)
+query error array_scale function requires 2 arguments, got 0
+select array_scale();
+
+# Wrong arity (one arg)
+query error array_scale function requires 2 arguments, got 1
+select array_scale([1.0, 2.0]);
+
+# Return type matches input list shape: List(Float64) input yields List(Float64) output
+query ?T
+select array_scale([1.0, 2.0], 3.0), arrow_typeof(array_scale([1.0, 2.0], 3.0));
+----
+[3.0, 6.0] List(Float64)
+
+# list_scale alias produces the same result
+query ?
+select list_scale([1.0, 2.0, 3.0], 2.0);
+----
+[2.0, 4.0, 6.0]
+
+# list_scale alias with NULL scalar propagates correctly
+query ?
+select list_scale(column1, column2) from (values
+    (make_array(1.0, 2.0), 2.0),
+    (make_array(1.0, 2.0), arrow_cast(NULL, 'Float64'))
+) as t(column1, column2);
+----
+[2.0, 4.0]
+NULL

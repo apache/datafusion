@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
 use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 /// FFI safe version of [`TableProviderFilterPushDown`].
-#[repr(C)]
-#[derive(StableAbi)]
+#[expect(non_camel_case_types)]
+#[repr(u8)]
 pub enum FFI_TableProviderFilterPushDown {
     Unsupported,
     Inexact,
@@ -57,7 +56,7 @@ impl From<&TableProviderFilterPushDown> for FFI_TableProviderFilterPushDown {
 
 /// FFI safe version of [`TableType`].
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StableAbi)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FFI_TableType {
     Base,
     View,

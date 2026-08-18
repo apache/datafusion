@@ -18,6 +18,8 @@
 //! `lead` and `lag` window function implementations
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
+use arrow::array::UInt64Builder;
+use arrow::compute::{interleave, take};
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
@@ -36,7 +38,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::hash::Hash;
-use std::ops::{Neg, Range};
+use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
 get_or_init_udwf!(
@@ -116,7 +118,7 @@ impl WindowShiftKind {
     fn shift_offset(&self, value: Option<i64>) -> i64 {
         match self {
             WindowShiftKind::Lag => value.unwrap_or(1),
-            WindowShiftKind::Lead => value.map(|v| v.neg()).unwrap_or(-1),
+            WindowShiftKind::Lead => value.map_or(-1, |v| v.wrapping_neg()),
         }
     }
 }
@@ -266,7 +268,7 @@ impl WindowUDFImpl for WindowShift {
                 .map(|n| self.kind.shift_offset(n))
                 .map(|offset| {
                     if partition_evaluator_args.is_reversed() {
-                        -offset
+                        offset.wrapping_neg()
                     } else {
                         offset
                     }
@@ -410,6 +412,61 @@ struct WindowShiftEvaluator {
     non_null_offsets: VecDeque<usize>,
 }
 
+fn offset_magnitude(offset: i64) -> usize {
+    let offset = offset.unsigned_abs();
+    if offset > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        offset as usize
+    }
+}
+
+enum ShiftIndexBuilder {
+    Take(UInt64Builder),
+    Interleave(Vec<(usize, usize)>),
+}
+
+impl ShiftIndexBuilder {
+    fn new(capacity: usize, default_is_null: bool) -> Self {
+        if default_is_null {
+            Self::Take(UInt64Builder::with_capacity(capacity))
+        } else {
+            Self::Interleave(Vec::with_capacity(capacity))
+        }
+    }
+
+    fn append_option(&mut self, index: Option<usize>) {
+        match self {
+            Self::Take(indices) => {
+                indices.append_option(index.map(|index| index as u64));
+            }
+            Self::Interleave(indices) => {
+                // `interleave` receives `[array, default]`.
+                indices.push(index.map_or((1, 0), |index| (0, index)));
+            }
+        }
+    }
+
+    fn finish(
+        self,
+        array: &ArrayRef,
+        default_value: &ScalarValue,
+    ) -> Result<ArrayRef, DataFusionError> {
+        match self {
+            Self::Take(mut indices) => {
+                let indices = indices.finish();
+                take(array.as_ref(), &indices, None)
+                    .map_err(|error| arrow_datafusion_err!(error))
+            }
+            Self::Interleave(indices) => {
+                let default = default_value.to_array_of_size(1)?;
+                interleave(&[array.as_ref(), default.as_ref()], &indices)
+                    .map_err(|error| arrow_datafusion_err!(error))
+            }
+        }
+    }
+}
+
 impl WindowShiftEvaluator {
     fn is_lag(&self) -> bool {
         // Mode is LAG, when shift_offset is positive
@@ -424,49 +481,57 @@ fn evaluate_all_with_ignore_null(
     default_value: &ScalarValue,
     is_lag: bool,
 ) -> Result<ArrayRef, DataFusionError> {
-    let valid_indices: Vec<usize> =
-        array.nulls().unwrap().valid_indices().collect::<Vec<_>>();
-    let direction = !is_lag;
-    let new_array_results: Result<Vec<_>, DataFusionError> = (0..array.len())
-        .map(|id| {
-            let result_index = match valid_indices.binary_search(&id) {
-                Ok(pos) => if direction {
-                    pos.checked_add(offset as usize)
-                } else {
-                    pos.checked_sub(offset.unsigned_abs() as usize)
-                }
-                .and_then(|new_pos| {
-                    if new_pos < valid_indices.len() {
-                        Some(valid_indices[new_pos])
-                    } else {
-                        None
-                    }
-                }),
-                Err(pos) => if direction {
-                    pos.checked_add(offset as usize)
-                } else if pos > 0 {
-                    pos.checked_sub(offset.unsigned_abs() as usize)
-                } else {
-                    None
-                }
-                .and_then(|new_pos| {
-                    if new_pos < valid_indices.len() {
-                        Some(valid_indices[new_pos])
-                    } else {
-                        None
-                    }
-                }),
+    if offset == 0 {
+        return Ok(Arc::clone(array));
+    }
+
+    // Arrays without NULLs do not necessarily have a null bitmap.
+    let Some(nulls) = array.nulls() else {
+        return shift_with_default_value(array, offset, default_value);
+    };
+
+    let shift = offset_magnitude(offset);
+    if shift >= array.len() {
+        return default_value.to_array_of_size(array.len());
+    }
+
+    let mut indices = ShiftIndexBuilder::new(array.len(), default_value.is_null());
+    if is_lag {
+        let mut preceding = VecDeque::new();
+        for index in 0..array.len() {
+            let result_index = if preceding.len() == shift {
+                preceding.front().copied()
+            } else {
+                None
             };
+            indices.append_option(result_index);
 
-            match result_index {
-                Some(index) => ScalarValue::try_from_array(array, index),
-                None => Ok(default_value.clone()),
+            if nulls.is_valid(index) {
+                if preceding.len() == shift {
+                    preceding.pop_front();
+                }
+                preceding.push_back(index);
             }
-        })
-        .collect();
+        }
+    } else {
+        let mut following = VecDeque::new();
+        let mut next_index = 0;
+        for index in 0..array.len() {
+            while following.front().is_some_and(|next| *next <= index) {
+                following.pop_front();
+            }
+            next_index = next_index.max(index.saturating_add(1));
+            while following.len() < shift && next_index < array.len() {
+                if nulls.is_valid(next_index) {
+                    following.push_back(next_index);
+                }
+                next_index += 1;
+            }
+            indices.append_option(following.get(shift - 1).copied());
+        }
+    }
 
-    let new_array = new_array_results?;
-    ScalarValue::iter_to_array(new_array)
+    indices.finish(array, default_value)
 }
 // TODO: change the original arrow::compute::kernels::window::shift impl to support an optional default value
 fn shift_with_default_value(
@@ -503,13 +568,14 @@ fn shift_with_default_value(
 
 impl PartitionEvaluator for WindowShiftEvaluator {
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
+        let offset = offset_magnitude(self.shift_offset);
+
         if self.is_lag() {
-            let start = if self.non_null_offsets.len() == self.shift_offset as usize {
+            let start = if self.non_null_offsets.len() == offset {
                 // How many rows needed previous than the current row to get necessary lag result
                 let offset: usize = self.non_null_offsets.iter().sum();
                 idx.saturating_sub(offset)
             } else if !self.ignore_nulls {
-                let offset = self.shift_offset as usize;
                 idx.saturating_sub(offset)
             } else {
                 0
@@ -517,13 +583,12 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             let end = idx + 1;
             Ok(Range { start, end })
         } else {
-            let end = if self.non_null_offsets.len() == (-self.shift_offset) as usize {
+            let end = if self.non_null_offsets.len() == offset {
                 // How many rows needed further than the current row to get necessary lead result
                 let offset: usize = self.non_null_offsets.iter().sum();
-                min(idx + offset + 1, n_rows)
+                min(idx.saturating_add(offset).saturating_add(1), n_rows)
             } else if !self.ignore_nulls {
-                let offset = (-self.shift_offset) as usize;
-                min(idx + offset, n_rows)
+                min(idx.saturating_add(offset), n_rows)
             } else {
                 n_rows
             };
@@ -546,20 +611,26 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 
         // LAG mode
         let i = if self.is_lag() {
-            (range.end as i64 - self.shift_offset - 1) as usize
+            range
+                .end
+                .checked_sub(1)
+                .and_then(|end| (end as i64).checked_sub(self.shift_offset))
+                .and_then(|value| usize::try_from(value).ok())
         } else {
             // LEAD mode
-            (range.start as i64 - self.shift_offset) as usize
+            (range.start as i64)
+                .checked_sub(self.shift_offset)
+                .and_then(|value| usize::try_from(value).ok())
         };
-
-        let mut idx: Option<usize> = if i < len { Some(i) } else { None };
+        let mut idx: Option<usize> = i.filter(|i| *i < len);
 
         // LAG with IGNORE NULLS calculated as the current row index - offset, but only for non-NULL rows
         // If current row index points to NULL value the row is NOT counted
         if self.ignore_nulls && self.is_lag() {
             // LAG when NULLS are ignored.
             // Find the nonNULL row index that shifted by offset comparing to current row index
-            idx = if self.non_null_offsets.len() == self.shift_offset as usize {
+            let shift_offset = offset_magnitude(self.shift_offset);
+            idx = if self.non_null_offsets.len() == shift_offset {
                 let total_offset: usize = self.non_null_offsets.iter().sum();
                 Some(range.end - 1 - total_offset)
             } else {
@@ -570,7 +641,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             if array.is_valid(range.end - 1) {
                 // Non-null add new offset
                 self.non_null_offsets.push_back(1);
-                if self.non_null_offsets.len() > self.shift_offset as usize {
+                if self.non_null_offsets.len() > shift_offset {
                     // WE do not need to keep track of more than `lag number of offset` values.
                     self.non_null_offsets.pop_front();
                 }
@@ -582,7 +653,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         } else if self.ignore_nulls && !self.is_lag() {
             // LEAD when NULLS are ignored.
             // Stores the necessary non-null entry number further than the current row.
-            let non_null_row_count = (-self.shift_offset) as usize;
+            let non_null_row_count = offset_magnitude(self.shift_offset);
 
             if self.non_null_offsets.is_empty() {
                 // When empty, fill non_null offsets with the data further than the current row.
@@ -596,7 +667,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                     }
                     // It is enough to keep track of `non_null_row_count + 1` non-null offset.
                     // further data is unnecessary for the result.
-                    if self.non_null_offsets.len() == non_null_row_count + 1 {
+                    if self.non_null_offsets.len() == non_null_row_count.saturating_add(1)
+                    {
                         break;
                     }
                 }
@@ -672,7 +744,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 mod tests {
     use super::*;
     use arrow::array::*;
-    use datafusion_common::cast::as_int32_array;
+    use arrow::datatypes::Int8Type;
+    use datafusion_common::cast::{as_dictionary_array, as_int32_array, as_string_array};
     use datafusion_physical_expr::expressions::{Column, Literal};
 
     fn test_i32_result(
@@ -821,5 +894,137 @@ mod tests {
             .iter()
             .collect::<Int32Array>(),
         )
+    }
+
+    #[test]
+    fn test_evaluate_all_with_ignore_null() -> Result<()> {
+        let input: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,
+            Some(10),
+            None,
+            Some(20),
+            Some(30),
+            None,
+        ]));
+
+        let cases = [
+            (
+                1,
+                ScalarValue::Int32(None),
+                Int32Array::from(vec![
+                    None,
+                    None,
+                    Some(10),
+                    Some(10),
+                    Some(20),
+                    Some(30),
+                ]),
+            ),
+            (
+                -1,
+                ScalarValue::Int32(None),
+                Int32Array::from(vec![
+                    Some(10),
+                    Some(20),
+                    Some(20),
+                    Some(30),
+                    None,
+                    None,
+                ]),
+            ),
+            (
+                2,
+                ScalarValue::Int32(Some(-1)),
+                Int32Array::from(vec![
+                    Some(-1),
+                    Some(-1),
+                    Some(-1),
+                    Some(-1),
+                    Some(10),
+                    Some(20),
+                ]),
+            ),
+            (
+                -2,
+                ScalarValue::Int32(Some(-1)),
+                Int32Array::from(vec![
+                    Some(20),
+                    Some(30),
+                    Some(30),
+                    Some(-1),
+                    Some(-1),
+                    Some(-1),
+                ]),
+            ),
+            (
+                0,
+                ScalarValue::Int32(Some(-1)),
+                Int32Array::from(vec![None, Some(10), None, Some(20), Some(30), None]),
+            ),
+        ];
+
+        for (offset, default_value, expected) in cases {
+            let actual = evaluate_all_with_ignore_null(
+                &input,
+                offset,
+                &default_value,
+                offset > 0,
+            )?;
+            assert_eq!(expected, *as_int32_array(&actual)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_nulls_dictionary_with_bounded_keys() -> Result<()> {
+        let keys =
+            Int8Array::from_iter(std::iter::once(None).chain((0_i8..=127).map(Some)));
+        let values =
+            StringArray::from_iter_values((0..128).map(|index| format!("value-{index}")));
+        let input: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            keys,
+            Arc::new(values),
+        )?);
+        let default_value = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Utf8(Some("default".to_string()))),
+        );
+
+        let actual = evaluate_all_with_ignore_null(&input, 1, &default_value, true)?;
+        let actual = as_dictionary_array::<Int8Type>(actual.as_ref())?;
+        let values = as_string_array(actual.values().as_ref())?;
+
+        assert_eq!(actual.len(), 129);
+        assert_eq!(values.len(), 128);
+        for index in 0..2 {
+            let key = actual.key(index).expect("non-null default");
+            assert_eq!(values.value(key), "default");
+        }
+        for index in 2..actual.len() {
+            let key = actual.key(index).expect("selected value");
+            assert_eq!(values.value(key), format!("value-{}", index - 2));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_nulls_without_null_bitmap() -> Result<()> {
+        let input = Int32Array::from(vec![1, 2, 3]);
+        assert!(input.nulls().is_none());
+        let input: ArrayRef = Arc::new(input);
+
+        for (offset, expected) in [
+            (1, Int32Array::from(vec![None, Some(1), Some(2)])),
+            (-1, Int32Array::from(vec![Some(2), Some(3), None])),
+        ] {
+            let actual = evaluate_all_with_ignore_null(
+                &input,
+                offset,
+                &ScalarValue::Int32(None),
+                offset > 0,
+            )?;
+            assert_eq!(expected, *as_int32_array(&actual)?);
+        }
+        Ok(())
     }
 }

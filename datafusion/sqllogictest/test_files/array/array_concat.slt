@@ -121,6 +121,38 @@ select
 ----
 [1, 2, 3] List(Utf8View)
 
+# Concatenating mixed list and large list — return type widens to LargeList
+query ?T
+select
+    array_concat(make_array(1, 2), arrow_cast([3, 4], 'LargeList(Int64)')),
+    arrow_typeof(array_concat(make_array(1, 2), arrow_cast([3, 4], 'LargeList(Int64)')));
+----
+[1, 2, 3, 4] LargeList(Int64)
+
+# Reverse argument order: LargeList first, plain list second
+query ?T
+select
+    array_concat(arrow_cast([1, 2], 'LargeList(Int64)'), make_array(3, 4)),
+    arrow_typeof(array_concat(arrow_cast([1, 2], 'LargeList(Int64)'), make_array(3, 4)));
+----
+[1, 2, 3, 4] LargeList(Int64)
+
+# FixedSizeList combined with LargeList — also widens to LargeList
+query ?T
+select
+    array_concat(arrow_cast([1, 2], 'FixedSizeList(2, Int64)'), arrow_cast([3, 4], 'LargeList(Int64)')),
+    arrow_typeof(array_concat(arrow_cast([1, 2], 'FixedSizeList(2, Int64)'), arrow_cast([3, 4], 'LargeList(Int64)')));
+----
+[1, 2, 3, 4] LargeList(Int64)
+
+# Three-way mix: List, LargeList, List
+query ?T
+select
+    array_concat(make_array(1, 2), arrow_cast([3], 'LargeList(Int64)'), make_array(4, 5)),
+    arrow_typeof(array_concat(make_array(1, 2), arrow_cast([3], 'LargeList(Int64)'), make_array(4, 5)));
+----
+[1, 2, 3, 4, 5] LargeList(Int64)
+
 # array_concat with NULL elements inside arrays
 query ?
 select array_concat([1, NULL, 3], [NULL, 5]);
@@ -386,6 +418,25 @@ select array_concat(make_array(column3), column1, column2) from arrays_values_v2
 [NULL, NULL, 1, NULL, 21]
 [NULL, 11, 12]
 [NULL]
+
+# array_concat derives a fresh return type from the unified element types rather
+# than cloning an input's, so its output field is always the default nullable
+# `item` regardless of the inputs' inner fields
+query ?T
+select
+  array_concat(arrow_cast(column1, 'List(non-null Int64)'), make_array(3)),
+  arrow_typeof(array_concat(arrow_cast(column1, 'List(non-null Int64)'), make_array(3)))
+from values (make_array(1, 2));
+----
+[1, 2, 3] List(Int64)
+
+query ?T
+select
+  array_concat(arrow_cast(column1, 'List(Int64, field: ''element'')'), make_array(3)),
+  arrow_typeof(array_concat(arrow_cast(column1, 'List(Int64, field: ''element'')'), make_array(3)))
+from values (make_array(1, 2));
+----
+[1, 2, 3] List(Int64)
 
 
 include ./cleanup.slt.part

@@ -18,31 +18,108 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{RResult, RStr};
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::ExecutionPlan;
+use stabby::string::String as SString;
 use tokio::runtime::Handle;
 
 use crate::config::FFI_ConfigOptions;
 use crate::execution_plan::FFI_ExecutionPlan;
-use crate::util::FFIResult;
-use crate::{df_result, rresult_return};
+use crate::util::FFI_Result;
+use crate::{df_result, sresult_return};
+
+/// A stable struct for sharing [`PhysicalOptimizerContext`] across FFI boundaries.
+///
+/// This provides access to configuration options for optimizer rules that need
+/// extended context beyond the plan itself.
+#[repr(C)]
+#[derive(Debug)]
+pub struct FFI_PhysicalOptimizerContext {
+    pub config_options:
+        unsafe extern "C" fn(&FFI_PhysicalOptimizerContext) -> FFI_ConfigOptions,
+
+    /// Release the memory of the private data.
+    pub release: unsafe extern "C" fn(&mut FFI_PhysicalOptimizerContext),
+
+    /// Internal data. Only accessed by the provider.
+    pub private_data: *const c_void,
+}
+
+unsafe impl Send for FFI_PhysicalOptimizerContext {}
+unsafe impl Sync for FFI_PhysicalOptimizerContext {}
+
+struct OptimizerContextPrivateData {
+    config: ConfigOptions,
+}
+
+impl FFI_PhysicalOptimizerContext {
+    pub fn new(context: &dyn PhysicalOptimizerContext) -> Self {
+        let private_data = Box::new(OptimizerContextPrivateData {
+            config: context.config_options().clone(),
+        });
+        let private_data = Box::into_raw(private_data) as *const c_void;
+
+        Self {
+            config_options: context_config_options_fn,
+            release: context_release_fn,
+            private_data,
+        }
+    }
+
+    fn inner(&self) -> &OptimizerContextPrivateData {
+        unsafe { &*(self.private_data as *const OptimizerContextPrivateData) }
+    }
+}
+
+impl Drop for FFI_PhysicalOptimizerContext {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
+}
+
+unsafe extern "C" fn context_config_options_fn(
+    ctx: &FFI_PhysicalOptimizerContext,
+) -> FFI_ConfigOptions {
+    FFI_ConfigOptions::from(&ctx.inner().config)
+}
+
+unsafe extern "C" fn context_release_fn(ctx: &mut FFI_PhysicalOptimizerContext) {
+    if !ctx.private_data.is_null() {
+        unsafe {
+            let _ = Box::from_raw(ctx.private_data as *mut OptimizerContextPrivateData);
+        }
+        ctx.private_data = std::ptr::null();
+    }
+}
+
+/// Reconstructed [`PhysicalOptimizerContext`] on the consumer side of FFI.
+///
+/// `StatisticsRegistry` is not plumbed because it contains trait object vtables
+/// that are only valid within the originating library.
+struct ForeignOptimizerContext {
+    config: ConfigOptions,
+}
+
+impl PhysicalOptimizerContext for ForeignOptimizerContext {
+    fn config_options(&self) -> &ConfigOptions {
+        &self.config
+    }
+}
 
 /// A stable struct for sharing [`PhysicalOptimizerRule`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_PhysicalOptimizerRule {
     pub optimize: unsafe extern "C" fn(
         &Self,
         plan: &FFI_ExecutionPlan,
         config: FFI_ConfigOptions,
-    ) -> FFIResult<FFI_ExecutionPlan>,
+    ) -> FFI_Result<FFI_ExecutionPlan>,
 
-    pub name: unsafe extern "C" fn(&Self) -> RStr,
+    pub name: unsafe extern "C" fn(&Self) -> SString,
 
     pub schema_check: unsafe extern "C" fn(&Self) -> bool,
 
@@ -55,6 +132,12 @@ pub struct FFI_PhysicalOptimizerRule {
 
     /// Return the major DataFusion version number of this rule.
     pub version: unsafe extern "C" fn() -> u64,
+
+    pub optimize_with_context: unsafe extern "C" fn(
+        &Self,
+        plan: &FFI_ExecutionPlan,
+        context: &FFI_PhysicalOptimizerContext,
+    ) -> FFI_Result<FFI_ExecutionPlan>,
 
     /// Internal data. This is only to be accessed by the provider of the rule.
     /// A [`ForeignPhysicalOptimizerRule`] should never attempt to access this data.
@@ -89,17 +172,34 @@ unsafe extern "C" fn optimize_fn_wrapper(
     rule: &FFI_PhysicalOptimizerRule,
     plan: &FFI_ExecutionPlan,
     config: FFI_ConfigOptions,
-) -> FFIResult<FFI_ExecutionPlan> {
+) -> FFI_Result<FFI_ExecutionPlan> {
     let runtime = rule.runtime();
     let rule = rule.inner();
-    let plan: Arc<dyn ExecutionPlan> = rresult_return!(plan.try_into());
-    let config = rresult_return!(ConfigOptions::try_from(config));
-    let optimized_plan = rresult_return!(rule.optimize(plan, &config));
+    let plan: Arc<dyn ExecutionPlan> = sresult_return!(plan.try_into());
+    let config = sresult_return!(ConfigOptions::try_from(config));
+    let optimized_plan = sresult_return!(rule.optimize(plan, &config));
 
-    RResult::ROk(FFI_ExecutionPlan::new(optimized_plan, runtime))
+    FFI_Result::Ok(FFI_ExecutionPlan::new(optimized_plan, runtime))
 }
 
-unsafe extern "C" fn name_fn_wrapper(rule: &FFI_PhysicalOptimizerRule) -> RStr<'_> {
+unsafe extern "C" fn optimize_with_context_fn_wrapper(
+    rule: &FFI_PhysicalOptimizerRule,
+    plan: &FFI_ExecutionPlan,
+    context: &FFI_PhysicalOptimizerContext,
+) -> FFI_Result<FFI_ExecutionPlan> {
+    let runtime = rule.runtime();
+    let inner = rule.inner();
+    let plan: Arc<dyn ExecutionPlan> = sresult_return!(plan.try_into());
+    let config = sresult_return!(ConfigOptions::try_from(unsafe {
+        (context.config_options)(context)
+    }));
+    let foreign_ctx = ForeignOptimizerContext { config };
+    let optimized_plan = sresult_return!(inner.optimize_with_context(plan, &foreign_ctx));
+
+    FFI_Result::Ok(FFI_ExecutionPlan::new(optimized_plan, runtime))
+}
+
+unsafe extern "C" fn name_fn_wrapper(rule: &FFI_PhysicalOptimizerRule) -> SString {
     let rule = rule.inner();
     rule.name().into()
 }
@@ -128,6 +228,7 @@ unsafe extern "C" fn clone_fn_wrapper(
 
     FFI_PhysicalOptimizerRule {
         optimize: optimize_fn_wrapper,
+        optimize_with_context: optimize_with_context_fn_wrapper,
         name: name_fn_wrapper,
         schema_check: schema_check_fn_wrapper,
         clone: clone_fn_wrapper,
@@ -153,7 +254,7 @@ impl FFI_PhysicalOptimizerRule {
         if let Some(rule) = (Arc::clone(&rule) as Arc<dyn std::any::Any>)
             .downcast_ref::<ForeignPhysicalOptimizerRule>()
         {
-            return rule.0.clone();
+            return rule.rule.clone();
         }
 
         let private_data = Box::new(RulePrivateData { rule, runtime });
@@ -161,6 +262,7 @@ impl FFI_PhysicalOptimizerRule {
 
         Self {
             optimize: optimize_fn_wrapper,
+            optimize_with_context: optimize_with_context_fn_wrapper,
             name: name_fn_wrapper,
             schema_check: schema_check_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -177,7 +279,10 @@ impl FFI_PhysicalOptimizerRule {
 /// defined on this struct must only use the stable functions provided in
 /// FFI_PhysicalOptimizerRule to interact with the foreign rule.
 #[derive(Debug)]
-pub struct ForeignPhysicalOptimizerRule(pub FFI_PhysicalOptimizerRule);
+pub struct ForeignPhysicalOptimizerRule {
+    name: String,
+    rule: FFI_PhysicalOptimizerRule,
+}
 
 unsafe impl Send for ForeignPhysicalOptimizerRule {}
 unsafe impl Sync for ForeignPhysicalOptimizerRule {}
@@ -188,8 +293,11 @@ impl From<&FFI_PhysicalOptimizerRule> for Arc<dyn PhysicalOptimizerRule + Send +
             return Arc::clone(rule.inner());
         }
 
-        Arc::new(ForeignPhysicalOptimizerRule(rule.clone()))
-            as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        let name: String = unsafe { (rule.name)(rule).into() };
+        Arc::new(ForeignPhysicalOptimizerRule {
+            name,
+            rule: rule.clone(),
+        }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
     }
 }
 
@@ -209,17 +317,36 @@ impl PhysicalOptimizerRule for ForeignPhysicalOptimizerRule {
         let config_options: FFI_ConfigOptions = config.into();
         let plan = FFI_ExecutionPlan::new(plan, None);
 
-        let optimized_plan =
-            unsafe { df_result!((self.0.optimize)(&self.0, &plan, config_options))? };
+        let optimized_plan = unsafe {
+            df_result!((self.rule.optimize)(&self.rule, &plan, config_options))?
+        };
+        (&optimized_plan).try_into()
+    }
+
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let ffi_context = FFI_PhysicalOptimizerContext::new(context);
+        let plan = FFI_ExecutionPlan::new(plan, None);
+
+        let optimized_plan = unsafe {
+            df_result!((self.rule.optimize_with_context)(
+                &self.rule,
+                &plan,
+                &ffi_context
+            ))?
+        };
         (&optimized_plan).try_into()
     }
 
     fn name(&self) -> &str {
-        unsafe { (self.0.name)(&self.0).as_str() }
+        &self.name
     }
 
     fn schema_check(&self) -> bool {
-        unsafe { (self.0.schema_check)(&self.0) }
+        unsafe { (self.rule.schema_check)(&self.rule) }
     }
 }
 
@@ -230,8 +357,11 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::error::Result;
-    use datafusion_physical_optimizer::PhysicalOptimizerRule;
+    use datafusion_physical_optimizer::{
+        ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule,
+    };
     use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 
     use super::*;
     use crate::execution_plan::tests::EmptyExec;
@@ -256,6 +386,39 @@ mod tests {
 
         fn schema_check(&self) -> bool {
             self.schema_check
+        }
+    }
+
+    /// A rule that returns an error from `optimize` but succeeds when
+    /// called via `optimize_with_context`, proving the context path is taken.
+    #[derive(Debug)]
+    struct ContextAwareRule;
+
+    impl PhysicalOptimizerRule for ContextAwareRule {
+        fn optimize(
+            &self,
+            _plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Err(datafusion_common::DataFusionError::Plan(
+                "optimize should not be called directly".to_string(),
+            ))
+        }
+
+        fn optimize_with_context(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _context: &dyn PhysicalOptimizerContext,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "context_aware_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
         }
     }
 
@@ -341,9 +504,9 @@ mod tests {
         let ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
         let cloned = ffi_rule.clone();
 
-        assert_eq!(unsafe { (ffi_rule.name)(&ffi_rule).as_str() }, unsafe {
-            (cloned.name)(&cloned).as_str()
-        });
+        let name1: String = unsafe { (ffi_rule.name)(&ffi_rule).into() };
+        let name2: String = unsafe { (cloned.name)(&cloned).into() };
+        assert_eq!(name1, name2);
 
         Ok(())
     }
@@ -363,10 +526,74 @@ mod tests {
 
         // Now wrap the foreign rule back into FFI - should not double-wrap
         let re_wrapped = FFI_PhysicalOptimizerRule::new(foreign_rule, None);
-        assert_eq!(
-            unsafe { (re_wrapped.name)(&re_wrapped).as_str() },
-            "no_op_rule"
-        );
+        let name: String = unsafe { (re_wrapped.name)(&re_wrapped).into() };
+        assert_eq!(name, "no_op_rule");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_optimize_with_context_round_trip() -> Result<()> {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(ContextAwareRule);
+
+        let mut ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
+        ffi_rule.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            (&ffi_rule).into();
+
+        let plan = create_test_plan();
+        let config = ConfigOptions::new();
+        let context = ConfigOnlyContext::new(&config);
+
+        let optimized = foreign_rule.optimize_with_context(plan, &context)?;
+        assert_eq!(optimized.name(), "empty-exec");
+
+        Ok(())
+    }
+
+    /// Tests that `optimize_with_context` works even when the caller supplies a
+    /// statistics registry. The registry cannot survive the FFI round-trip (it
+    /// contains trait object vtables that are library-local), so the provider
+    /// side will always see `None`. This test verifies the context-aware path
+    /// still succeeds in that scenario.
+    #[test]
+    fn test_optimize_with_context_with_registry() -> Result<()> {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(ContextAwareRule);
+
+        let mut ffi_rule = FFI_PhysicalOptimizerRule::new(rule, None);
+        ffi_rule.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            (&ffi_rule).into();
+
+        struct ContextWithRegistry {
+            config: ConfigOptions,
+            registry: StatisticsRegistry,
+        }
+
+        impl PhysicalOptimizerContext for ContextWithRegistry {
+            fn config_options(&self) -> &ConfigOptions {
+                &self.config
+            }
+
+            fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+                Some(&self.registry)
+            }
+        }
+
+        let ctx = ContextWithRegistry {
+            config: ConfigOptions::new(),
+            registry: StatisticsRegistry::default_with_builtin_providers(),
+        };
+
+        let plan = create_test_plan();
+        // The optimize_with_context path works, but the registry is not
+        // available on the provider side (it will be None).
+        let optimized = foreign_rule.optimize_with_context(plan, &ctx)?;
+        assert_eq!(optimized.name(), "empty-exec");
 
         Ok(())
     }

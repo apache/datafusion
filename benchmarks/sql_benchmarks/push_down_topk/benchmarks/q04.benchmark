@@ -1,0 +1,21 @@
+-- CROSS JOIN, ORDER BY a column from one side.
+-- Cross joins preserve every row from both sides; the rule pushes the
+-- TopK below the join over the side referenced by ORDER BY.
+
+name Q04
+group push_down_topk
+
+load sql_benchmarks/push_down_topk/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from customer;
+----
+true
+
+run
+SELECT c_custkey, c_acctbal
+FROM customer CROSS JOIN nation
+ORDER BY c_acctbal
+LIMIT 10;
+
+cleanup sql_benchmarks/push_down_topk/init/cleanup.sql

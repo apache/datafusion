@@ -1,0 +1,15 @@
+name Q17
+group tpcds
+
+load sql_benchmarks/tpcds/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from web_site;
+----
+true
+
+run ../datafusion/core/tests/tpc-ds/17.sql
+
+result sql_benchmarks/tpcds/results/sf${BENCH_SIZE:-1}/17.csv
+
+cleanup sql_benchmarks/tpcds/init/cleanup.sql

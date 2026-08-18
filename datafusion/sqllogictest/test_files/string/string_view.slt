@@ -1078,6 +1078,28 @@ logical_plan
 01)Projection: substr_index(test.column1_utf8view, Utf8View("a"), Int64(1)) AS c, substr_index(test.column1_utf8view, Utf8View("a"), Int64(2)) AS c2
 02)--TableScan: test projection=[column1_utf8view]
 
+## Verify Utf8View input produces Utf8View output for SUBSTR_INDEX
+query T
+SELECT arrow_typeof(substr_index(arrow_cast('a.b.c', 'Utf8View'), '.', 1));
+----
+Utf8View
+
+## Verify array path also returns Utf8View for SUBSTR_INDEX
+query T
+SELECT arrow_typeof(substr_index(column1_utf8view, 'a', 1)) FROM test LIMIT 1;
+----
+Utf8View
+
+## Verify array path values for SUBSTR_INDEX with Utf8View input
+query T
+SELECT substr_index(column1_utf8view, 'a', 1) FROM test;
+----
+Andrew
+Xi
+R
+(empty)
+NULL
+
 
 ## Ensure no casts on columns for STARTS_WITH
 query TT

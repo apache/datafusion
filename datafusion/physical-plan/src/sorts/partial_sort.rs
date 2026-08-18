@@ -58,10 +58,12 @@ use std::task::{Context, Poll};
 
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
+use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics, validate_child_count,
 };
 
 use arrow::compute::concat_batches;
@@ -76,7 +78,104 @@ use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use futures::{Stream, StreamExt, ready};
 use log::trace;
 
-/// Partial Sort execution plan.
+/// Sort execution plan for inputs that are already partially sorted.
+///
+/// This operator takes input ordered by a prefix of the required ordering, and
+/// produces output ordered by the required ordering, emitting rows sooner
+/// (streaming) and using less peak memory than [`SortExec`] which must buffer
+/// all rows before producing any output.
+///
+/// [`PartialSortExec`] relies on the property that rows with the same sort
+/// prefix are contiguous, so it can sort one prefix group at a time, emitting
+/// completed groups without reading (and buffering) the entire input.
+///
+/// For example, if the required output is `(a, b, c)`, but the input is only
+/// ordered by `(a, b)`, `PartialSortExec` sorts only within each `(a, b)`
+/// group to produce output ordered by `(a, b, c)`.
+///
+/// ```text
+/// input ordered by a, b              output ordered by a, b, c
+///
+/// +---+---+---+                      +---+---+---+
+/// | a | b | c |                      | a | b | c |
+/// +---+---+---+                      +---+---+---+
+/// | 0 | 0 | 3 |  --  new group  -->  | 0 | 0 | 1 |
+/// | 0 | 0 | 2 |                      | 0 | 0 | 2 |
+/// | 0 | 0 | 1 |                      | 0 | 0 | 3 |
+/// | 0 | 1 | 1 |  --  new group  -->  | 0 | 1 | 1 |
+/// | 0 | 2 | 4 |  --  new group  -->  | 0 | 2 | 0 |
+/// | 0 | 2 | 0 |                      | 0 | 2 | 4 |
+/// | 1 | 0 | 5 |  --  new group  -->  | 1 | 0 | 5 |
+/// +---+---+---+                      +---+---+---+
+/// ```
+///
+/// # Buffering and Emitting Rows
+///
+/// [`PartialSortExec`] buffers rows only until it can *prove* a prefix group
+/// will never be seen again, then sorts and emits buffered rows. A group is
+/// guaranteed to never be seen again once a row with a *different* prefix
+/// value arrives. This relies on the input's existing ordering guarantees.
+///
+/// Using the example from above, rows accumulate in the in-memory buffer in
+/// batches. As long as the `(a, b)` prefix keeps repeating, more rows are
+/// buffered.
+///
+/// ```text
+///            Buffer
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 0 | 0 | 3 |
+///        | 0 | 0 | 2 |
+///        | 0 | 0 | 1 |
+///        +---+---+---+
+/// ```
+///
+/// Once a batch arrives that contains a new `(a, b)` prefix, e.g. `(0, 2)`:
+/// every buffered row for previous prefixes may be emitted:
+///
+/// ```text
+///            Buffer
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 0 | 0 | 3 |
+///        | 0 | 0 | 2 |
+///        | 0 | 0 | 1 |
+///        | 0 | 1 | 1 |  <-- first row of new batch, new prefix
+///        | 0 | 2 | 4 |  <-- new prefix
+///        | 0 | 2 | 0 |
+///        | 1 | 0 | 5 |  <-- last row of new batch, new prefix
+///        +---+---+---+
+/// ```
+///
+/// Once known complete, the buffered rows are sorted by the full `(a, b, c)`
+/// ordering and emitted as a [`RecordBatch`]; Any rows from the most recently
+/// seen prefix remain buffered (as more rows with the same prefix may arrive in
+/// future batches.
+///
+/// ```text
+///          Emitted      <-- fully sorted on (a, b, c)
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 0 | 0 | 1 |   <-- completed group
+///        | 0 | 0 | 2 |
+///        | 0 | 0 | 3 |
+///        | 0 | 2 | 0 |   <-- completed group
+///        | 0 | 2 | 4 |
+///        | 0 | 1 | 1 |   <-- completed group
+///        +---+---+---+
+///
+///            Buffer
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 1 | 0 | 5 |   <-- (possibly) in progress group
+///        +---+---+---+
+/// ```
+///
+/// [`SortExec`]: crate::sorts::sort::SortExec
 #[derive(Debug, Clone)]
 pub struct PartialSortExec {
     /// Input schema
@@ -204,17 +303,6 @@ impl PartialSortExec {
             input.boundedness(),
         ))
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics_set: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for PartialSortExec {
@@ -268,11 +356,15 @@ impl ExecutionPlan for PartialSortExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.preserve_partitioning {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(if self.preserve_partitioning {
             vec![Distribution::UnspecifiedDistribution]
         } else {
             vec![Distribution::SinglePartition]
-        }
+        })
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -285,29 +377,58 @@ impl ExecutionPlan for PartialSortExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+        crate::apply_expression_roots(
+            self.expr.iter().map(|sort_expr| &sort_expr.expr),
+            f,
+        )
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics_set: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let new_partial_sort = PartialSortExec::new(
+                    self.expr.clone(),
+                    Arc::clone(&children[0]),
+                    self.common_prefix_length,
+                )
+                .with_fetch(self.fetch)
+                .with_preserve_partitioning(self.preserve_partitioning);
+
+                Ok(Arc::new(new_partial_sort))
+            }
         }
-        Ok(tnr)
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let new_partial_sort = PartialSortExec::new(
-            self.expr.clone(),
-            Arc::clone(&children[0]),
-            self.common_prefix_length,
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
-        .with_fetch(self.fetch)
-        .with_preserve_partitioning(self.preserve_partitioning);
+    }
 
-        Ok(Arc::new(new_partial_sort))
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -345,8 +466,16 @@ impl ExecutionPlan for PartialSortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 }
 
@@ -403,6 +532,9 @@ impl PartialSortStream {
             // Check if we've already reached the fetch limit
             if self.fetch == Some(0) {
                 self.is_closed = true;
+                // Release the input pipeline's resources.
+                let input_schema = self.input.schema();
+                self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                 return Poll::Ready(None);
             }
 
@@ -436,6 +568,9 @@ impl PartialSortStream {
                 Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                 None => {
                     self.is_closed = true;
+                    // Release the input pipeline's resources before sorting.
+                    let input_schema = self.input.schema();
+                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     // Once input is consumed, sort the rest of the inserted batches
                     let remaining_batch = self.sort_in_mem_batch()?;
                     return if remaining_batch.num_rows() > 0 {

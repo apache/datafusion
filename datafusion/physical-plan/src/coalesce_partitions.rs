@@ -26,11 +26,17 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
+};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
+use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions, validate_child_count,
+};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
@@ -100,17 +106,6 @@ impl CoalescePartitionsExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for CoalescePartitionsExec {
@@ -156,19 +151,49 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
-        plan.fetch = self.fetch;
-        Ok(Arc::new(plan))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
+                plan.fetch = self.fetch;
+                Ok(Arc::new(plan))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -239,8 +264,16 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(None)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
@@ -295,8 +328,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self.input
             .with_preserve_order(preserve_order)
             .and_then(|new_input| {
-                Arc::new(self.clone())
-                    .with_new_children(vec![new_input])
+                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
                     .ok()
             })
     }
@@ -345,17 +377,70 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 }
             })
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
+                    protobuf::CoalescePartitionsExecNode {
+                        input: Some(Box::new(input)),
+                        fetch: self.fetch().map(|f| f as u32),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CoalescePartitionsExec {
+    /// Reconstruct a [`CoalescePartitionsExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Note the protobuf
+    /// variant is named `Merge` (node [`CoalescePartitionsExecNode`]).
+    ///
+    /// [`CoalescePartitionsExecNode`]: datafusion_proto_models::protobuf::CoalescePartitionsExecNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let merge = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Merge,
+            "CoalescePartitionsExec",
+        );
+        let input = ctx.decode_required_child(
+            merge.input.as_deref(),
+            "CoalescePartitionsExec",
+            "input",
+        )?;
+        Ok(Arc::new(
+            CoalescePartitionsExec::new(input)
+                .with_fetch(merge.fetch.map(|f| f as usize)),
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test::exec::{
-        BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
+        BarrierExec, BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
     };
     use crate::test::{self, assert_is_pending};
     use crate::{collect, common};
 
+    use std::time::Duration;
+
+    use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema};
 
     use futures::FutureExt;
@@ -386,6 +471,45 @@ mod tests {
         // there should be a total of 400 rows (100 per each partition)
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
         assert_eq!(row_count, 400);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drops_input_plan_after_input_streams_start() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let input_partitions = 2;
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let input = Arc::new(
+            BarrierExec::new(vec![vec![batch]; input_partitions], schema)
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
+        );
+        let refs = Arc::downgrade(&input);
+
+        let input_plan: Arc<BarrierExec> = Arc::clone(&input);
+        let coalesce = CoalescePartitionsExec::new(input_plan);
+        let stream = coalesce.execute(0, task_ctx)?;
+        drop(coalesce);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // Why not `wait_finish` here: that releases the barrier which lets the input tasks
+            // finish, which drops the input Arcs and hides the bug.
+            while !input.is_finish_barrier_reached() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("input streams should reach pending");
+
+        drop(input);
+
+        assert_strong_count_converges_to_zero(refs).await;
+
+        drop(stream);
 
         Ok(())
     }

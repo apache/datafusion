@@ -18,7 +18,8 @@
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, StringBuilder};
+use arrow::array::{Array, ArrayAccessor, ArrayRef, StringArray, StringBuilder};
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
@@ -27,15 +28,16 @@ use arrow::{
 use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::types::{NativeType, logical_int64, logical_string};
+use datafusion_common::utils::hex::{HexCase, ToHex, encode_bytes_into};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DataFusionError,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
-    exec_err,
+    exec_datafusion_err, exec_err,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, EncodingPreservation, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -60,7 +62,8 @@ impl SparkHex {
 
         let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
 
-        let binary = Coercion::new_exact(TypeSignatureClass::Binary);
+        let binary = Coercion::new_exact(TypeSignatureClass::Binary)
+            .with_encoding_preservation(EncodingPreservation::dictionary());
 
         let variants = vec![
             // accepts numeric types
@@ -108,62 +111,81 @@ impl ScalarUDFImpl for SparkHex {
     }
 }
 
-/// Hex encoding lookup tables for fast byte-to-hex conversion
-const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
-const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
 #[inline]
-fn hex_int64(num: i64, buffer: &mut [u8; 16]) -> &[u8] {
-    if num == 0 {
-        return b"0";
-    }
-
-    let mut n = num as u64;
-    let mut i = 16;
-    while n != 0 {
-        i -= 1;
-        buffer[i] = HEX_CHARS_UPPER[(n & 0xF) as usize];
-        n >>= 4;
-    }
-    &buffer[i..]
+fn append_hex_bytes(
+    values: &mut Vec<u8>,
+    bytes: &[u8],
+    case: HexCase,
+) -> Result<i32, DataFusionError> {
+    let additional = bytes
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| exec_datafusion_err!("hex output size overflow"))?;
+    values.try_reserve(additional).map_err(|e| {
+        exec_datafusion_err!("failed to reserve {additional} bytes for hex output: {e}")
+    })?;
+    encode_bytes_into(bytes, case, values);
+    i32::try_from(values.len())
+        .map_err(|_| exec_datafusion_err!("hex output exceeds i32 offset range"))
 }
 
 /// Generic hex encoding for byte array types
-fn hex_encode_bytes<'a, I, T>(
-    iter: I,
+fn hex_encode_bytes<'a, A, T>(
+    array: &A,
     lowercase: bool,
-    len: usize,
 ) -> Result<ArrayRef, DataFusionError>
 where
-    I: Iterator<Item = Option<T>>,
-    T: AsRef<[u8]> + 'a,
+    A: ArrayAccessor<Item = &'a T>,
+    T: AsRef<[u8]> + ?Sized + 'a,
 {
-    let mut builder = StringBuilder::with_capacity(len, len * 64);
-    let mut buffer = Vec::with_capacity(64);
-    let hex_chars = if lowercase {
-        HEX_CHARS_LOWER
+    let case = if lowercase {
+        HexCase::Lower
     } else {
-        HEX_CHARS_UPPER
+        HexCase::Upper
     };
+    let len = array.len();
+    let nulls = array.nulls().cloned();
 
-    for v in iter {
-        if let Some(b) = v {
-            buffer.clear();
-            let bytes = b.as_ref();
-            for &byte in bytes {
-                buffer.push(hex_chars[(byte >> 4) as usize]);
-                buffer.push(hex_chars[(byte & 0x0f) as usize]);
+    // Write hex digits directly into one growing value buffer, tracking offsets
+    // ourselves. Each input byte becomes exactly two output bytes, so there is
+    // no per-row `String`/`StringBuilder` copy — the hex digits are written once
+    // into the final buffer.
+    let mut values: Vec<u8> = Vec::with_capacity(len * 64);
+    let mut offsets: Vec<i32> = Vec::with_capacity(len + 1);
+    offsets.push(0);
+
+    if let Some(ref nulls) = nulls {
+        for i in 0..len {
+            if nulls.is_valid(i) {
+                // SAFETY: `i` is in bounds and the validity buffer marks it valid.
+                let bytes = unsafe { array.value_unchecked(i) }.as_ref();
+                offsets.push(append_hex_bytes(&mut values, bytes, case)?);
+            } else {
+                offsets.push(i32::try_from(values.len()).map_err(|_| {
+                    exec_datafusion_err!("hex output exceeds i32 offset range")
+                })?);
             }
-            // SAFETY: buffer contains only ASCII hex digests, which are valid UTF-8
-            unsafe {
-                builder.append_value(from_utf8_unchecked(&buffer));
-            }
-        } else {
-            builder.append_null();
+        }
+    } else {
+        for i in 0..len {
+            // SAFETY: `i` is in bounds and no null buffer means every value is valid.
+            let bytes = unsafe { array.value_unchecked(i) }.as_ref();
+            offsets.push(append_hex_bytes(&mut values, bytes, case)?);
         }
     }
 
-    Ok(Arc::new(builder.finish()))
+    // SAFETY: the value buffer contains only ASCII hex digits (valid UTF-8) and
+    // the offsets are monotonically increasing and end at `values.len()`, so the
+    // array invariants hold. This mirrors the previous `from_utf8_unchecked`
+    // path and avoids a redundant UTF-8 validation pass over the whole buffer.
+    let array = unsafe {
+        StringArray::new_unchecked(
+            OffsetBuffer::new(offsets.into()),
+            Buffer::from_vec(values),
+            nulls,
+        )
+    };
+    Ok(Arc::new(array))
 }
 
 /// Generic hex encoding for int64 type
@@ -176,7 +198,7 @@ fn hex_encode_int64(
     for v in iter {
         if let Some(num) = v {
             let mut temp = [0u8; 16];
-            let slice = hex_int64(num, &mut temp);
+            let slice = num.write_hex(HexCase::Upper, &mut temp);
             // SAFETY: slice contains only ASCII hex digests, which are valid UTF-8
             unsafe {
                 builder.append_value(from_utf8_unchecked(slice));
@@ -219,51 +241,27 @@ pub fn compute_hex(
             }
             DataType::Utf8 => {
                 let array = as_string_array(array);
-                Ok(ColumnarValue::Array(hex_encode_bytes(
-                    array.iter(),
-                    lowercase,
-                    array.len(),
-                )?))
+                Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
             }
             DataType::Utf8View => {
                 let array = as_string_view_array(array)?;
-                Ok(ColumnarValue::Array(hex_encode_bytes(
-                    array.iter(),
-                    lowercase,
-                    array.len(),
-                )?))
+                Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
             }
             DataType::LargeUtf8 => {
                 let array = as_largestring_array(array);
-                Ok(ColumnarValue::Array(hex_encode_bytes(
-                    array.iter(),
-                    lowercase,
-                    array.len(),
-                )?))
+                Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
             }
             DataType::Binary => {
                 let array = as_binary_array(array)?;
-                Ok(ColumnarValue::Array(hex_encode_bytes(
-                    array.iter(),
-                    lowercase,
-                    array.len(),
-                )?))
+                Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
             }
             DataType::LargeBinary => {
                 let array = as_large_binary_array(array)?;
-                Ok(ColumnarValue::Array(hex_encode_bytes(
-                    array.iter(),
-                    lowercase,
-                    array.len(),
-                )?))
+                Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
             }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
-                Ok(ColumnarValue::Array(hex_encode_bytes(
-                    array.iter(),
-                    lowercase,
-                    array.len(),
-                )?))
+                Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
             }
             DataType::Dictionary(key_type, _) => {
                 if **key_type != DataType::Int32 {
@@ -283,27 +281,27 @@ pub fn compute_hex(
                     }
                     DataType::Utf8 => {
                         let arr = as_string_array(dict_values);
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(&arr, lowercase)?
                     }
                     DataType::LargeUtf8 => {
                         let arr = as_largestring_array(dict_values);
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(&arr, lowercase)?
                     }
                     DataType::Utf8View => {
                         let arr = as_string_view_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(&arr, lowercase)?
                     }
                     DataType::Binary => {
                         let arr = as_binary_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(&arr, lowercase)?
                     }
                     DataType::LargeBinary => {
                         let arr = as_large_binary_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(&arr, lowercase)?
                     }
                     DataType::FixedSizeBinary(_) => {
                         let arr = as_fixed_size_binary_array(dict_values)?;
-                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                        hex_encode_bytes(&arr, lowercase)?
                     }
                     _ => {
                         return exec_err!(
@@ -324,10 +322,11 @@ pub fn compute_hex(
 
 #[cfg(test)]
 mod test {
-    use std::str::from_utf8_unchecked;
     use std::sync::Arc;
 
-    use arrow::array::{DictionaryArray, Int32Array, Int64Array, StringArray};
+    use arrow::array::{
+        Array, BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+    };
     use arrow::{
         array::{
             BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder,
@@ -427,17 +426,114 @@ mod test {
 
     #[test]
     fn test_hex_int64() {
-        let test_cases = vec![(1234, "4D2"), (-1, "FFFFFFFFFFFFFFFF")];
+        let cases = vec![
+            (0_i64, "0"),
+            (1, "1"),
+            (15, "F"),
+            (16, "10"),
+            (255, "FF"),
+            (256, "100"),
+            (1234, "4D2"),
+            (i64::MAX, "7FFFFFFFFFFFFFFF"),
+            (i64::MIN, "8000000000000000"),
+            (-1, "FFFFFFFFFFFFFFFF"),
+        ];
 
-        for (num, expected) in test_cases {
-            let mut cache = [0u8; 16];
-            let slice = super::hex_int64(num, &mut cache);
-
-            unsafe {
-                let result = from_utf8_unchecked(slice);
-                assert_eq!(expected, result);
-            }
+        let arr =
+            super::hex_encode_int64(cases.iter().map(|(n, _)| Some(*n)), cases.len())
+                .unwrap();
+        let arr = as_string_array(&arr);
+        for (i, (num, expected)) in cases.iter().enumerate() {
+            assert_eq!(*expected, arr.value(i), "hex({num})");
         }
+    }
+
+    #[test]
+    fn test_hex_encode_bytes_lowercase() {
+        // Every in-repo caller of `hex_encode_bytes` goes through `spark_hex`,
+        // which always passes `lowercase = false`. The `lowercase = true` path
+        // is reachable only via `spark_sha2_hex`, which has no in-workspace
+        // caller, so it otherwise has no coverage. Drive it directly here.
+        let input = StringArray::from(vec![Some("hi"), Some("bye"), None, Some("rust")]);
+        let input_ref = &input;
+        let result = super::hex_encode_bytes(&input_ref, true).unwrap();
+        let result = as_string_array(&result);
+
+        let expected =
+            StringArray::from(vec![Some("6869"), Some("627965"), None, Some("72757374")]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_spark_hex_binary_round_trip_all_bytes() {
+        // Single-row binary input containing every byte value, encoded in
+        // a single column. Catches per-byte regressions in the bytes path.
+        let payload: Vec<u8> = (0u8..=255).collect();
+        let bin_array = BinaryArray::from(vec![Some(payload.as_slice())]);
+
+        let result =
+            super::spark_hex(&[ColumnarValue::Array(Arc::new(bin_array))]).unwrap();
+        let array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let strings = as_string_array(&array);
+        let mut expected = String::with_capacity(512);
+        for byte in 0u8..=255 {
+            use std::fmt::Write;
+            write!(expected, "{byte:02X}").unwrap();
+        }
+        assert_eq!(strings.value(0), expected);
+    }
+
+    #[test]
+    fn test_spark_hex_binary_no_nulls() {
+        let input = BinaryArray::from(vec![
+            b"".as_slice(),
+            b"\x00\x7f\x80\xff".as_slice(),
+            b"DataFusion".as_slice(),
+        ]);
+
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(input))]).unwrap();
+        let array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let strings = as_string_array(&array);
+
+        assert_eq!(strings.nulls(), None);
+        assert_eq!(
+            strings,
+            &StringArray::from(vec!["", "007F80FF", "44617461467573696F6E"])
+        );
+    }
+
+    #[test]
+    fn test_spark_hex_binary_reuses_input_nulls() {
+        let input = BinaryArray::from(vec![
+            Some(b"skip".as_slice()),
+            None,
+            Some(b"\x00\xff".as_slice()),
+            Some(b"hex".as_slice()),
+            None,
+        ])
+        .slice(1, 4);
+        let input_nulls = input.nulls().unwrap().clone();
+
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(input))]).unwrap();
+        let array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let strings = as_string_array(&array);
+        let output_nulls = strings.nulls().unwrap();
+
+        assert_eq!(output_nulls, &input_nulls);
+        assert!(output_nulls.inner().ptr_eq(input_nulls.inner()));
+        assert_eq!(
+            strings,
+            &StringArray::from(vec![None, Some("00FF"), Some("686578"), None])
+        );
     }
 
     #[test]
@@ -481,6 +577,27 @@ mod test {
 
         let keys = Int32Array::from(vec![Some(0), None, Some(1)]);
         let vals = StringArray::from(vec![Some("20"), None]);
+        let expected = DictionaryArray::new(keys, Arc::new(vals));
+
+        assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_dict_binary_values_null() {
+        let keys = Int32Array::from(vec![Some(0), None, Some(1)]);
+        let vals = BinaryArray::from(vec![Some(b"hi".as_slice()), None]);
+        // [b"hi", null, null]
+        let dict = DictionaryArray::new(keys, Arc::new(vals));
+
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(dict))]).unwrap();
+        let result = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let result = as_dictionary_array(&result).unwrap();
+
+        let keys = Int32Array::from(vec![Some(0), None, Some(1)]);
+        let vals = StringArray::from(vec![Some("6869"), None]);
         let expected = DictionaryArray::new(keys, Arc::new(vals));
 
         assert_eq!(&expected, result);

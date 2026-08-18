@@ -23,6 +23,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
@@ -37,6 +38,7 @@ use datafusion_cli::functions::{
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
 };
+use datafusion_cli::object_storage::{StdinCarriesCommands, is_stdin_location};
 use datafusion_cli::{
     DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
@@ -45,9 +47,11 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
+use datafusion::common::config::Dialect;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_spark::SessionStateBuilderSpark;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -143,6 +147,12 @@ struct Args {
     color: bool,
 
     #[clap(
+        long,
+        help = "Enable Apache Spark-compatible SQL dialect, functions, and expression planning"
+    )]
+    spark: bool,
+
+    #[clap(
         short = 'd',
         long,
         help = "Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')",
@@ -156,6 +166,23 @@ struct Args {
         default_value_t = InstrumentedObjectStoreMode::Disabled
     )]
     object_store_profiling: InstrumentedObjectStoreMode,
+}
+
+impl Args {
+    /// Without -c/-f the CLI enters the REPL, which reads its SQL from
+    /// stdin — interactively or piped.
+    fn repl_mode(&self) -> bool {
+        self.command.is_empty() && self.file.is_empty()
+    }
+
+    /// Whether the CLI consumes stdin for its own SQL input. This covers the
+    /// REPL (no -c/-f, reading SQL interactively or piped) as well as an
+    /// explicit `-f /dev/stdin` (or the other stdin pseudo-paths), where the
+    /// SQL file *is* stdin. In either case stdin is already spoken for and
+    /// cannot also back a `LOCATION '/dev/stdin'` table.
+    fn reads_sql_from_stdin(&self) -> bool {
+        self.repl_mode() || self.file.iter().any(|f| is_stdin_location(f))
+    }
 }
 
 #[tokio::main]
@@ -225,9 +252,16 @@ async fn main_inner() -> Result<()> {
 
     let runtime_env = rt_builder.build_arc()?;
 
+    let mut state_builder = SessionStateBuilder::new()
+        .with_config(session_config)
+        .with_runtime_env(runtime_env)
+        .with_default_features();
+    if args.spark {
+        state_builder = state_builder.with_spark_features();
+    }
+
     // enable dynamic file query
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
-        .enable_url_table();
+    let ctx = SessionContext::new_with_state(state_builder.build()).enable_url_table();
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
@@ -268,6 +302,7 @@ async fn main_inner() -> Result<()> {
         instrumented_registry: Arc::clone(&instrumented_registry),
     };
 
+    let repl_mode = args.repl_mode();
     let commands = args.command;
     let files = args.file;
     let rc = match args.rc {
@@ -285,7 +320,7 @@ async fn main_inner() -> Result<()> {
         }
     };
 
-    if commands.is_empty() && files.is_empty() {
+    if repl_mode {
         if !rc.is_empty() {
             exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
@@ -316,7 +351,8 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         if batch_size == 0 {
             return config_err!("batch_size must be greater than 0");
         }
-        config_options.execution.batch_size = batch_size;
+        config_options.execution.batch_size =
+            datafusion_common::config::ConfigNonZeroUsize::try_new(batch_size)?;
     };
 
     // use easier to understand "tree" mode by default
@@ -330,8 +366,20 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         config_options.format.null = String::from("NULL");
     }
 
-    let session_config =
+    if args.spark {
+        config_options.sql_parser.dialect = Dialect::Spark;
+    }
+
+    let mut session_config =
         SessionConfig::from(config_options).with_information_schema(true);
+
+    if args.reads_sql_from_stdin() {
+        // When stdin carries the session's SQL — the REPL (including any rc
+        // file run before it) or an explicit `-f /dev/stdin` — it cannot also
+        // serve as a data source for `LOCATION '/dev/stdin'`.
+        session_config = session_config.with_extension(Arc::new(StdinCarriesCommands));
+    }
+
     Ok(session_config)
 }
 
@@ -441,12 +489,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use datafusion::execution::cache::default_cache::DefaultCache;
     use datafusion::{
         common::test_util::batches_to_string,
-        execution::cache::{
-            DefaultListFilesCache, cache_manager::CacheManagerConfig,
-            cache_unit::DefaultFileStatisticsCache,
-        },
+        execution::cache::cache_manager::CacheManagerConfig,
         prelude::{ParquetReadOptions, col, lit, split_part},
     };
     use insta::assert_snapshot;
@@ -616,9 +662,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8882                | 2    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269074              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1339                | 2    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8794                | 1    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 1    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -647,17 +693,15 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8882                | 5    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 269074              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1339                | 3    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8794                | 4    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
         Ok(())
     }
 
-    /// Shows that the statistics cache is not enabled by default yet
-    /// See https://github.com/apache/datafusion/issues/19217
     #[tokio::test]
     async fn test_statistics_cache_default() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
@@ -687,68 +731,48 @@ mod tests {
             .await?;
         }
 
-        // When the cache manager creates a StatisticsCache by default,
-        // the contents will show up here
-        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, hits, table_size_bytes from statistics_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
-        ++
-        ++
+        assert_snapshot!(batches_to_string(&rbs),@"
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | filename                          | table                     | file_size_bytes | num_rows     | num_columns | hits | table_size_bytes |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | 0    | Absent           |
+        | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | 0    | Absent           |
+        | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | 0    | Absent           |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
         ");
 
-        Ok(())
-    }
-
-    // Can be removed when https://github.com/apache/datafusion/issues/19217 is resolved
-    #[tokio::test]
-    async fn test_statistics_cache_override() -> Result<(), DataFusionError> {
-        // Install a specific StatisticsCache implementation
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
-        let cache_config = CacheManagerConfig::default()
-            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
-        let runtime = RuntimeEnvBuilder::new()
-            .with_cache_manager(cache_config)
-            .build()?;
-        let config = SessionConfig::new().with_collect_statistics(true);
-        let ctx = SessionContext::new_with_config_rt(config, Arc::new(runtime));
-
-        ctx.register_udtf(
-            "statistics_cache",
-            Arc::new(StatisticsCacheFunc::new(
-                ctx.task_ctx().runtime_env().cache_manager.clone(),
-            )),
-        );
-
-        for filename in [
-            "alltypes_plain",
-            "alltypes_tiny_pages",
-            "lz4_raw_compressed_larger",
-        ] {
-            ctx.sql(
-                format!(
-                    "create external table {filename}
-                    stored as parquet
-                    location '../parquet-testing/data/{filename}.parquet'",
-                )
-                .as_str(),
-            )
+        // increase the number of hits
+        ctx.sql("select * from alltypes_plain")
             .await?
             .collect()
             .await?;
-        }
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from lz4_raw_compressed_larger")
+            .await?
+            .collect()
+            .await?;
 
-        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, hits, table_size_bytes from statistics_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
-        +-----------------------------------+-----------------+--------------+-------------+------------------+
-        | filename                          | file_size_bytes | num_rows     | num_columns | table_size_bytes |
-        +-----------------------------------+-----------------+--------------+-------------+------------------+
-        | alltypes_plain.parquet            | 1851            | Exact(8)     | 11          | Absent           |
-        | alltypes_tiny_pages.parquet       | 454233          | Exact(7300)  | 13          | Absent           |
-        | lz4_raw_compressed_larger.parquet | 380836          | Exact(10000) | 1           | Absent           |
-        +-----------------------------------+-----------------+--------------+-------------+------------------+
+        assert_snapshot!(batches_to_string(&rbs),@"
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | filename                          | table                     | file_size_bytes | num_rows     | num_columns | hits | table_size_bytes |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | 3    | Absent           |
+        | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | 0    | Absent           |
+        | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | 1    | Absent           |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
         ");
 
         Ok(())
@@ -756,7 +780,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_files_cache() -> Result<(), DataFusionError> {
-        let list_files_cache = Arc::new(DefaultListFilesCache::new(
+        let list_files_cache = Arc::new(DefaultCache::new_with_ttl(
             1024,
             Some(Duration::from_secs(1)),
         ));
@@ -806,7 +830,7 @@ mod tests {
         .collect()
         .await?;
 
-        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list FROM list_files_cache()";
+        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list, hits FROM list_files_cache()";
         let df = ctx
             .sql(sql)
             .await?
@@ -834,16 +858,17 @@ mod tests {
                 "filename",
                 "file_size_bytes",
                 "etag",
+                "hits",
             ])?
             .sort(vec![col("filename").sort(true, false)])?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs),@r"
-        +---------------------+-----------+-----------------+------+
-        | metadata_size_bytes | filename  | file_size_bytes | etag |
-        +---------------------+-----------+-----------------+------+
-        | 212                 | 0.parquet | 3642            | 0    |
-        | 212                 | 1.parquet | 3642            | 1    |
-        +---------------------+-----------+-----------------+------+
+        +---------------------+-----------+-----------------+------+------+
+        | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
+        +---------------------+-----------+-----------------+------+------+
+        | 212                 | 0.parquet | 3642            | 0    | 2    |
+        | 212                 | 1.parquet | 3642            | 1    | 2    |
+        +---------------------+-----------+-----------------+------+------+
         ");
 
         Ok(())

@@ -443,3 +443,19 @@ query T
 select coalesce(arrow_cast('', 'Utf8View'), arrow_cast('', 'Dictionary(UInt32, Utf8)'));
 ----
 (empty)
+
+# RunEndEncoded column coalesced with a string literal
+statement ok
+create table ree_t as
+select arrow_cast(c, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)') as ree_col
+from (values ('hello'), (NULL), ('world')) as t(c);
+
+query ?
+select coalesce(ree_col, '__null__') from ree_t;
+----
+hello
+__null__
+world
+
+statement ok
+drop table ree_t;

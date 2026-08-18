@@ -30,6 +30,7 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, displayable,
     filter::FilterExec,
@@ -112,7 +113,7 @@ pub struct TestSource {
 
 impl TestSource {
     pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
-        let table_schema = datafusion_datasource::TableSchema::new(schema, vec![]);
+        let table_schema = datafusion_datasource::TableSchema::from(schema);
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -238,21 +239,17 @@ impl FileSource for TestSource {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit predicate (filter) expression if present
-        if let Some(predicate) = &self.predicate {
-            f(predicate.as_ref())?;
-        }
-
-        // Visit projection expressions if present
-        if let Some(projection) = &self.projection {
-            for proj_expr in projection {
-                f(proj_expr.expr.as_ref())?;
-            }
-        }
-
-        Ok(TreeNodeRecursion::Continue)
+        datafusion_physical_plan::apply_expression_roots(
+            self.predicate.iter().chain(
+                self.projection
+                    .iter()
+                    .flatten()
+                    .map(|proj_expr| &proj_expr.expr),
+            ),
+            f,
+        )
     }
 }
 
@@ -437,7 +434,7 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 fn format_lines(s: &str) -> Vec<String> {
-    s.trim().split('\n').map(|s| s.to_string()).collect()
+    s.trim().lines().map(|s| s.to_string()).collect()
 }
 
 pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
@@ -493,9 +490,10 @@ impl ExecutionPlan for TestNode {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert!(children.len() == 1);
         Ok(Arc::new(TestNode::new(
@@ -503,6 +501,16 @@ impl ExecutionPlan for TestNode {
             children[0].clone(),
             self.predicate.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -572,10 +580,8 @@ impl ExecutionPlan for TestNode {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit the predicate expression
-        f(self.predicate.as_ref())?;
-        Ok(TreeNodeRecursion::Continue)
+        datafusion_physical_plan::apply_expression_roots([&self.predicate], f)
     }
 }

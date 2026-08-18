@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, StringArray, StringViewBuilder};
+use arrow::array::{Array, ArrayRef, StringArray, StringViewBuilder};
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
@@ -187,6 +187,43 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
+                    }))
+                })
+            },
+        );
+    }
+
+    {
+        let parent_size = 65536;
+        let slice_len = 128;
+        let str_len = 32;
+        let parent = Arc::new(create_string_array_with_len::<i32>(
+            parent_size,
+            0.2,
+            str_len,
+        )) as ArrayRef;
+        let offset = (parent_size - slice_len) / 2;
+        let sliced = parent.slice(offset, slice_len);
+        let args = vec![ColumnarValue::Array(sliced)];
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        c.bench_function(
+            &format!("lower_sliced_ascii: parent={parent_size}, slice={slice_len}, str_len={str_len}"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(lower.invoke_with_args(ScalarFunctionArgs {
+                        args: args_cloned,
+                        arg_fields: arg_fields.clone(),
+                        number_rows: slice_len,
                         return_field: Field::new("f", DataType::Utf8, true).into(),
                         config_options: Arc::clone(&config_options),
                     }))

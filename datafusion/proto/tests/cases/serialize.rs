@@ -22,13 +22,21 @@ use arrow::datatypes::{DataType, Field};
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
-use datafusion_expr::expr::Placeholder;
-use datafusion_expr::{ColumnarValue, col, create_udf, lit};
-use datafusion_expr::{Expr, Volatility};
+use datafusion_common::ScalarValue;
+use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable, Placeholder};
+use datafusion_expr::{ColumnarValue, HigherOrderUDF, col, create_udf, lambda, lit};
+use datafusion_expr::{Expr, ScalarUDF, Volatility};
 use datafusion_functions::string;
-use datafusion_proto::bytes::Serializeable;
+use datafusion_proto::bytes::{
+    Serializeable, logical_exprs_from_bytes_with_extension_codec,
+    logical_exprs_to_bytes_with_extension_codec,
+};
 use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
+
+use crate::cases::roundtrip_logical_plan::UDFExtensionCodec;
+use crate::cases::{MyHigherOrderUDF, MyRegexUdf};
 
 #[test]
 #[should_panic(
@@ -36,6 +44,57 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 )]
 fn bad_decode() {
     Expr::from_bytes(b"Leet").unwrap();
+}
+
+#[test]
+fn logical_exprs_roundtrip() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let exprs = vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))];
+
+    let bytes = logical_exprs_to_bytes_with_extension_codec(&exprs, &codec).unwrap();
+
+    let decoded = logical_exprs_from_bytes_with_extension_codec(
+        &bytes,
+        ctx.task_ctx().as_ref(),
+        &codec,
+    )
+    .unwrap();
+
+    assert_eq!(decoded, exprs);
+
+    let bytes =
+        logical_exprs_to_bytes_with_extension_codec(std::iter::empty::<&Expr>(), &codec)
+            .unwrap();
+
+    assert!(bytes.is_empty());
+
+    let decoded = logical_exprs_from_bytes_with_extension_codec(
+        &bytes,
+        ctx.task_ctx().as_ref(),
+        &codec,
+    )
+    .unwrap();
+
+    assert!(decoded.is_empty());
+}
+
+#[test]
+fn logical_exprs_roundtrip_with_extension_codec() {
+    let ctx = SessionContext::new();
+    let codec = UDFExtensionCodec;
+    let udf = ScalarUDF::from(MyRegexUdf::new(".*".to_owned()));
+    let exprs = vec![udf.call(vec![lit("foo")])];
+
+    let bytes = logical_exprs_to_bytes_with_extension_codec(&exprs, &codec).unwrap();
+
+    let decoded = logical_exprs_from_bytes_with_extension_codec(
+        &bytes,
+        ctx.task_ctx().as_ref(),
+        &codec,
+    )
+    .unwrap();
+    assert_eq!(format!("{exprs:?}"), format!("{decoded:?}"));
 }
 
 #[test]
@@ -77,7 +136,8 @@ fn udf_roundtrip_with_registry() {
         .call(vec![lit("")]);
 
     let bytes = expr.to_bytes().unwrap();
-    let deserialized_expr = Expr::from_bytes_with_registry(&bytes, &ctx).unwrap();
+    let deserialized_expr =
+        Expr::from_bytes_with_ctx(&bytes, ctx.task_ctx().as_ref()).unwrap();
 
     assert_eq!(expr, deserialized_expr);
 }
@@ -281,7 +341,8 @@ fn test_expression_serialization_roundtrip() {
 
         let extension_codec = DefaultLogicalExtensionCodec {};
         let proto = serialize_expr(&expr, &extension_codec).unwrap();
-        let deserialize = parse_expr(&proto, &ctx, &extension_codec).unwrap();
+        let deserialize =
+            parse_expr(&proto, ctx.task_ctx().as_ref(), &extension_codec).unwrap();
 
         let serialize_name = extract_function_name(&expr);
         let deserialize_name = extract_function_name(&deserialize);
@@ -294,5 +355,94 @@ fn test_expression_serialization_roundtrip() {
     fn extract_function_name(expr: &Expr) -> String {
         let name = expr.schema_name().to_string();
         name.split('(').next().unwrap().to_string()
+    }
+}
+
+/// return a `SessionContext` with `MyHigherOrderUDF` registered as a higher-order UDF
+fn context_with_higher_order_function() -> SessionContext {
+    let ctx = SessionContext::new();
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+    ctx.register_higher_order_function(hof);
+    ctx
+}
+
+fn dummy_higher_order_function_call(hof: Arc<HigherOrderUDF>) -> Expr {
+    let list = ScalarValue::List(ScalarValue::new_list_nullable(
+        &[ScalarValue::Int32(Some(1))],
+        &DataType::Int32,
+    ));
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
+        "x".to_string(),
+        Some(Arc::new(Field::new("x", DataType::Int32, true))),
+    ));
+    let lambda_var_without_field =
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
+    let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
+    Expr::HigherOrderFunction(HigherOrderFunction::new(
+        hof,
+        vec![Expr::Literal(list, None), lambda],
+    ))
+}
+
+#[test]
+fn hof_roundtrip_with_registry() {
+    let ctx = context_with_higher_order_function();
+    let hof = ctx
+        .higher_order_function("higher_order_udf")
+        .expect("could not find higher order udf");
+
+    let expr = dummy_higher_order_function_call(hof);
+
+    let bytes = expr.to_bytes().unwrap();
+    let deserialized_expr =
+        Expr::from_bytes_with_ctx(&bytes, ctx.task_ctx().as_ref()).unwrap();
+
+    assert_eq!(expr, deserialized_expr);
+}
+
+#[test]
+#[should_panic(
+    expected = "LogicalExtensionCodec is not provided for higher order function higher_order_udf"
+)]
+fn hof_roundtrip_without_registry() {
+    let ctx = context_with_higher_order_function();
+    let hof = ctx
+        .higher_order_function("higher_order_udf")
+        .expect("could not find higher order udf");
+
+    let expr = dummy_higher_order_function_call(hof);
+
+    let bytes = expr.to_bytes().unwrap();
+    Expr::from_bytes(&bytes).unwrap();
+}
+
+#[test]
+fn test_higher_order_serialization_roundtrip() {
+    let ctx = SessionContext::new();
+    let list = ScalarValue::List(ScalarValue::new_list_nullable(
+        &[ScalarValue::Int32(Some(1))],
+        &DataType::Int32,
+    ));
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
+        "x".to_string(),
+        Some(Arc::new(Field::new("x", DataType::Int32, true))),
+    ));
+    let lambda_var_without_field =
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
+    let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
+    let args = vec![Expr::Literal(list, None), lambda];
+
+    for function in datafusion::functions_nested::all_default_higher_order_functions() {
+        let expr =
+            Expr::HigherOrderFunction(HigherOrderFunction::new(function, args.clone()));
+
+        let extension_codec = DefaultLogicalExtensionCodec {};
+        let proto = serialize_expr(&expr, &extension_codec).unwrap();
+        let deserialize =
+            parse_expr(&proto, ctx.task_ctx().as_ref(), &extension_codec).unwrap();
+
+        assert_eq!(deserialize, expr);
     }
 }

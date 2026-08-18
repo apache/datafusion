@@ -1,0 +1,33 @@
+name Q15
+group hj
+
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM customer
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q15: 20% Density, 10% Hit rate, 20% Duplicates in Build Side
+-- density: 0.2,
+-- prob_hit: 0.1,
+-- build_size: "100K_(20%_dups)",
+-- probe_size: "60M",
+SELECT l.k
+        FROM (
+          SELECT CASE 
+                      WHEN l_suppkey % 10 = 0 THEN ((l_suppkey % 80000) + 1) * 25 / 4
+                      ELSE ((l_suppkey % 80000) + 1) * 25 / 4 + 1
+                 END as k
+          FROM lineitem
+        ) l
+        JOIN (
+          SELECT CASE 
+                      WHEN s_suppkey <= 80000 THEN (s_suppkey * 25) / 4 
+                      ELSE ((s_suppkey - 80000) * 25) / 4 
+                 END as k 
+          FROM supplier
+        ) s ON l.k = s.k;

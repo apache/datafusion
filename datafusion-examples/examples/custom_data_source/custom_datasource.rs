@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{UInt8Builder, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::assert_batches_eq;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
@@ -35,8 +36,8 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, project_schema,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, project_schema,
 };
 use datafusion::prelude::*;
 
@@ -52,6 +53,33 @@ pub async fn custom_datasource() -> Result<()> {
     search_accounts(db.clone(), None, 3).await?;
     search_accounts(db.clone(), Some(col("bank_account").gt(lit(8000u64))), 1).await?;
     search_accounts(db.clone(), Some(col("bank_account").gt(lit(200u64))), 2).await?;
+
+    // exercise SQL paths that push down non-trivial projections:
+    // - `SELECT 1 ...` requests no source columns (projection: Some([]))
+    // - `SELECT COUNT(id) ...` requests a single column (projection: Some([0]))
+    let ctx = SessionContext::new();
+    ctx.register_table("accounts", Arc::new(db))?;
+    let constant_batches = ctx
+        .sql("SELECT 1 AS a FROM accounts")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        [
+            "+---+", "| a |", "+---+", "| 1 |", "| 1 |", "| 1 |", "+---+",
+        ],
+        &constant_batches
+    );
+
+    let count_batches = ctx
+        .sql("SELECT COUNT(id) AS cnt FROM accounts")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        ["+-----+", "| cnt |", "+-----+", "| 3   |", "+-----+",],
+        &count_batches
+    );
 
     Ok(())
 }
@@ -118,9 +146,9 @@ impl Debug for CustomDataSource {
 }
 
 impl CustomDataSource {
-    pub(crate) async fn create_physical_plan(
+    pub(crate) fn create_physical_plan(
         &self,
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(CustomExec::new(projections, schema, self.clone())))
@@ -175,18 +203,19 @@ impl TableProvider for CustomDataSource {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         // filters and limit can be used here to inject some push-down operations if needed
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, self.schema()).await;
+        self.create_physical_plan(projection, self.schema())
     }
 }
 
 #[derive(Debug, Clone)]
 struct CustomExec {
     db: CustomDataSource,
+    projection: Option<Vec<usize>>,
     projected_schema: SchemaRef,
     cache: Arc<PlanProperties>,
 }
@@ -194,7 +223,7 @@ struct CustomExec {
 impl CustomExec {
     #[expect(clippy::needless_pass_by_value)]
     fn new(
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: SchemaRef,
         db: CustomDataSource,
     ) -> Self {
@@ -202,6 +231,7 @@ impl CustomExec {
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,
+            projection: projections.map(|p| p.to_vec()),
             projected_schema,
             cache: Arc::new(cache),
         }
@@ -238,11 +268,22 @@ impl ExecutionPlan for CustomExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -263,32 +304,35 @@ impl ExecutionPlan for CustomExec {
             account_array.append_value(user.bank_account);
         }
 
+        // Build a batch holding every column the table can produce, then let
+        // Arrow drop the columns the query didn't ask for. `RecordBatch::project`
+        // preserves the row count, which matters when the projection selects
+        // zero columns (e.g. `SELECT 1 FROM t`).
+        let full_batch = RecordBatch::try_new(
+            self.db.schema(),
+            vec![
+                Arc::new(id_array.finish()),
+                Arc::new(account_array.finish()),
+            ],
+        )?;
+        let batch = match &self.projection {
+            Some(indices) => full_batch.project(indices)?,
+            None => full_batch,
+        };
+
         Ok(Box::pin(MemoryStream::try_new(
-            vec![RecordBatch::try_new(
-                self.projected_schema.clone(),
-                vec![
-                    Arc::new(id_array.finish()),
-                    Arc::new(account_array.finish()),
-                ],
-            )?],
-            self.schema(),
+            vec![batch],
+            self.projected_schema.clone(),
             None,
         )?))
     }
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        Ok(TreeNodeRecursion::Continue)
     }
 }

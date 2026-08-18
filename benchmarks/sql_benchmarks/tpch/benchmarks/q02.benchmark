@@ -1,0 +1,62 @@
+name Q02
+group tpch
+subgroup sf${BENCH_SIZE:-1}
+
+init sql_benchmarks/tpch/init/set_config.sql
+
+load sql_benchmarks/tpch/init/load_${TPCH_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from lineitem;
+----
+true
+
+run
+select
+    s_acctbal,
+    s_name,
+    n_name,
+    p_partkey,
+    p_mfgr,
+    s_address,
+    s_phone,
+    s_comment
+from
+    part,
+    supplier,
+    partsupp,
+    nation,
+    region
+where
+        p_partkey = ps_partkey
+  and s_suppkey = ps_suppkey
+  and p_size = 15
+  and p_type like '%BRASS'
+  and s_nationkey = n_nationkey
+  and n_regionkey = r_regionkey
+  and r_name = 'EUROPE'
+  and ps_supplycost = (
+    select
+        min(ps_supplycost)
+    from
+        partsupp,
+        supplier,
+        nation,
+        region
+    where
+            p_partkey = ps_partkey
+      and s_suppkey = ps_suppkey
+      and s_nationkey = n_nationkey
+      and n_regionkey = r_regionkey
+      and r_name = 'EUROPE'
+)
+order by
+    s_acctbal desc,
+    n_name,
+    s_name,
+    p_partkey
+limit 100;
+
+result sql_benchmarks/tpch/results/sf${BENCH_SIZE:-1}/q02.csv
+
+cleanup sql_benchmarks/tpch/init/cleanup.sql

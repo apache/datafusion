@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray};
+use arrow::array::{ArrayRef, ListArray};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Int64Type};
+use arrow::util::bench_util::{
+    create_boolean_array, create_f64_array, create_primitive_array,
+    create_primitive_list_array_with_seed, create_string_array_with_max_len,
+};
 use criterion::{
     criterion_group, criterion_main, {BenchmarkId, Criterion},
 };
@@ -32,7 +36,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 const NUM_ROWS: &[usize] = &[100, 1000, 10000];
-const REPEAT_COUNTS: &[u64] = &[5, 50];
+// Must be of type i64 because ArrayRepeat's second argument is Int64
+const REPEAT_COUNTS: &[i64] = &[5, 50];
 const SEED: u64 = 42;
 const NULL_DENSITY: f64 = 0.1;
 
@@ -52,7 +57,10 @@ fn bench_array_repeat_int64(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_repeat_int64");
 
     for &num_rows in NUM_ROWS {
-        let element_array = create_int64_array(num_rows, NULL_DENSITY);
+        let element_array: ArrayRef = Arc::new(create_primitive_array::<Int64Type>(
+            num_rows,
+            NULL_DENSITY as f32,
+        ));
 
         for &repeat_count in REPEAT_COUNTS {
             let args = vec![
@@ -71,7 +79,7 @@ fn bench_array_repeat_int64(c: &mut Criterion) {
                                 args: args.clone(),
                                 arg_fields: vec![
                                     Field::new("element", DataType::Int64, false).into(),
-                                    Field::new("count", DataType::UInt64, false).into(),
+                                    Field::new("count", DataType::Int64, false).into(),
                                 ],
                                 number_rows: num_rows,
                                 return_field: Field::new(
@@ -100,7 +108,11 @@ fn bench_array_repeat_string(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_repeat_string");
 
     for &num_rows in NUM_ROWS {
-        let element_array = create_string_array(num_rows, NULL_DENSITY);
+        let element_array = Arc::new(create_string_array_with_max_len::<i64>(
+            num_rows,
+            NULL_DENSITY as f32,
+            100,
+        ));
 
         for &repeat_count in REPEAT_COUNTS {
             let args = vec![
@@ -119,7 +131,7 @@ fn bench_array_repeat_string(c: &mut Criterion) {
                                 args: args.clone(),
                                 arg_fields: vec![
                                     Field::new("element", DataType::Utf8, false).into(),
-                                    Field::new("count", DataType::UInt64, false).into(),
+                                    Field::new("count", DataType::Int64, false).into(),
                                 ],
                                 number_rows: num_rows,
                                 return_field: Field::new(
@@ -148,7 +160,14 @@ fn bench_array_repeat_nested_int64_list(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_repeat_nested_int64");
 
     for &num_rows in NUM_ROWS {
-        let list_array = create_int64_list_array(num_rows, 5, NULL_DENSITY);
+        let list_array: ArrayRef =
+            Arc::new(create_primitive_list_array_with_seed::<i32, Int64Type>(
+                num_rows,
+                NULL_DENSITY as f32,
+                NULL_DENSITY as f32,
+                5,
+                SEED,
+            ));
 
         for &repeat_count in REPEAT_COUNTS {
             let args = vec![
@@ -172,7 +191,7 @@ fn bench_array_repeat_nested_int64_list(c: &mut Criterion) {
                                         false,
                                     )
                                     .into(),
-                                    Field::new("count", DataType::UInt64, false).into(),
+                                    Field::new("count", DataType::Int64, false).into(),
                                 ],
                                 number_rows: num_rows,
                                 return_field: Field::new(
@@ -201,7 +220,7 @@ fn bench_array_repeat_float64(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_repeat_float64");
 
     for &num_rows in NUM_ROWS {
-        let element_array = create_float64_array(num_rows, NULL_DENSITY);
+        let element_array = Arc::new(create_f64_array(num_rows, NULL_DENSITY as f32));
 
         for &repeat_count in REPEAT_COUNTS {
             let args = vec![
@@ -221,7 +240,7 @@ fn bench_array_repeat_float64(c: &mut Criterion) {
                                 arg_fields: vec![
                                     Field::new("element", DataType::Float64, false)
                                         .into(),
-                                    Field::new("count", DataType::UInt64, false).into(),
+                                    Field::new("count", DataType::Int64, false).into(),
                                 ],
                                 number_rows: num_rows,
                                 return_field: Field::new(
@@ -250,7 +269,11 @@ fn bench_array_repeat_boolean(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_repeat_boolean");
 
     for &num_rows in NUM_ROWS {
-        let element_array = create_boolean_array(num_rows, NULL_DENSITY);
+        let element_array = Arc::new(create_boolean_array(
+            num_rows,
+            NULL_DENSITY as f32,
+            f32::MAX,
+        ));
 
         for &repeat_count in REPEAT_COUNTS {
             let args = vec![
@@ -270,7 +293,7 @@ fn bench_array_repeat_boolean(c: &mut Criterion) {
                                 arg_fields: vec![
                                     Field::new("element", DataType::Boolean, false)
                                         .into(),
-                                    Field::new("count", DataType::UInt64, false).into(),
+                                    Field::new("count", DataType::Int64, false).into(),
                                 ],
                                 number_rows: num_rows,
                                 return_field: Field::new(
@@ -323,7 +346,7 @@ fn bench_array_repeat_nested_string_list(c: &mut Criterion) {
                                         false,
                                     )
                                     .into(),
-                                    Field::new("count", DataType::UInt64, false).into(),
+                                    Field::new("count", DataType::Int64, false).into(),
                                 ],
                                 number_rows: num_rows,
                                 return_field: Field::new(
@@ -346,98 +369,6 @@ fn bench_array_repeat_nested_string_list(c: &mut Criterion) {
     }
 
     group.finish();
-}
-
-fn create_int64_array(num_rows: usize, null_density: f64) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                Some(rng.random_range(0..1000))
-            }
-        })
-        .collect::<Int64Array>();
-
-    Arc::new(values)
-}
-
-fn create_string_array(num_rows: usize, null_density: f64) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    use arrow::array::StringArray;
-
-    let values = (0..num_rows)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                Some(format!("value_{}", rng.random_range(0..100)))
-            }
-        })
-        .collect::<StringArray>();
-
-    Arc::new(values)
-}
-
-fn create_int64_list_array(
-    num_rows: usize,
-    array_size: usize,
-    null_density: f64,
-) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows * array_size)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                Some(rng.random_range(0..1000))
-            }
-        })
-        .collect::<Int64Array>();
-    let offsets = (0..=num_rows)
-        .map(|i| (i * array_size) as i32)
-        .collect::<Vec<i32>>();
-
-    Arc::new(
-        ListArray::try_new(
-            Arc::new(Field::new("item", DataType::Int64, true)),
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-fn create_float64_array(num_rows: usize, null_density: f64) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                Some(rng.random_range(0.0..1000.0))
-            }
-        })
-        .collect::<Float64Array>();
-
-    Arc::new(values)
-}
-
-fn create_boolean_array(num_rows: usize, null_density: f64) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(SEED);
-    let values = (0..num_rows)
-        .map(|_| {
-            if rng.random::<f64>() < null_density {
-                None
-            } else {
-                Some(rng.random())
-            }
-        })
-        .collect::<BooleanArray>();
-
-    Arc::new(values)
 }
 
 fn create_string_list_array(

@@ -1,0 +1,231 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Negative Zero (-0.0) vs. Positive Zero (+0.0) Behavior
+##########
+#
+# IEEE 754 specifies +0.0 == -0.0 (they compare equal). PostgreSQL follows
+# this and treats them as the same value for DISTINCT, GROUP BY, UNION,
+# INTERSECT, EXCEPT, and equality predicates. The bit patterns differ in
+# the sign bit, so any code path that hashes / compares the raw bits (e.g.
+# `f64::to_bits` or `f64::to_ne_bytes`) will treat them as distinct values
+# and must be normalized before grouping / dedup.
+#
+# Note: the sqllogictest formatter renders both `-0.0` and `+0.0` as `0`,
+# so the visible scalar values look identical in the expected output. The
+# behavior is asserted via row counts and via auxiliary `1.0 / a`
+# (`Infinity` vs `-Infinity`) columns that expose the sign.
+
+#####
+## Equality and ordering predicates
+#####
+
+# +0.0 == -0.0 is TRUE; +0.0 < -0.0 and +0.0 > -0.0 are both FALSE.
+query BBB
+SELECT 0.0 = -0.0 AS eq, 0.0 < -0.0 AS lt, 0.0 > -0.0 AS gt;
+----
+true false false
+
+# 0.0 IS DISTINCT FROM -0.0 must be FALSE because the values are equal.
+query B
+SELECT 0.0 IS DISTINCT FROM -0.0 AS is_distinct;
+----
+false
+
+#####
+## SELECT DISTINCT with +0.0 / -0.0 (Float64)
+#####
+
+# DISTINCT must collapse +0.0 and -0.0 into a single row.
+query R rowsort
+SELECT DISTINCT a
+FROM (SELECT 0.0 AS a UNION ALL SELECT -0.0 UNION ALL SELECT 0.0);
+----
+0
+
+# Same query, with `1.0 / a` to expose the sign in the projection. The
+# tuples `(+0.0, +Infinity)` and `(-0.0, -Infinity)` are not equal — the
+# zero columns compare equal but `+Infinity != -Infinity` — so DISTINCT
+# keeps both rows. PG returns the same two rows.
+query RR rowsort
+SELECT DISTINCT a, 1.0 / a AS inv
+FROM (SELECT 0.0 AS a UNION ALL SELECT -0.0 UNION ALL SELECT 0.0);
+----
+0 -Infinity
+0 Infinity
+
+# COUNT(DISTINCT) over {+0.0, -0.0} must return 1.
+query I
+SELECT COUNT(DISTINCT a)
+FROM (SELECT 0.0 AS a UNION ALL SELECT -0.0 UNION ALL SELECT 0.0);
+----
+1
+
+# GROUP BY must put +0.0 and -0.0 in the same group.
+query RRI rowsort
+SELECT a, 1.0 / a AS inv, COUNT(*)
+FROM (SELECT 0.0 AS a UNION ALL SELECT -0.0 UNION ALL SELECT 0.0)
+GROUP BY a;
+----
+0 Infinity 3
+
+# Multi-column DISTINCT; (+0.0, 1) and (-0.0, 1) must collapse.
+query RI rowsort
+SELECT DISTINCT a, b
+FROM (SELECT 0.0 AS a, 1 AS b UNION ALL SELECT -0.0, 1 UNION ALL SELECT 0.0, 2);
+----
+0 1
+0 2
+
+#####
+## SELECT DISTINCT with +0.0 / -0.0 (Float32 / REAL)
+#####
+
+# DISTINCT for Float32: same collapse to a single row.
+query R rowsort
+SELECT DISTINCT a
+FROM (
+    SELECT arrow_cast(0.0, 'Float32') AS a
+    UNION ALL SELECT arrow_cast(-0.0, 'Float32')
+    UNION ALL SELECT arrow_cast(0.0, 'Float32')
+);
+----
+0
+
+# COUNT(DISTINCT) for Float32: must be 1.
+query I
+SELECT COUNT(DISTINCT a)
+FROM (
+    SELECT arrow_cast(0.0, 'Float32') AS a
+    UNION ALL SELECT arrow_cast(-0.0, 'Float32')
+);
+----
+1
+
+#####
+## UNION (set semantics) with +0.0 / -0.0
+#####
+
+# UNION (DISTINCT) must collapse +0.0 / -0.0 into a single row.
+query R rowsort
+SELECT 0.0 AS a UNION SELECT -0.0 UNION SELECT 0.0;
+----
+0
+
+# UNION ALL preserves every input row regardless of sign — baseline.
+query R rowsort
+SELECT 0.0 AS a UNION ALL SELECT -0.0 UNION ALL SELECT 0.0;
+----
+0
+0
+0
+
+# UNION on Float32 must also collapse to a single row.
+query R rowsort
+SELECT arrow_cast(0.0, 'Float32') AS a
+UNION
+SELECT arrow_cast(-0.0, 'Float32');
+----
+0
+
+#####
+## INTERSECT with +0.0 / -0.0
+#####
+
+# INTERSECT treats +0.0 and -0.0 as equal — one matching row.
+query R rowsort
+SELECT 0.0 AS a INTERSECT SELECT -0.0;
+----
+0
+
+# INTERSECT ALL with multiplicities min(1,1) = 1.
+query R rowsort
+SELECT 0.0 AS a INTERSECT ALL SELECT -0.0;
+----
+0
+
+# INTERSECT for Float32: same matching behavior.
+query R rowsort
+SELECT arrow_cast(0.0, 'Float32') AS a
+INTERSECT
+SELECT arrow_cast(-0.0, 'Float32');
+----
+0
+
+#####
+## EXCEPT with +0.0 / -0.0
+#####
+
+# EXCEPT treats +0.0 and -0.0 as equal — zero rows after subtraction.
+query R rowsort
+SELECT 0.0 AS a EXCEPT SELECT -0.0;
+----
+
+# Reverse direction: also zero rows.
+query R rowsort
+SELECT -0.0 AS a EXCEPT SELECT 0.0;
+----
+
+# EXCEPT for Float32: zero rows.
+query R rowsort
+SELECT arrow_cast(0.0, 'Float32') AS a
+EXCEPT
+SELECT arrow_cast(-0.0, 'Float32');
+----
+
+# EXCEPT ALL with matching multiplicities: zero rows.
+query R rowsort
+SELECT 0.0 AS a EXCEPT ALL SELECT -0.0;
+----
+
+#####
+## INNER JOIN ON equality with +0.0 / -0.0
+#####
+
+# Equi-join on a = b matches +0.0 against -0.0.
+query RR
+SELECT t1.a, t2.b
+FROM (SELECT 0.0 AS a) t1
+JOIN (SELECT -0.0 AS b) t2 ON t1.a = t2.b;
+----
+0 0
+
+# Sort-merge join must also match +0.0 against -0.0. SMJ builds equi-key
+# matchers via `JoinKeyComparator`, which calls Arrow's `make_comparator`
+# (IEEE 754 totalOrder); without normalization, +0.0 and -0.0 produce
+# different orderings and miss the match.
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query RR
+SELECT t1.a, t2.b
+FROM (SELECT 0.0 AS a) t1
+JOIN (SELECT -0.0 AS b) t2 ON t1.a = t2.b;
+----
+0 0
+
+# Float32 SMJ equi-join.
+query RR
+SELECT t1.a, t2.b
+FROM (SELECT arrow_cast(0.0, 'Float32') AS a) t1
+JOIN (SELECT arrow_cast(-0.0, 'Float32') AS b) t2 ON t1.a = t2.b;
+----
+0 0
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;

@@ -1160,17 +1160,16 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 /// # Examples
 ///
 /// ```
-/// use datafusion_common::types::{logical_binary, logical_string, NativeType};
+/// use datafusion_common::types::{logical_binary, logical_string};
 /// use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 ///
 /// // Exact coercion that only accepts timestamp types
 /// let exact = Coercion::new_exact(TypeSignatureClass::Timestamp);
 ///
 /// // Implicit coercion that accepts string types but can coerce from binary types
-/// let implicit = Coercion::new_implicit(
-///     TypeSignatureClass::Native(logical_string()),
+/// let implicit = Coercion::new_implicit_native(
+///     logical_string(),
 ///     vec![TypeSignatureClass::Native(logical_binary())],
-///     NativeType::String,
 /// );
 /// ```
 ///
@@ -1184,6 +1183,8 @@ pub enum Coercion {
     Exact {
         /// The required type for the argument
         desired_type: TypeSignatureClass,
+        /// Physical encoding preservation requested by the function.
+        encoding_preservation: EncodingPreservation,
     },
 
     /// Coercion that accepts the desired type and can implicitly coerce from other types.
@@ -1192,12 +1193,44 @@ pub enum Coercion {
         desired_type: TypeSignatureClass,
         /// Rules for implicit coercion from other types
         implicit_coercion: ImplicitCoercion,
+        /// Physical encoding preservation requested by the function.
+        encoding_preservation: EncodingPreservation,
     },
+}
+
+/// Controls whether a [`Coercion`] preserves an argument's physical encoding
+/// (e.g. dictionary) instead of materializing it to the coerced value type.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Hash)]
+pub struct EncodingPreservation {
+    preserve_dictionary: bool,
+}
+
+impl EncodingPreservation {
+    /// Preserve dictionary encoding and coerce only the dictionary values.
+    pub const fn dictionary() -> Self {
+        Self {
+            preserve_dictionary: true,
+        }
+    }
+
+    /// Preserve dictionary encoding and coerce only the dictionary values.
+    pub const fn with_dictionary(mut self) -> Self {
+        self.preserve_dictionary = true;
+        self
+    }
+
+    /// Returns whether dictionary encoding should be preserved.
+    pub const fn preserve_dictionary(self) -> bool {
+        self.preserve_dictionary
+    }
 }
 
 impl Coercion {
     pub fn new_exact(desired_type: TypeSignatureClass) -> Self {
-        Self::Exact { desired_type }
+        Self::Exact {
+            desired_type,
+            encoding_preservation: EncodingPreservation::default(),
+        }
     }
 
     /// Create a new coercion with implicit coercion rules.
@@ -1215,6 +1248,56 @@ impl Coercion {
                 allowed_source_types,
                 default_casted_type,
             },
+            encoding_preservation: EncodingPreservation::default(),
+        }
+    }
+
+    /// Create a new coercion to a native logical type with implicit coercion rules.
+    ///
+    /// This is a convenience method for coercing to a specific logical type,
+    /// avoiding the need to separately pass the matching native default cast type.
+    ///
+    /// The native type of `desired_type` is used as the default type when coercing
+    /// from `allowed_source_types`.
+    pub fn new_implicit_native(
+        desired_type: LogicalTypeRef,
+        allowed_source_types: Vec<TypeSignatureClass>,
+    ) -> Self {
+        let default_casted_type = desired_type.native().clone();
+        Self::new_implicit(
+            TypeSignatureClass::Native(desired_type),
+            allowed_source_types,
+            default_casted_type,
+        )
+    }
+
+    pub fn with_encoding_preservation(
+        mut self,
+        encoding_preservation: EncodingPreservation,
+    ) -> Self {
+        match &mut self {
+            Coercion::Exact {
+                encoding_preservation: current,
+                ..
+            }
+            | Coercion::Implicit {
+                encoding_preservation: current,
+                ..
+            } => *current = encoding_preservation,
+        }
+        self
+    }
+
+    pub fn encoding_preservation(&self) -> EncodingPreservation {
+        match self {
+            Coercion::Exact {
+                encoding_preservation,
+                ..
+            }
+            | Coercion::Implicit {
+                encoding_preservation,
+                ..
+            } => *encoding_preservation,
         }
     }
 
@@ -1238,7 +1321,7 @@ impl Coercion {
 
     pub fn desired_type(&self) -> &TypeSignatureClass {
         match self {
-            Coercion::Exact { desired_type } => desired_type,
+            Coercion::Exact { desired_type, .. } => desired_type,
             Coercion::Implicit { desired_type, .. } => desired_type,
         }
     }
@@ -1263,6 +1346,7 @@ impl PartialEq for Coercion {
     fn eq(&self, other: &Self) -> bool {
         self.desired_type() == other.desired_type()
             && self.implicit_coercion() == other.implicit_coercion()
+            && self.encoding_preservation() == other.encoding_preservation()
     }
 }
 
@@ -1270,6 +1354,7 @@ impl Hash for Coercion {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.desired_type().hash(state);
         self.implicit_coercion().hash(state);
+        self.encoding_preservation().hash(state);
     }
 }
 
@@ -2401,6 +2486,37 @@ mod tests {
             NativeType::Int64,
         );
         assert_snapshot!(implicit_with_multiple_sources, @"Int64");
+    }
+
+    #[test]
+    fn test_new_implicit_native() {
+        let allowed_source_types = vec![TypeSignatureClass::Numeric];
+
+        assert_eq!(
+            Coercion::new_implicit_native(
+                logical_float64(),
+                allowed_source_types.clone(),
+            ),
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_float64()),
+                allowed_source_types,
+                NativeType::Float64,
+            )
+        );
+    }
+
+    #[test]
+    fn test_coercion_encoding_preservation_affects_equality() {
+        assert!(!EncodingPreservation::default().preserve_dictionary());
+        let preserve_dictionary = EncodingPreservation::dictionary();
+        assert!(preserve_dictionary.preserve_dictionary());
+
+        let default = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let preserving = default
+            .clone()
+            .with_encoding_preservation(preserve_dictionary);
+
+        assert_ne!(default, preserving);
     }
 
     #[test]

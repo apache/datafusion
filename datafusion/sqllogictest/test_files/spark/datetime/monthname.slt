@@ -1,0 +1,175 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Scalar date input
+query T
+SELECT monthname('2024-03-15'::DATE);
+----
+Mar
+
+# All 12 months
+query T
+SELECT monthname('2024-01-15'::DATE);
+----
+Jan
+
+query T
+SELECT monthname('2024-02-15'::DATE);
+----
+Feb
+
+query T
+SELECT monthname('2024-03-15'::DATE);
+----
+Mar
+
+query T
+SELECT monthname('2024-04-15'::DATE);
+----
+Apr
+
+query T
+SELECT monthname('2024-05-15'::DATE);
+----
+May
+
+query T
+SELECT monthname('2024-06-15'::DATE);
+----
+Jun
+
+query T
+SELECT monthname('2024-07-15'::DATE);
+----
+Jul
+
+query T
+SELECT monthname('2024-08-15'::DATE);
+----
+Aug
+
+query T
+SELECT monthname('2024-09-15'::DATE);
+----
+Sep
+
+query T
+SELECT monthname('2024-10-15'::DATE);
+----
+Oct
+
+query T
+SELECT monthname('2024-11-15'::DATE);
+----
+Nov
+
+query T
+SELECT monthname('2024-12-15'::DATE);
+----
+Dec
+
+# NULL handling
+query T
+SELECT monthname(NULL::DATE);
+----
+NULL
+
+# Array input
+query T
+SELECT monthname(d) FROM (VALUES ('2024-01-01'::DATE), ('2024-06-15'::DATE), ('2024-12-31'::DATE), (NULL::DATE)) AS t(d);
+----
+Jan
+Jun
+Dec
+NULL
+
+# Timestamp input: Spark coerces TIMESTAMP/TIMESTAMP_NTZ to DATE before evaluation
+query T
+SELECT monthname('2024-03-15 12:34:56'::TIMESTAMP);
+----
+Mar
+
+query T
+SELECT monthname('2024-07-04 00:00:00'::TIMESTAMP);
+----
+Jul
+
+query T
+SELECT monthname(NULL::TIMESTAMP);
+----
+NULL
+
+# Timestamp array input
+query T
+SELECT monthname(ts) FROM (VALUES
+  ('2024-01-15 01:02:03'::TIMESTAMP),
+  ('2024-08-20 10:20:30'::TIMESTAMP),
+  ('2024-11-30 23:59:59'::TIMESTAMP),
+  (NULL::TIMESTAMP)
+) AS t(ts);
+----
+Jan
+Aug
+Nov
+NULL
+
+# TIMESTAMP_NTZ (Timestamp without timezone) — explicit Microsecond precision
+query T
+SELECT monthname(arrow_cast('2024-04-10 09:15:00', 'Timestamp(Microsecond, None)'));
+----
+Apr
+
+# TIMESTAMP_NTZ — explicit Millisecond precision
+query T
+SELECT monthname(arrow_cast('2024-09-05 18:45:30', 'Timestamp(Millisecond, None)'));
+----
+Sep
+
+# TIMESTAMP_NTZ — explicit Second precision
+query T
+SELECT monthname(arrow_cast('2024-02-29 00:00:00', 'Timestamp(Second, None)'));
+----
+Feb
+
+# TIMESTAMP_NTZ — NULL handling
+query T
+SELECT monthname(arrow_cast(NULL, 'Timestamp(Microsecond, None)'));
+----
+NULL
+
+# TIMESTAMP with timezone (Spark TIMESTAMP / LTZ) — coerces to Date32
+query T
+SELECT monthname(arrow_cast('2024-05-20 03:00:00', 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+May
+
+query T
+SELECT monthname(arrow_cast('2024-10-31 23:59:59', 'Timestamp(Microsecond, Some("America/New_York"))'));
+----
+Oct
+
+# Error: wrong argument type (string without cast)
+statement error Function 'monthname' requires Date, but received String
+SELECT monthname('not-a-date');
+
+# Error: wrong argument type (integer)
+statement error Function 'monthname' requires Date, but received Int64
+SELECT monthname(123);
+
+# Error: no arguments
+statement error 'monthname' does not support zero arguments
+SELECT monthname();

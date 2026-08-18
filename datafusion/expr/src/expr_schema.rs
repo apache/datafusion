@@ -16,18 +16,22 @@
 // under the License.
 
 use super::{Between, Expr, Like, predicate_bounds};
+use crate::ValueOrLambda;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
+use crate::expr::{FieldMetadata, LambdaVariable};
+use crate::higher_order_function::HigherOrderReturnFieldArgs;
+use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::FieldRef;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -153,7 +157,7 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
             }
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type {
@@ -217,6 +221,16 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(schema)?.1.data_type().clone())
+            }
+            Expr::Lambda(_lambda) => Ok(DataType::Null),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.data_type().clone()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(DataType::Null),
+            },
         }
     }
 
@@ -352,7 +366,14 @@ impl ExprSchemable for Expr {
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
             Expr::SetComparison(_) => Ok(true),
-            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
+            Expr::InSubquery(InSubquery { expr, subquery, .. }) => {
+                let expr_nullable = expr.nullable(input_schema)?;
+                let subquery_nullable = subquery.subquery.schema().fields().first().ok_or_else(|| {
+                    plan_datafusion_err!("subquery must return exactly one column of data to compare against")
+                })?.is_nullable();
+
+                Ok(expr_nullable | subquery_nullable)
+            }
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
@@ -370,6 +391,16 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
+            Expr::HigherOrderFunction(_func) => {
+                Ok(self.to_field(input_schema)?.1.is_nullable())
+            }
+            Expr::Lambda(_lambda) => Ok(true),
+            Expr::LambdaVariable(LambdaVariable { field, .. }) => match field {
+                Some(f) => Ok(f.is_nullable()),
+                // If the lambda variable's field hasn't been specified, treat it as
+                // null (unspecified lambda variables generate an error during planning)
+                None => Ok(true),
+            },
         }
     }
 
@@ -585,6 +616,9 @@ impl ExprSchemable for Expr {
                     cast_output_field(&src, field.data_type(), true)
                 })
             }
+            Expr::LambdaVariable(LambdaVariable {
+                field: Some(field), ..
+            }) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -596,11 +630,51 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_) => Ok(Arc::new(Field::new(
+            | Expr::Unnest(_)
+            | Expr::Lambda(_)
+            | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
+            Expr::HigherOrderFunction(func) => {
+                let arg_fields = func
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lambda(Lambda { params: _, body }) => {
+                            // use the name of the lambda instead of just the body to help with debugging
+                            Ok(ValueOrLambda::Lambda(Arc::new(Field::new(
+                                arg.qualified_name().1,
+                                body.get_type(schema)?,
+                                body.nullable(schema)?,
+                            ))))
+                        }
+                        _ => Ok(ValueOrLambda::Value(arg.to_field(schema)?.1)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let new_fields = value_fields_with_higher_order_udf_and_lambdas(
+                    &arg_fields,
+                    func.func.as_ref(),
+                )?;
+
+                let arguments = func
+                    .args
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Literal(sv, _) => Some(sv),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
+                let args = HigherOrderReturnFieldArgs {
+                    arg_fields: &new_fields,
+                    scalar_arguments: &arguments,
+                };
+
+                func.func.return_field_from_args(args)
+            }
         }?;
 
         Ok((
@@ -729,8 +803,13 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
+    use crate::logical_plan::builder::LogicalTableSource;
+    use crate::{
+        LogicalPlanBuilder, and, col, in_subquery, lit, not, or,
+        out_ref_col_with_metadata, when,
+    };
 
+    use arrow::datatypes::Schema;
     use datafusion_common::{DFSchema, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
@@ -1007,6 +1086,27 @@ mod tests {
     }
 
     #[test]
+    fn test_alias_metadata_is_preserved_in_field_metadata() {
+        let schema = MockExprSchema::new().with_data_type(DataType::Int32);
+        let alias_metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+
+        let Expr::Alias(alias) = col("foo").alias("alias") else {
+            unreachable!();
+        };
+        let expr = Expr::Alias(alias.with_metadata(Some(alias_metadata.clone())));
+
+        let field = expr.to_field(&schema).unwrap().1;
+        assert_eq!(
+            field.metadata().get("some_key"),
+            Some(&"some_value".to_string())
+        );
+        assert_eq!(expr.metadata(&schema).unwrap(), alias_metadata);
+    }
+
+    #[test]
     fn test_expr_placeholder() {
         let schema = MockExprSchema::new();
 
@@ -1102,6 +1202,76 @@ mod tests {
         fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
             Ok(&self.field)
         }
+    }
+
+    /// A scan of `t`, whose single column `a` has the given nullability.
+    fn scan_t(a_nullable: bool) -> LogicalPlanBuilder {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, a_nullable)]);
+        let source = Arc::new(LogicalTableSource::new(Arc::new(schema)));
+        LogicalPlanBuilder::scan("t", source, None).unwrap()
+    }
+
+    #[test]
+    fn in_subquery_nullability() {
+        // `x IN (SELECT a FROM t)` evaluates to NULL when `x` is NULL, and when `x`
+        // matches no row while `a` contains a NULL. So it is nullable exactly when
+        // either the compared expression or the subquery's output column is.
+        let cases = [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ];
+
+        for (x_nullable, a_nullable, expected) in cases {
+            let subquery = scan_t(a_nullable)
+                .project(vec![col("a")])
+                .unwrap()
+                .build()
+                .unwrap();
+            let expr = in_subquery(col("x"), Arc::new(subquery));
+            let schema = MockExprSchema::new().with_nullable(x_nullable);
+
+            assert_eq!(expr.nullable(&schema).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn in_subquery_nullability_uses_subquery_output_schema() {
+        // `DISTINCT` carries no expressions of its own, but its output column is still
+        // nullable, so the `IN` expression must be nullable too.
+        let subquery = scan_t(true)
+            .project(vec![col("a")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+        assert!(expr.nullable(&MockExprSchema::new()).unwrap());
+
+        // A computed projection's expressions reference `t.a`, which does not appear in
+        // the subquery's output schema, so nullability must be read off that schema's
+        // single column rather than by resolving the projection's expressions against it.
+        let subquery = scan_t(false)
+            .project(vec![col("a") + lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+    }
+
+    #[test]
+    fn in_subquery_nullability_errors_for_no_subquery_columns() {
+        let subquery = LogicalPlanBuilder::empty(false).build().unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+
+        let err = expr.nullable(&MockExprSchema::new()).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: subquery must return exactly one column of data to compare against"
+        );
     }
 
     #[test]

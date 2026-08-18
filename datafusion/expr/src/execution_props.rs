@@ -22,8 +22,9 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use std::sync::Arc;
 
-/// Holds per-query execution properties and data (such as statement
-/// starting timestamps).
+/// Holds properties and scratch state used while optimizing a [`LogicalPlan`]
+/// and translating it into an executable physical plan, such as the statement
+/// start time used during simplification.
 ///
 /// An [`ExecutionProps`] is created each time a `LogicalPlan` is
 /// prepared for execution (optimized). If the same plan is optimized
@@ -31,6 +32,22 @@ use std::sync::Arc;
 ///
 /// It is important that this structure be cheap to create as it is
 /// done so during predicate pruning and expression simplification
+///
+/// # Relationship with [`TaskContext`]
+///
+/// [`ExecutionProps`] is intentionally distinct from [`TaskContext`].
+/// It is used while optimizing a logical plan and constructing physical
+/// expressions and physical plans, before physical operators are run.
+///
+/// [`TaskContext`] is the runtime context passed to physical operators during
+/// physical-plan execution.
+///
+/// Keeping these structures separate avoids threading execution/runtime state
+/// through planning APIs, and avoids making execution depend on planner-only
+/// scratch state.
+///
+/// [`TaskContext`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.TaskContext.html
+/// [`LogicalPlan`]: crate::LogicalPlan
 #[derive(Clone, Debug)]
 pub struct ExecutionProps {
     /// The time at which the query execution started. If `None`,
@@ -85,8 +102,7 @@ impl ExecutionProps {
         &*self
     }
 
-    /// Registers a variable provider, returning the existing
-    /// provider, if any
+    /// Registers a variable provider, returning the existing provider, if any
     pub fn add_var_provider(
         &mut self,
         var_type: VarType,
@@ -122,6 +138,7 @@ impl ExecutionProps {
 #[cfg(test)]
 mod test {
     use super::*;
+
     #[test]
     fn debug() {
         let props = ExecutionProps::new();

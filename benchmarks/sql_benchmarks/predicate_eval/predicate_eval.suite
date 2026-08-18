@@ -1,0 +1,31 @@
+description = "Conjunctive filter evaluation micro-benchmarks covering predicate cost, selectivity, cardinality, width, scale, correlation, and drift"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+short = "r"
+env = "PRED_ROWS"
+default = "1000000"
+values = ["1000000", "..."]
+help = "Sets the number of rows in generated predicate-evaluation datasets."
+
+[[options]]
+name = "fill"
+short = "f"
+env = "PRED_FILL"
+default = "30"
+values = ["2", "30", "170", "..."]
+help = "Sets the filler width for generated string columns."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- predicate_eval"
+description = "Run all predicate-evaluation subgroups with default data sizes."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- predicate_eval --query 20 --subgroup selectivity"
+description = "Run selectivity query 20."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- predicate_eval --subgroup width -r 500000 -f 170"
+description = "Run the width subgroup with 500,000 extra-wide rows."

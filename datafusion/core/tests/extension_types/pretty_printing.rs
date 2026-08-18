@@ -40,10 +40,16 @@ async fn create_test_table() -> Result<DataFrame> {
     // define data.
     let batch = RecordBatch::try_new(
         schema,
-        vec![Arc::new(FixedSizeBinaryArray::from(vec![
-            &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 5, 6],
-        ]))],
+        vec![Arc::new(
+            FixedSizeBinaryArray::try_from_iter(
+                vec![
+                    &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 5, 6],
+                ]
+                .into_iter(),
+            )
+            .unwrap(),
+        )],
     )?;
 
     let state = SessionStateBuilder::default()

@@ -1,0 +1,30 @@
+name Q02d
+group imdb
+
+echo Loading imdb tables
+
+load sql_benchmarks/imdb/init/load_${IMDB_FILE_TYPE:-parquet}.sql
+
+assert I
+SELECT COUNT(*) > 0 from title;
+----
+true
+
+run
+SELECT MIN(t.title) AS movie_title
+FROM company_name AS cn,
+     keyword AS k,
+     movie_companies AS mc,
+     movie_keyword AS mk,
+     title AS t
+WHERE cn.country_code ='[us]'
+  AND k.keyword ='character-name-in-title'
+  AND cn.id = mc.company_id
+  AND mc.movie_id = t.id
+  AND t.id = mk.movie_id
+  AND mk.keyword_id = k.id
+  AND mc.movie_id = mk.movie_id;
+
+result sql_benchmarks/imdb/results/02d.csv
+
+cleanup sql_benchmarks/imdb/init/cleanup.sql

@@ -280,6 +280,19 @@ pub trait FileSource: Any + Send + Sync {
         Ok(SortOrderPushdownResult::Unsupported)
     }
 
+    /// Reorder files in the shared work queue to optimize query performance.
+    ///
+    /// For example, TopK queries benefit from reading files with the best
+    /// statistics first, so the dynamic filter threshold tightens quickly.
+    ///
+    /// The default implementation returns files unchanged (no reordering).
+    fn reorder_files(
+        &self,
+        files: Vec<crate::PartitionedFile>,
+    ) -> Vec<crate::PartitionedFile> {
+        files
+    }
+
     /// Try to push down a projection into this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
@@ -346,20 +359,41 @@ pub trait FileSource: Any + Send + Sync {
     /// - Filter predicates (which may contain dynamic filters)
     /// - Projection expressions
     ///
-    /// The function `f` is called once for each expression. The function should
-    /// return `TreeNodeRecursion::Continue` to continue visiting other expressions,
-    /// or `TreeNodeRecursion::Stop` to stop visiting expressions early.
+    /// The function `f` should be called once per expression unless the function returns
+    /// [`TreeNodeRecursion::Stop`] to stop iteration.
     ///
-    /// Implementations must explicitly visit all expressions. There is no default
-    /// implementation to ensure that all FileSource implementations handle this correctly.
-    ///
-    /// See [`ExecutionPlan::apply_expressions`] for more details and examples.
+    /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
     ///
     /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
+
+    /// Serialize this file source into a full [`PhysicalPlanNode`] (a
+    /// `DataSourceExec` wrapping the `FileScanConfig`), if it knows how.
+    ///
+    /// `base` is the shared [`FileScanConfig`] this source is wrapped in; the
+    /// format-agnostic parts (file groups, schema, statistics, ordering,
+    /// projection, …) are encoded via
+    /// [`FileScanConfig::try_to_proto`](crate::file_scan_config::FileScanConfig::try_to_proto),
+    /// and the concrete source appends its format-specific fields (e.g. CSV
+    /// delimiter/quote) around it.
+    ///
+    /// * `Ok(None)` (the default) — this source has no proto hook yet; the
+    ///   caller falls back to the central downcast chain in `datafusion-proto`.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`FileScanConfig`]: crate::file_scan_config::FileScanConfig
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _base: &FileScanConfig,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
 }
 
 impl dyn FileSource {

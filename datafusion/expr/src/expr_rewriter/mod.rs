@@ -87,13 +87,16 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
     // Normalize column inside Unnest
-    if let Expr::Unnest(Unnest { expr }) = expr {
+    if let Expr::Unnest(Unnest { expr, outer }) = expr {
         let e = normalize_col_with_schemas_and_ambiguity_check(
             expr.as_ref().clone(),
             schemas,
             using_columns,
         )?;
-        return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
+        return Ok(Expr::Unnest(Unnest {
+            expr: Box::new(e),
+            outer,
+        }));
     }
 
     expr.transform(|expr| {
@@ -340,8 +343,16 @@ impl NamePreserver {
 
     pub fn save(&self, expr: &Expr) -> SavedName {
         if self.use_alias {
-            let (relation, name) = expr.qualified_name();
-            SavedName::Saved { relation, name }
+            match expr {
+                Expr::Alias(alias) => SavedName::Saved {
+                    relation: alias.relation.clone(),
+                    name: alias.name.clone(),
+                },
+                _ => {
+                    let (relation, name) = expr.qualified_name();
+                    SavedName::Saved { relation, name }
+                }
+            }
         } else {
             SavedName::None
         }
@@ -475,7 +486,7 @@ mod test {
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
                 .unwrap_err()
                 .strip_backtrace();
-        let expected = "Schema error: No field named b. \
+        let expected = "Schema error: No field named b.\n\
             Valid fields are \"tableA\".a.";
         assert_eq!(error, expected);
     }

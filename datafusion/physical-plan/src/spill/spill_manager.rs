@@ -25,8 +25,8 @@ use arrow::datatypes::{ByteViewType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::spill_file::SpillFile;
 use std::borrow::Borrow;
 use std::sync::Arc;
 
@@ -76,6 +76,10 @@ impl SpillManager {
         &self.schema
     }
 
+    pub(crate) fn env(&self) -> &RuntimeEnv {
+        &self.env
+    }
+
     /// Creates a temporary file for in-progress operations, returning an error
     /// message if file creation fails. The file can be used to append batches
     /// incrementally and then finish the file when done.
@@ -99,7 +103,7 @@ impl SpillManager {
         &self,
         batches: &[RecordBatch],
         request_msg: &str,
-    ) -> Result<Option<RefCountedTempFile>> {
+    ) -> Result<Option<Arc<dyn SpillFile>>> {
         let mut in_progress_file = self.create_in_progress_file(request_msg)?;
 
         for batch in batches {
@@ -115,7 +119,7 @@ impl SpillManager {
         &self,
         mut iter: impl Iterator<Item = Result<impl Borrow<RecordBatch>>>,
         request_description: &str,
-    ) -> Result<Option<(RefCountedTempFile, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let mut max_record_batch_size = 0;
@@ -141,7 +145,7 @@ impl SpillManager {
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(RefCountedTempFile, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
@@ -160,19 +164,32 @@ impl SpillManager {
         Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
-    /// Reads a spill file as a stream. The file must be created by the current `SpillManager`.
-    /// This method will generate output in FIFO order: the batch appended first
-    /// will be read first.
+    /// Reads a spill file as a stream. The file must be created by the current
+    /// `SpillManager`; otherwise an error will be returned.
+    ///
+    /// Output is produced in FIFO order: the batch appended first is read first.
+    ///
+    /// # Arg `max_record_batch_memory`
+    ///
+    /// Most callers should pass `None`. This is mainly useful for the
+    /// memory-limited sort-preserving merge path.
+    ///
+    /// When provided, this value is used only as a validation hint. If a
+    /// decoded batch exceeds this threshold, a debug-level log message is
+    /// emitted.
+    ///
+    /// That path uses the maximum spilled batch size to conservatively estimate
+    /// the merge degree when merging multiple sorted runs.
     pub fn read_spill_as_stream(
         &self,
-        spill_file_path: RefCountedTempFile,
+        spill_file_path: Arc<dyn SpillFile>,
         max_record_batch_memory: Option<usize>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = Box::pin(cooperative(SpillReaderStream::new(
             Arc::clone(&self.schema),
             spill_file_path,
             max_record_batch_memory,
-        )));
+        )?));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
     }
@@ -180,14 +197,14 @@ impl SpillManager {
     /// Same as `read_spill_as_stream`, but without buffering.
     pub fn read_spill_as_stream_unbuffered(
         &self,
-        spill_file_path: RefCountedTempFile,
+        spill_file_path: Arc<dyn SpillFile>,
         max_record_batch_memory: Option<usize>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(cooperative(SpillReaderStream::new(
             Arc::clone(&self.schema),
             spill_file_path,
             max_record_batch_memory,
-        ))))
+        )?)))
     }
 }
 
@@ -234,14 +251,111 @@ fn byte_view_data_buffer_size<T: ByteViewType>(array: &GenericByteViewArray<T>) 
 
 #[cfg(test)]
 mod tests {
+    use super::SpillManager;
+    use crate::common::collect;
+    use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use crate::spill::{get_record_batch_memory_size, spill_manager::GetSlicedSize};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::{
-        array::{ArrayRef, StringViewArray},
+        array::{ArrayRef, Int32Array, StringArray, StringViewArray},
         record_batch::RecordBatch,
     };
     use datafusion_common::Result;
+    use datafusion_execution::runtime_env::RuntimeEnv;
     use std::sync::Arc;
+
+    fn build_test_spill_manager(
+        env: Arc<RuntimeEnv>,
+        schema: Arc<Schema>,
+    ) -> SpillManager {
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        SpillManager::new(env, metrics, schema)
+    }
+
+    fn build_writer_batch(schema: Arc<Schema>) -> Result<RecordBatch> {
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
+        .map_err(Into::into)
+    }
+
+    #[tokio::test]
+    async fn test_read_spill_as_stream_from_another_spill_manager_same_schema()
+    -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let writer_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let reader_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+
+        let writer =
+            build_test_spill_manager(Arc::clone(&env), Arc::clone(&writer_schema));
+        let reader = build_test_spill_manager(env, Arc::clone(&reader_schema));
+        let written_batch = build_writer_batch(Arc::clone(&writer_schema))?;
+
+        let spill_file = writer
+            .spill_record_batch_and_finish(
+                std::slice::from_ref(&written_batch),
+                "writer",
+            )?
+            .unwrap();
+
+        // Same-schema reads through a different SpillManager currently pass
+        // because only schema compatibility is validated. This is not a
+        // supported usage pattern.
+        let stream = reader.read_spill_as_stream(spill_file, None)?;
+        assert_eq!(stream.schema(), reader_schema);
+
+        let batches = collect(stream).await?;
+        assert_eq!(batches, vec![written_batch]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_spill_as_stream_from_another_spill_manager_different_schema()
+    -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let writer_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let reader_schema = Arc::new(Schema::new(vec![
+            Field::new("other_id", DataType::Int32, true),
+            Field::new("other_value", DataType::Utf8, true),
+        ]));
+
+        let writer =
+            build_test_spill_manager(Arc::clone(&env), Arc::clone(&writer_schema));
+        let reader = build_test_spill_manager(env, Arc::clone(&reader_schema));
+        let written_batch = build_writer_batch(Arc::clone(&writer_schema))?;
+
+        let spill_file = writer
+            .spill_record_batch_and_finish(
+                std::slice::from_ref(&written_batch),
+                "writer",
+            )?
+            .unwrap();
+
+        let stream = reader.read_spill_as_stream(spill_file, None)?;
+        let err = collect(stream)
+            .await
+            .expect_err("schema mismatch should fail fast");
+        let err = err.to_string();
+        assert!(err.contains("Spill file schema mismatch"));
+        assert!(err.contains("expected"));
+        assert!(err.contains("got"));
+
+        Ok(())
+    }
 
     #[test]
     fn check_sliced_size_for_string_view_array() -> Result<()> {

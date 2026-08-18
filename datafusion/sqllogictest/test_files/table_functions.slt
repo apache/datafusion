@@ -100,6 +100,20 @@ SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC
 2
 1
 
+# Ensures the physical plan doesn't include `SortExec`.
+# Tests that generate_series() on Int64 auto-detects output sort order.
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM generate_series(100000) AS t1(v1) ORDER BY v1
+----
+logical_plan
+01)Sort: t1.v1 ASC NULLS LAST
+02)--SubqueryAlias: t1
+03)----Projection: generate_series().value AS v1
+04)------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[value@0 as v1]
+02)--LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100000, batch_size=8192]
+
 # Test generate_series with LIMIT
 query I rowsort
 SELECT * FROM generate_series(1, 100) t1(v1) LIMIT 5
@@ -182,6 +196,68 @@ SELECT * FROM generate_series(1, 2, 3, 4)
 
 statement error DataFusion error: Error during planning: Argument \#1 must be an INTEGER, TIMESTAMP, DATE or NULL, got Utf8
 SELECT * FROM generate_series('foo', 'bar')
+
+# Regression test for https://github.com/apache/datafusion/issues/22208
+# A step that would overflow i64 after the last reachable value must return the
+# reachable values instead of panicking, matching PostgreSQL/DuckDB behavior.
+query I
+SELECT * FROM generate_series(9223372036854775806, 9223372036854775807, 2)
+----
+9223372036854775806
+
+# Same, in the descending direction
+query I
+SELECT * FROM generate_series(-9223372036854775806, -9223372036854775808, -2)
+----
+-9223372036854775806
+-9223372036854775808
+
+# Landing exactly on i64::MAX must include it
+query I
+SELECT * FROM generate_series(9223372036854775805, 9223372036854775807, 2)
+----
+9223372036854775805
+9223372036854775807
+
+# Same overflow behavior for `range` (end exclusive)
+query I
+SELECT * FROM range(9223372036854775806, 9223372036854775807, 2)
+----
+9223372036854775806
+
+# Regression test for https://github.com/apache/datafusion/issues/22193
+# Dates outside the nanosecond timestamp range must produce a clean planning
+# error instead of panicking (debug) or silently wrapping (release).
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(DATE '0001-01-01', DATE '2000-01-01', INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: Second argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(DATE '2000-01-01', DATE '3000-01-01', INTERVAL '1' DAY)
+
+# Reaching the maximum representable date must not attempt to advance beyond it.
+query P
+SELECT * FROM generate_series(DATE '2262-04-11', DATE '2262-04-11', INTERVAL '1' DAY)
+----
+2262-04-11T00:00:00
+
+# Same for the maximum representable nanosecond timestamp.
+query P
+SELECT * FROM generate_series(TIMESTAMP '2262-04-11T23:47:16.854775807', TIMESTAMP '2262-04-11T23:47:16.854775807', INTERVAL '1' NANOSECOND)
+----
+2262-04-11T23:47:16.854775807
+
+# A timestamp step that exceeds the nanosecond range must terminate after the
+# last reachable value instead of returning an overflow error.
+query P
+SELECT * FROM generate_series(TIMESTAMP '2262-04-11T23:47:16.854775806', TIMESTAMP '2262-04-11T23:47:16.854775807', INTERVAL '2' NANOSECOND)
+----
+2262-04-11T23:47:16.854775806
+
+# Same behavior for date series, which use the timestamp implementation.
+query P
+SELECT * FROM generate_series(DATE '2262-04-10', DATE '2262-04-11', INTERVAL '2' DAY)
+----
+2262-04-10T00:00:00
 
 # UDF and UDTF `generate_series` can be used simultaneously
 query ? rowsort

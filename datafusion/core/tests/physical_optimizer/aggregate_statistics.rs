@@ -29,16 +29,17 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::assert_batches_eq;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, Statistics};
+use datafusion_common::{ScalarValue, assert_batches_eq};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::TaskContext;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::Operator;
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::{self, cast};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -542,6 +543,308 @@ async fn test_count_distinct_optimization() -> Result<()> {
                     case.name
                 );
             }
+        } else {
+            assert!(
+                optimized.is::<AggregateExec>(),
+                "'{}': expected AggregateExec (not optimized)",
+                case.name
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Regression test for https://github.com/apache/datafusion/issues/22554
+///
+/// TopK aggregation for DISTINCT queries was unconditionally dropping NULL
+/// group keys, producing wrong results with NULLS FIRST / NULLS LAST ordering.
+#[tokio::test]
+async fn topk_distinct_preserves_nulls() -> Result<()> {
+    let ctx = SessionContext::new_with_config(SessionConfig::new());
+
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(vec![None, Some(""), Some("a")]))],
+    )?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("t", Arc::new(table))?;
+
+    // ASC NULLS FIRST LIMIT 1 → NULL should come first
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS FIRST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(&["+---+", "| v |", "+---+", "|   |", "+---+"], &result);
+    assert!(result[0].column(0).is_null(0), "first row should be NULL");
+
+    // ASC NULLS FIRST LIMIT 2 → NULL, then empty string
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS FIRST LIMIT 2")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 2);
+    assert!(result[0].column(0).is_null(0));
+    assert!(!result[0].column(0).is_null(1));
+
+    // ASC NULLS LAST LIMIT 1 → empty string (smallest non-null)
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS LAST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert!(
+        !result[0].column(0).is_null(0),
+        "first row should NOT be NULL"
+    );
+
+    // Full result with NULLS LAST should include NULL at end
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t ORDER BY v ASC NULLS LAST LIMIT 3")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 3);
+    assert!(result[0].column(0).is_null(2), "last row should be NULL");
+
+    // Integer column
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)])),
+        vec![Arc::new(Int64Array::from(vec![None, Some(3), Some(1)]))],
+    )?;
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    ctx.register_table("t_int", Arc::new(table))?;
+
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t_int ORDER BY v ASC NULLS FIRST LIMIT 1")
+        .await?
+        .collect()
+        .await?;
+    assert!(
+        result[0].column(0).is_null(0),
+        "integer NULL should be first"
+    );
+
+    let result = ctx
+        .sql("SELECT DISTINCT v FROM t_int ORDER BY v DESC NULLS LAST LIMIT 2")
+        .await?
+        .collect()
+        .await?;
+    assert_eq!(result[0].num_rows(), 2);
+    assert!(!result[0].column(0).is_null(0));
+    assert!(!result[0].column(0).is_null(1));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sum_from_statistics() -> Result<()> {
+    enum SumArg {
+        ColumnA,
+        ColumnB,
+        CastColumnA(DataType),
+        Binary,
+    }
+
+    struct TestCase {
+        name: &'static str,
+        data_type: DataType,
+        sum_value_a: Precision<ScalarValue>,
+        sum_value_b: Precision<ScalarValue>,
+        sum_arg: SumArg,
+        is_distinct: bool,
+        expected_value: Option<ScalarValue>,
+    }
+
+    for case in [
+        TestCase {
+            name: "exact statistics",
+            data_type: DataType::Int64,
+            sum_value_a: Precision::Exact(ScalarValue::Int64(Some(10))),
+            sum_value_b: Precision::Absent,
+            sum_arg: SumArg::ColumnA,
+            is_distinct: false,
+            expected_value: Some(ScalarValue::Int64(Some(10))),
+        },
+        TestCase {
+            name: "second column statistics",
+            data_type: DataType::Int64,
+            sum_value_a: Precision::Exact(ScalarValue::Int64(Some(10))),
+            sum_value_b: Precision::Exact(ScalarValue::Int64(Some(42))),
+            sum_arg: SumArg::ColumnB,
+            is_distinct: false,
+            expected_value: Some(ScalarValue::Int64(Some(42))),
+        },
+        TestCase {
+            name: "casted int32 column statistics",
+            data_type: DataType::Int32,
+            sum_value_a: Precision::Exact(ScalarValue::Int32(Some(10))),
+            sum_value_b: Precision::Absent,
+            sum_arg: SumArg::CastColumnA(DataType::Int64),
+            is_distinct: false,
+            expected_value: Some(ScalarValue::Int64(Some(10))),
+        },
+        TestCase {
+            name: "decimal statistics uses aggregate return type",
+            data_type: DataType::Decimal128(5, 2),
+            sum_value_a: Precision::Exact(ScalarValue::Decimal128(Some(12345), 5, 2)),
+            sum_value_b: Precision::Absent,
+            sum_arg: SumArg::ColumnA,
+            is_distinct: false,
+            expected_value: Some(ScalarValue::Decimal128(Some(12345), 15, 2)),
+        },
+        TestCase {
+            name: "inexact statistics",
+            data_type: DataType::Int64,
+            sum_value_a: Precision::Inexact(ScalarValue::Int64(Some(10))),
+            sum_value_b: Precision::Absent,
+            sum_arg: SumArg::ColumnA,
+            is_distinct: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "absent statistics",
+            data_type: DataType::Int64,
+            sum_value_a: Precision::Absent,
+            sum_value_b: Precision::Absent,
+            sum_arg: SumArg::ColumnA,
+            is_distinct: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "null statistics",
+            data_type: DataType::Int64,
+            sum_value_a: Precision::Exact(ScalarValue::Int64(None)),
+            sum_value_b: Precision::Absent,
+            sum_arg: SumArg::ColumnA,
+            is_distinct: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "binary expr",
+            data_type: DataType::Int64,
+            sum_value_a: Precision::Exact(ScalarValue::Int64(Some(10))),
+            sum_value_b: Precision::Exact(ScalarValue::Int64(Some(42))),
+            sum_arg: SumArg::Binary,
+            is_distinct: false,
+            expected_value: None,
+        },
+        TestCase {
+            name: "distinct sum",
+            data_type: DataType::Int64,
+            sum_value_a: Precision::Exact(ScalarValue::Int64(Some(10))),
+            sum_value_b: Precision::Absent,
+            sum_arg: SumArg::ColumnA,
+            is_distinct: true,
+            expected_value: None,
+        },
+    ] {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", case.data_type.clone(), true),
+            Field::new("b", case.data_type.clone(), true),
+        ]));
+
+        let statistics = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    sum_value: case.sum_value_a,
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    sum_value: case.sum_value_b,
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(ParquetSource::new(Arc::clone(&schema))),
+        )
+        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_statistics(statistics)
+        .build();
+
+        let source: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let schema = source.schema();
+
+        let (agg_args, alias): (Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>>, _) =
+            match case.sum_arg {
+                SumArg::ColumnA => (vec![expressions::col("a", &schema)?], "SUM(a)"),
+                SumArg::ColumnB => (vec![expressions::col("b", &schema)?], "SUM(b)"),
+                SumArg::CastColumnA(cast_type) => (
+                    vec![cast(expressions::col("a", &schema)?, &schema, cast_type)?],
+                    "SUM(CAST(a))",
+                ),
+                SumArg::Binary => (
+                    vec![expressions::binary(
+                        expressions::col("a", &schema)?,
+                        Operator::Plus,
+                        expressions::col("b", &schema)?,
+                        &schema,
+                    )?],
+                    "SUM(a + b)",
+                ),
+            };
+
+        let sum_expr_builder = AggregateExprBuilder::new(sum_udaf(), agg_args)
+            .schema(Arc::clone(&schema))
+            .alias(alias);
+        let sum_expr_builder = if case.is_distinct {
+            sum_expr_builder.distinct()
+        } else {
+            sum_expr_builder
+        };
+        let sum_expr = sum_expr_builder.build()?;
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(sum_expr.clone())],
+            vec![None],
+            source,
+            Arc::clone(&schema),
+        )?;
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(sum_expr)],
+            vec![None],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
+
+        let conf = ConfigOptions::new();
+        let optimized =
+            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+
+        if let Some(expected_value) = case.expected_value {
+            assert!(
+                optimized.is::<ProjectionExec>(),
+                "'{}': expected ProjectionExec",
+                case.name
+            );
+
+            let task_ctx = Arc::new(TaskContext::default());
+            let result = common::collect(optimized.execute(0, task_ctx)?).await?;
+            assert_eq!(result.len(), 1, "'{}': expected 1 batch", case.name);
+            assert_eq!(
+                result[0].schema().field(0).data_type(),
+                &expected_value.data_type(),
+                "'{}': unexpected data type",
+                case.name
+            );
+            assert_eq!(
+                ScalarValue::try_from_array(result[0].column(0), 0)?,
+                expected_value,
+                "'{}': unexpected value",
+                case.name
+            );
         } else {
             assert!(
                 optimized.is::<AggregateExec>(),

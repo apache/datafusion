@@ -15,23 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RVec};
 use arrow_schema::FieldRef;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{DataFusionError, ffi_datafusion_err};
 use datafusion_expr::ReturnFieldArgs;
 use prost::Message;
 
+use stabby::vec::Vec as SVec;
+
 use crate::arrow_wrappers::WrappedSchema;
-use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
+use crate::util::{
+    FFI_Option, rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped,
+};
 
 /// A stable struct for sharing a [`ReturnFieldArgs`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_ReturnFieldArgs {
-    arg_fields: RVec<WrappedSchema>,
-    scalar_arguments: RVec<ROption<RVec<u8>>>,
+    arg_fields: SVec<WrappedSchema>,
+    scalar_arguments: SVec<FFI_Option<SVec<u8>>>,
 }
 
 impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
@@ -47,13 +49,17 @@ impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
                     .map(|arg| {
                         let proto_value: datafusion_proto::protobuf::ScalarValue =
                             arg.try_into()?;
-                        let proto_bytes: RVec<u8> = proto_value.encode_to_vec().into();
+                        let proto_bytes: SVec<u8> =
+                            proto_value.encode_to_vec().into_iter().collect();
                         Ok(proto_bytes)
                     })
                     .transpose()
             })
             .collect();
-        let scalar_arguments = scalar_arguments?.into_iter().map(ROption::from).collect();
+        let scalar_arguments = scalar_arguments?
+            .into_iter()
+            .map(FFI_Option::from)
+            .collect();
 
         Ok(Self {
             arg_fields,
@@ -91,7 +97,7 @@ impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
                     let scalar_value: ScalarValue = (&proto_value).try_into()?;
                     Ok(scalar_value)
                 });
-                Option::from(maybe_arg).transpose()
+                maybe_arg.transpose()
             })
             .collect();
         let scalar_arguments = scalar_arguments?.into_iter().collect();

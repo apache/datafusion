@@ -36,16 +36,21 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
+};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
+    StatisticsContext,
     execution_plan::{Boundedness, EmissionType},
 };
 
@@ -249,20 +254,96 @@ async fn test_join_with_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join
-            .left()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
+    );
+}
+
+#[tokio::test]
+async fn test_join_with_swap_to_sort_preserving_merge_fetch_side() {
+    let (big, _) = create_big_and_small();
+    let top1_input = Arc::new(StatisticsExec::new(
+        big_statistics(),
+        Schema::new(vec![Field::new("top_col", DataType::Int32, false)]),
+    ));
+    let top1 = Arc::new(
+        SortPreservingMergeExec::new(
+            [PhysicalSortExpr::new_default(Arc::new(Column::new(
+                "top_col", 0,
+            )))]
+            .into(),
+            top1_input,
+        )
+        .with_fetch(Some(1)),
+    );
+
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&big),
+            top1,
+            vec![(
+                Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
+                Arc::new(Column::new("top_col", 0)),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    let optimized_join = JoinSelection::new()
+        .optimize(join, &ConfigOptions::new())
+        .unwrap();
+    let optimized_join = optimized_join
+        .downcast_ref::<ProjectionExec>()
+        .map(|projection| projection.input())
+        .unwrap_or(&optimized_join);
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("optimized plan should contain a hash join");
+
+    let left_spm = swapped_join
+        .left()
+        .downcast_ref::<SortPreservingMergeExec>()
+        .expect("SPM fetch side should become the left/build input");
+    assert_eq!(left_spm.fetch(), Some(1));
+    let statistics_context = StatisticsContext::new();
+    assert_eq!(
+        statistics_context
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
+        Precision::Inexact(1)
+    );
+    let left_byte_size = statistics_context
+        .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
+        .unwrap()
+        .total_byte_size;
+    let right_byte_size = big_statistics().total_byte_size;
+    assert!(
+        left_byte_size.get_value() < right_byte_size.get_value(),
+        "SPM fetch side should be estimated smaller than the big side"
+    );
+    assert_eq!(
+        statistics_context
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
+            .unwrap()
+            .num_rows,
+        big_statistics().num_rows
     );
 }
 
@@ -297,17 +378,15 @@ async fn test_left_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join
-            .left()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -348,17 +427,15 @@ async fn test_join_with_swap_semi() {
 
         assert_eq!(swapped_join.schema().fields().len(), 1);
         assert_eq!(
-            swapped_join
-                .left()
-                .partition_statistics(None)
+            StatisticsContext::new()
+                .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            swapped_join
-                .right()
-                .partition_statistics(None)
+            StatisticsContext::new()
+                .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -401,17 +478,15 @@ async fn test_join_with_swap_mark() {
 
         assert_eq!(swapped_join.schema().fields().len(), 2);
         assert_eq!(
-            swapped_join
-                .left()
-                .partition_statistics(None)
+            StatisticsContext::new()
+                .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(8192)
         );
         assert_eq!(
-            swapped_join
-                .right()
-                .partition_statistics(None)
+            StatisticsContext::new()
+                .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
             Precision::Inexact(2097152)
@@ -529,17 +604,15 @@ async fn test_join_no_swap() {
         .expect("The type of the plan should not be changed");
 
     assert_eq!(
-        swapped_join
-            .left()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -604,17 +677,15 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join
-            .left()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -677,17 +748,15 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     );
 
     assert_eq!(
-        swapped_join
-            .left()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(8192)
     );
     assert_eq!(
-        swapped_join
-            .right()
-            .partition_statistics(None)
+        StatisticsContext::new()
+            .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         Precision::Inexact(2097152)
@@ -1041,11 +1110,22 @@ impl ExecutionPlan for UnboundedExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -1062,16 +1142,9 @@ impl ExecutionPlan for UnboundedExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -1152,11 +1225,22 @@ impl ExecutionPlan for StatisticsExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -1167,8 +1251,12 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        Ok(Arc::new(if partition.is_some() {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(if args.partition().is_some() {
             Statistics::new_unknown(&self.schema)
         } else {
             self.stats.clone()
@@ -1177,16 +1265,9 @@ impl ExecutionPlan for StatisticsExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -1229,8 +1310,8 @@ struct TestCase {
     expecting_swap: bool,
 }
 
-#[tokio::test]
-async fn test_join_with_swap_full() -> Result<()> {
+#[test]
+fn test_join_with_swap_full() -> Result<()> {
     // NOTE: Currently, some initial conditions are not viable after join order selection.
     //       For example, full join always comes in partitioned mode. See the warning in
     //       function "swap". If this changes in the future, we should update these tests.
@@ -1277,13 +1358,13 @@ async fn test_join_with_swap_full() -> Result<()> {
         },
     ];
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-#[tokio::test]
-async fn test_cases_without_collect_left_check() -> Result<()> {
+#[test]
+fn test_cases_without_collect_left_check() -> Result<()> {
     let mut cases = vec![];
     let join_types = vec![JoinType::LeftSemi, JoinType::Inner];
     for join_type in join_types {
@@ -1370,13 +1451,13 @@ async fn test_cases_without_collect_left_check() -> Result<()> {
     }
 
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-#[tokio::test]
-async fn test_not_support_collect_left() -> Result<()> {
+#[test]
+fn test_not_support_collect_left() -> Result<()> {
     let mut cases = vec![];
     // After [JoinSelection] optimization, these join types cannot run in CollectLeft mode except
     // [JoinType::LeftSemi]
@@ -1425,13 +1506,13 @@ async fn test_not_support_collect_left() -> Result<()> {
     }
 
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-#[tokio::test]
-async fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
+#[test]
+fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
     let mut cases = vec![];
     let the_ones_not_support_collect_left =
         vec![JoinType::Right, JoinType::RightAnti, JoinType::RightSemi];
@@ -1525,12 +1606,12 @@ async fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
     }
 
     for case in cases.into_iter() {
-        test_join_with_maybe_swap_unbounded_case(case).await?
+        test_join_with_maybe_swap_unbounded_case(case)?
     }
     Ok(())
 }
 
-async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
+fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
     let left_unbounded = t.initial_sources_unbounded.0 == SourceType::Unbounded;
     let right_unbounded = t.initial_sources_unbounded.1 == SourceType::Unbounded;
     let left_exec = Arc::new(UnboundedExec::new(

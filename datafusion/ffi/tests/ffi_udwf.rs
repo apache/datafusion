@@ -22,7 +22,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, create_array};
-    use datafusion::error::{DataFusionError, Result};
+    use datafusion::error::Result;
     use datafusion::logical_expr::expr::Sort;
     use datafusion::logical_expr::{ExprFunctionExt, WindowUDF, WindowUDFImpl, col};
     use datafusion::prelude::SessionContext;
@@ -33,13 +33,7 @@ mod tests {
     async fn test_rank_udwf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_rank_func =
-            module
-                .create_rank_udwf()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External table provider failed to implement create_scalar_udf"
-                        .to_string(),
-                ))?();
+        let ffi_rank_func = (module.create_rank_udwf)();
         let foreign_rank_func: Arc<dyn WindowUDFImpl> = (&ffi_rank_func).into();
 
         let udwf = WindowUDF::new_from_shared_impl(foreign_rank_func);

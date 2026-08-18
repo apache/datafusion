@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::TableDef;
+use crate::{TableDef, primary_key};
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::Constraints;
 
 /// Schemas for the TPCH tables
 pub fn tpch_schemas() -> Vec<TableDef> {
@@ -105,14 +106,41 @@ pub fn tpch_schemas() -> Vec<TableDef> {
         Field::new("r_comment", DataType::Utf8, false),
     ]);
 
+    let def = |name, schema: Schema| {
+        let constraints = tpch_constraints(name, &schema);
+        TableDef::new(name, schema).with_constraints(constraints)
+    };
+
     vec![
-        TableDef::new("lineitem", lineitem_schema),
-        TableDef::new("orders", orders_schema),
-        TableDef::new("part", part_schema),
-        TableDef::new("supplier", supplier_schema),
-        TableDef::new("partsupp", partsupp_schema),
-        TableDef::new("customer", customer_schema),
-        TableDef::new("nation", nation_schema),
-        TableDef::new("region", region_schema),
+        def("lineitem", lineitem_schema),
+        def("orders", orders_schema),
+        def("part", part_schema),
+        def("supplier", supplier_schema),
+        def("partsupp", partsupp_schema),
+        def("customer", customer_schema),
+        def("nation", nation_schema),
+        def("region", region_schema),
     ]
+}
+
+/// Primary-key columns for each TPC-H table.
+static TPCH_PRIMARY_KEYS: &[(&str, &[&str])] = &[
+    ("region", &["r_regionkey"]),
+    ("nation", &["n_nationkey"]),
+    ("part", &["p_partkey"]),
+    ("supplier", &["s_suppkey"]),
+    ("partsupp", &["ps_partkey", "ps_suppkey"]),
+    ("customer", &["c_custkey"]),
+    ("orders", &["o_orderkey"]),
+    ("lineitem", &["l_orderkey", "l_linenumber"]),
+];
+
+fn tpch_constraints(table: &str, schema: &Schema) -> Constraints {
+    let columns = TPCH_PRIMARY_KEYS
+        .iter()
+        .find(|(name, _)| *name == table)
+        .map(|(_, columns)| *columns)
+        .unwrap_or_else(|| unimplemented!("unknown TPC-H table: {table}"));
+
+    Constraints::new_unverified(vec![primary_key(schema, columns)])
 }

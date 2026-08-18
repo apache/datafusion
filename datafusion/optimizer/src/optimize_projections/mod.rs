@@ -21,7 +21,6 @@ mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
@@ -30,15 +29,13 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
+    Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
 use crate::utils::NamePreserver;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -136,9 +133,11 @@ fn optimize_projections(
     // their parents' required indices.
     match plan {
         LogicalPlan::Projection(proj) => {
-            return merge_consecutive_projections(proj)?.transform_data(|proj| {
-                rewrite_projection_given_requirements(proj, config, &indices)
-            });
+            return merge_consecutive_projections(proj)?
+                .transform_data(|proj| {
+                    rewrite_projection_given_requirements(proj, config, &indices)
+                })?
+                .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Aggregate(aggregate) => {
             // Split parent requirements to GROUP BY and aggregate sections:
@@ -147,26 +146,39 @@ fn optimize_projections(
             // `aggregate.aggr_expr`:
             let (group_by_reqs, aggregate_reqs) = indices.split_off(n_group_exprs);
 
-            // Get absolutely necessary GROUP BY fields:
-            let group_by_expr_existing = aggregate
-                .group_expr
-                .iter()
-                .map(|group_by_expr| group_by_expr.schema_name().to_string())
-                .collect::<Vec<_>>();
-
-            let new_group_bys = if let Some(simplest_groupby_indices) =
-                get_required_group_by_exprs_indices(
-                    aggregate.input.schema(),
-                    &group_by_expr_existing,
-                ) {
-                // Some of the fields in the GROUP BY may be required by the
-                // parent even if these fields are unnecessary in terms of
-                // functional dependency.
-                group_by_reqs
-                    .append(&simplest_groupby_indices)
-                    .get_at_indices(&aggregate.group_expr)
-            } else {
+            // Get absolutely necessary GROUP BY fields.
+            //
+            // When the input has no functional dependencies, we can
+            // short-circuit this analysis.
+            let new_group_bys = if aggregate
+                .input
+                .schema()
+                .functional_dependencies()
+                .is_empty()
+            {
                 aggregate.group_expr
+            } else {
+                let group_by_expr_existing = aggregate
+                    .group_expr
+                    .iter()
+                    .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                    .collect::<Vec<_>>();
+
+                if let Some(simplest_groupby_indices) =
+                    get_required_group_by_exprs_indices(
+                        aggregate.input.schema(),
+                        &group_by_expr_existing,
+                    )
+                {
+                    // Some of the fields in the GROUP BY may be required by
+                    // the parent even if these fields are unnecessary in
+                    // terms of functional dependency.
+                    group_by_reqs
+                        .append(&simplest_groupby_indices)
+                        .get_at_indices(&aggregate.group_expr)
+                } else {
+                    aggregate.group_expr
+                }
             };
 
             // Only use the absolutely necessary aggregate expressions required
@@ -210,7 +222,8 @@ fn optimize_projections(
                     new_aggr_expr,
                 )
                 .map(LogicalPlan::Aggregate)
-            });
+            })?
+            .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Window(window) => {
             let input_schema = Arc::clone(window.input.schema());
@@ -250,28 +263,22 @@ fn optimize_projections(
                         .map(LogicalPlan::Window)
                         .map(Transformed::yes)
                 }
-            });
+            })?
+            .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::TableScan(table_scan) => {
-            let TableScan {
-                table_name,
-                source,
-                projection,
-                filters,
-                fetch,
-                projected_schema: _,
-            } = table_scan;
-
             // Get indices referred to in the original (schema with all fields)
             // given projected indices.
-            let projection = match &projection {
+            let projection = match &table_scan.projection {
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+            let new_scan = TableScanBuilder::from(table_scan)
+                .with_projection(Some(projection))
+                .build()?;
 
-            return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
+            return Transformed::yes(LogicalPlan::TableScan(new_scan))
+                .transform_data(|plan| optimize_subqueries(plan, config));
         }
         // Other node types are handled below
         _ => {}
@@ -364,39 +371,35 @@ fn optimize_projections(
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::RecursiveQuery(recursive) => {
-            // Only allow subqueries that reference the current CTE; nested subqueries are not yet
-            // supported for projection pushdown for simplicity.
-            // TODO: be able to do projection pushdown on recursive CTEs with subqueries
-            if plan_contains_other_subqueries(
-                recursive.static_term.as_ref(),
-                &recursive.name,
-            ) || plan_contains_other_subqueries(
-                recursive.recursive_term.as_ref(),
-                &recursive.name,
-            ) {
-                return Ok(Transformed::no(plan));
-            }
-
-            plan.inputs()
-                .into_iter()
-                .map(|input| {
-                    indices
-                        .clone()
-                        .with_projection_beneficial()
-                        .with_plan_exprs(&plan, input.schema())
-                })
-                .collect::<Result<Vec<_>>>()?
+        LogicalPlan::RecursiveQuery(_) => {
+            // optimize the static and recursive terms: treat each recursive CTE term like a
+            // standalone subquery: optimize its internals, but do not push parent required indices
+            // through the RecursiveQuery boundary, as this can otherwise lead to bugs
+            // (see: https://github.com/apache/datafusion/issues/22249)
+            return plan.map_children(|c| {
+                let indices = RequiredIndices::new_for_all_exprs(&c);
+                optimize_projections(c, config, indices)
+            });
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let right_len = join.right.schema().fields().len();
             let (left_req_indices, right_req_indices) =
                 split_join_requirements(left_len, right_len, indices, &join.join_type);
-            let left_indices =
+            let mut left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
-            let right_indices =
+            let mut right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
+            // Ensure an empty mark join still has a column to qualify mark
+            match join.join_type {
+                JoinType::LeftMark if right_indices.indices().is_empty() => {
+                    right_indices = right_indices.append(&[0]);
+                }
+                JoinType::RightMark if left_indices.indices().is_empty() => {
+                    left_indices = left_indices.append(&[0]);
+                }
+                _ => {}
+            }
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
             vec![
@@ -464,6 +467,9 @@ fn optimize_projections(
         )
     })?;
 
+    let transformed_plan =
+        transformed_plan.transform_data(|plan| optimize_subqueries(plan, config))?;
+
     // If any of the children are transformed, we need to potentially update the plan's schema
     if transformed_plan.transformed {
         transformed_plan.map_data(|plan| plan.recompute_schema())
@@ -472,8 +478,19 @@ fn optimize_projections(
     }
 }
 
-/// Merges consecutive projections.
-///
+/// Optimizes uncorrelated subquery plans embedded in expressions of the given
+/// plan node (e.g., `Expr::ScalarSubquery`). `map_children` only visits direct
+/// plan inputs, so subqueries must be handled separately.
+fn optimize_subqueries(
+    plan: LogicalPlan,
+    config: &dyn OptimizerConfig,
+) -> Result<Transformed<LogicalPlan>> {
+    plan.map_uncorrelated_subqueries(|subquery_plan| {
+        let indices = RequiredIndices::new_for_all_exprs(&subquery_plan);
+        optimize_projections(subquery_plan, config, indices)
+    })
+}
+
 /// Given a projection `proj`, this function attempts to merge it with a previous
 /// projection if it exists and if merging is beneficial. Merging is considered
 /// beneficial when expressions in the current projection are non-trivial and
@@ -505,6 +522,30 @@ fn optimize_projections(
 /// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
 /// - `Err(error)`: An error occurred during the function call.
 fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Projection>> {
+    // Collapse the whole chain in one pass; otherwise an N-deep chain needs
+    // N outer optimizer passes to fully fold.
+    let mut current = proj;
+    let mut transformed_any = false;
+    loop {
+        let Transformed {
+            data, transformed, ..
+        } = merge_consecutive_projections_one_level(current)?;
+        current = data;
+        if !transformed {
+            break;
+        }
+        transformed_any = true;
+    }
+    Ok(if transformed_any {
+        Transformed::yes(current)
+    } else {
+        Transformed::no(current)
+    })
+}
+
+fn merge_consecutive_projections_one_level(
+    proj: Projection,
+) -> Result<Transformed<Projection>> {
     let Projection {
         expr,
         input,
@@ -574,9 +615,12 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
                     if metadata.is_none() && expr.schema_name().to_string() == name {
                         expr
                     } else {
-                        Expr::Alias(
-                            Alias::new(expr, relation, name).with_metadata(metadata),
-                        )
+                        Expr::Alias(Alias {
+                            expr: Box::new(expr),
+                            relation,
+                            name,
+                            metadata,
+                        })
                     }
                 })
             }),
@@ -680,56 +724,6 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
             _ => Ok(Transformed::no(expr)),
         }
     })
-}
-
-/// Accumulates outer-referenced columns by the
-/// given expression, `expr`.
-///
-/// # Parameters
-///
-/// * `expr` - The expression to analyze for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
-///   columns are collected.
-fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
-    // inspect_expr_pre doesn't handle subquery references, so find them explicitly
-    expr.apply(|expr| {
-        match expr {
-            Expr::OuterReferenceColumn(_, col) => {
-                columns.insert(col);
-            }
-            Expr::ScalarSubquery(subquery) => {
-                outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
-            }
-            Expr::Exists(exists) => {
-                outer_columns_helper_multi(&exists.subquery.outer_ref_columns, columns);
-            }
-            Expr::InSubquery(insubquery) => {
-                outer_columns_helper_multi(
-                    &insubquery.subquery.outer_ref_columns,
-                    columns,
-                );
-            }
-            _ => {}
-        };
-        Ok(TreeNodeRecursion::Continue)
-    })
-    // unwrap: closure above never returns Err, so can not be Err here
-    .unwrap();
-}
-
-/// A recursive subroutine that accumulates outer-referenced columns by the
-/// given expressions (`exprs`).
-///
-/// # Parameters
-///
-/// * `exprs` - The expressions to analyze for outer-referenced columns.
-/// * `columns` - A mutable reference to a `HashSet<Column>` where detected
-///   columns are collected.
-fn outer_columns_helper_multi<'a, 'b>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    columns: &'b mut HashSet<&'a Column>,
-) {
-    exprs.into_iter().for_each(|e| outer_columns(e, columns));
 }
 
 /// Splits requirement indices for a join into left and right children based on
@@ -890,64 +884,6 @@ pub fn is_projection_unnecessary(
             }
         },
     ))
-}
-
-/// Returns true if the plan subtree contains any subqueries that are not the
-/// CTE reference itself. This treats any non-CTE [`LogicalPlan::SubqueryAlias`]
-/// node (including aliased relations) as a blocker, along with expression-level
-/// subqueries like scalar, EXISTS, or IN. These cases prevent projection
-/// pushdown for now because we cannot safely reason about their column usage.
-fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
-    if let LogicalPlan::SubqueryAlias(alias) = plan
-        && alias.alias.table() != cte_name
-        && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
-    {
-        return true;
-    }
-
-    let mut found = false;
-    plan.apply_expressions(|expr| {
-        if expr_contains_subquery(expr) {
-            found = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    })
-    .expect("expression traversal never fails");
-    if found {
-        return true;
-    }
-
-    plan.inputs()
-        .into_iter()
-        .any(|child| plan_contains_other_subqueries(child, cte_name))
-}
-
-fn expr_contains_subquery(expr: &Expr) -> bool {
-    expr.exists(|e| match e {
-        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => Ok(true),
-        _ => Ok(false),
-    })
-    // Safe unwrap since we are doing a simple boolean check
-    .unwrap()
-}
-
-fn subquery_alias_targets_recursive_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
-    match plan {
-        LogicalPlan::TableScan(scan) => scan.table_name.table() == cte_name,
-        LogicalPlan::SubqueryAlias(alias) => {
-            subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
-        }
-        _ => {
-            let inputs = plan.inputs();
-            if inputs.len() == 1 {
-                subquery_alias_targets_recursive_cte(inputs[0], cte_name)
-            } else {
-                false
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -2458,6 +2394,62 @@ mod tests {
               TableScan: a projection=[a, b, c]
               TableScan: b projection=[a]
           TableScan: c projection=[a, b, c]
+        "
+        )
+    }
+
+    // Stacked filter-less LeftMark joins (from `= ANY` / `<> ALL`) must keep
+    // each `mark` qualified so they don't collide.
+    #[test]
+    fn optimize_projections_stacked_mark_joins_keep_qualified_mark() -> Result<()> {
+        let person = test_table_scan_with_name("person")?;
+
+        let aliased_scan = |table: &str, alias: &str| -> Result<LogicalPlan> {
+            LogicalPlanBuilder::from(test_table_scan_with_name(table)?)
+                .project(vec![col(format!("{table}.a"))])?
+                .alias(alias)?
+                .build()
+        };
+
+        let plan = LogicalPlanBuilder::from(person)
+            .join_on(
+                aliased_scan("s1", "__correlated_sq_1")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s2", "__correlated_sq_2")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s3", "__correlated_sq_3")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .filter(
+                col("__correlated_sq_1.mark")
+                    .or(col("__correlated_sq_2.mark"))
+                    .and(not(col("__correlated_sq_3.mark"))),
+            )?
+            .project(vec![col("person.a")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: person.a
+          Filter: (__correlated_sq_1.mark OR __correlated_sq_2.mark) AND NOT __correlated_sq_3.mark
+            LeftMark Join:  Filter: Boolean(true)
+              LeftMark Join:  Filter: Boolean(true)
+                LeftMark Join:  Filter: Boolean(true)
+                  TableScan: person projection=[a]
+                  SubqueryAlias: __correlated_sq_1
+                    TableScan: s1 projection=[a]
+                SubqueryAlias: __correlated_sq_2
+                  TableScan: s2 projection=[a]
+              SubqueryAlias: __correlated_sq_3
+                TableScan: s3 projection=[a]
         "
         )
     }

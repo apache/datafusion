@@ -42,6 +42,10 @@ name = "datafusion_expr"
 
 [features]
 default = ["sql"]
+# Enables protobuf conversions for the expression types owned by this crate.
+# Off by default so consumers that never serialize plans pay nothing. Mirrors
+# the `proto` feature on `datafusion-datasource` and friends.
+proto = ["dep:datafusion-proto-common", "dep:datafusion-proto-models"]
 recursive_protection = ["dep:recursive"]
 sql = ["sqlparser"]
 
@@ -56,6 +60,8 @@ datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
+datafusion-proto-models = { workspace = true, optional = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 recursive = { workspace = true, optional = true }
@@ -66,3 +72,6 @@ sqlparser = { workspace = true, optional = true }
 ctor = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
+# Makes sure `test_display_pg_json` behaves in a consistent way regardless of
+# feature unification with dependencies
+serde_json = { workspace = true, features = ["preserve_order"] }

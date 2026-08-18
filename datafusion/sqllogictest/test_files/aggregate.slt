@@ -212,203 +212,6 @@ WITHIN GROUP (ORDER BY c3)
 OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
 FROM aggregate_test_100
 
-# array agg can use order by
-query ?
-SELECT array_agg(c13 ORDER BY c13)
-FROM
-  (SELECT *
-  FROM aggregate_test_100
-  ORDER BY c13
-  LIMIT 5) as t1
-----
-[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
-
-# array agg can use order by with distinct
-query ?
-SELECT array_agg(DISTINCT c13 ORDER BY c13)
-FROM
-  (SELECT *
-  FROM aggregate_test_100
-  ORDER BY c13
-  LIMIT 5) as t1
-----
-[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
-
-query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
-SELECT array_agg(DISTINCT c13 ORDER BY c12)
-FROM aggregate_test_100
-
-query error Execution error: In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
-SELECT array_agg(DISTINCT c13 ORDER BY c13, c12)
-FROM aggregate_test_100
-
-query ?? rowsort
-with tbl as (SELECT * FROM (VALUES ('xxx', 'yyy'), ('xxx', 'yyy'), ('xxx2', 'yyy2')) AS t(x, y))
-select
-    array_agg(x order by x) as x_agg,
-    array_agg(y order by y) as y_agg
-from tbl
-group by all
-----
-[xxx, xxx, xxx2] [yyy, yyy, yyy2]
-
-query ??
-SELECT
-    (SELECT array_agg(c12 ORDER BY c12) FROM aggregate_test_100),
-    (SELECT array_agg(c13 ORDER BY c13) FROM aggregate_test_100)
-----
-[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
-
-query ??
-SELECT
-    array_agg(c12 ORDER BY c12),
-    array_agg(c13 ORDER BY c13)
-FROM aggregate_test_100
-----
-[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
-
-query ?? rowsort
-with tbl as (SELECT * FROM (VALUES ('xxx', 'yyy'), ('xxx', 'yyy'), ('xxx2', 'yyy2')) AS t(x, y))
-select
-    array_agg(distinct x order by x) as x_agg,
-    array_agg(distinct y order by y) as y_agg
-from tbl
-group by all
-----
-[xxx, xxx2] [yyy, yyy2]
-
-query ??
-SELECT
-    (SELECT array_agg(DISTINCT c12 ORDER BY c12) FROM aggregate_test_100),
-    (SELECT array_agg(DISTINCT c13 ORDER BY c13) FROM aggregate_test_100)
-----
-[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
-
-query ??
-SELECT
-    array_agg(DISTINCT c12 ORDER BY c12),
-    array_agg(DISTINCT c13 ORDER BY c13)
-FROM aggregate_test_100
-----
-[0.01479305307777301, 0.02182578039211991, 0.03968347085780355, 0.04429073092078406, 0.047343434291126085, 0.04893135681998029, 0.0494924465469434, 0.05573662213439634, 0.05636955101974106, 0.061029375346466685, 0.07260475960924484, 0.09465635123783445, 0.12357539988406441, 0.152498292971736, 0.16301110515739792, 0.1640882545084913, 0.1754261586710173, 0.17592486905979987, 0.17909035118828576, 0.18628859265874176, 0.19113293583306745, 0.2145232647388039, 0.21535402343780985, 0.24899794314659673, 0.2537253407987472, 0.2667177795079635, 0.27159190516490006, 0.2739938529235548, 0.28534428578703896, 0.2944158618048994, 0.296036538664718, 0.3051364088814128, 0.30585375151301186, 0.3114712539863804, 0.3231750610081745, 0.32869374687050157, 0.33639590659276175, 0.3600766362333053, 0.36936304600612724, 0.38870280983958583, 0.39144436569161134, 0.40342283197779727, 0.4094218353587008, 0.40975383525297016, 0.42073125331890115, 0.4273123318932347, 0.42950521730777025, 0.4830878559436823, 0.5081765563442366, 0.5437595540422571, 0.5590205548347534, 0.5593249815276734, 0.5603062368164834, 0.560333188635217, 0.5614503754617461, 0.565352842229935, 0.574210838214554, 0.5759450483859969, 0.5773498217058918, 0.5991138115095911, 0.6009475544728957, 0.6108938307533, 0.6316565296547284, 0.6404495093354053, 0.6405262429561641, 0.6425694115212065, 0.658671129040488, 0.6668423897406515, 0.6864391962767343, 0.7035635283169166, 0.7325106678655877, 0.7328050041291218, 0.7614304100703713, 0.7631239070049998, 0.7670021786149205, 0.7697753383420857, 0.7764360990307122, 0.7784918983501654, 0.7973920072996036, 0.819715865079681, 0.8506721053047003, 0.8813167497816289, 0.8824879447595726, 0.9185813970744787, 0.9231889896940375, 0.9237877978193884, 0.9255031346434324, 0.9293883502480845, 0.9294097332465232, 0.9463098243875633, 0.946325164889271, 0.9491397432856566, 0.9567595541247681, 0.9706712283358269, 0.9723580396501548, 0.9748360509016578, 0.9800193410444061, 0.980809631269599, 0.991517828651004, 0.9965400387585364] [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8, 3BEOHQsMEFZ58VcNTOJYShTBpAPzbt, 4HX6feIvmNXBN7XGqgO4YVBkhu8GDI, 4JznSdBajNWhu4hRQwjV1FjTTxY68i, 52mKlRE3aHCBZtjECq6sY9OqVf8Dze, 56MZa5O1hVtX4c5sbnCfxuX5kDChqI, 6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ, 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW, 6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE, 6x93sxYioWuq5c9Kkk8oTAAORM7cH0, 802bgTGl6Bk5TlkPYYTxp5JkKyaYUA, 8LIh0b6jmDGm87BmIyjdxNIpX4ugjD, 90gAtmGEeIqUTbo1ZrxCvWtsseukXC, 9UbObCsVkmYpJGcGrgfK90qOnwb2Lj, AFGCj7OWlEB5QfniEFgonMq90Tq5uH, ALuRhobVWbnQTTWZdSOk0iVe8oYFhW, Amn2K87Db5Es3dFQO9cw9cvpAM6h35, AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz, BJqx5WokrmrrezZA0dUbleMYkG5U2O, BPtQMxnuSPpxMExYV9YkDa6cAN7GP3, BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE, C2GT5KVyOPZpgKVl110TyZO0NcJ434, DuJNG8tufSqW0ZstHqWj3aGvFLMg4A, EcCuckwsF3gV1Ecgmh5v4KM8g1ozif, ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU, F7NSTjWvQJyBburN7CXRUlbgp2dIrA, Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u, H5j5ZHy1FGesOAHjkQEDYCucbpKWRu, HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g, IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr, IZTkHMLvIKuiLjhDjYMmIHxh166we4, Ig1QcuKsjHXkproePdERo2w0mYzIqd, JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ, JN0VclewmjwYlSl8386MlWv5rEhWCz, JafwVLSVk5AVoXFuzclesQ000EE2k1, KJFcmTVjdkCMv94wYCtfHMFhzyRsmH, Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn, Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV, LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW, MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ, MeSTAXq8gVxVjbEjgkvU9YLte0X9uE, NEhyk8uIx4kEULJGa8qIyFjjBcP2G6, O66j6PaYuZhEUtqV6fuU7TyjM2WxC5, OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh, OPwBqCEK5PWTjWaiOyL45u2NLTaDWv, Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0, Ow5PGpfTm4dXCfTDsXAOTatXRoAydR, QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv, QJYm7YRA3YetcBHI5wkMZeLXVmfuNy, QYlaIAnJA6r8rlAb6f59wcxvcPcWFf, RilTlL1tKkPOUFuzmLydHAVZwv1OGl, Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH, TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX, TtDKUZxzVxsq758G6AWPSYuZgVgbcl, VDhtJkYjAYPykCgOU9x3v7v3t4SO1a, VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4, Vp3gmWunM5A7wOC9YW2JroFqTWjvTi, WHmjWk2AY4c6m7DA4GitUx6nmb1yYS, XemNcT1xp61xcM1Qz3wZ1VECCnq06O, Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK, aDxBtor7Icd9C5hnTvvw5NrIre740e, akiiY5N0I44CMwEnBL6RTBk7BRkxEj, b3b9esRhTzFEawbs6XhpKnD9ojutHB, bgK1r6v3BCTh0aejJUhkA1Hn6idXGp, cBGc0kSm32ylBDnxogG727C0uhZEYZ, cq4WSAIFwx3wwTUS5bp1wCe71R6U5I, dVdvo6nUD5FgCgsbOZLds28RyGTpnx, e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG, f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX, fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG, gTpyQnEODMcpsPnJMZC66gh33i3m0b, gpo8K5qtYePve6jyPt6xgJx4YOVjms, gxfHWUF8XgY2KdFxigxvNEXe2V2XMl, i6RQVXKUh7MzuGMDaNclUYnFUAireU, ioEncce3mPOXD2hWhpZpCPWGATG6GU, jQimhdepw3GKmioWUlVSWeBVRKFkY3, l7uwDoTepWwnAP0ufqtHJS3CRi7RfP, lqhzgLsXZ8JhtpeeUWWNbMz8PHI705, m6jD0LBIQWaMfenwRCTANI9eOdyyto, mhjME0zBHbrK6NMkytMTQzOssOa1gF, mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS, nYVJnVicpGRqKZibHyBAmtmzBXAFfT, oHJMNvWuunsIMIWFnYG31RCfkOo2V7, oLZ21P2JEDooxV1pU31cIxQHEeeoLu, okOkcWflkNXIy4R8LzmySyY1EC3sYd, pLk3i59bZwd5KBZrI1FiweYTd5hteG, pTeu0WMjBRTaNRT15rLCuEh3tBJVc5, qnPOOmslCJaT45buUisMRnM0rc77EK, t6fQUjJejPcjc04wHvHTPe55S65B4V, ukOiFGGFnQJDHFgZxHMpvhD3zybF0M, ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8, waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs, wwXqSGKLyBQyPkonlzBNYUJTCo4LRS, xipQ93429ksjNcXPX5326VSg1xJZcW, y7C453hRWd4E7ImjNDWlpexB8nUqjh, ydkwycaISlYSlEq3TlkS2m15I2pcp8]
-
-statement ok
-CREATE EXTERNAL TABLE agg_order (
-c1 INT NOT NULL,
-c2 INT NOT NULL,
-c3 INT NOT NULL
-)
-STORED AS CSV
-LOCATION '../core/tests/data/aggregate_agg_multi_order.csv'
-OPTIONS ('format.has_header' 'true');
-
-# test array_agg with order by multiple columns
-query ?
-select array_agg(c1 order by c2 desc, c3) from agg_order;
-----
-[5, 6, 7, 8, 9, 1, 2, 3, 4, 10]
-
-query TT
-explain select array_agg(c1 order by c2 desc, c3) from agg_order;
-----
-logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
-02)--TableScan: agg_order projection=[c1, c2, c3]
-physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
-04)------SortExec: expr=[c2@1 DESC, c3@2 ASC NULLS LAST], preserve_partitioning=[true]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
-
-# test array_agg_order with list data type
-statement ok
-CREATE TABLE array_agg_order_list_table AS VALUES
-  ('w', 2, [1,2,3], 10),
-  ('w', 1, [9,5,2], 20),
-  ('w', 1, [3,2,5], 30),
-  ('b', 2, [4,5,6], 20),
-  ('b', 1, [7,8,9], 30)
-;
-
-query T? rowsort
-select column1, array_agg(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
-----
-b [[7, 8, 9], [4, 5, 6]]
-w [[3, 2, 5], [9, 5, 2], [1, 2, 3]]
-
-query T?? rowsort
-select column1, first_value(column3 order by column2, column4 desc), last_value(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
-----
-b [7, 8, 9] [4, 5, 6]
-w [3, 2, 5] [1, 2, 3]
-
-query T? rowsort
-select column1, nth_value(column3, 2 order by column2, column4 desc) from array_agg_order_list_table group by column1;
-----
-b [4, 5, 6]
-w [9, 5, 2]
-
-query ?
-select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table;
-----
-[1, 2]
-
-query ?
-select array_agg(DISTINCT column2 order by column2 desc) from array_agg_order_list_table;
-----
-[2, 1]
-
-query ?
-select array_agg(DISTINCT column2 + 1 order by column2 + 1 desc) from array_agg_order_list_table;
-----
-[3, 2]
-
-query ?
-select array_agg(DISTINCT column2 order by column2) from array_agg_order_list_table GROUP BY column1;
-----
-[1, 2]
-[1, 2]
-
-statement error In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list
-select array_agg(DISTINCT column2 order by column1) from array_agg_order_list_table;
-
-statement ok
-drop table array_agg_order_list_table;
-
-# test array_agg_distinct with list data type
-statement ok
-CREATE TABLE array_agg_distinct_list_table AS VALUES
-  ('w', [0,1]),
-  ('w', [0,1]),
-  ('w', [1,0]),
-  ('b', [1,0]),
-  ('b', [1,0]),
-  ('b', [1,0]),
-  ('b', [0,1]),
-  (NULL, [0,1]),
-  ('b', NULL)
-;
-
-# Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
-# so they are covered in `datafusion/functions-aggregate/src/array_agg.rs`
-query ??
-select array_sort(c1), array_sort(c2) from (
-  select array_agg(distinct column1) as c1, array_agg(distinct column2) ignore nulls as c2 from array_agg_distinct_list_table
-);
-----
-[NULL, b, w] [[0, 1], [1, 0]]
-
-statement ok
-drop table array_agg_distinct_list_table;
-
-# Test array_agg with DISTINCT and IGNORE NULLS (regression test for issue #19735)
-query ?
-SELECT array_sort(ARRAY_AGG(DISTINCT x IGNORE NULLS)) as result
-FROM (VALUES (1), (2), (NULL), (2), (NULL), (1)) AS t(x);
-----
-[1, 2]
 
 # Test that non-DISTINCT aggregates also preserve IGNORE NULLS when mixed with DISTINCT
 # This tests the two-phase aggregation rewrite in SingleDistinctToGroupBy
@@ -455,75 +258,6 @@ FROM (VALUES
 ) AS t(x, y)
 ----
 2 [40, 30, 20, 10]
-
-statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
-SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
-
-
-# Test distinct aggregate function with merge batch
-query II
-with A as (
-    select 1 as id, 2 as foo
-    UNION ALL
-    select 1, null
-    UNION ALL
-    select 1, null
-    UNION ALL
-    select 1, 3
-    UNION ALL
-    select 1, 2
-    ---- The order is non-deterministic, verify with length
-) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
-----
-3 1
-
-# It has only AggregateExec with FinalPartitioned mode, so `merge_batch` is used
-# If the plan is changed, whether the `merge_batch` is used should be verified to ensure the test coverage
-query TT
-explain with A as (
-    select 1 as id, 2 as foo
-    UNION ALL
-    select 1, null
-    UNION ALL
-    select 1, null
-    UNION ALL
-    select 1, 3
-    UNION ALL
-    select 1, 2
-) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
-----
-logical_plan
-01)Projection: array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))
-02)--Aggregate: groupBy=[[a.id]], aggr=[[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
-03)----SubqueryAlias: a
-04)------SubqueryAlias: a
-05)--------Union
-06)----------Projection: Int64(1) AS id, Int64(2) AS foo
-07)------------EmptyRelation: rows=1
-08)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
-09)------------EmptyRelation: rows=1
-10)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
-11)------------EmptyRelation: rows=1
-12)----------Projection: Int64(1) AS id, Int64(3) AS foo
-13)------------EmptyRelation: rows=1
-14)----------Projection: Int64(1) AS id, Int64(2) AS foo
-15)------------EmptyRelation: rows=1
-physical_plan
-01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-05)--------UnionExec
-06)----------ProjectionExec: expr=[1 as id, 2 as foo]
-07)------------PlaceholderRowExec
-08)----------ProjectionExec: expr=[1 as id, NULL as foo]
-09)------------PlaceholderRowExec
-10)----------ProjectionExec: expr=[1 as id, NULL as foo]
-11)------------PlaceholderRowExec
-12)----------ProjectionExec: expr=[1 as id, 3 as foo]
-13)------------PlaceholderRowExec
-14)----------ProjectionExec: expr=[1 as id, 2 as foo]
-15)------------PlaceholderRowExec
 
 
 # FIX: custom absolute values
@@ -692,6 +426,18 @@ select corr(f, b)
 from data
 ----
 1
+
+# correlation_with_group_by_and_nullable_filter
+query IR rowsort
+SELECT g, corr(x, y) FILTER (WHERE b < 1) AS r
+FROM (VALUES
+  (0, 1.0, 1.0, CAST(NULL AS INT)),
+  (0, 2.0, 2.0, CAST(NULL AS INT)),
+  (0, 3.0, 4.0, 2)
+) AS t(g, x, y, b)
+GROUP BY g
+----
+0 NULL
 
 # group correlation_query_with_nans_f32
 query IR
@@ -965,16 +711,16 @@ statement error
 SELECT approx_median(c1) FROM aggregate_test_100
 
 # csv_query_median_1
-query I
+query R
 SELECT median(c2) FROM aggregate_test_100
 ----
 3
 
 # csv_query_median_2
-query I
+query R
 SELECT median(c6) FROM aggregate_test_100
 ----
-1125553990140691277
+1125553990140691200
 
 # csv_query_median_3
 query R
@@ -983,18 +729,18 @@ SELECT median(c12) FROM aggregate_test_100
 0.551390054439
 
 # median_i8
-query I
+query R
 SELECT median(col_i8) FROM median_table
 ----
 -14
 
 # distinct_median_i8
-query I
+query R
 SELECT median(distinct col_i8) FROM median_table
 ----
 100
 
-query II
+query RR
 SELECT median(col_i8), median(distinct col_i8) FROM median_table
 ----
 -14 100
@@ -1016,43 +762,43 @@ query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS
 SELECT median(c2) RESPECT NULLS FROM aggregate_test_100
 
 # median_i16
-query I
+query R
 SELECT median(col_i16) FROM median_table
 ----
 -16334
 
 # median_i32
-query I
+query R
 SELECT median(col_i32) FROM median_table
 ----
 -1073741774
 
 # median_i64
-query I
+query R
 SELECT median(col_i64) FROM median_table
 ----
--4611686018427387854
+-4611686018427388000
 
 # median_u8
-query I
+query R
 SELECT median(col_u8) FROM median_table
 ----
 50
 
 # median_u16
-query I
+query R
 SELECT median(col_u16) FROM median_table
 ----
 50
 
 # median_u32
-query I
+query R
 SELECT median(col_u32) FROM median_table
 ----
 50
 
 # median_u64
-query I
+query R
 SELECT median(col_u64) FROM median_table
 ----
 50
@@ -1083,56 +829,56 @@ NaN
 
 
 # median_i8_overflow_negative
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-85, 'Int8')), (arrow_cast(-56, 'Int8'))) AS t(v);
 ----
--70
+-70.5
 
 # median_i8_overflow_positive
 # Test overflow with positive values: 100 + 120 = 220 > 127 (max i8)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(100, 'Int8')), (arrow_cast(120, 'Int8'))) AS t(v);
 ----
 110
 
 # median_u8_overflow
 # Test unsigned overflow: 200 + 250 = 450 > 255 (max u8)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(200, 'UInt8')), (arrow_cast(250, 'UInt8'))) AS t(v);
 ----
 225
 
 # median_i8_no_overflow_normal_case
 # Normal case that doesn't overflow for comparison
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(4, 'Int8')), (arrow_cast(5, 'Int8'))) AS t(v);
 ----
-4
+4.5
 
 # median_i8_max_values
 # Test with both i8::MAX values: 127 + 127 = 254 > 127, overflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(127, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
 ----
 127
 
 # median_i8_min_values
 # Test with both i8::MIN values: -128 + -128 = -256 < -128, underflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(-128, 'Int8'))) AS t(v);
 ----
 -128
 
 # median_i8_min_max_values
 # Test with i8::MIN and i8::MAX: -128 + 127 = -1, no overflow, median = 0 (truncated from -0.5)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
 ----
-0
+-0.5
 
 # median_u8_max_values
 # Test with both u8::MAX values: 255 + 255 = 510 > 255, overflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(255, 'UInt8')), (arrow_cast(255, 'UInt8'))) AS t(v);
 ----
 255
@@ -1358,6 +1104,74 @@ ORDER BY tags, timestamp;
 statement ok
 DROP TABLE median_window_test;
 
+# Regression: percentile_cont(DISTINCT ...) used to forward the extra
+# percentile-argument column into the distinct-values buffer (which asserts a
+# single input array), panicking on every distinct query. Plain aggregate:
+statement ok
+CREATE TABLE distinct_pct(id INT, x DOUBLE) AS VALUES
+  (1, 5), (2, 5), (3, 9);
+
+query R
+SELECT percentile_cont(DISTINCT x, 0.5) FROM distinct_pct;
+----
+7
+
+# Regression: distinct sliding-window percentile must count value multiplicity
+# on retract. Row 3's frame is {5, 9}; the row-1 `5` leaves the frame but the
+# row-2 `5` remains, so the distinct set is still {5, 9} (median 7), not {9}.
+query IR
+SELECT id, percentile_cont(DISTINCT x, 0.5)
+  OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM distinct_pct
+ORDER BY id;
+----
+1 5
+2 5
+3 7
+
+statement ok
+DROP TABLE distinct_pct;
+
+# Regression: grouped percentile_cont(DISTINCT ...) forces two-phase
+# (Partial + FinalPartitioned) aggregation, exercising the distinct
+# accumulator's state()/merge_batch() paths. Duplicate values within a
+# group must be de-duplicated across the per-partition merge.
+# Group 1 distinct {1,5,9} -> median 5; group 2 distinct {3,7} -> median 5.
+statement ok
+CREATE TABLE grp_distinct_pct(g INT, x DOUBLE) AS VALUES
+  (1, 5), (1, 5), (1, 9), (1, 1),
+  (2, 7), (2, 7), (2, 3);
+
+query IR
+SELECT g, percentile_cont(DISTINCT x, 0.5) FROM grp_distinct_pct GROUP BY g ORDER BY g;
+----
+1 5
+2 5
+
+statement ok
+DROP TABLE grp_distinct_pct;
+
+# Regression: sliding-window percentile_cont(DISTINCT ...) over data with
+# NULLs exercises the null_count() > 0 slow path in BOTH update_batch (a NULL
+# row enters the frame) and retract_batch (a NULL row leaves the frame as the
+# window slides). NULLs are ignored; distinct dedups the non-null values.
+statement ok
+CREATE TABLE distinct_pct_nulls(id INT, x DOUBLE) AS VALUES
+  (1, 5), (2, NULL), (3, 9), (4, 5);
+
+query IR
+SELECT id, percentile_cont(DISTINCT x, 0.5)
+  OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM distinct_pct_nulls ORDER BY id;
+----
+1 5
+2 5
+3 9
+4 7
+
+statement ok
+DROP TABLE distinct_pct_nulls;
+
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
 ----
@@ -1383,6 +1197,11 @@ from median_table;
 
 query ?T
 select approx_median(NULL), arrow_typeof(approx_median(NULL)) from median_table;
+----
+NULL Null
+
+query ?T
+select median(NULL), arrow_typeof(median(NULL));
 ----
 NULL Null
 
@@ -1431,7 +1250,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (2), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
 3
@@ -1443,10 +1262,10 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (2), (3), (4), (5), (6);
 
-query I
+query R
 select median(c) from t;
 ----
-3
+3.5
 
 statement ok
 drop table t;
@@ -1455,10 +1274,10 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (null), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
-3
+3.5
 
 statement ok
 drop table t;
@@ -1467,7 +1286,7 @@ drop table t;
 statement ok
 create table t(c int) as values (null), (null), (null);
 
-query I
+query R
 select median(c) from t;
 ----
 NULL
@@ -1479,7 +1298,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (2), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
 3
@@ -1527,7 +1346,7 @@ drop table t;
 statement ok
 create table t(c int) as values (2), (1), (1), (2), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1539,7 +1358,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (1), (3), (1), (1);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1551,7 +1370,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (null), (1), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1563,7 +1382,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (1), (2), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1575,7 +1394,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (1), (1), (1), (3), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1635,7 +1454,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (1), (1), (1), (2), (2), (3), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1653,7 +1472,7 @@ explain select median(distinct c) from t;
 logical_plan
 01)Projection: median(alias1) AS median(DISTINCT t.c)
 02)--Aggregate: groupBy=[[]], aggr=[[median(alias1)]]
-03)----Aggregate: groupBy=[[t.c AS alias1]], aggr=[[]]
+03)----Aggregate: groupBy=[[CAST(t.c AS Float64) AS alias1]], aggr=[[]]
 04)------TableScan: t projection=[c]
 physical_plan
 01)ProjectionExec: expr=[median(alias1)@0 as median(DISTINCT t.c)]
@@ -1662,7 +1481,7 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+07)------------AggregateExec: mode=Partial, gby=[CAST(c@0 AS Float64) as alias1], aggr=[]
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
@@ -1823,6 +1642,472 @@ query IIIII
 SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arrow_cast(c15, 'Date64')), approx_distinct(arrow_cast(c15, 'Time32(Second)')) as c, approx_distinct(arrow_cast(c15, 'Time64(Nanosecond)')) AS d FROM aggregate_test_100
 ----
 18 60 60 60 60
+
+# approx_distinct over Boolean: exact count via flag-pair accumulator (0..=2).
+statement ok
+CREATE TABLE approx_distinct_bool_test (g INT, b BOOLEAN) AS VALUES
+  (1, true), (1, true), (1, NULL),
+  (2, false), (2, false),
+  (3, true), (3, false), (3, NULL), (3, true),
+  (4, NULL), (4, NULL);
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 1;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 2;
+----
+1
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 3;
+----
+2
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test WHERE g = 4;
+----
+0
+
+query II
+SELECT g, approx_distinct(b) FROM approx_distinct_bool_test GROUP BY g ORDER BY g;
+----
+1 1
+2 1
+3 2
+4 0
+
+query I
+SELECT approx_distinct(b) FROM approx_distinct_bool_test;
+----
+2
+
+statement ok
+DROP TABLE approx_distinct_bool_test;
+
+# Grouped approx_distinct uses a dedicated GroupsAccumulator (adaptive
+# sparse -> dense HyperLogLog per group). Results are deterministic (the HLL uses
+# a fixed hash seed); for these specific small inputs the 16384-register HLL
+# estimates the true distinct count exactly. The key invariant is that the
+# grouped path agrees with the scalar (no GROUP BY) path on the same data, which
+# is checked explicitly below.
+statement ok
+CREATE TABLE approx_distinct_group_test (g INT, s VARCHAR, i INT) AS VALUES
+  (1, 'a', 10), (1, 'a', 10), (1, 'b', 20),
+  (2, 'c', 30), (2, 'd', 30), (2, 'c', 40),
+  (3, NULL, NULL), (3, NULL, NULL),
+  (4, 'e', 50);
+
+# Strings (Utf8): group 1 -> {a,b}=2, group 2 -> {c,d}=2, group 3 -> all null=0, group 4 -> {e}=1
+query II
+SELECT g, approx_distinct(s) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Utf8View takes the inline-view hashing path
+query II
+SELECT g, approx_distinct(arrow_cast(s, 'Utf8View')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# BinaryView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+
+# BinaryView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'BinaryView')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
+# FixedSizeBinary non-grouped
+query I
+SELECT approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1)')) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+# FixedSizeBinary grouped
+query II
+SELECT g, approx_distinct(arrow_cast(arrow_cast(s, 'Binary'), 'FixedSizeBinary(1)')) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+
+# List
+statement ok
+CREATE TABLE approx_distinct_list_test (g INT, l INT[]) AS VALUES
+  (1, [1, 2]), (1, [1, 2]), (1, [3, 4]),
+  (2, [5, 6]), (2, NULL),
+  (3, NULL), (3, NULL),
+  (4, [7, 8]);
+
+# List non-grouped
+query I
+SELECT approx_distinct(l) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# List grouped
+# Group 1 -> {[1,2],[3,4]}=2,
+# Group 2 -> {[5,6]}=1 (NULL excluded),
+# Group 3 -> all null=0,
+# Group 4 -> {[7,8]}=1
+query II
+SELECT g, approx_distinct(l) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(l) FROM approx_distinct_list_test;
+----
+4
+
+# LargeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeList(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# ListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# ListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'ListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+# LargeListView non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# LargeListView grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'LargeListView(Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+
+# FixedSizeList non-grouped
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test WHERE g = 1;
+----
+2
+
+# FixedSizeList grouped
+query II
+SELECT g, approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct lists across groups are still counted overall.
+query I
+SELECT approx_distinct(arrow_cast(l, 'FixedSizeList(2, Int32)')) FROM approx_distinct_list_test;
+----
+4
+
+statement ok
+DROP TABLE approx_distinct_list_test;
+
+# Map
+statement ok
+CREATE TABLE approx_distinct_map_test AS SELECT * FROM (VALUES
+  (1, MAP {'a': 1, 'b': 2}), (1, MAP {'a': 1, 'b': 2}), (1, MAP {'c': 3}),
+  (2, MAP {'d': 4}), (2, NULL),
+  (3, NULL), (3, NULL),
+  (4, MAP {'e': 5})
+) AS t(g, m);
+
+# Map non-grouped
+query I
+SELECT approx_distinct(m) FROM approx_distinct_map_test WHERE g = 1;
+----
+2
+
+# Map grouped
+# Group 1 -> {{a:1,b:2},{c:3}}=2,
+# Group 2 -> {{d:4}}=1 (NULL excluded),
+# Group 3 -> all null=0,
+# Group 4 -> {{e:5}}=1
+query II
+SELECT g, approx_distinct(m) FROM approx_distinct_map_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct maps across groups are still counted overall.
+query I
+SELECT approx_distinct(m) FROM approx_distinct_map_test;
+----
+4
+
+statement ok
+DROP TABLE approx_distinct_map_test;
+
+# Struct
+statement ok
+CREATE TABLE approx_distinct_struct_test AS SELECT * FROM (VALUES
+  (1, named_struct('a', 1, 'b', 2)), (1, named_struct('a', 1, 'b', 2)), (1, named_struct('a', 3, 'b', 3)),
+  (2, named_struct('a', 4, 'b', 4)), (2, NULL),
+  (3, NULL), (3, NULL),
+  (4, named_struct('a', 5, 'b', 5))
+) AS t(g, s);
+
+# Struct non-grouped
+query I
+SELECT approx_distinct(s) FROM approx_distinct_struct_test WHERE g = 1;
+----
+2
+
+# Struct grouped
+# Group 1 -> {{a:1,b:2},{a:3,b:3}}=2,
+# Group 2 -> {{a:4,b:4}}=1 (NULL excluded),
+# Group 3 -> all null=0,
+# Group 4 -> {{a:5,b:5}}=1
+query II
+SELECT g, approx_distinct(s) FROM approx_distinct_struct_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct structs across groups are still counted overall.
+query I
+SELECT approx_distinct(s) FROM approx_distinct_struct_test;
+----
+4
+
+statement ok
+DROP TABLE approx_distinct_struct_test;
+
+# Union
+# `approx_distinct_union_test` (g INT, u UNION<i: Int32, s: Utf8>) is registered
+# in test_context.rs because a union value cannot be constructed from SQL.
+
+# Union non-grouped
+query I
+SELECT approx_distinct(u) FROM approx_distinct_union_test WHERE g = 1;
+----
+2
+
+# Union grouped
+# Group 1 -> {i:1, i:1, s:"x"}=2,
+# Group 2 -> {s:"y"}=1 (NULL excluded),
+# Group 3 -> all null=0,
+# Group 4 -> {i:5}=1
+query II
+SELECT g, approx_distinct(u) FROM approx_distinct_union_test GROUP BY g ORDER BY g;
+----
+1 2
+2 1
+3 0
+4 1
+
+# The non-group path must agree with the grouped path on
+# the same data, and distinct union values across groups are still counted overall.
+query I
+SELECT approx_distinct(u) FROM approx_distinct_union_test;
+----
+4
+
+# Integers (Int32): group 1 -> {10,20}=2, group 2 -> {30,40}=2, group 3 -> 0, group 4 -> {50}=1
+query II
+SELECT g, approx_distinct(i) FROM approx_distinct_group_test GROUP BY g ORDER BY g;
+----
+1 2
+2 2
+3 0
+4 1
+
+# Invariant: the scalar (no GROUP BY) path must agree with the grouped path on
+# the same data. The grouped result for g = 2 above is 2, and so is the scalar
+# result over only g = 2's rows.
+query I
+SELECT approx_distinct(s) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+query I
+SELECT approx_distinct(i) FROM approx_distinct_group_test WHERE g = 2;
+----
+2
+
+statement ok
+DROP TABLE approx_distinct_group_test;
+
+# Grouped approx_distinct that crosses the sparse -> dense promotion threshold:
+# 2000 distinct values in group 0 and 2000 in group 1. The estimate should be
+# within HyperLogLog's error margin (~0.8%) of the true cardinality.
+statement ok
+CREATE TABLE approx_distinct_dense_test AS
+  SELECT (v % 2) AS g, v AS i FROM generate_series(0, 3999) AS t(v);
+
+query B
+SELECT min(c) > 1900 AND max(c) < 2100 FROM (
+  SELECT g, approx_distinct(i) AS c FROM approx_distinct_dense_test GROUP BY g
+);
+----
+true
+
+statement ok
+DROP TABLE approx_distinct_dense_test;
+
+# This test runs approx_distinct over decimal128 and decimal256 for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_decimal_test (g INT, dec128 DECIMAL(20, 2), dec256 DECIMAL(40, 2)) AS VALUES
+  (1, 12345678901234.56,  12345678901234567890123456.78),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (1, 98765432109876.54,  98765432109876543210987654.32),
+  (2, 55555555555555.55,  55555555555555555555555555.55),
+  (2, -0.0,               -0.0),
+  (2, 0.0,                0.0);
+
+# Scalar path
+query II
+SELECT approx_distinct(dec128), approx_distinct(dec256) FROM approx_distinct_decimal_test;
+----
+4 4
+
+# Grouped path
+query III
+SELECT g, approx_distinct(dec128), approx_distinct(dec256)
+FROM approx_distinct_decimal_test GROUP BY g ORDER BY g;
+----
+1 2 2
+2 2 2
+
+statement ok
+DROP TABLE approx_distinct_decimal_test;
+
+# This test runs approx_distinct over all four Duration units for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_duration_test AS VALUES
+  (1, arrow_cast(1, 'Duration(Second)'),  arrow_cast(1, 'Duration(Millisecond)'),  arrow_cast(1, 'Duration(Microsecond)'),  arrow_cast(1, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (1, arrow_cast(2, 'Duration(Second)'),  arrow_cast(2, 'Duration(Millisecond)'),  arrow_cast(2, 'Duration(Microsecond)'),  arrow_cast(2, 'Duration(Nanosecond)')),
+  (2, arrow_cast(3, 'Duration(Second)'),  arrow_cast(3, 'Duration(Millisecond)'),  arrow_cast(3, 'Duration(Microsecond)'),  arrow_cast(3, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)')),
+  (2, arrow_cast(0, 'Duration(Second)'),  arrow_cast(0, 'Duration(Millisecond)'),  arrow_cast(0, 'Duration(Microsecond)'),  arrow_cast(0, 'Duration(Nanosecond)'));
+
+# Scalar path
+query IIII
+SELECT approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5) FROM approx_distinct_duration_test;
+----
+4 4 4 4
+
+# Grouped path
+query IIIII
+SELECT column1, approx_distinct(column2), approx_distinct(column3), approx_distinct(column4), approx_distinct(column5)
+FROM approx_distinct_duration_test GROUP BY column1 ORDER BY column1;
+----
+1 2 2 2 2
+2 2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_duration_test;
+
+
+# This test runs approx_distinct over the intervals YearMonth,
+# DayTime, MonthDayNano for the scalar and the grouped path.
+statement ok
+CREATE TABLE approx_distinct_interval_test (g INT, ym INTERVAL, dt INTERVAL, mdn INTERVAL) AS VALUES
+  (1, INTERVAL '1' MONTH,  INTERVAL '1' DAY,             INTERVAL '1' MONTH),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (1, INTERVAL '2' MONTH,  INTERVAL '1 day 5 hours',     INTERVAL '1 day 5 nanoseconds'),
+  (2, INTERVAL '3' YEAR,   INTERVAL '2' DAY,             INTERVAL '2' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY),
+  (2, INTERVAL '0' MONTH,  INTERVAL '0' DAY,             INTERVAL '0' DAY);
+
+# Scalar path
+query III
+SELECT approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn) FROM approx_distinct_interval_test;
+----
+4 4 4
+
+# Grouped path
+query IIII
+SELECT g, approx_distinct(ym), approx_distinct(dt), approx_distinct(mdn)
+FROM approx_distinct_interval_test GROUP BY g ORDER BY g;
+----
+1 2 2 2
+2 2 2 2
+
+statement ok
+DROP TABLE approx_distinct_interval_test;
+
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.
@@ -2371,7 +2656,6 @@ d 2.444444444444 25.444444444444
 e 3 40.333333333333
 
 
-
 query TR
 SELECT c1, approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
@@ -2639,23 +2923,6 @@ SELECT count(1 + 1)
 ----
 1
 
-# csv_query_array_agg
-query ?
-SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
-----
-[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB]
-
-# csv_query_array_agg_empty
-query ?
-SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
-----
-NULL
-
-# csv_query_array_agg_one
-query ?
-SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
-----
-[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
 
 # csv_query_array_agg_with_overflow
 query IIRIII
@@ -2708,12 +2975,6 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
-# select with count to forces array_agg_distinct function, since single distinct expression is converted to group by by optimizer
-# csv_query_array_agg_distinct
-query ?I
-SELECT array_sort(array_agg(distinct c2)), count(1) FROM aggregate_test_100
-----
-[1, 2, 3, 4, 5] 100
 
 # aggregate_time_min_and_max
 query TT
@@ -2874,7 +3135,6 @@ query I
 SELECT max(c1) FROM test;
 ----
 3
-
 
 
 # count_basic
@@ -3903,9 +4163,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[min(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
+01)AggregateExec: mode=Final, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3916,9 +4176,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[max(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
+01)AggregateExec: mode=Final, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3929,9 +4189,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[min(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(aggregate_test_100.c2,Float64(0))]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(0))]
+01)AggregateExec: mode=Final, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(0))]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(0))]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[min(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(0))]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3942,9 +4202,9 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[max(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(aggregate_test_100.c2,Float64(1))]]
 02)--TableScan: aggregate_test_100 projection=[c2]
 physical_plan
-01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(1))]
+01)AggregateExec: mode=Final, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(1))]
 02)--CoalescePartitionsExec
-03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(1))]
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(aggregate_test_100.c2) as percentile_cont(aggregate_test_100.c2,Float64(1))]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
@@ -3959,7 +4219,7 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 4
 
 # Test that percentile_cont(0.5) equals median
-query I
+query R
 SELECT median(c2) FROM aggregate_test_100
 ----
 3
@@ -4238,177 +4498,6 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2
 ----
 2.75
 
-# array_agg_zero
-query ?
-SELECT ARRAY_AGG([])
-----
-[[]]
-
-# array_agg_one
-query ?
-SELECT ARRAY_AGG([1])
-----
-[[1]]
-
-# test array_agg with no row qualified
-statement ok
-create table t(a int, b float, c bigint) as values (1, 1.2, 2);
-
-# returns NULL, follows DuckDB's behaviour
-query ?
-select array_agg(a) from t where a > 2;
-----
-NULL
-
-query ?
-select array_agg(b) from t where b > 3.1;
-----
-NULL
-
-query ?
-select array_agg(c) from t where c > 3;
-----
-NULL
-
-query ?I
-select array_agg(c), count(1) from t where c > 3;
-----
-NULL 0
-
-# returns 0 rows if group by is applied, follows DuckDB's behaviour
-query ?
-select array_agg(a) from t where a > 3 group by a;
-----
-
-query ?I
-select array_agg(a), count(1) from t where a > 3 group by a;
-----
-
-# returns NULL, follows DuckDB's behaviour
-query ?
-select array_agg(distinct a) from t where a > 3;
-----
-NULL
-
-query ?I
-select array_agg(distinct a), count(1) from t where a > 3;
-----
-NULL 0
-
-# returns 0 rows if group by is applied, follows DuckDB's behaviour
-query ?
-select array_agg(distinct a) from t where a > 3 group by a;
-----
-
-query ?I
-select array_agg(distinct a), count(1) from t where a > 3 group by a;
-----
-
-# test order sensitive array agg
-query ?
-select array_agg(a order by a) from t where a > 3;
-----
-NULL
-
-query ?
-select array_agg(a order by a) from t where a > 3 group by a;
-----
-
-query ?I
-select array_agg(a order by a), count(1) from t where a > 3 group by a;
-----
-
-statement ok
-drop table t;
-
-# test with no values
-statement ok
-create table t(a int, b float, c bigint);
-
-query ?
-select array_agg(a) from t;
-----
-NULL
-
-query ?
-select array_agg(b) from t;
-----
-NULL
-
-query ?
-select array_agg(c) from t;
-----
-NULL
-
-query ?I
-select array_agg(distinct a), count(1) from t;
-----
-NULL 0
-
-query ?I
-select array_agg(distinct b), count(1) from t;
-----
-NULL 0
-
-query ?I
-select array_agg(distinct b), count(1) from t;
-----
-NULL 0
-
-statement ok
-drop table t;
-
-
-# array_agg_i32
-statement ok
-create table t (c1 int) as values (1), (2), (3), (4), (5);
-
-query ?
-select array_agg(c1) from t;
-----
-[1, 2, 3, 4, 5]
-
-statement ok
-drop table t;
-
-# array_agg_nested
-statement ok
-create table t as values (make_array([1, 2, 3], [4, 5])), (make_array([6], [7, 8])), (make_array([9]));
-
-query ?
-select array_agg(column1) from t;
-----
-[[[1, 2, 3], [4, 5]], [[6], [7, 8]], [[9]]]
-
-statement ok
-drop table t;
-
-# array_agg_ignore_nulls
-statement ok
-create table t as values (NULL, ''), (1, 'c'), (2, 'a'), (NULL, 'b'), (4, NULL), (NULL, NULL), (5, 'a');
-
-query ?
-select array_agg(column1) ignore nulls as c1 from t;
-----
-[1, 2, 4, 5]
-
-query II
-select count(*), array_length(array_agg(distinct column2) ignore nulls) from t;
-----
-7 4
-
-query ?
-select array_agg(column2 order by column1) ignore nulls from t;
-----
-[c, a, a, , b]
-
-query ?
-select array_agg(DISTINCT column2 order by column2) ignore nulls from t;
-----
-[, a, b, c]
-
-statement ok
-drop table t;
 
 # variance_single_value
 query RRRR
@@ -4421,7 +4510,6 @@ query RRRR
 select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0), (3.0)) as sq;
 ----
 2 1 1.414213562373 1
-
 
 
 # aggregates on empty tables
@@ -5261,7 +5349,6 @@ DROP TABLE min_bool;
 #################
 
 
-
 #################
 # min_max on strings/binary with null values and groups
 #################
@@ -5465,6 +5552,31 @@ SELECT id, MAX(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
 2 000109
 3 000101
 4 NULL
+
+# Group by a FixedSizeBinary column
+# (exercises the FixedSizeBinary `GroupColumn` in `GroupValuesColumn`)
+query ?I
+SELECT value, COUNT(*) FROM fixed_size_binary_views GROUP BY value ORDER BY value;
+----
+000101 2
+000102 1
+000103 3
+000104 2
+000109 1
+NULL 2
+
+# Multi-column group by including a FixedSizeBinary column
+query ?II
+SELECT value, id, COUNT(*) FROM fixed_size_binary_views GROUP BY value, id ORDER BY value, id;
+----
+000101 2 1
+000101 3 1
+000102 1 1
+000103 1 3
+000104 1 2
+000109 2 1
+NULL 1 1
+NULL 4 1
 
 statement ok
 DROP VIEW fixed_size_binary_views;
@@ -5971,7 +6083,6 @@ ORDER BY tag
 426172 426172 1 426172 426172 1
 
 
-
 statement ok
 drop table t_source;
 
@@ -5979,7 +6090,7 @@ statement ok
 drop table t;
 
 
-query I
+query R
 select median(a) from (select 1 as a where 1=0);
 ----
 NULL
@@ -6177,6 +6288,111 @@ FROM test_table
 ----
 2
 
+# count_with_group_by_and_nullable_filter
+query II rowsort
+SELECT g, COUNT(a) FILTER (WHERE b < 1) AS count_a
+FROM (VALUES (0, 1, CAST(NULL AS INT)), (0, 2, 2)) AS t(g, a, b)
+GROUP BY g
+----
+0 0
+
+# first_value_with_group_by_and_nullable_filter
+# Rows whose FILTER predicate evaluates to NULL must be excluded (#22666)
+query II rowsort
+SELECT g, first_value(a ORDER BY a) FILTER (WHERE b < 1) AS fv
+FROM (VALUES (0, 10, CAST(NULL AS INT)), (0, 20, 2)) AS t(g, a, b)
+GROUP BY g
+----
+0 NULL
+
+# last_value_with_group_by_and_nullable_filter
+query II rowsort
+SELECT g, last_value(a ORDER BY a) FILTER (WHERE b < 1) AS lv
+FROM (VALUES (0, 10, CAST(NULL AS INT)), (0, 20, 2)) AS t(g, a, b)
+GROUP BY g
+----
+0 NULL
+
+# first_last_value_with_group_by_and_mixed_filter_results
+# Only rows whose FILTER predicate is TRUE participate: a = 10 (b = 1) and
+# a = 20 (b = 0) in group 0. The NULL-predicate row (a = 5) and the
+# FALSE-predicate row (a = 30) are excluded. No row passes the filter in
+# group 1, so the aggregates return NULL there.
+query III rowsort
+SELECT g,
+  first_value(a ORDER BY a) FILTER (WHERE b < 2) AS fv,
+  last_value(a ORDER BY a) FILTER (WHERE b < 2) AS lv
+FROM (VALUES (0, 5, CAST(NULL AS INT)), (0, 10, 1), (0, 30, 2), (0, 20, 0),
+             (1, 100, CAST(NULL AS INT)), (1, 50, 3)) AS t(g, a, b)
+GROUP BY g
+----
+0 10 20
+1 NULL NULL
+
+# first_last_value_with_group_by_filter_all_true_and_no_filter
+# Behavior is unchanged when every row passes the FILTER or there is no FILTER
+query IIIII rowsort
+SELECT g,
+  first_value(a ORDER BY a) FILTER (WHERE a > 0) AS fv,
+  last_value(a ORDER BY a) FILTER (WHERE a > 0) AS lv,
+  first_value(a ORDER BY a) AS fv_no_filter,
+  last_value(a ORDER BY a) AS lv_no_filter
+FROM (VALUES (0, 5, CAST(NULL AS INT)), (0, 10, 1), (0, 30, 2), (0, 20, 0)) AS t(g, a, b)
+GROUP BY g
+----
+0 5 30 5 30
+
+# first_value_without_group_by_and_nullable_filter
+query I rowsort
+SELECT first_value(a ORDER BY a) FILTER (WHERE b < 1) AS fv
+FROM (VALUES (10, CAST(NULL AS INT)), (20, 2)) AS t(a, b)
+----
+NULL
+
+# first_value_window_function_no_regression
+query II
+SELECT a, first_value(a) OVER (ORDER BY a) AS fv
+FROM (VALUES (10), (20), (5)) AS t(a)
+ORDER BY a
+----
+5 5
+10 5
+20 5
+
+# query_with_untyped_null_filter
+query I
+SELECT count(*) FILTER (WHERE NULL)
+----
+0
+
+query I
+SELECT count(1) FILTER (WHERE NULL)
+----
+0
+
+query I
+SELECT sum(1) FILTER (WHERE NULL)
+----
+NULL
+
+query R
+SELECT avg(1) FILTER (WHERE NULL)
+----
+NULL
+
+# window_aggregate_with_untyped_null_filter
+query I
+SELECT count(*) FILTER (WHERE NULL) OVER ()
+FROM (VALUES (1)) AS t(x)
+----
+0
+
+query I
+SELECT sum(1) FILTER (WHERE NULL) OVER ()
+FROM (VALUES (1)) AS t(x)
+----
+NULL
+
 # query_with_and_without_filter
 query III rowsort
 SELECT
@@ -6354,6 +6570,99 @@ c NULL 2
 
 statement ok
 drop table dn;
+
+# sum_interval
+# Component-wise sum across all three Interval variants (matches PostgreSQL).
+
+# Basic Interval(MonthDayNano): the issue's repro.
+# (0 mons, 0 days, 1s) + (12 mons, 0, 0) + (1 mon, 0, 0) = (13 mons, 0, 1s)
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (interval '1 second'),
+  (interval '1 year'),
+  (interval '1 month')) t(v);
+----
+Interval(MonthDayNano) 13 mons 1.000000000 secs
+
+# NULLs are skipped.
+query ?
+SELECT sum(v) FROM (VALUES
+  (interval '1 day'),
+  (NULL),
+  (interval '2 days')) t(v);
+----
+3 days
+
+# Empty input → NULL.
+query ?
+SELECT sum(v) FROM (VALUES (interval '1 day')) t(v) WHERE 1 = 0;
+----
+NULL
+
+# GROUP BY exercises the PrimitiveGroupsAccumulator path.
+query I? rowsort
+SELECT k, sum(v) FROM (VALUES
+  (1, interval '1 day'),
+  (1, interval '2 days'),
+  (2, interval '1 month')) t(k, v)
+GROUP BY k;
+----
+1 3 days
+2 1 mons
+
+# Interval(YearMonth) via cast.
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (arrow_cast('1 year', 'Interval(YearMonth)')),
+  (arrow_cast('6 months', 'Interval(YearMonth)'))) t(v);
+----
+Interval(YearMonth) 1 years 6 mons
+
+# Interval(DayTime) via cast.
+query T?
+SELECT arrow_typeof(sum(v)), sum(v) FROM (VALUES
+  (arrow_cast('1 day', 'Interval(DayTime)')),
+  (arrow_cast('1 day', 'Interval(DayTime)'))) t(v);
+----
+Interval(DayTime) 2 days
+
+# Sliding window sum on intervals.
+query ??
+SELECT v, sum(v) OVER (ORDER BY v ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES
+  (interval '1 day'),
+  (interval '2 days'),
+  (interval '3 days')) t(v);
+----
+1 days 1 days
+2 days 3 days
+3 days 5 days
+
+# DISTINCT sum drops duplicates (DistinctSumAccumulator path).
+query ?
+SELECT sum(DISTINCT v) FROM (VALUES
+  (interval '1 day'),
+  (interval '1 day'),
+  (interval '2 days')) t(v);
+----
+3 days
+
+# SUM(col + interval_lit) — exercises the simplify_expr_op_literal path.
+query ?
+SELECT sum(v + interval '1 day') FROM (VALUES
+  (interval '1 day'),
+  (interval '2 days'),
+  (interval '3 days')) t(v);
+----
+9 days
+
+# Negative intervals: component-wise wrapping_add over signed i32/i64.
+query ?
+SELECT sum(v) FROM (VALUES
+  (interval '1 day'),
+  (interval '-3 days')) t(v);
+----
+-2 days
 
 # Prepare the table with dictionary values for testing
 statement ok
@@ -6739,7 +7048,6 @@ statement error
 select regr_sxy(NULL, 'bar');
 
 
-
 # regr_*() NULL results
 query RRIRRRRRR
 select regr_slope(1,1), regr_intercept(1,1), regr_count(1,1), regr_r2(1,1), regr_avgx(1,1), regr_avgy(1,1), regr_sxx(1,1), regr_syy(1,1), regr_sxy(1,1);
@@ -6765,7 +7073,6 @@ query RRIRRRRRR
 select regr_slope(column2, column1), regr_intercept(column2, column1), regr_count(column2, column1), regr_r2(column2, column1), regr_avgx(column2, column1), regr_avgy(column2, column1), regr_sxx(column2, column1), regr_syy(column2, column1), regr_sxy(column2, column1) from (values (1,2), (1,4), (1,6));
 ----
 NULL NULL 3 NULL 1 4 0 8 0
-
 
 
 # regr_*() basic tests
@@ -6872,7 +7179,6 @@ b 3 0 2 1 2 6 2 18 6
 c NULL NULL 1 NULL 1 10 0 0 0
 
 
-
 # regr_*() testing merge_batch() from RegrAccumulator's internal implementation
 statement ok
 set datafusion.execution.batch_size = 1;
@@ -6930,7 +7236,6 @@ from aggregate_test_100;
 
 statement ok
 set datafusion.execution.batch_size = 8192;
-
 
 
 # regr_*() testing retract_batch() from RegrAccumulator's internal implementation
@@ -7402,11 +7707,9 @@ statement ok
 drop table distinct_count_large_binary_table;
 
 
-
 ## Cleanup from distinct count tests
 statement ok
 drop table distinct_count_string_table;
-
 
 
 # rule `aggregate_statistics` should not optimize MIN/MAX to wrong values on empty relation
@@ -7842,6 +8145,23 @@ CREATE TABLE t1(v1 int);
 statement error DataFusion error: Error during planning: Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead
 SELECT v1 FROM t1 WHERE ((count(v1) % 1) << 1) > 0;
 
+# issue: https://github.com/apache/datafusion/issues/11748
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false HAVING false;
+----
+
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3);
+
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+2
+
 statement ok
 DROP TABLE t1;
 
@@ -8095,56 +8415,56 @@ drop table t;
 #######
 
 # group median i8 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i8) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -14
 group1 100
 
 # group median i16 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
-group0 -4611686018427387854
+group0 -4611686018427388000
 group1 100
 
 # group median u8 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u8) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u16 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
@@ -8186,56 +8506,56 @@ group0 0.0002
 group1 0.0003
 
 # group median i8 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i8) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -14
 group1 100
 
 # group median i16 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i16) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i32) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_nullable GROUP BY col_group
 ----
-group0 -4611686018427387854
+group0 -4611686018427388000
 group1 100
 
 # group median u8 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u8) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u16 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u32) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u64) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
@@ -8289,11 +8609,11 @@ create table group_median_all_nulls(
 ( 'group1', NULL),
 ( 'group1', NULL)
 
-query TIT rowsort
+query TRT rowsort
 SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP BY a
 ----
-group0 NULL Int32
-group1 NULL Int32
+group0 NULL Float64
+group1 NULL Float64
 
 statement ok
 create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null);
@@ -8431,19 +8751,6 @@ VALUES
 ----
 x 1
 
-query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
-SELECT array_agg(a_varchar) WITHIN GROUP (ORDER BY a_varchar)
-FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-
-
-query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions
-SELECT array_agg(DISTINCT a_varchar) WITHIN GROUP (ORDER BY a_varchar)
-FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
-
-
-query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function
-SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)
-FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
 
 # distinct average
 statement ok
@@ -8832,7 +9139,7 @@ ORDER BY g;
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
@@ -8957,3 +9264,114 @@ GROUP BY id ORDER BY id;
 
 statement ok
 DROP TABLE first_last_value_str_tests;
+
+# MIN/MAX over a CAST projection folds from parquet statistics via the
+# aggregate-statistics optimizer. Non-CAST projections (multi-column or
+# self-referenced expressions) must keep returning correct results — guard
+# against future regressions if the optimizer is broadened.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION '../core/tests/data/clickbench_hits_10.parquet';
+
+query II
+SELECT MIN(CAST("EventDate" AS BIGINT)), MAX(CAST("EventDate" AS BIGINT)) FROM hits_raw;
+----
+15901 15901
+
+query II
+SELECT MIN(delta), MAX(delta)
+FROM (
+  SELECT "UserID" - CAST("ClientIP" AS BIGINT) AS delta
+  FROM hits_raw
+);
+----
+-2461439044872611287 7418527518698834918
+
+query II
+SELECT MIN(zero), MAX(zero)
+FROM (
+  SELECT "UserID" - "UserID" AS zero
+  FROM hits_raw
+);
+----
+0 0
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE hits_raw;
+
+# Nested aggregate function calls are rejected during planning
+# issue: https://github.com/apache/datafusion/issues/23812
+statement ok
+CREATE TABLE nested_agg_t AS VALUES (1, 10.0), (1, 20.0), (2, 30.0);
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'sum\(nested_agg_t\.column2\)' is nested inside 'sum\(sum\(nested_agg_t\.column2\)\)'
+SELECT column1, sum(sum(column2)) FROM nested_agg_t GROUP BY column1;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'count\(nested_agg_t\.column2\)' is nested inside 'sum\(count\(nested_agg_t\.column2\)\)'
+SELECT column1, sum(count(column2)) FROM nested_agg_t GROUP BY column1;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT sum(sum(column2)) FROM nested_agg_t;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT column1 FROM nested_agg_t GROUP BY column1 HAVING sum(sum(column2)) > 0;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT column1, sum(column2 + sum(column2)) FROM nested_agg_t GROUP BY column1;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT sum(column2) FILTER (WHERE sum(column2) > 0) FROM nested_agg_t;
+
+statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
+SELECT array_agg(column2 ORDER BY sum(column2)) FROM nested_agg_t;
+
+# A window function nested inside an aggregate is rejected as well
+statement error DataFusion error: Error during planning: Aggregate function calls cannot contain window function calls
+SELECT sum(sum(column2) OVER ()) FROM nested_agg_t;
+
+# ... as are nested window functions
+statement error DataFusion error: Error during planning: Window function calls cannot be nested
+SELECT sum(sum(column2) OVER ()) OVER () FROM nested_agg_t;
+
+statement error DataFusion error: Error during planning: Window function calls cannot be nested
+SELECT row_number() OVER (ORDER BY row_number() OVER ()) FROM nested_agg_t;
+
+# ... including a window call nested in `PARTITION BY`
+statement error DataFusion error: Error during planning: Window function calls cannot be nested
+SELECT row_number() OVER (PARTITION BY row_number() OVER ()) FROM nested_agg_t;
+
+# A scalar function applied to an aggregate is legal
+query IR
+SELECT column1, abs(sum(column2)) FROM nested_agg_t GROUP BY column1 ORDER BY column1;
+----
+1 30
+2 30
+
+# A window function applied to an aggregate is legal
+query IR
+SELECT column1, sum(sum(column2)) OVER () FROM nested_agg_t GROUP BY column1 ORDER BY column1;
+----
+1 60
+2 60
+
+# An aggregate over the result of an aggregate computed in a subquery is legal
+query R
+SELECT sum(s) FROM (SELECT sum(column2) AS s FROM nested_agg_t GROUP BY column1);
+----
+60
+
+# An aggregate over the result of a window function computed in a subquery is legal
+query R
+SELECT sum(s) FROM (SELECT sum(column2) OVER () AS s FROM nested_agg_t);
+----
+180
+
+statement ok
+DROP TABLE nested_agg_t;

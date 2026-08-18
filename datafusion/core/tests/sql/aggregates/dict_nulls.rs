@@ -91,10 +91,10 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     +----------------+--------------+
     | dict_null_vals | median_value |
     +----------------+--------------+
-    |                | 3            |
-    | group_x        | 1            |
-    | group_y        | 5            |
-    | group_z        | 7            |
+    |                | 3.0          |
+    | group_x        | 1.0          |
+    | group_y        | 5.0          |
+    | group_z        | 7.0          |
     +----------------+--------------+
     ");
 
@@ -292,7 +292,7 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
 /// Test MAX with dictionary columns containing null keys and values as specified in the SQL query
 #[tokio::test]
 async fn test_max_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_test_contexts()?;
 
     // Execute the SQL query with MAX aggregations
     let sql = "SELECT
@@ -333,7 +333,7 @@ async fn test_max_with_fuzz_table_dict_nulls() -> Result<()> {
 /// Test MIN with fuzz table containing dictionary columns with null keys and values and timestamp data (single and multiple partitions)
 #[tokio::test]
 async fn test_min_timestamp_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_timestamp_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_timestamp_test_contexts()?;
 
     // Execute the SQL query with MIN aggregation on timestamp
     let sql = "SELECT
@@ -373,7 +373,7 @@ async fn test_min_timestamp_with_fuzz_table_dict_nulls() -> Result<()> {
 /// Test COUNT and COUNT DISTINCT with fuzz table containing dictionary columns with null keys and values (single and multiple partitions)
 #[tokio::test]
 async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_count_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_count_test_contexts()?;
 
     // Execute the SQL query with COUNT and COUNT DISTINCT aggregations
     let sql = "SELECT
@@ -414,7 +414,7 @@ async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
 /// Test MEDIAN and MEDIAN DISTINCT with fuzz table containing various numeric types and dictionary columns with null keys and values (single and multiple partitions)
 #[tokio::test]
 async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_median_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_median_test_contexts()?;
 
     // Execute the SQL query with MEDIAN and MEDIAN DISTINCT aggregations
     let sql = "SELECT
@@ -437,16 +437,16 @@ async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
     assert_snapshot!(
         batches_to_string(&results),
         @r"
-    +--------+---------------------+------+------+------+--------+--------+
-    | u8_low | dictionary_utf8_low | col1 | col2 | col3 | col4   | col5   |
-    +--------+---------------------+------+------+------+--------+--------+
-    | 50     |                     |      | 30   |      | 987.65 | 400000 |
-    | 50     | group_three         | 5000 | 50   | 5000 | 555.55 | 500000 |
-    | 75     |                     | 4000 |      | 4000 |        | 450000 |
-    | 100    | group_one           | 1100 | 11   | 1000 | 123.45 | 110000 |
-    | 100    | group_two           | 1500 | 15   | 1500 | 111.11 | 150000 |
-    | 200    |                     | 2500 | 22   | 2500 | 506.11 | 250000 |
-    +--------+---------------------+------+------+------+--------+--------+
+    +--------+---------------------+--------+------+--------+--------+----------+
+    | u8_low | dictionary_utf8_low | col1   | col2 | col3   | col4   | col5     |
+    +--------+---------------------+--------+------+--------+--------+----------+
+    | 50     |                     |        | 30.0 |        | 987.65 | 400000.0 |
+    | 50     | group_three         | 5000.0 | 50.0 | 5000.0 | 555.55 | 500000.0 |
+    | 75     |                     | 4000.0 |      | 4000.0 |        | 450000.0 |
+    | 100    | group_one           | 1100.0 | 11.0 | 1000.0 | 123.45 | 110000.0 |
+    | 100    | group_two           | 1500.0 | 15.0 | 1500.0 | 111.11 | 150000.0 |
+    | 200    |                     | 2500.0 | 22.5 | 2500.0 | 506.11 | 250000.0 |
+    +--------+---------------------+--------+------+--------+--------+----------+
     "
     );
 

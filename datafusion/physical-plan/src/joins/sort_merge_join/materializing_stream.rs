@@ -17,21 +17,17 @@
 
 //! Sort-Merge Join execution
 //!
-//! This module implements the runtime state machine for the Sort-Merge Join
-//! operator. It drives two sorted input streams (the *streamed* side and the
-//! *buffered* side), compares join keys, and produces joined `RecordBatch`es.
+//! This module implements the Sort-Merge Join operator as an async
+//! generator running a merge scan: it drives two sorted input streams (the
+//! *streamed* side and the *buffered* side), compares join keys, and
+//! produces joined `RecordBatch`es.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
-use std::fs::File;
-use std::io::BufReader;
+use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
-use std::task::{Context, Poll};
 
 use crate::joins::sort_merge_join::filter::{
     FilterMetadata, filter_record_batch_by_join_type, get_corrected_filter_mask,
@@ -39,68 +35,28 @@ use crate::joins::sort_merge_join::filter::{
 };
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator};
-use crate::metrics::RecordOutput;
+use crate::metrics::Time;
 use crate::spill::spill_manager::SpillManager;
-use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
+use crate::{PhysicalExpr, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
     self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, interleave,
-    take, take_arrays,
+    take_arrays,
 };
 use arrow::datatypes::SchemaRef;
-use arrow::ipc::reader::StreamReader;
 use datafusion_common::cast::as_uint64_array;
-use datafusion_common::{JoinType, NullEquality, Result, exec_err, internal_err};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_common::instant::Instant;
+use datafusion_common::{
+    DataFusionError, JoinType, NullEquality, Result, exec_err, internal_err,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::{SpillFile, TryEmitter, async_try_stream};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 
-use futures::{Stream, StreamExt};
-
-/// State of SMJ stream
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum SortMergeJoinState {
-    /// Init joining with a new streamed row or a new buffered batches
-    Init,
-    /// Polling one streamed row or one buffered batch, or both
-    Polling,
-    /// Joining polled data and making output
-    JoinOutput,
-    /// Emit ready data if have any and then go back to [`Self::Init`] state
-    EmitReadyThenInit,
-    /// No more output
-    Exhausted,
-}
-
-/// State of streamed data stream
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum StreamedState {
-    /// Init polling
-    Init,
-    /// Polling one streamed row
-    Polling,
-    /// Ready to produce one streamed row
-    Ready,
-    /// No more streamed row
-    Exhausted,
-}
-
-/// State of buffered data stream
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum BufferedState {
-    /// Init polling
-    Init,
-    /// Polling first row in the next batch
-    PollingFirst,
-    /// Polling rest rows in the next batch
-    PollingRest,
-    /// Ready to produce one batch
-    Ready,
-    /// No more buffered batches
-    Exhausted,
-}
+use futures::StreamExt;
 
 /// Represents a chunk of joined data from streamed and buffered side
 pub(super) struct StreamedJoinedChunk {
@@ -222,7 +178,7 @@ pub(super) enum FilterState {
 
 /// A buffered batch that contains contiguous rows with same join key
 ///
-/// `BufferedBatch` can exist as either an in-memory `RecordBatch` or a `RefCountedTempFile` on disk.
+/// `BufferedBatch` can exist as either an in-memory `RecordBatch` or a `SpillFile`.
 #[derive(Debug)]
 pub(super) struct BufferedBatch {
     /// Represents in memory or spilled record batch
@@ -235,6 +191,18 @@ pub(super) struct BufferedBatch {
     pub null_joined: Vec<usize>,
     /// Size estimation used for reserving / releasing memory
     pub size_estimation: usize,
+    /// Memory footprint of `join_arrays` cached at construction time.
+    /// Used during spill to track the residual memory that remains after
+    /// the main batch is written to disk.
+    pub join_arrays_mem: usize,
+    /// Actual amount tracked in the memory reservation for this batch.
+    ///
+    /// - `InMemory`: equals `size_estimation` (full batch + join_arrays + metadata)
+    /// - `Spilled`: equals `join_arrays_mem` (join key arrays stay in memory)
+    ///
+    /// Invariant: `free_reservation()` shrinks by exactly this amount, so we never
+    /// shrink by more than we grew.
+    pub reserved_amount: usize,
     /// Tracks filter outcomes for buffered rows in full outer joins.
     /// Indexed by absolute row position within the batch. See [`FilterState`].
     pub join_filter_status: Vec<FilterState>,
@@ -258,11 +226,13 @@ impl BufferedBatch {
         // + worst case null_joined (as vector capacity * element size)
         // + Range size
         // + size of this estimation
+        let join_arrays_mem: usize = join_arrays
+            .iter()
+            .map(|arr| arr.get_array_memory_size())
+            .sum();
+
         let size_estimation = batch.get_array_memory_size()
-            + join_arrays
-                .iter()
-                .map(|arr| arr.get_array_memory_size())
-                .sum::<usize>()
+            + join_arrays_mem
             + batch.num_rows().next_power_of_two() * size_of::<usize>()
             + size_of::<Range<usize>>()
             + size_of::<usize>();
@@ -274,6 +244,8 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
+            join_arrays_mem,
+            reserved_amount: 0,
             join_filter_status: vec![FilterState::Unvisited; num_rows],
             num_rows,
         }
@@ -282,14 +254,23 @@ impl BufferedBatch {
 
 // TODO: Spill join arrays (https://github.com/apache/datafusion/pull/17429)
 // Used to represent whether the buffered data is currently in memory or written to disk
-#[derive(Debug)]
 pub(super) enum BufferedBatchState {
     // In memory record batch
     InMemory(RecordBatch),
     // Spilled temp file
-    Spilled(RefCountedTempFile),
+    Spilled(Arc<dyn SpillFile>),
 }
 
+impl Debug for BufferedBatchState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InMemory(batch) => f.debug_tuple("InMemory").field(batch).finish(),
+            Self::Spilled(_) => {
+                write!(f, "Spilled(Custom_Backend)")
+            }
+        }
+    }
+}
 /// Sort-Merge join stream for Inner/Left/Right/Full joins.
 ///
 /// Named "materializing" because it builds explicit `(streamed, buffered)` row
@@ -311,6 +292,9 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub filter: Option<JoinFilter>,
     /// How the join is performed
     pub join_type: JoinType,
+    /// Cached `needs_deferred_filtering(filter, join_type)` — both inputs
+    /// are fixed at construction time.
+    pub deferred_filtering: bool,
     /// Target output batch size
     pub batch_size: usize,
 
@@ -324,10 +308,8 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub streamed: SendableRecordBatchStream,
     /// Current processing record batch of streamed
     pub streamed_batch: StreamedBatch,
-    /// (used in outer join) Is current streamed row joined at least once?
-    pub streamed_joined: bool,
-    /// State of streamed
-    pub streamed_state: StreamedState,
+    /// True once the streamed input has no more rows
+    pub streamed_exhausted: bool,
     /// Join key columns of streamed
     pub on_streamed: Vec<PhysicalExprRef>,
 
@@ -341,10 +323,11 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub buffered: SendableRecordBatchStream,
     /// Current buffered data
     pub buffered_data: BufferedData,
-    /// (used in outer join) Is current buffered batches joined at least once?
-    pub buffered_joined: bool,
-    /// State of buffered
-    pub buffered_state: BufferedState,
+    /// Has any streamed row matched the current buffered key group?
+    /// (FULL join: an unmatched group is emitted null-joined when passed.)
+    pub buffered_group_matched: bool,
+    /// True once the buffered input has no more rows and no group remains
+    pub buffered_exhausted: bool,
     /// Join key columns of buffered
     pub on_buffered: Vec<PhysicalExprRef>,
 
@@ -353,17 +336,25 @@ pub(super) struct MaterializingSortMergeJoinStream {
     // These fields track the execution state of merge join and are updated
     // during the execution.
     // ========================================================================
-    /// Current state of the stream
-    pub state: SortMergeJoinState,
     /// Staging output array builders
     pub joined_record_batches: JoinedRecordBatches,
     /// Output buffer. Currently used by filtering as it requires double buffering
-    /// to avoid small/empty batches. Non-filtered join outputs directly from `staging_output_record_batches.batches`
+    /// to avoid small/empty batches. Non-filtered joins output directly from
+    /// `joined_record_batches.joined_batches`
     pub output: BatchCoalescer,
-    /// The comparison result of current streamed row and buffered batches
-    pub current_ordering: Ordering,
     /// Manages the process of spilling and reading back intermediate data
     pub spill_manager: SpillManager,
+
+    /// Tracks the number of batches currently spilled
+    pub spilled_batch_count: usize,
+
+    /// Time spent doing the join's own work (including spill write and
+    /// read-back). The clock is stopped while awaiting the child inputs or
+    /// the consumer taking an emitted batch — see [`Self::stop_join_time`].
+    pub join_time: Time,
+    /// Start of the currently running `join_time` span; `None` while the
+    /// clock is stopped.
+    pub join_time_start: Option<Instant>,
 
     // ========================================================================
     // CACHED COMPARATORS:
@@ -384,8 +375,9 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub reservation: MemoryReservation,
     /// Runtime env
     pub runtime_env: Arc<RuntimeEnv>,
-    /// A unique number for each batch
-    pub streamed_batch_counter: AtomicUsize,
+    /// A unique id per streamed batch, tagging deferred-filter metadata so
+    /// `get_corrected_filter_mask` can group output rows by input batch.
+    pub streamed_batch_counter: usize,
 }
 
 /// Staging area for joined data before output
@@ -531,240 +523,6 @@ impl JoinedRecordBatches {
         self.debug_assert_empty_consistency();
     }
 }
-impl RecordBatchStream for MaterializingSortMergeJoinStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-}
-
-impl Stream for MaterializingSortMergeJoinStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let join_time = self.join_metrics.join_time().clone();
-        let _timer = join_time.timer();
-        loop {
-            match &self.state {
-                SortMergeJoinState::Init => {
-                    let streamed_exhausted =
-                        self.streamed_state == StreamedState::Exhausted;
-                    let buffered_exhausted =
-                        self.buffered_state == BufferedState::Exhausted;
-                    self.state = if streamed_exhausted && buffered_exhausted {
-                        SortMergeJoinState::Exhausted
-                    } else {
-                        match self.current_ordering {
-                            Ordering::Less | Ordering::Equal => {
-                                if !streamed_exhausted {
-                                    // Batch deferred filtering: process_filtered_batches()
-                                    // only when >= batch_size rows have accumulated.
-                                    // Without this gate, unique keys cause per-row pipeline
-                                    // execution (concat + correct_mask + filter_by_type),
-                                    // which dominates runtime.
-                                    //
-                                    // Accumulated rows are bounded to ~2*batch_size:
-                                    // one batch_size worth from freeze_dequeuing_buffered()
-                                    // (when an input batch is fully consumed), plus up to
-                                    // batch_size pairs accumulating toward the next freeze.
-                                    // This does not reintroduce the unbounded buffering
-                                    // fixed by PR #20482. Exhausted state flushes remainder.
-                                    if needs_deferred_filtering(
-                                        &self.filter,
-                                        self.join_type,
-                                    ) {
-                                        let accumulated = self.num_unfrozen_pairs()
-                                            + self
-                                                .joined_record_batches
-                                                .filter_metadata
-                                                .filter_mask
-                                                .len();
-                                        if accumulated >= self.batch_size {
-                                            match self.process_filtered_batches()? {
-                                                Poll::Ready(Some(batch)) => {
-                                                    return Poll::Ready(Some(Ok(batch)));
-                                                }
-                                                Poll::Ready(None) | Poll::Pending => {}
-                                            }
-                                        }
-                                    }
-
-                                    self.streamed_joined = false;
-                                    self.streamed_state = StreamedState::Init;
-                                }
-                            }
-                            Ordering::Greater => {
-                                if !buffered_exhausted {
-                                    self.buffered_joined = false;
-                                    self.buffered_state = BufferedState::Init;
-                                }
-                            }
-                        }
-                        SortMergeJoinState::Polling
-                    };
-                }
-                SortMergeJoinState::Polling => {
-                    if ![StreamedState::Exhausted, StreamedState::Ready]
-                        .contains(&self.streamed_state)
-                    {
-                        match self.poll_streamed_row(cx)? {
-                            Poll::Ready(_) => {}
-                            Poll::Pending => return Poll::Pending,
-                        }
-                    }
-
-                    if ![BufferedState::Exhausted, BufferedState::Ready]
-                        .contains(&self.buffered_state)
-                    {
-                        match self.poll_buffered_batches(cx)? {
-                            Poll::Ready(_) => {}
-                            Poll::Pending => return Poll::Pending,
-                        }
-                    }
-                    let streamed_exhausted =
-                        self.streamed_state == StreamedState::Exhausted;
-                    let buffered_exhausted =
-                        self.buffered_state == BufferedState::Exhausted;
-                    if streamed_exhausted && buffered_exhausted {
-                        self.state = SortMergeJoinState::Exhausted;
-                        continue;
-                    }
-                    self.current_ordering = self.compare_streamed_buffered()?;
-                    self.state = SortMergeJoinState::JoinOutput;
-                }
-                SortMergeJoinState::EmitReadyThenInit => {
-                    // If have data to emit, emit it and if no more, change to next
-
-                    // Verify metadata alignment before checking if we have batches to output
-                    self.joined_record_batches
-                        .filter_metadata
-                        .debug_assert_metadata_aligned();
-
-                    // For filtered joins, skip output and let Init state handle it
-                    if needs_deferred_filtering(&self.filter, self.join_type) {
-                        self.state = SortMergeJoinState::Init;
-                        continue;
-                    }
-
-                    // For non-filtered joins, only output if we have a completed batch
-                    // (opportunistic output when target batch size is reached)
-                    if self
-                        .joined_record_batches
-                        .joined_batches
-                        .has_completed_batch()
-                    {
-                        let record_batch = self
-                            .joined_record_batches
-                            .joined_batches
-                            .next_completed_batch()
-                            .expect("has_completed_batch was true");
-                        (&record_batch)
-                            .record_output(&self.join_metrics.baseline_metrics());
-                        return Poll::Ready(Some(Ok(record_batch)));
-                    }
-                    self.state = SortMergeJoinState::Init;
-                }
-                SortMergeJoinState::JoinOutput => {
-                    self.join_partial()?;
-
-                    if self.num_unfrozen_pairs() < self.batch_size {
-                        if self.buffered_data.scanning_finished() {
-                            self.buffered_data.scanning_reset();
-                            self.state = SortMergeJoinState::EmitReadyThenInit;
-                        }
-                    } else {
-                        self.freeze_all()?;
-
-                        // Verify metadata alignment before checking if we have batches to output
-                        self.joined_record_batches
-                            .filter_metadata
-                            .debug_assert_metadata_aligned();
-
-                        // For filtered joins, skip output and let Init state handle it
-                        if needs_deferred_filtering(&self.filter, self.join_type) {
-                            continue;
-                        }
-
-                        // For non-filtered joins, only output if we have a completed batch
-                        // (opportunistic output when target batch size is reached)
-                        if self
-                            .joined_record_batches
-                            .joined_batches
-                            .has_completed_batch()
-                        {
-                            let record_batch = self
-                                .joined_record_batches
-                                .joined_batches
-                                .next_completed_batch()
-                                .expect("has_completed_batch was true");
-                            (&record_batch)
-                                .record_output(&self.join_metrics.baseline_metrics());
-                            return Poll::Ready(Some(Ok(record_batch)));
-                        }
-                        // Otherwise keep buffering (don't output yet)
-                    }
-                }
-                SortMergeJoinState::Exhausted => {
-                    self.freeze_all()?;
-
-                    // Verify metadata alignment before final output
-                    self.joined_record_batches
-                        .filter_metadata
-                        .debug_assert_metadata_aligned();
-
-                    // For filtered joins, must concat and filter ALL data at once
-                    if needs_deferred_filtering(&self.filter, self.join_type)
-                        && !self.joined_record_batches.joined_batches.is_empty()
-                    {
-                        let record_batch = self.filter_joined_batch()?;
-                        (&record_batch)
-                            .record_output(&self.join_metrics.baseline_metrics());
-                        return Poll::Ready(Some(Ok(record_batch)));
-                    }
-
-                    // For non-filtered joins, finish buffered data first
-                    if !self.joined_record_batches.joined_batches.is_empty() {
-                        self.joined_record_batches
-                            .joined_batches
-                            .finish_buffered_batch()?;
-                    }
-
-                    // Output one completed batch at a time (stay in Exhausted until empty)
-                    if self
-                        .joined_record_batches
-                        .joined_batches
-                        .has_completed_batch()
-                    {
-                        let record_batch = self
-                            .joined_record_batches
-                            .joined_batches
-                            .next_completed_batch()
-                            .expect("has_completed_batch was true");
-                        (&record_batch)
-                            .record_output(&self.join_metrics.baseline_metrics());
-                        return Poll::Ready(Some(Ok(record_batch)));
-                    }
-
-                    // Finally check self.output BatchCoalescer (used by filtered joins)
-                    return if !self.output.is_empty() {
-                        self.output.finish_buffered_batch()?;
-                        let record_batch = self
-                            .output
-                            .next_completed_batch()
-                            .expect("Failed to get last batch");
-                        (&record_batch)
-                            .record_output(&self.join_metrics.baseline_metrics());
-                        Poll::Ready(Some(Ok(record_batch)))
-                    } else {
-                        Poll::Ready(None)
-                    };
-                }
-            }
-        }
-    }
-}
 
 impl MaterializingSortMergeJoinStream {
     #[expect(clippy::too_many_arguments)]
@@ -783,7 +541,7 @@ impl MaterializingSortMergeJoinStream {
         reservation: MemoryReservation,
         spill_manager: SpillManager,
         runtime_env: Arc<RuntimeEnv>,
-    ) -> Result<Self> {
+    ) -> Result<SendableRecordBatchStream> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
         debug_assert!(
@@ -794,8 +552,8 @@ impl MaterializingSortMergeJoinStream {
             "MaterializingSortMergeJoinStream does not handle {join_type:?}; \
              semi/anti/mark joins use BitwiseSortMergeJoinStream"
         );
-        Ok(Self {
-            state: SortMergeJoinState::Init,
+        let join_time = join_metrics.join_time();
+        let mut this = Self {
             sort_options,
             null_equality,
             schema: Arc::clone(&schema),
@@ -805,13 +563,12 @@ impl MaterializingSortMergeJoinStream {
             buffered,
             streamed_batch: StreamedBatch::new_empty(streamed_schema),
             buffered_data: BufferedData::default(),
-            streamed_joined: false,
-            buffered_joined: false,
-            streamed_state: StreamedState::Init,
-            buffered_state: BufferedState::Init,
-            current_ordering: Ordering::Equal,
+            buffered_group_matched: false,
+            streamed_exhausted: false,
+            buffered_exhausted: false,
             on_streamed,
             on_buffered,
+            deferred_filtering: needs_deferred_filtering(&filter, join_type),
             filter,
             joined_record_batches: JoinedRecordBatches {
                 joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size)
@@ -826,10 +583,299 @@ impl MaterializingSortMergeJoinStream {
             reservation,
             runtime_env,
             spill_manager,
+            spilled_batch_count: 0,
+            join_time,
+            join_time_start: None,
             streamed_buffered_cmp: None,
             buffered_equality_cmp: None,
-            streamed_batch_counter: AtomicUsize::new(0),
-        })
+            streamed_batch_counter: 0,
+        };
+
+        let schema = Arc::clone(&this.schema);
+        let baseline_metrics = this.join_metrics.baseline_metrics();
+
+        let stream = async_try_stream(|mut emitter| async move {
+            this.start_join_time();
+            let result = this.join(&mut emitter).await;
+            this.stop_join_time();
+            result
+        });
+        // ObservedStream records the baseline metrics (output rows/batches,
+        // end time).
+        Ok(Box::pin(ObservedStream::new(
+            Box::pin(RecordBatchStreamAdapter::new(schema, stream)),
+            baseline_metrics,
+            None,
+        )))
+    }
+
+    /// Main loop: the textbook sort-merge join.
+    ///
+    /// Both inputs arrive sorted on the join keys. The streamed side is
+    /// consumed one row at a time; the buffered side one key *group* (all
+    /// contiguous rows sharing a key) at a time
+    async fn join(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        // 1. Load the first streamed row and the first buffered key group.
+        self.load_next_streamed_batch().await?;
+        self.advance_buffered_group().await?;
+
+        // 2. Merge-scan while either input still has rows.
+        while !(self.streamed_exhausted && self.buffered_exhausted) {
+            // Flush the deferred-filtering pipeline once a full batch of
+            // rows accumulated (filtered outer joins output through it).
+            if self.deferred_filtering
+                && self.deferred_rows_accumulated() >= self.batch_size
+            {
+                self.emit_deferred_output(emitter).await?;
+            }
+
+            // 3. Compare the join keys at both cursors. An exhausted side
+            //    compares as the larger one, so the other side keeps
+            //    draining through its own arm.
+            match self.compare_streamed_buffered()? {
+                // 3a. The streamed row can never match: null-join it (outer
+                //     joins emit it; inner joins drop it), then advance.
+                Ordering::Less => {
+                    self.null_join_streamed_row();
+                    if self.num_unfrozen_pairs() >= self.batch_size {
+                        self.freeze_and_emit(emitter).await?;
+                    }
+                    if !self.try_advance_streamed_row() {
+                        self.load_next_streamed_batch().await?;
+                    }
+                }
+                // 3b. The buffered group can never match again: null-join
+                //     it if nothing matched it (FULL join), then advance to
+                //     the next key group.
+                Ordering::Greater => {
+                    self.null_join_buffered_group();
+                    if !self.try_advance_buffered_group()? {
+                        self.advance_buffered_group().await?;
+                    }
+                }
+                // 3c. Match: pair the streamed row with the whole group —
+                //     materializing ("freezing") mid-scan whenever a full
+                //     batch of pairs accumulates — then advance streamed.
+                //     The group stays for the next streamed row.
+                Ordering::Equal => {
+                    while !self.pair_streamed_row_with_group() {
+                        self.freeze_and_emit(emitter).await?;
+                    }
+                    if !self.try_advance_streamed_row() {
+                        self.load_next_streamed_batch().await?;
+                    }
+                }
+            }
+
+            // 4. Emit completed output batches (filtered joins emit
+            //    through the deferred-filtering pipeline above instead).
+            if !self.deferred_filtering
+                && self
+                    .joined_record_batches
+                    .joined_batches
+                    .has_completed_batch()
+            {
+                self.emit_completed_joined_batches(emitter).await;
+            }
+        }
+
+        // 5. Flush everything that remains.
+        self.on_children_exhausted(emitter).await
+    }
+
+    /// `Equal`: pair the current streamed row with every row of the
+    /// buffered key group, and mark the group as matched.
+    ///
+    /// Returns false when a full batch of pairs has accumulated (the scan
+    /// may or may not be complete): the caller must materialize
+    /// (`freeze_and_emit`) and call again, which resumes the scan where it
+    /// paused. Returns true when the group scan is complete and there is
+    /// room for more pairs.
+    fn pair_streamed_row_with_group(&mut self) -> bool {
+        while !self.buffered_data.scanning_finished()
+            && self.num_unfrozen_pairs() < self.batch_size
+        {
+            let scanning_idx = self.buffered_data.scanning_idx();
+            self.streamed_batch.append_output_pair(
+                Some(self.buffered_data.scanning_batch_idx),
+                Some(scanning_idx),
+                self.batch_size,
+            );
+            self.buffered_data.scanning_advance();
+        }
+        if self.num_unfrozen_pairs() >= self.batch_size {
+            return false;
+        }
+
+        self.buffered_group_matched = true;
+        self.buffered_data.scanning_reset();
+        true
+    }
+
+    /// `Less` (outer joins): no buffered row matches the current streamed
+    /// row — emit it joined to NULLs. Inner joins emit nothing.
+    fn null_join_streamed_row(&mut self) {
+        if matches!(
+            self.join_type,
+            JoinType::Left | JoinType::Right | JoinType::Full
+        ) {
+            let scanning_batch_idx = if self.buffered_data.scanning_finished() {
+                None
+            } else {
+                Some(self.buffered_data.scanning_batch_idx)
+            };
+            self.streamed_batch.append_output_pair(
+                scanning_batch_idx,
+                None,
+                self.batch_size,
+            );
+        }
+        self.buffered_data.scanning_reset();
+    }
+
+    /// `Greater` (FULL join): the buffered group can never match a streamed
+    /// row anymore — if nothing matched it, mark all its rows for
+    /// null-joined output (produced when the group's batches are dequeued).
+    fn null_join_buffered_group(&mut self) {
+        if self.join_type == JoinType::Full && !self.buffered_group_matched {
+            while !self.buffered_data.scanning_finished() {
+                let scanning_idx = self.buffered_data.scanning_idx();
+                self.buffered_data
+                    .scanning_batch_mut()
+                    .null_joined
+                    .push(scanning_idx);
+                self.buffered_data.scanning_advance();
+            }
+        }
+        self.buffered_data.scanning_reset();
+    }
+
+    /// Start (resume) the `join_time` clock.
+    fn start_join_time(&mut self) {
+        debug_assert!(self.join_time_start.is_none(), "join_time already running");
+        self.join_time_start = Some(Instant::now());
+    }
+
+    /// Stop (pause) the `join_time` clock, accumulating the elapsed span.
+    ///
+    /// Called around awaits whose duration is not the join's own work: the
+    /// child input streams' `next()` and `emitter.emit()` (where the
+    /// consumer processes the batch). The join's own spill write and
+    /// read-back are NOT excluded — that time is join work.
+    fn stop_join_time(&mut self) {
+        if let Some(start) = self.join_time_start.take() {
+            self.join_time.add_elapsed(start);
+        }
+    }
+
+    /// Number of rows currently waiting in the deferred-filtering pipeline.
+    ///
+    /// Typically bounded to ~2*batch_size: one batch_size worth from
+    /// freeze_dequeuing_buffered() (when an input batch is fully consumed),
+    /// plus up to batch_size pairs accumulating toward the next freeze. A
+    /// single streamed row matching a very large key group can exceed that
+    /// (its pairs freeze into the pipeline before the gate runs again — same
+    /// as the pre-generator design). This does not reintroduce the unbounded
+    /// buffering fixed by PR #20482; `on_children_exhausted` flushes the
+    /// remainder.
+    fn deferred_rows_accumulated(&self) -> usize {
+        self.num_unfrozen_pairs()
+            + self.joined_record_batches.filter_metadata.filter_mask.len()
+    }
+
+    /// Run the deferred-filtering pipeline over everything accumulated so
+    /// far and emit its completed output, if any. Clears the accumulation
+    /// it processed.
+    ///
+    /// The caller gates this on `deferred_rows_accumulated() >= batch_size`:
+    /// running the pipeline per row instead (concat + correct_mask +
+    /// filter_by_type) would dominate runtime for unique keys.
+    async fn emit_deferred_output(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        // Ensure required spilled batches are restored to memory before
+        // processing, as this path invokes freeze_all().
+        self.restore_spilled_batches_for_freeze().await?;
+        if let Some(batch) = self.process_filtered_batches()? {
+            // While the emitted batch is in the consumer's hands the join
+            // isn't doing any work.
+            self.stop_join_time();
+            emitter.emit(batch).await;
+            self.start_join_time();
+        }
+        Ok(())
+    }
+
+    /// Restore every spilled buffered batch that the next freeze needs.
+    async fn restore_spilled_batches_for_freeze(&mut self) -> Result<()> {
+        let needed = self.get_required_batch_indices(self.buffered_data.batches.len());
+        self.restore_spilled_batches(&needed).await
+    }
+
+    /// Emit all completed joined batches to the stream consumer.
+    async fn emit_completed_joined_batches(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) {
+        while let Some(record_batch) = self
+            .joined_record_batches
+            .joined_batches
+            .next_completed_batch()
+        {
+            // While the emitted batch is in the consumer's hands the join
+            // isn't doing any work.
+            self.stop_join_time();
+            emitter.emit(record_batch).await;
+            self.start_join_time();
+        }
+    }
+
+    /// Flush everything that remains once both inputs are exhausted.
+    async fn on_children_exhausted(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        // Freeze the remaining pairs, restoring any spilled batches needed.
+        self.restore_spilled_batches_for_freeze().await?;
+        self.freeze_all()?;
+
+        // Verify metadata alignment before final output
+        self.joined_record_batches
+            .filter_metadata
+            .debug_assert_metadata_aligned();
+
+        if self.deferred_filtering {
+            // Filtered joins must concat and filter ALL remaining data at once
+            if !self.joined_record_batches.joined_batches.is_empty() {
+                let record_batch = self.filter_joined_batch()?;
+                self.stop_join_time();
+                emitter.emit(record_batch).await;
+                self.start_join_time();
+            }
+        } else if !self.joined_record_batches.joined_batches.is_empty() {
+            // For non-filtered joins, finish buffered data first, then emit
+            // every completed batch.
+            self.joined_record_batches
+                .joined_batches
+                .finish_buffered_batch()?;
+            self.emit_completed_joined_batches(emitter).await;
+        }
+
+        // Drain the double-buffering coalescer used by filtered joins.
+        if !self.output.is_empty() {
+            self.output.finish_buffered_batch()?;
+            while let Some(record_batch) = self.output.next_completed_batch() {
+                self.stop_join_time();
+                emitter.emit(record_batch).await;
+                self.start_join_time();
+            }
+        }
+
+        Ok(())
     }
 
     /// Build a comparator for streamed vs buffered head batch keys.
@@ -872,9 +918,9 @@ impl MaterializingSortMergeJoinStream {
 
     /// Process accumulated batches for filtered joins
     ///
-    /// Freezes unfrozen pairs, applies deferred filtering, and outputs if ready.
-    /// Returns Poll::Ready with a batch if one is available, otherwise Poll::Pending.
-    fn process_filtered_batches(&mut self) -> Poll<Option<Result<RecordBatch>>> {
+    /// Freezes unfrozen pairs, applies deferred filtering, and returns a
+    /// completed output batch if one is ready.
+    fn process_filtered_batches(&mut self) -> Result<Option<RecordBatch>> {
         self.freeze_all()?;
 
         self.joined_record_batches
@@ -892,73 +938,143 @@ impl MaterializingSortMergeJoinStream {
                     .output
                     .next_completed_batch()
                     .expect("Failed to get output batch");
-                (&record_batch).record_output(&self.join_metrics.baseline_metrics());
-                return Poll::Ready(Some(Ok(record_batch)));
+                return Ok(Some(record_batch));
             }
         }
 
-        Poll::Pending
+        Ok(None)
     }
 
-    /// Poll next streamed row
-    fn poll_streamed_row(&mut self, cx: &mut Context) -> Poll<Option<Result<()>>> {
-        loop {
-            match &self.streamed_state {
-                StreamedState::Init => {
-                    if self.streamed_batch.idx + 1 < self.streamed_batch.batch.num_rows()
-                    {
-                        self.streamed_batch.idx += 1;
-                        self.streamed_state = StreamedState::Ready;
-                        return Poll::Ready(Some(Ok(())));
-                    } else {
-                        self.streamed_state = StreamedState::Polling;
+    /// Identifies which buffered batches are needed for the upcoming freeze operation
+    fn get_required_batch_indices(&self, buffered_freeze_count: usize) -> Vec<usize> {
+        let mut needed = vec![];
+        // Avoid scanning if no spilled batches exist
+        if self.spilled_batch_count == 0 {
+            return needed;
+        }
+        // We need all batches that matched with streamed rows
+        for chunk in &self.streamed_batch.output_indices {
+            if let Some(idx) = chunk.buffered_batch_idx {
+                needed.push(idx);
+            }
+        }
+
+        // Full Joins need to emit null-joined rows, so we need batches up to freeze_count
+        if self.join_type == JoinType::Full {
+            needed.extend(0..buffered_freeze_count);
+        }
+
+        needed.sort_unstable();
+        needed.dedup();
+        needed
+    }
+
+    /// Asynchronously reads spilled batches back into memory.
+    /// Only processes the required indices to avoid OOMs.
+    async fn restore_spilled_batches(
+        &mut self,
+        required_indices: &[usize],
+    ) -> Result<()> {
+        for &idx in required_indices {
+            // Guard against indices that might be out of bounds if the queue was cleared
+            if idx >= self.buffered_data.batches.len() {
+                continue;
+            }
+
+            let bb = &mut self.buffered_data.batches[idx];
+
+            if let BufferedBatchState::Spilled(spill_file) = &bb.batch {
+                let mut spill_stream = self
+                    .spill_manager
+                    .read_spill_as_stream(Arc::clone(spill_file), None)?;
+
+                match spill_stream.next().await.transpose()? {
+                    Some(batch) => {
+                        // Transition the batch back to InMemory
+                        bb.batch = BufferedBatchState::InMemory(batch);
+                        self.spilled_batch_count -= 1;
+                        // The batch is back in memory, so we must account for its size.
+                        let newly_allocated =
+                            bb.size_estimation.saturating_sub(bb.reserved_amount);
+                        self.reservation.grow(newly_allocated);
+                        bb.reserved_amount = bb.size_estimation;
+
+                        self.join_metrics
+                            .peak_mem_used()
+                            .set_max(self.reservation.size());
                     }
-                }
-                StreamedState::Polling => match self.streamed.poll_next_unpin(cx)? {
-                    Poll::Pending => {
-                        return Poll::Pending;
+                    None => {
+                        return internal_err!("Spill file was empty");
                     }
-                    Poll::Ready(None) => {
-                        self.streamed_state = StreamedState::Exhausted;
-                    }
-                    Poll::Ready(Some(batch)) => {
-                        if batch.num_rows() > 0 {
-                            self.freeze_streamed()?;
-                            self.join_metrics.input_batches().add(1);
-                            self.join_metrics.input_rows().add(batch.num_rows());
-                            self.streamed_batch =
-                                StreamedBatch::new(batch, &self.on_streamed);
-                            self.rebuild_streamed_buffered_cmp()?;
-                            // Every incoming streaming batch should have its unique id
-                            // Check `JoinedRecordBatches.self.streamed_batch_counter` documentation
-                            self.streamed_batch_counter
-                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                            self.streamed_state = StreamedState::Ready;
-                        }
-                    }
-                },
-                StreamedState::Ready => {
-                    return Poll::Ready(Some(Ok(())));
-                }
-                StreamedState::Exhausted => {
-                    return Poll::Ready(None);
                 }
             }
         }
-    }
 
-    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) -> Result<()> {
-        // Shrink memory usage for in-memory batches only
-        if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
-            self.reservation
-                .try_shrink(buffered_batch.size_estimation)?;
-        }
         Ok(())
+    }
+
+    /// Sync fast path of advancing the streamed cursor: move to the next row
+    /// of the current batch. Returns false at the batch boundary, where the
+    /// caller must load the next batch via
+    /// [`Self::load_next_streamed_batch`].
+    fn try_advance_streamed_row(&mut self) -> bool {
+        if self.streamed_batch.idx + 1 < self.streamed_batch.batch.num_rows() {
+            self.streamed_batch.idx += 1;
+            return true;
+        }
+        false
+    }
+
+    /// Load the next streamed batch (freezing the finished one) and point
+    /// the streamed cursor at its first row. Sets `streamed_exhausted` when
+    /// the streamed input has no more rows.
+    async fn load_next_streamed_batch(&mut self) -> Result<()> {
+        loop {
+            // Loading a new streamed batch freezes the current one, which
+            // materializes buffered columns — restore any spilled buffered
+            // batches it needs first.
+            self.restore_spilled_batches_for_freeze().await?;
+
+            // The child's execution time is its own, not join_time.
+            self.stop_join_time();
+            let item = self.streamed.next().await.transpose();
+            self.start_join_time();
+            match item? {
+                None => {
+                    // Release the streamed input pipeline's resources.
+                    let streamed_schema = self.streamed.schema();
+                    self.streamed =
+                        Box::pin(EmptyRecordBatchStream::new(streamed_schema));
+                    self.streamed_exhausted = true;
+                    return Ok(());
+                }
+                Some(batch) => {
+                    if batch.num_rows() > 0 {
+                        self.freeze_streamed()?;
+                        self.join_metrics.input_batches().add(1);
+                        self.join_metrics.input_rows().add(batch.num_rows());
+                        self.streamed_batch =
+                            StreamedBatch::new(batch, &self.on_streamed);
+                        self.rebuild_streamed_buffered_cmp()?;
+                        // Every incoming streamed batch gets a unique id.
+                        self.streamed_batch_counter += 1;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) {
+        if buffered_batch.reserved_amount > 0 {
+            self.reservation.shrink(buffered_batch.reserved_amount);
+        }
     }
 
     fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
             Ok(_) => {
+                buffered_batch.reserved_amount = buffered_batch.size_estimation;
                 self.join_metrics
                     .peak_mem_used()
                     .set_max(self.reservation.size());
@@ -978,6 +1094,23 @@ impl MaterializingSortMergeJoinStream {
                             .unwrap(); // Operation only return None if no batches are spilled, here we ensure that at least one batch is spilled
 
                         buffered_batch.batch = BufferedBatchState::Spilled(spill_file);
+                        self.spilled_batch_count += 1;
+
+                        // Join key arrays remain in memory after the batch is
+                        // spilled — the comparator needs them for key boundary
+                        // detection. Force-grow the reservation so the pool
+                        // reflects actual memory usage even if this pushes
+                        // pool.reserved() above the configured limit. This is
+                        // safe because the memory is physically consumed and
+                        // not tracking it would let other operators over-allocate
+                        // against a stale pool view.
+                        let join_arrays_mem = buffered_batch.join_arrays_mem;
+                        self.reservation.grow(join_arrays_mem);
+                        buffered_batch.reserved_amount = join_arrays_mem;
+                        self.join_metrics
+                            .peak_mem_used()
+                            .set_max(self.reservation.size());
+
                         Ok(())
                     }
                     _ => internal_err!("Buffered batch has empty body"),
@@ -990,116 +1123,185 @@ impl MaterializingSortMergeJoinStream {
         Ok(())
     }
 
-    /// Poll next buffered batches
-    fn poll_buffered_batches(&mut self, cx: &mut Context) -> Poll<Option<Result<()>>> {
+    /// Sync fast path of [`Self::advance_buffered_group`]: when the next
+    /// group starts in the single remaining buffered batch and provably ends
+    /// within it (the common case — a group only reaches a batch boundary
+    /// once per batch), advance entirely synchronously. Returns false —
+    /// leaving all state unchanged — when the async path must run instead.
+    fn try_advance_buffered_group(&mut self) -> Result<bool> {
+        if self.buffered_data.batches.len() != 1 {
+            return Ok(false);
+        }
+        let head_batch = self.buffered_data.head_batch();
+        if head_batch.range.end == head_batch.num_rows {
+            // Fully consumed — needs dequeuing (and loading the next batch).
+            return Ok(false);
+        }
+
+        if self.buffered_equality_cmp.is_none() {
+            self.rebuild_buffered_equality_cmp()?;
+        }
+        let cmp = self.buffered_equality_cmp.as_ref().unwrap();
+
+        // Scan the next group's extent before committing any state, so a
+        // bail-out (the group may span into the next batch) leaves
+        // everything untouched for the async path.
+        let batch = self.buffered_data.head_batch();
+        let group_start = batch.range.end;
+        let mut group_end = group_start + 1;
+        while group_end < batch.num_rows && cmp.is_equal(group_start, group_end) {
+            group_end += 1;
+        }
+        if group_end == batch.num_rows {
+            return Ok(false);
+        }
+
+        let batch = self.buffered_data.tail_batch_mut();
+        batch.range.start = group_start;
+        batch.range.end = group_end;
+        self.buffered_group_matched = false;
+        Ok(true)
+    }
+
+    /// Advance the buffered side to the next key group: dequeue batches
+    /// fully consumed by the previous group, then collect all contiguous
+    /// rows sharing the next join key (the group may span multiple buffered
+    /// batches). Sets `buffered_exhausted` when no group remains.
+    async fn advance_buffered_group(&mut self) -> Result<()> {
+        self.buffered_group_matched = false;
+        self.dequeue_consumed_buffered_batches().await?;
+
+        if self.buffered_data.batches.is_empty() {
+            // Load the batch holding the first row of the next group.
+            if !self.load_next_buffered_batch().await? {
+                self.buffered_exhausted = true;
+                return Ok(());
+            }
+        } else {
+            // Seed the next group at the first unconsumed row of the
+            // remaining batch.
+            let tail_batch = self.buffered_data.tail_batch_mut();
+            tail_batch.range.start = tail_batch.range.end;
+            tail_batch.range.end += 1;
+        }
+
+        self.extend_buffered_group().await
+    }
+
+    /// Dequeue buffered batches fully consumed by the previous group,
+    /// producing their pending output (e.g. Full-join null-joined rows).
+    async fn dequeue_consumed_buffered_batches(&mut self) -> Result<()> {
+        let mut head_changed = false;
+        while !self.buffered_data.batches.is_empty() {
+            let head_batch = self.buffered_data.head_batch();
+            if head_batch.range.end != head_batch.num_rows {
+                // The next group starts within the head batch: streamed rows
+                // will be joined with the head batch in the next step.
+                break;
+            }
+            // load the spilled head batch before dequeuing
+            let needed = self.get_required_batch_indices(1);
+            self.restore_spilled_batches(&needed).await?;
+
+            self.freeze_dequeuing_buffered()?;
+            if let Some(mut buffered_batch) = self.buffered_data.batches.pop_front() {
+                self.produce_buffered_not_matched(&mut buffered_batch)?;
+                self.free_reservation(&buffered_batch);
+                if matches!(buffered_batch.batch, BufferedBatchState::Spilled(_)) {
+                    self.spilled_batch_count -= 1;
+                }
+                head_changed = true;
+            }
+        }
+        if head_changed {
+            self.streamed_buffered_cmp = None;
+            self.buffered_equality_cmp = None;
+        }
+        Ok(())
+    }
+
+    /// Load the next non-empty buffered batch and seed a new group with its
+    /// first row. Returns false when the buffered input is exhausted.
+    async fn load_next_buffered_batch(&mut self) -> Result<bool> {
         loop {
-            match &self.buffered_state {
-                BufferedState::Init => {
-                    // pop previous buffered batches
-                    let mut head_changed = false;
-                    while !self.buffered_data.batches.is_empty() {
-                        let head_batch = self.buffered_data.head_batch();
-                        // If the head batch is fully processed, dequeue it and produce output of it.
-                        if head_batch.range.end == head_batch.num_rows {
-                            self.freeze_dequeuing_buffered()?;
-                            if let Some(mut buffered_batch) =
-                                self.buffered_data.batches.pop_front()
-                            {
-                                self.produce_buffered_not_matched(&mut buffered_batch)?;
-                                self.free_reservation(&buffered_batch)?;
-                                head_changed = true;
-                            }
-                        } else {
-                            // If the head batch is not fully processed, break the loop.
-                            // Streamed batch will be joined with the head batch in the next step.
-                            break;
-                        }
-                    }
-                    if head_changed {
+            // The child's execution time is its own, not join_time.
+            self.stop_join_time();
+            let item = self.buffered.next().await.transpose();
+            self.start_join_time();
+            match item? {
+                None => {
+                    // Release the buffered input pipeline's resources.
+                    let buffered_schema = self.buffered.schema();
+                    self.buffered =
+                        Box::pin(EmptyRecordBatchStream::new(buffered_schema));
+                    return Ok(false);
+                }
+                Some(batch) => {
+                    self.join_metrics.input_batches().add(1);
+                    self.join_metrics.input_rows().add(batch.num_rows());
+
+                    if batch.num_rows() > 0 {
+                        let buffered_batch =
+                            BufferedBatch::new(batch, 0..1, &self.on_buffered);
+                        self.allocate_reservation(buffered_batch)?;
                         self.streamed_buffered_cmp = None;
-                        self.buffered_equality_cmp = None;
-                    }
-                    if self.buffered_data.batches.is_empty() {
-                        self.buffered_state = BufferedState::PollingFirst;
-                    } else {
-                        let tail_batch = self.buffered_data.tail_batch_mut();
-                        tail_batch.range.start = tail_batch.range.end;
-                        tail_batch.range.end += 1;
-                        self.buffered_state = BufferedState::PollingRest;
+                        return Ok(true);
                     }
                 }
-                BufferedState::PollingFirst => match self.buffered.poll_next_unpin(cx)? {
-                    Poll::Pending => {
-                        return Poll::Pending;
+            }
+        }
+    }
+
+    /// Extend the current group with every following row that shares its
+    /// key, loading more buffered batches as needed.
+    async fn extend_buffered_group(&mut self) -> Result<()> {
+        loop {
+            if self.buffered_data.tail_batch().range.end
+                < self.buffered_data.tail_batch().num_rows
+            {
+                if self.buffered_equality_cmp.is_none() {
+                    self.rebuild_buffered_equality_cmp()?;
+                }
+                while self.buffered_data.tail_batch().range.end
+                    < self.buffered_data.tail_batch().num_rows
+                {
+                    if self.buffered_equality_cmp.as_ref().unwrap().is_equal(
+                        self.buffered_data.head_batch().range.start,
+                        self.buffered_data.tail_batch().range.end,
+                    ) {
+                        self.buffered_data.tail_batch_mut().range.end += 1;
+                    } else {
+                        // Group complete within the current batch.
+                        return Ok(());
                     }
-                    Poll::Ready(None) => {
-                        self.buffered_state = BufferedState::Exhausted;
-                        return Poll::Ready(None);
+                }
+            } else {
+                // The child's execution time is its own, not join_time.
+                self.stop_join_time();
+                let item = self.buffered.next().await.transpose();
+                self.start_join_time();
+                match item? {
+                    None => {
+                        // Group complete; the input is done but the group is
+                        // still valid — `buffered_exhausted` is only set once
+                        // it has been fully consumed and dequeued.
+                        // Release the buffered input pipeline's resources.
+                        let buffered_schema = self.buffered.schema();
+                        self.buffered =
+                            Box::pin(EmptyRecordBatchStream::new(buffered_schema));
+                        return Ok(());
                     }
-                    Poll::Ready(Some(batch)) => {
+                    Some(batch) => {
+                        // Polling batches coming concurrently as multiple partitions
                         self.join_metrics.input_batches().add(1);
                         self.join_metrics.input_rows().add(batch.num_rows());
-
                         if batch.num_rows() > 0 {
                             let buffered_batch =
-                                BufferedBatch::new(batch, 0..1, &self.on_buffered);
-
+                                BufferedBatch::new(batch, 0..0, &self.on_buffered);
                             self.allocate_reservation(buffered_batch)?;
-                            self.streamed_buffered_cmp = None;
-                            self.buffered_state = BufferedState::PollingRest;
+                            self.buffered_equality_cmp = None;
                         }
                     }
-                },
-                BufferedState::PollingRest => {
-                    if self.buffered_data.tail_batch().range.end
-                        < self.buffered_data.tail_batch().num_rows
-                    {
-                        if self.buffered_equality_cmp.is_none() {
-                            self.rebuild_buffered_equality_cmp()?;
-                        }
-                        while self.buffered_data.tail_batch().range.end
-                            < self.buffered_data.tail_batch().num_rows
-                        {
-                            if self.buffered_equality_cmp.as_ref().unwrap().is_equal(
-                                self.buffered_data.head_batch().range.start,
-                                self.buffered_data.tail_batch().range.end,
-                            ) {
-                                self.buffered_data.tail_batch_mut().range.end += 1;
-                            } else {
-                                self.buffered_state = BufferedState::Ready;
-                                return Poll::Ready(Some(Ok(())));
-                            }
-                        }
-                    } else {
-                        match self.buffered.poll_next_unpin(cx)? {
-                            Poll::Pending => {
-                                return Poll::Pending;
-                            }
-                            Poll::Ready(None) => {
-                                self.buffered_state = BufferedState::Ready;
-                            }
-                            Poll::Ready(Some(batch)) => {
-                                // Polling batches coming concurrently as multiple partitions
-                                self.join_metrics.input_batches().add(1);
-                                self.join_metrics.input_rows().add(batch.num_rows());
-                                if batch.num_rows() > 0 {
-                                    let buffered_batch = BufferedBatch::new(
-                                        batch,
-                                        0..0,
-                                        &self.on_buffered,
-                                    );
-                                    self.allocate_reservation(buffered_batch)?;
-                                    self.buffered_equality_cmp = None;
-                                }
-                            }
-                        }
-                    }
-                }
-                BufferedState::Ready => {
-                    return Poll::Ready(Some(Ok(())));
-                }
-                BufferedState::Exhausted => {
-                    return Poll::Ready(None);
                 }
             }
         }
@@ -1107,7 +1309,7 @@ impl MaterializingSortMergeJoinStream {
 
     /// Get comparison result of streamed row and buffered batches
     fn compare_streamed_buffered(&mut self) -> Result<Ordering> {
-        if self.streamed_state == StreamedState::Exhausted {
+        if self.streamed_exhausted {
             return Ok(Ordering::Greater);
         }
         if !self.buffered_data.has_buffered_rows() {
@@ -1123,81 +1325,23 @@ impl MaterializingSortMergeJoinStream {
         ))
     }
 
-    /// Produce join and fill output buffer until reaching target batch size
-    /// or the join is finished
-    fn join_partial(&mut self) -> Result<()> {
-        // Whether to join streamed rows
-        let mut join_streamed = false;
-        // Whether to join buffered rows
-        let mut join_buffered = false;
+    /// Materialize ("freeze") the accumulated pairs — restoring any spilled
+    /// batches they reference first — and emit completed output batches
+    /// (filtered joins emit through the deferred-filtering gate instead).
+    async fn freeze_and_emit(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        self.restore_spilled_batches_for_freeze().await?;
+        self.freeze_all()?;
 
-        // determine whether we need to join streamed/buffered rows
-        match self.current_ordering {
-            Ordering::Less => {
-                if matches!(
-                    self.join_type,
-                    JoinType::Left | JoinType::Right | JoinType::Full
-                ) {
-                    join_streamed = !self.streamed_joined;
-                }
-            }
-            Ordering::Equal => {
-                join_streamed = true;
-                join_buffered = true;
-            }
-            Ordering::Greater => {
-                if self.join_type == JoinType::Full {
-                    join_buffered = !self.buffered_joined;
-                };
-            }
-        }
-        if !join_streamed && !join_buffered {
-            // no joined data
-            self.buffered_data.scanning_finish();
-            return Ok(());
-        }
-
-        if join_buffered {
-            // joining streamed/nulls and buffered
-            while !self.buffered_data.scanning_finished()
-                && self.num_unfrozen_pairs() < self.batch_size
-            {
-                let scanning_idx = self.buffered_data.scanning_idx();
-                if join_streamed {
-                    // Join streamed row and buffered row
-                    self.streamed_batch.append_output_pair(
-                        Some(self.buffered_data.scanning_batch_idx),
-                        Some(scanning_idx),
-                        self.batch_size,
-                    );
-                } else {
-                    // Join nulls and buffered row for FULL join
-                    self.buffered_data
-                        .scanning_batch_mut()
-                        .null_joined
-                        .push(scanning_idx);
-                }
-                self.buffered_data.scanning_advance();
-
-                if self.buffered_data.scanning_finished() {
-                    self.streamed_joined = join_streamed;
-                    self.buffered_joined = true;
-                }
-            }
-        } else {
-            // joining streamed and nulls
-            let scanning_batch_idx = if self.buffered_data.scanning_finished() {
-                None
-            } else {
-                Some(self.buffered_data.scanning_batch_idx)
-            };
-            self.streamed_batch.append_output_pair(
-                scanning_batch_idx,
-                None,
-                self.batch_size,
-            );
-            self.buffered_data.scanning_finish();
-            self.streamed_joined = true;
+        if !self.deferred_filtering
+            && self
+                .joined_record_batches
+                .joined_batches
+                .has_completed_batch()
+        {
+            self.emit_completed_joined_batches(emitter).await;
         }
         Ok(())
     }
@@ -1331,7 +1475,7 @@ impl MaterializingSortMergeJoinStream {
                 // but must flow through the same pipeline as matched rows to
                 // preserve output ordering. Use null metadata as a sentinel so
                 // get_corrected_filter_mask() passes them through unchanged.
-                if needs_deferred_filtering(&self.filter, self.join_type) {
+                if self.deferred_filtering {
                     self.joined_record_batches
                         .push_batch_with_null_metadata(batch, self.join_type);
                 } else {
@@ -1434,12 +1578,12 @@ impl MaterializingSortMergeJoinStream {
                     filter_result_mask.clone()
                 };
 
-                if needs_deferred_filtering(&self.filter, self.join_type) {
+                if self.deferred_filtering {
                     self.joined_record_batches.push_batch_with_filter_metadata(
                         output_batch,
                         &combined_left_indices,
                         &mask,
-                        self.streamed_batch_counter.load(Relaxed),
+                        self.streamed_batch_counter,
                         self.join_type,
                     );
                 } else {
@@ -1496,7 +1640,7 @@ impl MaterializingSortMergeJoinStream {
     /// gathers columns across sources. A null-row sentinel at source index 0
     /// handles null right indices (unmatched streamed rows).
     fn materialize_right_columns(
-        &self,
+        &mut self,
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<Vec<ArrayRef>> {
@@ -1511,6 +1655,7 @@ impl MaterializingSortMergeJoinStream {
                     matched_chunks.iter().map(|c| &c.2 as &dyn Array).collect();
                 as_uint64_array(&compute::concat(&refs)?)?.clone()
             };
+
             return fetch_right_columns_by_idxs(
                 &self.buffered_data,
                 first_batch_idx,
@@ -1544,24 +1689,24 @@ impl MaterializingSortMergeJoinStream {
         }
 
         let num_right_cols = self.buffered_schema.fields().len();
-        let mut right_columns = Vec::with_capacity(num_right_cols);
 
         // Read each source batch once (spilled batches require disk I/O).
-        let source_data: Vec<Option<RecordBatch>> = source_batches
+        let source_data_result: Result<Vec<RecordBatch>> = source_batches
             .iter()
             .map(|&idx| {
                 let bb = &self.buffered_data.batches[idx];
                 match &bb.batch {
-                    BufferedBatchState::InMemory(batch) => Some(batch.clone()),
-                    BufferedBatchState::Spilled(spill_file) => {
-                        let file = BufReader::new(File::open(spill_file.path()).ok()?);
-                        let reader = StreamReader::try_new(file, None).ok()?;
-                        reader.into_iter().next()?.ok()
+                    BufferedBatchState::InMemory(batch) => Ok(batch.clone()),
+                    BufferedBatchState::Spilled(_) => {
+                        internal_err!("Buffered batch should have been unspilled before fetching columns")
                     }
                 }
             })
             .collect();
 
+        let source_data = source_data_result?;
+
+        let mut right_columns = Vec::with_capacity(num_right_cols);
         for col_idx in 0..num_right_cols {
             let dtype = self.buffered_schema.field(col_idx).data_type();
             let null_array = new_null_array(dtype, 1);
@@ -1571,16 +1716,8 @@ impl MaterializingSortMergeJoinStream {
             source_arrays.push(null_array.as_ref());
 
             for data in &source_data {
-                match data {
-                    Some(batch) => source_arrays.push(batch.column(col_idx).as_ref()),
-                    None => {
-                        return internal_err!(
-                            "Failed to read spilled buffered batch during interleave"
-                        );
-                    }
-                }
+                source_arrays.push(data.column(col_idx).as_ref());
             }
-
             right_columns.push(interleave(&source_arrays, &interleave_indices)?);
         }
 
@@ -1773,32 +1910,17 @@ fn fetch_right_columns_from_batch_by_idxs(
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>> {
     match &buffered_batch.batch {
-        // In memory batch
-        // In memory batch
         BufferedBatchState::InMemory(batch) => {
-            // When indices form a contiguous range (common in SMJ since the
-            // buffered side is scanned sequentially), use zero-copy slice.
             if let Some(range) = is_contiguous_range(buffered_indices) {
                 Ok(batch.slice(range.start, range.len()).columns().to_vec())
             } else {
                 Ok(take_arrays(batch.columns(), buffered_indices, None)?)
             }
         }
-        // If the batch was spilled to disk, less likely
-        BufferedBatchState::Spilled(spill_file) => {
-            let mut buffered_cols: Vec<ArrayRef> =
-                Vec::with_capacity(buffered_indices.len());
-
-            let file = BufReader::new(File::open(spill_file.path())?);
-            let reader = StreamReader::try_new(file, None)?;
-
-            for batch in reader {
-                batch?.columns().iter().for_each(|column| {
-                    buffered_cols.extend(take(column, &buffered_indices, None))
-                });
-            }
-
-            Ok(buffered_cols)
+        BufferedBatchState::Spilled(_) => {
+            internal_err!(
+                "Buffered batch should have been unspilled before fetching columns"
+            )
         }
     }
 }
@@ -1808,9 +1930,9 @@ fn fetch_right_columns_from_batch_by_idxs(
 pub(super) struct BufferedData {
     /// Buffered batches with the same key
     pub batches: VecDeque<BufferedBatch>,
-    /// current scanning batch index used in join_partial()
+    /// current scanning batch index used by the group-scan phase
     pub scanning_batch_idx: usize,
-    /// current scanning offset used in join_partial()
+    /// current scanning offset used by the group-scan phase
     pub scanning_offset: usize,
 }
 
@@ -1862,11 +1984,6 @@ impl BufferedData {
 
     pub fn scanning_finished(&self) -> bool {
         self.scanning_batch_idx == self.batches.len()
-    }
-
-    pub fn scanning_finish(&mut self) {
-        self.scanning_batch_idx = self.batches.len();
-        self.scanning_offset = 0;
     }
 }
 

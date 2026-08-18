@@ -18,22 +18,23 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RVec};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
+use stabby::vec::Vec as SVec;
+
 use crate::arrow_wrappers::WrappedSchema;
 use crate::physical_expr::partitioning::FFI_Partitioning;
 use crate::physical_expr::sort::FFI_PhysicalSortExpr;
+use crate::util::FFI_Option;
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_PlanProperties {
     /// The output partitioning of the plan.
     pub output_partitioning: unsafe extern "C" fn(plan: &Self) -> FFI_Partitioning,
@@ -46,7 +47,7 @@ pub struct FFI_PlanProperties {
 
     /// The output ordering of the plan.
     pub output_ordering:
-        unsafe extern "C" fn(plan: &Self) -> ROption<RVec<FFI_PhysicalSortExpr>>,
+        unsafe extern "C" fn(plan: &Self) -> FFI_Option<SVec<FFI_PhysicalSortExpr>>,
 
     /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
@@ -95,8 +96,8 @@ unsafe extern "C" fn boundedness_fn_wrapper(
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> ROption<RVec<FFI_PhysicalSortExpr>> {
-    let ordering: Option<RVec<FFI_PhysicalSortExpr>> =
+) -> FFI_Option<SVec<FFI_PhysicalSortExpr>> {
+    let ordering: Option<SVec<FFI_PhysicalSortExpr>> =
         properties.inner().output_ordering().map(|lex_ordering| {
             let vec_ordering: Vec<PhysicalSortExpr> = lex_ordering.clone().into();
             vec_ordering
@@ -159,7 +160,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
-        let ffi_orderings: Option<RVec<FFI_PhysicalSortExpr>> =
+        let ffi_orderings: Option<SVec<FFI_PhysicalSortExpr>> =
             unsafe { (ffi_props.output_ordering)(&ffi_props) }.into();
         let sort_exprs = ffi_orderings
             .map(|ordering_vec| {
@@ -171,6 +172,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             .unwrap_or_default();
 
         let partitioning = unsafe { (ffi_props.output_partitioning)(&ffi_props) };
+        let partitioning = Partitioning::try_from(partitioning)?;
 
         let eq_properties = if sort_exprs.is_empty() {
             EquivalenceProperties::new(Arc::new(schema))
@@ -186,7 +188,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         Ok(PlanProperties::new(
             eq_properties,
-            (&partitioning).into(),
+            partitioning,
             emission_type,
             boundedness,
         ))
@@ -194,8 +196,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 }
 
 /// FFI safe version of [`Boundedness`].
-#[repr(C)]
-#[derive(Clone, StableAbi)]
+#[repr(C, u8)]
+#[derive(Clone)]
 pub enum FFI_Boundedness {
     Bounded,
     Unbounded { requires_infinite_memory: bool },
@@ -228,8 +230,9 @@ impl From<FFI_Boundedness> for Boundedness {
 }
 
 /// FFI safe version of [`EmissionType`].
-#[repr(C)]
-#[derive(Clone, StableAbi)]
+#[expect(non_camel_case_types)]
+#[repr(u8)]
+#[derive(Clone)]
 pub enum FFI_EmissionType {
     Incremental,
     Final,
@@ -258,13 +261,15 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::physical_expr::PhysicalSortExpr;
     use datafusion::physical_plan::Partitioning;
+    use datafusion_common::{ScalarValue, SplitPoint};
+    use datafusion_physical_expr::{LexOrdering, RangePartitioning};
 
     use super::*;
 
     fn create_test_props() -> Result<PlanProperties> {
-        use arrow::datatypes::{DataType, Field, Schema};
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
@@ -275,6 +280,25 @@ mod tests {
         Ok(PlanProperties::new(
             eqp,
             Partitioning::RoundRobinBatch(3),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ))
+    }
+
+    fn create_range_test_props() -> Result<PlanProperties> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let col = datafusion::physical_plan::expressions::col("a", &schema)?;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(col)])
+            .expect("non-empty ordering");
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
+            SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
+        ];
+        let range = RangePartitioning::try_new(ordering, split_points)?;
+
+        Ok(PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::Range(range),
             EmissionType::Incremental,
             Boundedness::Bounded,
         ))
@@ -309,6 +333,24 @@ mod tests {
         ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_plan: PlanProperties = ffi_plan.try_into()?;
         assert_eq!(format!("{foreign_plan:?}"), format!("{props:?}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_ffi_plan_properties_range_partitioning() -> Result<()> {
+        let original_props = create_range_test_props()?;
+
+        let mut local_props_ptr = FFI_PlanProperties::from(&original_props);
+        local_props_ptr.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_props: PlanProperties = local_props_ptr.try_into()?;
+
+        assert_eq!(
+            format!("{:?}", foreign_props.output_partitioning()),
+            format!("{:?}", original_props.output_partitioning())
+        );
+        assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
 
         Ok(())
     }

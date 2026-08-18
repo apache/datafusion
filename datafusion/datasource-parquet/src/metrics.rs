@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricCategory, MetricType,
-    PruningMetrics, RatioMergeStrategy, RatioMetrics, Time,
+    Count, ExecutionPlanMetricsSet, Gauge, Label, MetricBuilder, MetricCategory,
+    MetricType, PruningMetrics, RatioMergeStrategy, RatioMetrics, Time,
 };
 
 /// Stores metrics about the parquet execution for a particular parquet file.
@@ -51,6 +53,14 @@ pub struct ParquetFileMetrics {
     pub limit_pruned_row_groups: PruningMetrics,
     /// Number of row groups pruned by statistics
     pub row_groups_pruned_statistics: PruningMetrics,
+    /// Number of row groups pruned at runtime by a dynamic predicate
+    /// (e.g. the threshold expression a TopK `SortExec` pushes down).
+    ///
+    /// Unlike [`Self::row_groups_pruned_statistics`], which is decided once
+    /// at access-plan time, this counter reflects row groups that survived
+    /// the initial pruning but were proved unreachable mid-scan after the
+    /// dynamic filter tightened.
+    pub row_groups_pruned_dynamic_filter: Count,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
     /// Total rows filtered out by predicates pushed into parquet scan
@@ -100,37 +110,42 @@ impl ParquetFileMetrics {
         filename: &str,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Self {
+        // Share the filename label across all per-file metrics to avoid
+        // allocating the same filename string for each metric.
+        let filename_label = Label::new("filename", Arc::<str>::from(filename));
+        let builder = MetricBuilder::new(metrics).with_label(filename_label);
+
         // -----------------------
         // 'summary' level metrics
         // -----------------------
-        let row_groups_pruned_bloom_filter = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let row_groups_pruned_bloom_filter = builder
+            .clone()
             .with_type(MetricType::Summary)
             .pruning_metrics("row_groups_pruned_bloom_filter", partition);
 
-        let limit_pruned_row_groups = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let limit_pruned_row_groups = builder
+            .clone()
             .with_type(MetricType::Summary)
             .pruning_metrics("limit_pruned_row_groups", partition);
 
-        let row_groups_pruned_statistics = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let row_groups_pruned_statistics = builder
+            .clone()
             .with_type(MetricType::Summary)
             .pruning_metrics("row_groups_pruned_statistics", partition);
 
-        let page_index_pages_pruned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let page_index_pages_pruned = builder
+            .clone()
             .with_type(MetricType::Summary)
             .pruning_metrics("page_index_pages_pruned", partition);
 
-        let bytes_scanned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let bytes_scanned = builder
+            .clone()
             .with_type(MetricType::Summary)
             .with_category(MetricCategory::Bytes)
             .counter("bytes_scanned", partition);
 
-        let metadata_load_time = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let metadata_load_time = builder
+            .clone()
             .with_type(MetricType::Summary)
             .subset_time("metadata_load_time", partition);
 
@@ -138,8 +153,8 @@ impl ParquetFileMetrics {
             .with_type(MetricType::Summary)
             .pruning_metrics("files_ranges_pruned_statistics", partition);
 
-        let scan_efficiency_ratio = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let scan_efficiency_ratio = builder
+            .clone()
             .with_type(MetricType::Summary)
             .ratio_metrics_with_strategy(
                 "scan_efficiency_ratio",
@@ -150,47 +165,51 @@ impl ParquetFileMetrics {
         // -----------------------
         // 'dev' level metrics
         // -----------------------
-        let predicate_evaluation_errors = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let predicate_evaluation_errors = builder
+            .clone()
             .with_category(MetricCategory::Rows)
             .counter("predicate_evaluation_errors", partition);
 
-        let pushdown_rows_pruned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let pushdown_rows_pruned = builder
+            .clone()
             .with_category(MetricCategory::Rows)
             .counter("pushdown_rows_pruned", partition);
-        let pushdown_rows_matched = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let pushdown_rows_matched = builder
+            .clone()
             .with_category(MetricCategory::Rows)
             .counter("pushdown_rows_matched", partition);
 
-        let row_pushdown_eval_time = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let row_pushdown_eval_time = builder
+            .clone()
             .subset_time("row_pushdown_eval_time", partition);
-        let statistics_eval_time = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let statistics_eval_time = builder
+            .clone()
             .subset_time("statistics_eval_time", partition);
-        let bloom_filter_eval_time = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let bloom_filter_eval_time = builder
+            .clone()
             .subset_time("bloom_filter_eval_time", partition);
 
-        let page_index_eval_time = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let page_index_eval_time = builder
+            .clone()
             .subset_time("page_index_eval_time", partition);
 
-        let page_index_rows_pruned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let page_index_rows_pruned = builder
+            .clone()
             .pruning_metrics("page_index_rows_pruned", partition);
 
-        let predicate_cache_inner_records = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let predicate_cache_inner_records = builder
+            .clone()
             .with_category(MetricCategory::Rows)
             .gauge("predicate_cache_inner_records", partition);
 
-        let predicate_cache_records = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
+        let predicate_cache_records = builder
             .with_category(MetricCategory::Rows)
             .gauge("predicate_cache_records", partition);
+
+        let row_groups_pruned_dynamic_filter = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .counter("row_groups_pruned_dynamic_filter", partition);
 
         Self {
             files_ranges_pruned_statistics,
@@ -211,6 +230,50 @@ impl ParquetFileMetrics {
             scan_efficiency_ratio,
             predicate_cache_inner_records,
             predicate_cache_records,
+            row_groups_pruned_dynamic_filter,
         }
+    }
+
+    /// Record pages whose page-index pruning was skipped because the containing
+    /// row group was fully matched by row-group statistics.
+    ///
+    /// The counter is only registered when there is a non-zero value. This keeps
+    /// [`ParquetFileMetrics::new`] from cloning the filename and metrics set for
+    /// files that never use this metric.
+    pub(crate) fn add_page_index_pages_skipped_by_fully_matched(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+        n: usize,
+    ) {
+        if n == 0 {
+            return;
+        }
+
+        let count = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Rows)
+            .counter("page_index_pages_skipped_by_fully_matched", partition);
+        count.add(n);
+    }
+
+    /// Record that page index I/O was skipped because row-group statistics
+    /// already proved page index could not prune further.
+    pub(crate) fn add_page_index_load_skipped(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+        n: usize,
+    ) {
+        if n == 0 {
+            return;
+        }
+
+        let count = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .counter("page_index_load_skipped", partition);
+        count.add(n);
     }
 }

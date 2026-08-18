@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod metrics;
 pub(crate) mod partitioning;
 pub(crate) mod sort;
 
@@ -23,8 +24,6 @@ use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
 use arrow::array::{ArrayRef, BooleanArray, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
@@ -33,9 +32,13 @@ use datafusion_common::{Result, ffi_datafusion_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
+#[expect(deprecated)]
 use datafusion_expr::statistics::Distribution;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
+
+use stabby::string::String as SString;
+use stabby::vec::Vec as SVec;
 
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 use crate::expr::columnar_value::FFI_ColumnarValue;
@@ -45,78 +48,82 @@ use crate::expr::interval::FFI_Interval;
 use crate::record_batch_stream::{
     record_batch_to_wrapped_array, wrapped_array_to_record_batch,
 };
-use crate::util::FFIResult;
-use crate::{df_result, rresult, rresult_return};
+use crate::util::{FFI_Option, FFI_Result};
+use crate::{df_result, sresult, sresult_return};
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
+#[derive(Debug)]
 pub struct FFI_PhysicalExpr {
     pub data_type: unsafe extern "C" fn(
         &Self,
         input_schema: WrappedSchema,
-    ) -> FFIResult<WrappedSchema>,
+    ) -> FFI_Result<WrappedSchema>,
 
     pub nullable:
-        unsafe extern "C" fn(&Self, input_schema: WrappedSchema) -> FFIResult<bool>,
+        unsafe extern "C" fn(&Self, input_schema: WrappedSchema) -> FFI_Result<bool>,
 
     pub evaluate:
-        unsafe extern "C" fn(&Self, batch: WrappedArray) -> FFIResult<FFI_ColumnarValue>,
+        unsafe extern "C" fn(&Self, batch: WrappedArray) -> FFI_Result<FFI_ColumnarValue>,
 
     pub return_field: unsafe extern "C" fn(
         &Self,
         input_schema: WrappedSchema,
-    ) -> FFIResult<WrappedSchema>,
+    ) -> FFI_Result<WrappedSchema>,
 
     pub evaluate_selection: unsafe extern "C" fn(
         &Self,
         batch: WrappedArray,
         selection: WrappedArray,
-    ) -> FFIResult<FFI_ColumnarValue>,
+    ) -> FFI_Result<FFI_ColumnarValue>,
 
-    pub children: unsafe extern "C" fn(&Self) -> RVec<FFI_PhysicalExpr>,
+    pub children: unsafe extern "C" fn(&Self) -> SVec<FFI_PhysicalExpr>,
 
-    pub new_with_children:
-        unsafe extern "C" fn(&Self, children: &RVec<FFI_PhysicalExpr>) -> FFIResult<Self>,
+    pub new_with_children: unsafe extern "C" fn(
+        &Self,
+        children: &SVec<FFI_PhysicalExpr>,
+    ) -> FFI_Result<Self>,
 
     pub evaluate_bounds: unsafe extern "C" fn(
         &Self,
-        children: RVec<FFI_Interval>,
-    ) -> FFIResult<FFI_Interval>,
+        children: SVec<FFI_Interval>,
+    ) -> FFI_Result<FFI_Interval>,
 
     pub propagate_constraints:
         unsafe extern "C" fn(
             &Self,
             interval: FFI_Interval,
-            children: RVec<FFI_Interval>,
-        ) -> FFIResult<ROption<RVec<FFI_Interval>>>,
+            children: SVec<FFI_Interval>,
+        ) -> FFI_Result<FFI_Option<SVec<FFI_Interval>>>,
 
     pub evaluate_statistics: unsafe extern "C" fn(
         &Self,
-        children: RVec<FFI_Distribution>,
-    ) -> FFIResult<FFI_Distribution>,
+        children: SVec<FFI_Distribution>,
+    ) -> FFI_Result<FFI_Distribution>,
 
     pub propagate_statistics:
         unsafe extern "C" fn(
             &Self,
             parent: FFI_Distribution,
-            children: RVec<FFI_Distribution>,
-        ) -> FFIResult<ROption<RVec<FFI_Distribution>>>,
+            children: SVec<FFI_Distribution>,
+        ) -> FFI_Result<FFI_Option<SVec<FFI_Distribution>>>,
 
     pub get_properties: unsafe extern "C" fn(
         &Self,
-        children: RVec<FFI_ExprProperties>,
-    ) -> FFIResult<FFI_ExprProperties>,
+        children: SVec<FFI_ExprProperties>,
+    ) -> FFI_Result<FFI_ExprProperties>,
 
-    pub fmt_sql: unsafe extern "C" fn(&Self) -> FFIResult<RString>,
+    pub fmt_sql: unsafe extern "C" fn(&Self) -> FFI_Result<SString>,
 
-    pub snapshot: unsafe extern "C" fn(&Self) -> FFIResult<ROption<FFI_PhysicalExpr>>,
+    pub snapshot: unsafe extern "C" fn(&Self) -> FFI_Result<FFI_Option<FFI_PhysicalExpr>>,
 
     pub snapshot_generation: unsafe extern "C" fn(&Self) -> u64,
 
     pub is_volatile_node: unsafe extern "C" fn(&Self) -> bool,
 
+    pub expression_id: unsafe extern "C" fn(&Self) -> FFI_Option<u64>,
+
     // Display trait
-    pub display: unsafe extern "C" fn(&Self) -> RString,
+    pub display: unsafe extern "C" fn(&Self) -> SString,
 
     // Hash trait
     pub hash: unsafe extern "C" fn(&Self) -> u64,
@@ -159,31 +166,31 @@ struct PhysicalExprPrivateData {
 unsafe extern "C" fn data_type_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     input_schema: WrappedSchema,
-) -> FFIResult<WrappedSchema> {
+) -> FFI_Result<WrappedSchema> {
     let expr = expr.inner();
     let schema: SchemaRef = input_schema.into();
     let data_type = expr
         .data_type(&schema)
         .and_then(|dt| FFI_ArrowSchema::try_from(dt).map_err(Into::into))
         .map(WrappedSchema);
-    rresult!(data_type)
+    sresult!(data_type)
 }
 
 unsafe extern "C" fn nullable_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     input_schema: WrappedSchema,
-) -> FFIResult<bool> {
+) -> FFI_Result<bool> {
     let expr = expr.inner();
     let schema: SchemaRef = input_schema.into();
-    rresult!(expr.nullable(&schema))
+    sresult!(expr.nullable(&schema))
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     batch: WrappedArray,
-) -> FFIResult<FFI_ColumnarValue> {
-    let batch = rresult_return!(wrapped_array_to_record_batch(batch));
-    rresult!(
+) -> FFI_Result<FFI_ColumnarValue> {
+    let batch = sresult_return!(wrapped_array_to_record_batch(batch));
+    sresult!(
         expr.inner()
             .evaluate(&batch)
             .and_then(FFI_ColumnarValue::try_from)
@@ -193,10 +200,10 @@ unsafe extern "C" fn evaluate_fn_wrapper(
 unsafe extern "C" fn return_field_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     input_schema: WrappedSchema,
-) -> FFIResult<WrappedSchema> {
+) -> FFI_Result<WrappedSchema> {
     let expr = expr.inner();
     let schema: SchemaRef = input_schema.into();
-    rresult!(
+    sresult!(
         expr.return_field(&schema)
             .and_then(|f| FFI_ArrowSchema::try_from(&f).map_err(Into::into))
             .map(WrappedSchema)
@@ -207,16 +214,16 @@ unsafe extern "C" fn evaluate_selection_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     batch: WrappedArray,
     selection: WrappedArray,
-) -> FFIResult<FFI_ColumnarValue> {
-    let batch = rresult_return!(wrapped_array_to_record_batch(batch));
-    let selection: ArrayRef = rresult_return!(selection.try_into());
-    let selection = rresult_return!(
+) -> FFI_Result<FFI_ColumnarValue> {
+    let batch = sresult_return!(wrapped_array_to_record_batch(batch));
+    let selection: ArrayRef = sresult_return!(selection.try_into());
+    let selection = sresult_return!(
         selection
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or(ffi_datafusion_err!("Unexpected selection array type"))
     );
-    rresult!(
+    sresult!(
         expr.inner()
             .evaluate_selection(&batch, selection)
             .and_then(FFI_ColumnarValue::try_from)
@@ -225,7 +232,7 @@ unsafe extern "C" fn evaluate_selection_fn_wrapper(
 
 unsafe extern "C" fn children_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-) -> RVec<FFI_PhysicalExpr> {
+) -> SVec<FFI_PhysicalExpr> {
     let expr = expr.inner();
     let children = expr.children();
     children
@@ -236,19 +243,19 @@ unsafe extern "C" fn children_fn_wrapper(
 
 unsafe extern "C" fn new_with_children_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    children: &RVec<FFI_PhysicalExpr>,
-) -> FFIResult<FFI_PhysicalExpr> {
+    children: &SVec<FFI_PhysicalExpr>,
+) -> FFI_Result<FFI_PhysicalExpr> {
     let expr = Arc::clone(expr.inner());
     let children = children.iter().map(Into::into).collect::<Vec<_>>();
-    rresult!(expr.with_new_children(children).map(FFI_PhysicalExpr::from))
+    sresult!(expr.with_new_children(children).map(FFI_PhysicalExpr::from))
 }
 
 unsafe extern "C" fn evaluate_bounds_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    children: RVec<FFI_Interval>,
-) -> FFIResult<FFI_Interval> {
+    children: SVec<FFI_Interval>,
+) -> FFI_Result<FFI_Interval> {
     let expr = expr.inner();
-    let children = rresult_return!(
+    let children = sresult_return!(
         children
             .into_iter()
             .map(Interval::try_from)
@@ -256,7 +263,7 @@ unsafe extern "C" fn evaluate_bounds_fn_wrapper(
     );
     let children_borrowed = children.iter().collect::<Vec<_>>();
 
-    rresult!(
+    sresult!(
         expr.evaluate_bounds(&children_borrowed)
             .and_then(FFI_Interval::try_from)
     )
@@ -265,11 +272,11 @@ unsafe extern "C" fn evaluate_bounds_fn_wrapper(
 unsafe extern "C" fn propagate_constraints_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     interval: FFI_Interval,
-    children: RVec<FFI_Interval>,
-) -> FFIResult<ROption<RVec<FFI_Interval>>> {
+    children: SVec<FFI_Interval>,
+) -> FFI_Result<FFI_Option<SVec<FFI_Interval>>> {
     let expr = expr.inner();
-    let interval = rresult_return!(Interval::try_from(interval));
-    let children = rresult_return!(
+    let interval = sresult_return!(Interval::try_from(interval));
+    let children = sresult_return!(
         children
             .into_iter()
             .map(Interval::try_from)
@@ -278,46 +285,48 @@ unsafe extern "C" fn propagate_constraints_fn_wrapper(
     let children_borrowed = children.iter().collect::<Vec<_>>();
 
     let result =
-        rresult_return!(expr.propagate_constraints(&interval, &children_borrowed));
+        sresult_return!(expr.propagate_constraints(&interval, &children_borrowed));
 
-    let result = rresult_return!(
+    let result = sresult_return!(
         result
             .map(|intervals| intervals
                 .into_iter()
                 .map(FFI_Interval::try_from)
-                .collect::<Result<RVec<_>>>())
+                .collect::<Result<SVec<_>>>())
             .transpose()
     );
 
-    RResult::ROk(result.into())
+    FFI_Result::Ok(result.into())
 }
 
+#[expect(deprecated)]
 unsafe extern "C" fn evaluate_statistics_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    children: RVec<FFI_Distribution>,
-) -> FFIResult<FFI_Distribution> {
+    children: SVec<FFI_Distribution>,
+) -> FFI_Result<FFI_Distribution> {
     let expr = expr.inner();
-    let children = rresult_return!(
+    let children = sresult_return!(
         children
             .into_iter()
             .map(Distribution::try_from)
             .collect::<Result<Vec<_>>>()
     );
     let children_borrowed = children.iter().collect::<Vec<_>>();
-    rresult!(
+    sresult!(
         expr.evaluate_statistics(&children_borrowed)
             .and_then(|dist| FFI_Distribution::try_from(&dist))
     )
 }
 
+#[expect(deprecated)]
 unsafe extern "C" fn propagate_statistics_fn_wrapper(
     expr: &FFI_PhysicalExpr,
     parent: FFI_Distribution,
-    children: RVec<FFI_Distribution>,
-) -> FFIResult<ROption<RVec<FFI_Distribution>>> {
+    children: SVec<FFI_Distribution>,
+) -> FFI_Result<FFI_Option<SVec<FFI_Distribution>>> {
     let expr = expr.inner();
-    let parent = rresult_return!(Distribution::try_from(parent));
-    let children = rresult_return!(
+    let parent = sresult_return!(Distribution::try_from(parent));
+    let children = sresult_return!(
         children
             .into_iter()
             .map(Distribution::try_from)
@@ -325,47 +334,47 @@ unsafe extern "C" fn propagate_statistics_fn_wrapper(
     );
     let children_borrowed = children.iter().collect::<Vec<_>>();
 
-    let result = rresult_return!(expr.propagate_statistics(&parent, &children_borrowed));
-    let result = rresult_return!(
+    let result = sresult_return!(expr.propagate_statistics(&parent, &children_borrowed));
+    let result = sresult_return!(
         result
             .map(|dists| dists
                 .iter()
                 .map(FFI_Distribution::try_from)
-                .collect::<Result<RVec<_>>>())
+                .collect::<Result<SVec<_>>>())
             .transpose()
     );
 
-    RResult::ROk(result.into())
+    FFI_Result::Ok(result.into())
 }
 
 unsafe extern "C" fn get_properties_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    children: RVec<FFI_ExprProperties>,
-) -> FFIResult<FFI_ExprProperties> {
+    children: SVec<FFI_ExprProperties>,
+) -> FFI_Result<FFI_ExprProperties> {
     let expr = expr.inner();
-    let children = rresult_return!(
+    let children = sresult_return!(
         children
             .into_iter()
             .map(ExprProperties::try_from)
             .collect::<Result<Vec<_>>>()
     );
-    rresult!(
+    sresult!(
         expr.get_properties(&children)
             .and_then(|p| FFI_ExprProperties::try_from(&p))
     )
 }
 
-unsafe extern "C" fn fmt_sql_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFIResult<RString> {
+unsafe extern "C" fn fmt_sql_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_Result<SString> {
     let expr = expr.inner();
     let result = fmt_sql(expr.as_ref()).to_string();
-    RResult::ROk(result.into())
+    FFI_Result::Ok(result.into())
 }
 
 unsafe extern "C" fn snapshot_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-) -> FFIResult<ROption<FFI_PhysicalExpr>> {
+) -> FFI_Result<FFI_Option<FFI_PhysicalExpr>> {
     let expr = expr.inner();
-    rresult!(
+    sresult!(
         expr.snapshot()
             .map(|snapshot| snapshot.map(FFI_PhysicalExpr::from).into())
     )
@@ -380,7 +389,14 @@ unsafe extern "C" fn is_volatile_node_fn_wrapper(expr: &FFI_PhysicalExpr) -> boo
     let expr = expr.inner();
     expr.is_volatile_node()
 }
-unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> RString {
+
+unsafe extern "C" fn expression_id_fn_wrapper(
+    expr: &FFI_PhysicalExpr,
+) -> FFI_Option<u64> {
+    expr.inner().expression_id().into()
+}
+
+unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> SString {
     let expr = expr.inner();
     format!("{expr}").into()
 }
@@ -427,6 +443,7 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
             snapshot: snapshot_fn_wrapper,
             snapshot_generation: snapshot_generation_fn_wrapper,
             is_volatile_node: is_volatile_node_fn_wrapper,
+            expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -470,6 +487,7 @@ impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
             snapshot: snapshot_fn_wrapper,
             snapshot_generation: snapshot_generation_fn_wrapper,
             is_volatile_node: is_volatile_node_fn_wrapper,
+            expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -594,7 +612,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
             let children = children
                 .iter()
                 .map(|interval| FFI_Interval::try_from(*interval))
-                .collect::<Result<RVec<_>>>()?;
+                .collect::<Result<SVec<_>>>()?;
             df_result!((self.expr.evaluate_bounds)(&self.expr, children))
                 .and_then(Interval::try_from)
         }
@@ -610,7 +628,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
             let children = children
                 .iter()
                 .map(|interval| FFI_Interval::try_from(*interval))
-                .collect::<Result<RVec<_>>>()?;
+                .collect::<Result<SVec<_>>>()?;
             let result = df_result!((self.expr.propagate_constraints)(
                 &self.expr, interval, children
             ))?;
@@ -627,12 +645,13 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         unsafe {
             let children = children
                 .iter()
                 .map(|dist| FFI_Distribution::try_from(*dist))
-                .collect::<Result<RVec<_>>>()?;
+                .collect::<Result<SVec<_>>>()?;
 
             let result =
                 df_result!((self.expr.evaluate_statistics)(&self.expr, children))?;
@@ -640,6 +659,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
         }
     }
 
+    #[expect(deprecated)]
     fn propagate_statistics(
         &self,
         parent: &Distribution,
@@ -650,7 +670,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
             let children = children
                 .iter()
                 .map(|dist| FFI_Distribution::try_from(*dist))
-                .collect::<Result<RVec<_>>>()?;
+                .collect::<Result<SVec<_>>>()?;
             let result = df_result!((self.expr.propagate_statistics)(
                 &self.expr, parent, children
             ))?;
@@ -673,7 +693,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
             let children = children
                 .iter()
                 .map(FFI_ExprProperties::try_from)
-                .collect::<Result<RVec<_>>>()?;
+                .collect::<Result<SVec<_>>>()?;
             df_result!((self.expr.get_properties)(&self.expr, children))
                 .and_then(ExprProperties::try_from)
         }
@@ -682,8 +702,8 @@ impl PhysicalExpr for ForeignPhysicalExpr {
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         unsafe {
             match (self.expr.fmt_sql)(&self.expr) {
-                RResult::ROk(sql) => write!(f, "{sql}"),
-                RResult::RErr(_) => Err(std::fmt::Error),
+                FFI_Result::Ok(sql) => write!(f, "{sql}"),
+                FFI_Result::Err(_) => Err(std::fmt::Error),
             }
         }
     }
@@ -703,6 +723,10 @@ impl PhysicalExpr for ForeignPhysicalExpr {
 
     fn is_volatile_node(&self) -> bool {
         unsafe { (self.expr.is_volatile_node)(&self.expr) }
+    }
+
+    fn expression_id(&self) -> Option<u64> {
+        unsafe { (self.expr.expression_id)(&self.expr) }.into()
     }
 }
 
@@ -736,8 +760,11 @@ mod tests {
     use datafusion_common::tree_node::DynTreeNode;
     use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::interval_arithmetic::Interval;
+    #[expect(deprecated)]
     use datafusion_expr::statistics::Distribution;
-    use datafusion_physical_expr::expressions::{Column, NegativeExpr, NotExpr};
+    use datafusion_physical_expr::expressions::{
+        Column, DynamicFilterPhysicalExpr, NegativeExpr, NotExpr, lit,
+    };
     use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 
     use crate::physical_expr::FFI_PhysicalExpr;
@@ -750,6 +777,21 @@ mod tests {
         let foreign_expr: Arc<dyn PhysicalExpr> = (&ffi_expr).into();
 
         (original, foreign_expr)
+    }
+
+    #[test]
+    fn ffi_physical_expr_expression_id() {
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter);
+        let mut ffi_expr = FFI_PhysicalExpr::from(expression);
+        ffi_expr.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_expr: Arc<dyn PhysicalExpr> = (&ffi_expr).into();
+        assert_eq!(foreign_expr.expression_id(), Some(expected_id));
     }
 
     fn test_record_batch() -> RecordBatch {
@@ -876,6 +918,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn ffi_physical_expr_statistics() -> Result<(), DataFusionError> {
         let (negative_expr, foreign_neg) = create_test_negative_expr();
         let interval =
