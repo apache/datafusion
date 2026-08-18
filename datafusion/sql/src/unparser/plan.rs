@@ -1591,33 +1591,36 @@ impl Unparser<'_> {
                     );
                 }
 
+                // Each UNION branch is unparsed in its own isolated query
+                // context. A branch is inlined only when it is a plain SELECT
+                // with no query-scoped clauses; otherwise it is wrapped in a
+                // parenthesized subquery.
+                //
+                // Sharing this statement's `QueryBuilder` across branches is
+                // unsound: its single `distinct_union` flag leaks a nested
+                // distinct `UNION` up to the enclosing `UNION ALL`, and a
+                // branch's own `ORDER BY`/`LIMIT`/`OFFSET` would bind to the
+                // whole set operation. Combined with sqlparser rendering nested
+                // `SetExpr::SetOperation`s without parentheses, this silently
+                // rewrites e.g. `a UNION ALL (b UNION c LIMIT 1)` into
+                // `a UNION b UNION c LIMIT 1`. Isolating each branch and
+                // parenthesizing non-trivial ones preserves precedence, the set
+                // quantifier, and operand-scoped clauses.
                 let input_exprs: Vec<SetExpr> = union
                     .inputs
                     .iter()
                     .map(|input| {
-                        // A distinct UNION (represented as `Distinct(Union)`)
-                        // nested as an input to this UNION must be emitted as its
-                        // own parenthesized subquery. Unparsing it inline shares
-                        // this statement's `QueryBuilder`, whose single
-                        // `distinct_union` flag would then leak the child's
-                        // DISTINCT up to the enclosing UNION; and sqlparser
-                        // renders nested `SetExpr::SetOperation`s without
-                        // parentheses. Either alone silently rewrites
-                        // `a UNION ALL (b UNION c)` into a flat, fully-distinct
-                        // `a UNION b UNION c`. Wrapping the child in its own
-                        // query isolates the flag and forces parentheses.
-                        if matches!(
-                            input.as_ref(),
-                            LogicalPlan::Distinct(Distinct::All(inner))
-                                if matches!(inner.as_ref(), LogicalPlan::Union(_))
-                        ) {
-                            let mut sub_query = Some(QueryBuilder::default());
-                            let body = self.select_to_sql_expr(input, &mut sub_query)?;
-                            let query =
-                                QueryBuilder::default().body(Box::new(body)).build()?;
-                            Ok(SetExpr::Query(Box::new(query)))
+                        let mut branch_query = Some(QueryBuilder::default());
+                        let body = self.select_to_sql_expr(input, &mut branch_query)?;
+                        let mut branch_query =
+                            branch_query.expect("branch QueryBuilder is always present");
+                        if matches!(body, SetExpr::Select(_))
+                            && !branch_query.has_operand_scoped_clauses()
+                        {
+                            Ok(body)
                         } else {
-                            self.select_to_sql_expr(input, query)
+                            let query = branch_query.body(Box::new(body)).build()?;
+                            Ok(SetExpr::Query(Box::new(query)))
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;

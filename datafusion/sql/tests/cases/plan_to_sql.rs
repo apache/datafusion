@@ -176,6 +176,10 @@ fn roundtrip_statement() -> Result<()> {
             // The same shape written flat: `a UNION b UNION ALL a` parses as
             // `(a UNION b) UNION ALL a`, so the outer ALL must be preserved too.
             r#"SELECT j1_string FROM j1 UNION SELECT j2_string FROM j2 UNION ALL SELECT j1_string FROM j1"#,
+            // Operand-scoped clauses on a UNION branch (LIMIT/ORDER BY) must stay
+            // bound to that branch, not leak to the enclosing set operation.
+            r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 LIMIT 5)"#,
+            r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 ORDER BY 1)"#,
             r#"SELECT col1, id FROM (
                 SELECT j1_string AS col1, j1_id AS id FROM j1
                 UNION ALL
@@ -382,6 +386,13 @@ fn roundtrip_statement_union_all_with_nested_distinct_union()
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
         expected: @"(SELECT j1.j1_string FROM j1 UNION SELECT j2.j2_string FROM j2) UNION ALL SELECT j1.j1_string FROM j1",
+    );
+    // A branch's own LIMIT must remain bound to that branch, inside the parens.
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 LIMIT 5)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1.j1_string FROM j1 UNION ALL (SELECT j2.j2_string FROM j2 UNION SELECT j1.j1_string FROM j1 LIMIT 5)",
     );
     Ok(())
 }
