@@ -53,6 +53,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
+use futures::future::BoxFuture;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use std::collections::{HashMap, HashSet};
@@ -489,21 +490,100 @@ impl TableProvider for ListingTable {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
         limit: Option<usize>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
-            .with_filters(Some(filters))
-            .with_limit(limit);
-        Ok(self.scan_with_args(state, options).await?.into_inner())
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
     }
 
-    async fn scan_with_args<'a>(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        args: ScanArgs<'a>,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<ScanResult>>
+    where
+        'a: 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_with_args_boxed(state, args)
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> datafusion_common::Result<Vec<TableProviderFilterPushDown>> {
+        let partition_column_names = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| col.0.as_str())
+            .collect::<Vec<_>>();
+        filters
+            .iter()
+            .map(|filter| {
+                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
+                {
+                    // if filter can be handled by partition pruning, it is exact
+                    return Ok(TableProviderFilterPushDown::Exact);
+                }
+
+                Ok(TableProviderFilterPushDown::Inexact)
+            })
+            .collect()
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.definition.as_deref()
+    }
+
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn insert_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.insert_into_boxed(state, input, insert_op)
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
+    }
+}
+
+impl ListingTable {
+    fn scan_with_args_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        args: ScanArgs<'a>,
+    ) -> BoxFuture<'a, datafusion_common::Result<ScanResult>> {
+        Box::pin(self.scan_with_args_inner(state, args))
+    }
+
+    async fn scan_with_args_inner<'a>(
         &self,
         state: &dyn Session,
         args: ScanArgs<'a>,
@@ -670,35 +750,40 @@ impl TableProvider for ListingTable {
         Ok(ScanResult::new(plan))
     }
 
-    fn supports_filters_pushdown(
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
         &self,
-        filters: &[&Expr],
-    ) -> datafusion_common::Result<Vec<TableProviderFilterPushDown>> {
-        let partition_column_names = self
-            .options
-            .table_partition_cols
-            .iter()
-            .map(|col| col.0.as_str())
-            .collect::<Vec<_>>();
-        filters
-            .iter()
-            .map(|filter| {
-                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter)
-                {
-                    // if filter can be handled by partition pruning, it is exact
-                    return Ok(TableProviderFilterPushDown::Exact);
-                }
-
-                Ok(TableProviderFilterPushDown::Inexact)
-            })
-            .collect()
+        state: &dyn Session,
+        projection: Option<&[usize]>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection)
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
     }
 
-    fn get_table_definition(&self) -> Option<&str> {
-        self.definition.as_deref()
+    fn insert_into_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.insert_into_inner(state, input, insert_op))
     }
 
-    async fn insert_into(
+    async fn insert_into_inner(
         &self,
         state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
@@ -765,10 +850,6 @@ impl TableProvider for ListingTable {
             .format
             .create_writer_physical_plan(input, state, config, order_requirements)
             .await
-    }
-
-    fn get_column_default(&self, column: &str) -> Option<&Expr> {
-        self.column_defaults.get(column)
     }
 }
 

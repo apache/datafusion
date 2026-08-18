@@ -1514,7 +1514,10 @@ mod tests {
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::statistics::StatisticsArgs;
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, ExecutionPlan, PlanProperties,
+        ReplaceChildrenOptions,
+    };
 
     use super::DisplayableExecutionPlan;
 
@@ -1548,9 +1551,10 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
@@ -1560,6 +1564,16 @@ mod tests {
             _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -1639,10 +1653,11 @@ mod tests {
         use crate::empty::EmptyExec;
         use crate::filter::FilterExec;
         use crate::projection::ProjectionExec;
+        use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
         use datafusion_physical_expr::expressions::{binary, col, lit};
         use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
-        fn sample_plan() -> Arc<dyn crate::ExecutionPlan> {
+        fn sample_plan() -> Arc<dyn ExecutionPlan> {
             let schema = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1730,11 +1745,22 @@ mod tests {
                 {
                     Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
                 }
-                fn with_new_children(
+
+                fn replace_children(
                     self: Arc<Self>,
                     _: Vec<Arc<dyn ExecutionPlan>>,
+                    _: ReplaceChildrenOptions,
                 ) -> Result<Arc<dyn ExecutionPlan>> {
                     unimplemented!()
+                }
+                fn with_new_children(
+                    self: Arc<Self>,
+                    children: Vec<Arc<dyn ExecutionPlan>>,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    self.replace_children(
+                        children,
+                        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                    )
                 }
                 fn execute(
                     &self,
