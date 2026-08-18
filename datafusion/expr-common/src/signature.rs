@@ -22,9 +22,8 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    DECIMAL_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
-    DECIMAL128_MAX_PRECISION, DataType, Decimal128Type, DecimalType, Field, IntervalUnit,
-    TimeUnit,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
+    Decimal128Type, DecimalType, Field, IntervalUnit, TimeUnit,
 };
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
@@ -417,12 +416,10 @@ impl TypeSignatureClass {
     ///
     /// This is used for `information_schema` and can be used to generate
     /// documentation or error messages.
-    // Remove with `get_example_types`
-    #[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+    // Deprecated, remove with `get_example_types`
     fn get_example_types(&self) -> Vec<DataType> {
         match self {
             TypeSignatureClass::Any => vec![],
-            #[expect(deprecated)]
             TypeSignatureClass::Native(l) => get_data_types(l.native()),
             TypeSignatureClass::Timestamp => {
                 vec![
@@ -490,10 +487,14 @@ impl TypeSignatureClass {
             TypeSignatureClass::Binary => {
                 vec![NativeType::Binary]
             }
-            TypeSignatureClass::Decimal => vec![NATIVE_TYPE_DECIMAL],
+            TypeSignatureClass::Decimal => vec![Decimal128Type::DEFAULT_TYPE.into()],
             TypeSignatureClass::Float => vec![NativeType::Float64],
             TypeSignatureClass::Numeric => {
-                vec![NativeType::Float64, NativeType::Int64, NATIVE_TYPE_DECIMAL]
+                vec![
+                    NativeType::Float64,
+                    NativeType::Int64,
+                    Decimal128Type::DEFAULT_TYPE.into(),
+                ]
             }
         }
     }
@@ -637,28 +638,7 @@ impl Display for ArrayFunctionArgument {
     }
 }
 
-/// Constant that is used as a Decimal type for `get_example_types`
-/// Use Decimal128 precision as a reasonable default
-const NATIVE_TYPE_DECIMAL: NativeType =
-    NativeType::Decimal(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
-
-/// Native types for `get_example_types`
-static EXAMPLE_NUMERIC_TYPES: &[NativeType] = &[
-    NativeType::Int8,
-    NativeType::Int16,
-    NativeType::Int32,
-    NativeType::Int64,
-    NativeType::UInt8,
-    NativeType::UInt16,
-    NativeType::UInt32,
-    NativeType::UInt64,
-    NativeType::Float16,
-    NativeType::Float32,
-    NativeType::Float64,
-    NATIVE_TYPE_DECIMAL,
-];
-
-#[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+// Deprecated, remove with `get_example_types`
 static NUMERICS: &[DataType] = &[
     DataType::Int8,
     DataType::Int16,
@@ -950,9 +930,8 @@ impl TypeSignature {
     ///
     /// This is used for `information_schema` and can be used to generate
     /// documentation or error messages.
-    #[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+    #[deprecated(since = "55.0.0", note = "See get_representative_types instead")]
     pub fn get_example_types(&self) -> Vec<Vec<DataType>> {
-        #[expect(deprecated)]
         match self {
             TypeSignature::Exact(types) => vec![types.clone()],
             TypeSignature::OneOf(types) => types
@@ -1007,12 +986,13 @@ impl TypeSignature {
         }
     }
 
-    /// Return example acceptable types for this `TypeSignature`'
+    /// Return example acceptable types for this `TypeSignature'
     ///
     /// Returns a `Vec<NativeType>` for each argument to the function
     ///
     /// This is used for `information_schema` and can be used to generate
-    /// documentation or error messages.
+    /// documentation or error messages. The returned types are the types a caller may pass.
+    /// Callers computing return types must apply coercion themselves.
     pub fn get_representative_types(&self) -> Vec<Vec<NativeType>> {
         match self {
             TypeSignature::Exact(types) => vec![
@@ -1057,10 +1037,10 @@ impl TypeSignature {
                 .cloned()
                 .map(|data_type| vec![data_type.into()])
                 .collect(),
-            TypeSignature::Numeric(arg_count) => EXAMPLE_NUMERIC_TYPES
-                .iter()
-                .cloned()
-                .map(|numeric_type| vec![numeric_type; *arg_count])
+            TypeSignature::Numeric(arg_count) => TypeSignatureClass::Numeric
+                .get_representative_types()
+                .into_iter()
+                .map(|t| vec![t; *arg_count])
                 .collect(),
             TypeSignature::String(arg_count) => {
                 vec![vec![NativeType::String; *arg_count]]
@@ -1076,7 +1056,7 @@ impl TypeSignature {
     }
 }
 
-#[deprecated(since = "53.0.0", note = "See get_representative_types instead")]
+// Deprecated, remove with get_data_types
 fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
     match native_type {
         NativeType::Null => vec![DataType::Null],
@@ -1948,18 +1928,12 @@ mod tests {
         assert_eq!(
             types,
             vec![
-                vec![NativeType::Int8, NativeType::Int8],
-                vec![NativeType::Int16, NativeType::Int16],
-                vec![NativeType::Int32, NativeType::Int32],
-                vec![NativeType::Int64, NativeType::Int64],
-                vec![NativeType::UInt8, NativeType::UInt8],
-                vec![NativeType::UInt16, NativeType::UInt16],
-                vec![NativeType::UInt32, NativeType::UInt32],
-                vec![NativeType::UInt64, NativeType::UInt64],
-                vec![NativeType::Float16, NativeType::Float16],
-                vec![NativeType::Float32, NativeType::Float32],
                 vec![NativeType::Float64, NativeType::Float64],
-                vec![NATIVE_TYPE_DECIMAL, NATIVE_TYPE_DECIMAL],
+                vec![NativeType::Int64, NativeType::Int64],
+                vec![
+                    Decimal128Type::DEFAULT_TYPE.into(),
+                    Decimal128Type::DEFAULT_TYPE.into()
+                ],
             ]
         );
 
