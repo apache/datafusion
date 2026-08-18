@@ -23,10 +23,12 @@ use datafusion_expr::EmitTo;
 
 mod full;
 mod partial;
+mod partition_disjoint;
 
 use crate::InputOrderMode;
 pub use full::GroupOrderingFull;
 pub use partial::GroupOrderingPartial;
+pub use partition_disjoint::GroupOrderingPartitionDisjoint;
 
 /// Ordering information for each group in the hash table
 #[derive(Debug)]
@@ -37,12 +39,21 @@ pub enum GroupOrdering {
     Partial(GroupOrderingPartial),
     /// Groups are entirely contiguous,
     Full(GroupOrderingFull),
+    /// Group keys are disjoint across output partitions, but not ordered within
+    /// each partition.
+    PartitionDisjoint(GroupOrderingPartitionDisjoint),
 }
 
 impl GroupOrdering {
     /// Create a `GroupOrdering` for the specified ordering
-    pub fn try_new(mode: &InputOrderMode) -> Result<Self> {
+    pub fn try_new(
+        mode: &InputOrderMode,
+        group_keys_partition_disjoint: bool,
+    ) -> Result<Self> {
         match mode {
+            InputOrderMode::Linear if group_keys_partition_disjoint => Ok(
+                GroupOrdering::PartitionDisjoint(GroupOrderingPartitionDisjoint::new()),
+            ),
             InputOrderMode::Linear => Ok(GroupOrdering::None),
             InputOrderMode::PartiallySorted(order_indices) => {
                 GroupOrderingPartial::try_new(order_indices.clone())
@@ -59,6 +70,9 @@ impl GroupOrdering {
             GroupOrdering::None => None,
             GroupOrdering::Partial(partial) => partial.emit_to(),
             GroupOrdering::Full(full) => full.emit_to(),
+            GroupOrdering::PartitionDisjoint(partition_disjoint) => {
+                partition_disjoint.emit_to()
+            }
         }
     }
 
@@ -81,6 +95,7 @@ impl GroupOrdering {
                     EmitTo::All => EmitTo::First(n),
                 })
             }
+            GroupOrdering::PartitionDisjoint(_) => Some(EmitTo::First(n)),
         }
     }
 
@@ -90,6 +105,9 @@ impl GroupOrdering {
             GroupOrdering::None => {}
             GroupOrdering::Partial(partial) => partial.input_done(),
             GroupOrdering::Full(full) => full.input_done(),
+            GroupOrdering::PartitionDisjoint(partition_disjoint) => {
+                partition_disjoint.input_done()
+            }
         }
     }
 
@@ -104,6 +122,9 @@ impl GroupOrdering {
             GroupOrdering::None => {}
             GroupOrdering::Partial(partial) => partial.reset(),
             GroupOrdering::Full(full) => full.reset(),
+            GroupOrdering::PartitionDisjoint(partition_disjoint) => {
+                partition_disjoint.reset()
+            }
         }
     }
 
@@ -114,6 +135,9 @@ impl GroupOrdering {
             GroupOrdering::None => {}
             GroupOrdering::Partial(partial) => partial.remove_groups(n),
             GroupOrdering::Full(full) => full.remove_groups(n),
+            GroupOrdering::PartitionDisjoint(partition_disjoint) => {
+                partition_disjoint.remove_groups(n)
+            }
         }
     }
 
@@ -143,6 +167,9 @@ impl GroupOrdering {
             GroupOrdering::Full(full) => {
                 full.new_groups(total_num_groups);
             }
+            GroupOrdering::PartitionDisjoint(partition_disjoint) => {
+                partition_disjoint.new_groups(total_num_groups);
+            }
         };
         Ok(())
     }
@@ -154,6 +181,9 @@ impl GroupOrdering {
                 GroupOrdering::None => 0,
                 GroupOrdering::Partial(partial) => partial.size(),
                 GroupOrdering::Full(full) => full.size(),
+                GroupOrdering::PartitionDisjoint(partition_disjoint) => {
+                    partition_disjoint.size()
+                }
             }
     }
 }

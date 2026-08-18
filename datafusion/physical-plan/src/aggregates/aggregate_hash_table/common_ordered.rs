@@ -183,6 +183,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         state_schema: SchemaRef,
         batch_size: usize,
         input_order_mode: &InputOrderMode,
+        group_keys_partition_disjoint: bool,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
         metrics: OrderedAggregateTableMetrics,
@@ -192,7 +193,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             "OrderedAggregateTable requires config batch_size >= 1"
         );
 
-        let group_ordering = GroupOrdering::try_new(input_order_mode)?;
+        let group_ordering =
+            GroupOrdering::try_new(input_order_mode, group_keys_partition_disjoint)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;
         let group_values = new_group_values(group_schema, &group_ordering)?;
         let aggregate_arguments = aggregate_expressions(

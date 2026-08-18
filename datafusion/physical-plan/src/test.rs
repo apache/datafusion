@@ -73,6 +73,8 @@ pub struct TestMemoryExec {
     projection: Option<Vec<usize>>,
     /// Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
+    /// Expressions known to be disjoint across output partitions
+    partition_disjoint_exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// if partition sizes should be displayed
     show_sizes: bool,
     /// The maximum number of records to read from this plan. If `None`,
@@ -233,10 +235,12 @@ impl TestMemoryExec {
     }
 
     fn eq_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
+        let mut eq_properties = EquivalenceProperties::new_with_orderings(
             Arc::clone(&self.projected_schema),
             self.sort_information.clone(),
-        )
+        );
+        eq_properties.set_partition_disjoint_exprs(self.partition_disjoint_exprs.clone());
+        eq_properties
     }
 
     fn statistics_inner(&self) -> Result<Statistics> {
@@ -268,6 +272,7 @@ impl TestMemoryExec {
             projected_schema,
             projection,
             sort_information: vec![],
+            partition_disjoint_exprs: vec![],
             show_sizes: true,
             fetch: None,
         })
@@ -361,6 +366,52 @@ impl TestMemoryExec {
         self.sort_information = sort_information;
         self.cache = Arc::new(self.compute_properties());
         Ok(self)
+    }
+
+    /// Attach expressions known to be disjoint across output partitions.
+    pub fn try_with_partition_disjoint_keys(
+        mut self,
+        mut partition_disjoint_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Self> {
+        let fields = self.schema.fields();
+        let ambiguous_column = partition_disjoint_exprs
+            .iter()
+            .flat_map(collect_columns)
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the TestMemoryExec",
+            ambiguous_column.as_ref().unwrap()
+        );
+
+        if let Some(projection) = &self.projection {
+            let base_schema = self.original_schema();
+            let proj_exprs = projection.iter().map(|idx| {
+                let name = base_schema.field(*idx).name();
+                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+            });
+            let projection_mapping =
+                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
+            let mut base_eqp = EquivalenceProperties::new(Arc::clone(&base_schema));
+            base_eqp.set_partition_disjoint_exprs(partition_disjoint_exprs);
+            let proj_eqp =
+                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
+            partition_disjoint_exprs = proj_eqp.partition_disjoint_exprs().to_vec();
+        }
+
+        self.partition_disjoint_exprs = partition_disjoint_exprs;
+        self.cache = Arc::new(self.compute_properties());
+        Ok(self)
+    }
+
+    /// Ref to partition-disjoint expressions
+    pub fn partition_disjoint_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.partition_disjoint_exprs
     }
 
     /// Arc clone of ref to original schema

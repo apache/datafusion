@@ -420,6 +420,202 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     }
 }
 
+/// Like `streaming_aggregate_test`, but uses partition-disjoint keys instead of
+/// global sort order to enable incremental aggregation.
+#[tokio::test(flavor = "multi_thread")]
+async fn partition_disjoint_streaming_aggregate_test() {
+    let test_cases = [vec!["a"], vec!["b"], vec!["c"]];
+    let n = 10;
+    let distincts = vec![10, 20];
+    for distinct in distincts {
+        let mut join_set = JoinSet::new();
+        for i in 0..n {
+            let test_idx = i % test_cases.len();
+            let group_by_columns = test_cases[test_idx].clone();
+            join_set.spawn(run_partition_disjoint_aggregate_test(
+                make_staggered_batches::<true>(1000, distinct, i as u64),
+                group_by_columns,
+            ));
+        }
+        while let Some(join_handle) = join_set.join_next().await {
+            join_handle.unwrap();
+        }
+    }
+}
+
+fn partition_batches_by_modulo(
+    batches: &[RecordBatch],
+    key_name: &str,
+    n_partitions: usize,
+) -> Vec<Vec<RecordBatch>> {
+    let schema = batches[0].schema();
+    let concat = concat_batches(&schema, batches).unwrap();
+    let key_col = concat.column_by_name(key_name).unwrap();
+    let key_values = key_col.as_primitive::<Int64Type>();
+
+    let mut parts: Vec<Vec<ArrayRef>> = (0..n_partitions)
+        .map(|_| {
+            (0..concat.num_columns())
+                .map(|col_idx| {
+                    arrow::array::new_empty_array(
+                        concat.schema().field(col_idx).data_type(),
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let mut counts = vec![0usize; n_partitions];
+
+    for (col_idx, column) in concat.columns().iter().enumerate() {
+        for row_idx in 0..concat.num_rows() {
+            let partition_idx =
+                (key_values.value(row_idx).rem_euclid(n_partitions as i64)) as usize;
+            parts[partition_idx][col_idx] = arrow::compute::concat(&[
+                parts[partition_idx][col_idx].as_ref(),
+                column.slice(row_idx, 1).as_ref(),
+            ])
+            .unwrap();
+            if col_idx == 0 {
+                counts[partition_idx] += 1;
+            }
+        }
+    }
+
+    parts
+        .into_iter()
+        .zip(counts)
+        .filter(|(_, count)| *count > 0)
+        .map(|(columns, _)| {
+            vec![RecordBatch::try_new(Arc::clone(&schema), columns).unwrap()]
+        })
+        .collect()
+}
+
+async fn run_partition_disjoint_aggregate_test(
+    input1: Vec<RecordBatch>,
+    group_by_columns: Vec<&str>,
+) {
+    let schema = input1[0].schema();
+    let session_config = SessionConfig::new()
+        .with_batch_size(50)
+        .set_bool("datafusion.execution.enable_migration_aggregate", true);
+    let ctx = SessionContext::new_with_config(session_config);
+
+    let concat_input_record = concat_batches(&schema, &input1).unwrap();
+
+    let usual_source = MemorySourceConfig::try_new_exec(
+        &[vec![concat_input_record]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    let partition_key = group_by_columns[0];
+    let partition_batches = partition_batches_by_modulo(&input1, partition_key, 4);
+    assert!(partition_batches.len() > 1);
+    let disjoint_exprs = group_by_columns
+        .iter()
+        .map(|col_name| col(col_name, &schema).unwrap())
+        .collect::<Vec<_>>();
+    let running_source = DataSourceExec::from_data_source(
+        MemorySourceConfig::try_new(&partition_batches, schema.clone(), None)
+            .unwrap()
+            .try_with_partition_disjoint_keys(disjoint_exprs)
+            .unwrap(),
+    );
+
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(sum_udaf(), vec![col("d", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("sum1")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
+    let expr = group_by_columns
+        .iter()
+        .map(|elem| (col(elem, &schema).unwrap(), (*elem).to_string()))
+        .collect::<Vec<_>>();
+    let group_by = PhysicalGroupBy::new_single(expr);
+
+    let aggregate_exec_running = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregate_expr.clone(),
+            vec![None],
+            running_source,
+            schema.clone(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        aggregate_exec_running.input_order_mode(),
+        &InputOrderMode::Linear
+    );
+    assert!(aggregate_exec_running.group_keys_partition_disjoint());
+
+    let aggregate_exec_usual = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregate_expr.clone(),
+            vec![None],
+            usual_source,
+            schema.clone(),
+        )
+        .unwrap(),
+    );
+
+    let task_ctx = ctx.task_ctx();
+    let collected_usual = collect(aggregate_exec_usual.clone(), task_ctx.clone())
+        .await
+        .unwrap();
+
+    let collected_running = collect(aggregate_exec_running.clone(), task_ctx.clone())
+        .await
+        .unwrap();
+    assert!(collected_running.len() > 2);
+    assert!(collected_running.len() > collected_usual.len());
+
+    let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
+    let running_formatted = pretty_format_batches(&collected_running)
+        .unwrap()
+        .to_string();
+
+    let mut usual_formatted_sorted: Vec<&str> = usual_formatted.trim().lines().collect();
+    usual_formatted_sorted.sort_unstable();
+
+    let mut running_formatted_sorted: Vec<&str> =
+        running_formatted.trim().lines().collect();
+    running_formatted_sorted.sort_unstable();
+    for (i, (usual_line, running_line)) in usual_formatted_sorted
+        .iter()
+        .zip(&running_formatted_sorted)
+        .enumerate()
+    {
+        assert_eq!(
+            (i, usual_line),
+            (i, running_line),
+            "Inconsistent result\n\n\
+             Aggregate_expr: {aggregate_expr:?}\n\
+             group_by: {group_by:?}\n\
+             Left Plan:\n{}\n\
+             Right Plan:\n{}\n\
+             schema:\n{schema}\n\
+             Left Output:\n{}\n\
+             Right Output:\n{}\n\
+             input:\n{}\n\
+             ",
+            displayable(aggregate_exec_usual.as_ref()).indent(false),
+            displayable(aggregate_exec_running.as_ref()).indent(false),
+            usual_formatted,
+            running_formatted,
+            pretty_format_batches(&input1).unwrap(),
+        );
+    }
+}
+
 /// Return randomly sized record batches with:
 /// three sorted int64 columns 'a', 'b', 'c' ranged from 0..'n_distinct' as columns
 /// one random int64 column 'd' as other columns

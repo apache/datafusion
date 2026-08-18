@@ -501,16 +501,22 @@ impl GroupedHashAggregateStream {
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
-        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
+        let group_ordering = GroupOrdering::try_new(
+            &agg.input_order_mode,
+            agg.group_keys_partition_disjoint(),
+        )?;
         let oom_mode = match (agg.mode, &group_ordering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
             (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
             // For non-partial aggregation modes, emitting incomplete results is not an option.
             // Instead, use disk spilling to store sorted, incomplete results, and merge them
             // afterwards.
-            (_, GroupOrdering::None | GroupOrdering::Partial(_))
-                if context.runtime_env().disk_manager.tmp_files_enabled() =>
-            {
+            (
+                _,
+                GroupOrdering::None
+                | GroupOrdering::Partial(_)
+                | GroupOrdering::PartitionDisjoint(_),
+            ) if context.runtime_env().disk_manager.tmp_files_enabled() => {
                 OutOfMemoryMode::Spill
             }
             // For `GroupOrdering::Full`, the incoming stream is already sorted. This ensures the
@@ -559,7 +565,10 @@ impl GroupedHashAggregateStream {
         //   since Final mode expects unique group values as its input
         // - there is only one GROUP BY expressions set
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
-            && matches!(group_ordering, GroupOrdering::None)
+            && matches!(
+                group_ordering,
+                GroupOrdering::None | GroupOrdering::PartitionDisjoint(_)
+            )
             && agg_group_by.is_single()
         {
             let options = &context.session_config().options().execution;

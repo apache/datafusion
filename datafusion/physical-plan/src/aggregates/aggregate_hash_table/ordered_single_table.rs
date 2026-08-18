@@ -60,6 +60,7 @@ impl OrderedAggregateTable<SingleMarker> {
             state_schema,
             batch_size,
             &agg.input_order_mode,
+            agg.group_keys_partition_disjoint(),
             &agg.mode,
             agg.filter_expr.iter().cloned().collect(),
             metrics,
