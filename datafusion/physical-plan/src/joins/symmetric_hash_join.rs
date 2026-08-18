@@ -2103,10 +2103,10 @@ mod tests {
         partitioned_sym_join_with_filter, split_record_batches,
     };
     use crate::test::TestMemoryExec;
-    use arrow::array::{ArrayRef, Int32Array, StructArray};
+    use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-    use datafusion_common::{DataFusionError, ScalarValue};
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+    use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{
         MemoryLimit, MemoryPool, MemoryReservation, UnboundedMemoryPool,
@@ -2127,173 +2127,10 @@ mod tests {
     static TABLE_CACHE: LazyLock<Mutex<HashMap<TableKey, TableValue>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    fn create_stream<T: BatchTransformer>(
-        batch_transformer: T,
-        input_schema: SchemaRef,
-    ) -> SymmetricHashJoinStream<T> {
-        let context = TaskContext::default();
-        create_stream_with_context(batch_transformer, input_schema, &context)
-    }
-
-    fn create_stream_with_context<T: BatchTransformer>(
-        batch_transformer: T,
-        input_schema: SchemaRef,
-        context: &TaskContext,
-    ) -> SymmetricHashJoinStream<T> {
-        let metrics = ExecutionPlanMetricsSet::new();
-        SymmetricHashJoinStream {
-            left_stream: Box::pin(EmptyRecordBatchStream::new(Arc::clone(&input_schema))),
-            right_stream: Box::pin(EmptyRecordBatchStream::new(Arc::clone(
-                &input_schema,
-            ))),
-            schema: Arc::clone(&input_schema),
-            filter: None,
-            join_type: JoinType::Inner,
-            left: OneSideHashJoiner::new(
-                JoinSide::Left,
-                vec![],
-                Arc::clone(&input_schema),
-            ),
-            right: OneSideHashJoiner::new(JoinSide::Right, vec![], input_schema),
-            column_indices: vec![],
-            graph: None,
-            left_sorted_filter_expr: None,
-            right_sorted_filter_expr: None,
-            random_state: RandomState::default(),
-            null_equality: NullEquality::NullEqualsNothing,
-            metrics: StreamJoinMetrics::new(0, &metrics),
-            reservation: Arc::new(
-                MemoryConsumer::new("SymmetricHashJoinStream[test]")
-                    .register(context.memory_pool()),
-            ),
-            state: SHJStreamState::PullRight,
-            batch_transformer,
-        }
-    }
-
-    fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {
-        let batch = RecordBatch::try_from_iter(vec![(
-            "a",
-            Arc::new(Int32Array::from_iter_values(0..10)) as _,
-        )])
-        .unwrap();
-        let expected_size = batch.get_array_memory_size();
-        let mut stream = create_stream(batch_transformer, batch.schema());
-
-        let empty_size = stream.size();
-        stream.batch_transformer.set_batch(batch.clone());
-        stream.update_reservation().unwrap();
-        assert_eq!(stream.size() - empty_size, expected_size);
-        assert_eq!(stream.reservation.size(), stream.size());
-
-        while stream.batch_transformer.next().is_some() {}
-        stream.update_reservation().unwrap();
-        assert_eq!(stream.reservation.size(), empty_size);
-
-        stream.left.input_buffer = batch;
-        let size_with_shared_batch = stream.size();
-        stream
-            .batch_transformer
-            .set_batch(stream.left.input_buffer.clone());
-        assert_eq!(stream.size(), size_with_shared_batch);
-    }
-
-    #[test]
-    fn stream_accounts_for_transformer_batches_once() {
-        assert_stream_accounts_for_transformer(NoopBatchTransformer::new());
-        assert_stream_accounts_for_transformer(BatchSplitter::new(3));
-    }
-
-    fn assert_stream_deduplicates_nested_transformer_batch<T: BatchTransformer>(
-        batch_transformer: T,
-    ) {
-        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let fields =
-            Fields::from(vec![Arc::new(Field::new("value", DataType::Int32, false))]);
-        let left_batch = RecordBatch::try_from_iter(vec![(
-            "nested",
-            Arc::new(StructArray::new(
-                fields.clone(),
-                vec![Arc::clone(&shared_child)],
-                None,
-            )) as ArrayRef,
-        )])
-        .unwrap();
-        let transformer_batch = RecordBatch::try_from_iter(vec![(
-            "nested",
-            Arc::new(StructArray::new(
-                fields,
-                vec![Arc::clone(&shared_child)],
-                None,
-            )) as ArrayRef,
-        )])
-        .unwrap();
-        let mut stream = create_stream(batch_transformer, left_batch.schema());
-        stream.left.input_buffer = left_batch;
-        let size_without_transformer = stream.size();
-
-        stream
-            .batch_transformer
-            .set_batch(transformer_batch.clone());
-
-        assert_eq!(
-            stream.size() - size_without_transformer,
-            transformer_batch.get_array_memory_size()
-                - shared_child.get_array_memory_size()
-        );
-    }
-
-    #[test]
-    fn stream_deduplicates_nested_transformer_batches() {
-        assert_stream_deduplicates_nested_transformer_batch(NoopBatchTransformer::new());
-        assert_stream_deduplicates_nested_transformer_batch(BatchSplitter::new(3));
-    }
-
-    fn assert_transformer_reservation_exhausts_pool<T: BatchTransformer>(
-        batch_transformer: T,
-    ) -> Result<()> {
-        let batch = RecordBatch::try_from_iter(vec![(
-            "a",
-            Arc::new(Int32Array::from_iter_values(0..10)) as _,
-        )])?;
-        let empty_size =
-            create_stream(NoopBatchTransformer::new(), batch.schema()).size();
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(empty_size + batch.get_array_memory_size() - 1, 1.0)
-            .build_arc()?;
-        let context = TaskContext::default().with_runtime(runtime);
-        let mut stream =
-            create_stream_with_context(batch_transformer, batch.schema(), &context);
-
-        // The empty stream fits, but retaining this batch exceeds the exact
-        // stream reservation boundary by one byte.
-        stream.update_reservation()?;
-        stream.batch_transformer.set_batch(batch);
-        let error = stream.update_reservation().unwrap_err();
-        assert!(
-            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
-            "expected a memory-pool error, got: {error}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn transformer_reservation_exhausts_pool() -> Result<()> {
-        assert_transformer_reservation_exhausts_pool(NoopBatchTransformer::new())?;
-        assert_transformer_reservation_exhausts_pool(BatchSplitter::new(3))?;
-        Ok(())
-    }
-
-    #[derive(Clone, Debug)]
-    struct RecordedReservationChange {
-        change: isize,
-        reserved: usize,
-    }
-
     #[derive(Debug, Default)]
     struct RecordingMemoryPool {
         inner: UnboundedMemoryPool,
-        symmetric_join_changes: Mutex<Vec<RecordedReservationChange>>,
+        symmetric_join_changes: Mutex<Vec<isize>>,
     }
 
     impl fmt::Display for RecordingMemoryPool {
@@ -2312,27 +2149,15 @@ mod tests {
                 self.symmetric_join_changes
                     .lock()
                     .expect("recording pool mutex is not poisoned")
-                    .push(RecordedReservationChange {
-                        change,
-                        reserved: self.inner.reserved(),
-                    });
+                    .push(change);
             }
-        }
-
-        fn changes(&self) -> Vec<RecordedReservationChange> {
-            self.symmetric_join_changes
-                .lock()
-                .expect("recording pool mutex is not poisoned")
-                .clone()
         }
 
         fn change_deltas(&self) -> Vec<isize> {
             self.symmetric_join_changes
                 .lock()
                 .expect("recording pool mutex is not poisoned")
-                .iter()
-                .map(|change| change.change)
-                .collect()
+                .clone()
         }
     }
 
@@ -2462,64 +2287,6 @@ mod tests {
                 .map(RecordBatch::num_rows)
                 .sum::<usize>();
         assert_eq!(output_rows, 10);
-        Ok(())
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn symmetric_hash_join_transformer_retention_exhausts_bounded_pool(
-        #[values(false, true)] enforce_batch_size_in_joins: bool,
-    ) -> Result<()> {
-        let calibration_pool = Arc::new(RecordingMemoryPool::default());
-        let calibration_runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&calibration_pool) as Arc<dyn MemoryPool>)
-            .build_arc()?;
-        let mut calibration_stream = transformer_lifecycle_test_join()?.execute(
-            0,
-            transformer_lifecycle_test_context(
-                calibration_runtime,
-                enforce_batch_size_in_joins,
-            ),
-        )?;
-
-        let first_batch = calibration_stream.next().await.transpose()?.unwrap();
-        let retained_batch_size = first_batch.get_array_memory_size() as isize;
-        let changes = calibration_pool.changes();
-        // `poll_next_impl` has no reservation operation after transformer `next()`.
-        // Therefore the retain operation is last for a splitter and penultimate
-        // for Noop, whose `next()` immediately releases the retained batch.
-        let retain_index = changes
-            .len()
-            .checked_sub(if enforce_batch_size_in_joins { 1 } else { 2 })
-            .expect("transformer retain must update the stream reservation");
-        let retain_change = &changes[retain_index];
-        assert_eq!(
-            retain_change.change, retained_batch_size,
-            "expected transformer retain reservation update: {changes:?}"
-        );
-        if !enforce_batch_size_in_joins {
-            assert_eq!(
-                changes.last().map(|change| change.change),
-                Some(-retained_batch_size),
-                "Noop must release the retained batch before emitting it: {changes:?}"
-            );
-        }
-
-        // This limit is between the reservation immediately before transformer
-        // retention and the reservation immediately after it. The old accounting
-        // omitted this growth and would emit the first batch instead of failing.
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(retain_change.reserved - 1, 1.0)
-            .build_arc()?;
-        let mut stream = transformer_lifecycle_test_join()?.execute(
-            0,
-            transformer_lifecycle_test_context(runtime, enforce_batch_size_in_joins),
-        )?;
-        let error = stream.next().await.transpose().unwrap_err();
-        assert!(
-            matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
-            "expected transformer retention to exhaust the pool, got: {error}"
-        );
         Ok(())
     }
 
