@@ -213,123 +213,133 @@ zstd = { version = "0.13", default-features = false }
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
 # picking useful non-default lints.
 [workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
 # https://github.com/apache/datafusion/issues/18881
 allow_attributes = "warn"
 as_ptr_cast_mut = "warn"
-assigning_clones = "warn"
-bool_to_int_with_if = "warn"
 branches_sharing_code = "warn"
-checked_conversions = "warn"
 clear_with_drain = "warn"
 coerce_container_to_any = "warn"
 debug_assert_with_mut_call = "warn"
-decimal_bitwise_operands = "warn"
 default_union_representation = "warn"
 doc_include_without_cfg = "warn"
-duration_suboptimal_units = "warn"
-elidable_lifetime_names = "warn"
 empty_enum_variants_with_brackets = "warn"
-empty_enums = "warn"
 equatable_if_let = "warn"
 exit = "warn"
-expl_impl_clone_on_copy = "warn"
-explicit_deref_methods = "warn"
-filter_map_next = "warn"
-flat_map_option = "warn"
-fn_params_excessive_bools = "warn"
 fn_to_numeric_cast_any = "warn"
-ignore_without_reason = "warn"
 imprecise_flops = "warn"
-inconsistent_struct_constructor = "warn"
-index_refutable_slice = "warn"
-inefficient_to_string = "warn"
 infinite_loop = "warn"
-into_iter_without_iter = "warn"
-invalid_upcast_comparisons = "warn"
-ip_constant = "warn"
-iter_filter_is_ok = "warn"
-iter_filter_is_some = "warn"
-iter_not_returning_iterator = "warn"
 iter_on_empty_collections = "warn"
 iter_on_single_items = "warn"
-iter_without_into_iter = "warn"
-# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
-large_futures = "warn"
 large_include_file = "warn"
-# Like `large_futures`, these guard against stack overflows
-large_stack_arrays = "warn"
+# Guards against stack overflows
 large_stack_frames = "warn"
-large_types_passed_by_value = "warn"
-linkedlist = "warn"
 # Catches `"{foo}"` where the string is never actually formatted
 literal_string_with_formatting_args = "warn"
-macro_use_imports = "warn"
-manual_assert = "warn"
-manual_ilog2 = "warn"
-manual_instant_elapsed = "warn"
-manual_is_power_of_two = "warn"
-manual_is_variant_and = "warn"
-# `(a + b) / 2` can overflow; `a.midpoint(b)` cannot
-manual_midpoint = "warn"
-match_wild_err_arm = "warn"
 mem_forget = "warn"
-mismatching_type_param_order = "warn"
-mut_mut = "warn"
-# https://github.com/apache/datafusion/issues/18503
-needless_pass_by_value = "warn"
 needless_type_cast = "warn"
 negative_feature_names = "warn"
-# Prefer `std::sync::LazyLock` over the `lazy_static`/`once_cell` crates
-non_std_lazy_statics = "warn"
 non_zero_suggestions = "warn"
 nonstandard_macro_braces = "warn"
-option_as_ref_cloned = "warn"
-option_option = "warn"
 or_fun_call = "warn"
 path_buf_push_overwrite = "warn"
 pathbuf_init_then_push = "warn"
 precedence_bits = "warn"
-ptr_cast_constness = "warn"
-pub_underscore_fields = "warn"
 pub_without_shorthand = "warn"
 rc_mutex = "warn"
-ref_as_ptr = "warn"
-ref_option_ref = "warn"
 rest_pat_in_fully_bound_structs = "warn"
-# Catches copy-paste bugs in `if`/`else if` chains
-same_functions_in_if_condition = "warn"
-same_length_and_capacity = "warn"
-# Catches a `&self` argument that is only threaded through recursive calls
-self_only_used_in_recursion = "warn"
 # Avoids hashing the key twice
 set_contains_or_insert = "warn"
 single_option_map = "warn"
-str_split_at_newline = "warn"
-string_add_assign = "warn"
 string_lit_as_bytes = "warn"
 string_lit_chars_any = "warn"
 suspicious_xor_used_as_pow = "warn"
 trailing_empty_array = "warn"
 trait_duplication_in_bounds = "warn"
-transmute_ptr_to_ptr = "warn"
-# Subtracting `Instant`s panics on overflow; use `saturating_duration_since`
-unchecked_time_subtraction = "warn"
 uninhabited_references = "warn"
-uninlined_format_args = "warn"
-unnecessary_box_returns = "warn"
-# `{:?}` on a `Path` quotes and escapes it; `{}` on `.display()` does not
-unnecessary_debug_formatting = "warn"
 unnecessary_lazy_evaluations = "warn"
 unnecessary_safety_doc = "warn"
 unnecessary_self_imports = "warn"
 unnecessary_struct_initialization = "warn"
-unused_async = "warn"
 unused_peekable = "warn"
 unused_rounding = "warn"
-used_underscore_binding = "warn"
 verbose_file_reads = "warn"
 wildcard_dependencies = "warn"
-zero_sized_map_values = "warn"
+
+# Pedantic lints we opt out of, with the number of hits at the time we enabled `pedantic`:
+borrow_as_ptr = "allow"                             # 6 hits
+case_sensitive_file_extension_comparisons = "allow" # 1 hit
+cast_lossless = "allow"                             # 361 hits
+cast_possible_truncation = "allow"                  # 911 hits
+cast_possible_wrap = "allow"                        # 493 hits
+cast_precision_loss = "allow"                       # 266 hits
+cast_ptr_alignment = "allow"                        # 5 hits
+cast_sign_loss = "allow"                            # 440 hits
+cloned_instead_of_copied = "allow"                  # 38 hits
+collapsible_else_if = "allow"                       # 1 hit
+comparison_chain = "allow"                          # 3 hits
+default_trait_access = "allow"                      # 221 hits
+doc_comment_double_space_linebreaks = "allow"       # 6 hits
+doc_link_with_quotes = "allow"                      # 25 hits
+doc_markdown = "allow"                              # 4933 hits; needs a long `doc-valid-idents` list in `clippy.toml`
+enum_glob_use = "allow"                             # 98 hits
+explicit_into_iter_loop = "allow"                   # 55 hits
+explicit_iter_loop = "allow"                        # 189 hits
+float_cmp = "allow"                                 # 8 hits; exact float comparisons are often intentional here
+format_collect = "allow"                            # 4 hits
+format_push_string = "allow"                        # 34 hits
+from_iter_instead_of_collect = "allow"              # 51 hits
+if_not_else = "allow"                               # 133 hits
+ignored_unit_patterns = "allow"                     # 52 hits
+implicit_clone = "allow"                            # 198 hits
+implicit_hasher = "allow"                           # 17 hits
+inline_always = "allow"                             # 45 hits
+items_after_statements = "allow"                    # 171 hits
+large_digit_groups = "allow"                        # 3 hits
+manual_assert_eq = "allow"                          # 25 hits
+manual_let_else = "allow"                           # 106 hits
+manual_string_new = "allow"                         # 84 hits
+many_single_char_names = "allow"                    # 12 hits; short names are idiomatic in the numeric kernels
+map_unwrap_or = "allow"                             # 198 hits
+match_bool = "allow"                                # 46 hits
+match_same_arms = "allow"                           # 261 hits
+match_wildcard_for_single_variants = "allow"        # 132 hits
+missing_errors_doc = "allow"                        # 1807 hits
+missing_fields_in_debug = "allow"                   # 29 hits
+missing_panics_doc = "allow"                        # 244 hits
+must_use_candidate = "allow"                        # 2726 hits
+needless_bitwise_bool = "allow"                     # 1 hit
+needless_continue = "allow"                         # 37 hits
+needless_for_each = "allow"                         # 44 hits
+needless_raw_string_hashes = "allow"                # 540 hits
+no_effect_underscore_binding = "allow"              # 1 hit
+ptr_as_ptr = "allow"                                # 83 hits
+range_plus_one = "allow"                            # 12 hits
+redundant_closure_for_method_calls = "allow"        # 686 hits
+redundant_else = "allow"                            # 48 hits
+ref_option = "allow"                                # 36 hits
+return_self_not_must_use = "allow"                  # 644 hits
+semicolon_if_nothing_returned = "allow"             # 1353 hits
+should_panic_without_expect = "allow"               # 1 hit
+similar_names = "allow"                             # 228 hits; too many false positives, e.g. `expr`/`exprs`
+single_char_pattern = "allow"                       # 23 hits
+single_match_else = "allow"                         # 155 hits
+stable_sort_primitive = "allow"                     # 14 hits
+struct_excessive_bools = "allow"                    # 24 hits
+struct_field_names = "allow"                        # 14 hits
+too_many_lines = "allow"                            # 484 hits
+trivially_copy_pass_by_ref = "allow"                # 74 hits
+unicode_not_nfc = "allow"                           # 2 hits
+unnecessary_literal_bound = "allow"                 # 471 hits
+unnecessary_semicolon = "allow"                     # 185 hits
+unnecessary_trailing_comma = "allow"                # 49 hits
+unnecessary_wraps = "allow"                         # 427 hits
+unnested_or_patterns = "allow"                      # 68 hits
+unreadable_literal = "allow"                        # 502 hits
+unused_self = "allow"                               # 69 hits
+used_underscore_items = "allow"                     # 28 hits
+wildcard_imports = "allow"                          # 48 hits; `use crate::prelude::*` is idiomatic
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
