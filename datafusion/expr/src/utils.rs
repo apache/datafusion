@@ -224,9 +224,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     let size = group_exprs.len();
                     let slice = group_exprs.as_slice();
                     check_grouping_sets_size_limit(size * (size + 1) / 2 + 1)?;
-                    (0..(size + 1))
-                        .map(|i| slice[0..i].iter().collect())
-                        .collect()
+                    (0..=size).map(|i| slice[0..i].iter().collect()).collect()
                 }
                 expr => vec![vec![expr]],
             };

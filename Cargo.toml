@@ -315,7 +315,6 @@ needless_for_each = "allow"                         # 44 hits
 needless_raw_string_hashes = "allow"                # 540 hits
 no_effect_underscore_binding = "allow"              # 1 hit
 ptr_as_ptr = "allow"                                # 83 hits
-range_plus_one = "allow"                            # 12 hits
 redundant_closure_for_method_calls = "allow"        # 686 hits
 redundant_else = "allow"                            # 48 hits
 ref_option = "allow"                                # 36 hits
