@@ -314,8 +314,6 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let values = self.evaluate_args(record_batch)?;
-
         // Evaluate filter mask once per record batch if present
         let filter_mask_arr: Option<ArrayRef> = match self.filter_expr() {
             Some(expr) => {
@@ -329,6 +327,20 @@ pub trait AggregateWindowExpr: WindowExpr {
         let filter_mask: Option<&BooleanArray> = match filter_mask_arr.as_deref() {
             Some(arr) => Some(as_boolean_array(arr)?),
             None => None,
+        };
+
+        // Evaluate arguments only for rows that pass the FILTER. The selected
+        // results are scattered back to preserve the window frame's row indices.
+        let values = match filter_mask {
+            Some(mask) => self
+                .expressions()
+                .iter()
+                .map(|expr| {
+                    expr.evaluate_selection(record_batch, mask)?
+                        .into_array_of_size(record_batch.num_rows())
+                })
+                .collect::<Result<Vec<_>>>()?,
+            None => self.evaluate_args(record_batch)?,
         };
 
         if self.is_constant_in_partition() {

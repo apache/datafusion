@@ -6150,6 +6150,30 @@ LIMIT 5
 0 3 NULL NULL 0 NULL NULL
 0 4 NULL NULL 0 NULL NULL
 
+# FILTER excludes rows before evaluating fallible window aggregate arguments
+query II
+SELECT id,
+       SUM(10 / x) FILTER (WHERE x <> 0) OVER (ORDER BY id) AS running_sum
+FROM (VALUES (1, 2), (2, 0), (3, 5)) AS t(id, x)
+ORDER BY id
+----
+1 5
+2 5
+3 7
+
+# FILTER preserves row alignment while evaluating arguments for a sliding frame
+query III
+SELECT id, x,
+       SUM(10 / x) FILTER (WHERE x <> 0) OVER (
+           ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+       ) AS s
+FROM (VALUES (1, 2), (2, 0), (3, 5)) AS t(id, x)
+ORDER BY id
+----
+1 2 5
+2 0 5
+3 5 2
+
 # regression test for https://github.com/apache/datafusion/issues/17401
 query I
 WITH source AS (
