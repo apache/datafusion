@@ -213,6 +213,7 @@ zstd = { version = "0.13", default-features = false }
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
 # picking useful non-default lints.
 [workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
 # https://github.com/apache/datafusion/issues/18881
@@ -258,7 +259,6 @@ suspicious_xor_used_as_pow = "warn"
 trailing_empty_array = "warn"
 trait_duplication_in_bounds = "warn"
 uninhabited_references = "warn"
-unnecessary_lazy_evaluations = "warn"
 unnecessary_safety_doc = "warn"
 unnecessary_self_imports = "warn"
 unnecessary_struct_initialization = "warn"
