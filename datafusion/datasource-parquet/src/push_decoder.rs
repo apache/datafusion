@@ -442,7 +442,7 @@ impl PushDecoderStreamState {
                     Some(Ok(batch)) => {
                         let mut timer = self.baseline_metrics.elapsed_compute().timer();
                         self.copy_arrow_reader_metrics();
-                        let result = self.project_batch(&batch);
+                        let result = self.project_batch(batch);
                         timer.stop();
                         drop(timer);
                         return Some((result, self));
@@ -695,7 +695,7 @@ impl PushDecoderStreamState {
         }
     }
 
-    fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+    fn project_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         self.decoder_projection.map(batch)
     }
 }

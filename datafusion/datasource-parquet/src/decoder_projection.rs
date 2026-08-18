@@ -57,11 +57,18 @@ use crate::projection_read_plan::build_projection_read_plan;
 /// boundary) and calls [`Self::map`] on every decoded batch.
 pub(crate) struct DecoderProjection {
     projection_mask: ProjectionMask,
+    /// `None` when the decoder already yields `output_schema` and
+    /// [`map`](Self::map) is a pass-through.
+    transform: Option<DecoderTransform>,
+}
+
+/// The per-batch half of a [`DecoderProjection`].
+struct DecoderTransform {
     projector: Projector,
     output_schema: SchemaRef,
     /// `true` when the projector's output schema differs from `output_schema`
-    /// in metadata / nullability and [`map`](Self::map) must rebuild the batch
-    /// with `output_schema`.
+    /// in metadata / nullability and [`DecoderProjection::map`] must rebuild
+    /// the batch with `output_schema`.
     replace_schema: bool,
 }
 
@@ -73,18 +80,52 @@ impl DecoderProjection {
     /// corresponding parquet [`SchemaDescriptor`]. `output_schema` is what
     /// consumers of the scan stream expect.
     ///
+    /// `projection` is `None` when the scan reads the table unprojected. When
+    /// the decoder's own output then already matches `output_schema` this
+    /// installs an all-columns mask and no per-batch transform, avoiding a
+    /// column-per-field projector on very wide unprojected scans.
+    ///
     /// `virtual_state`, when present, describes virtual columns the reader
     /// will append to each decoded batch (e.g. parquet `row_number`). Virtual
     /// columns are stripped from the projection fed into
     /// `build_projection_read_plan` (which only understands file columns) and
     /// appended to the stream schema so the projector can resolve them.
     pub(crate) fn try_new(
-        projection: &ProjectionExprs,
+        projection: Option<&ProjectionExprs>,
         physical_file_schema: &SchemaRef,
         parquet_schema: &SchemaDescriptor,
         output_schema: &SchemaRef,
         virtual_state: Option<&VirtualColumnsState>,
     ) -> Result<Self> {
+        if projection.is_none() {
+            // Unprojected scan: if the decoder's output (the file schema plus
+            // any appended virtual columns) already is the output schema,
+            // there is no transform to apply.
+            let stream_schema = match virtual_state {
+                Some(state) => {
+                    append_fields(physical_file_schema, state.virtual_columns())
+                }
+                None => Arc::clone(physical_file_schema),
+            };
+            if stream_schema == *output_schema {
+                return Ok(Self {
+                    projection_mask: ProjectionMask::all(),
+                    transform: None,
+                });
+            }
+        }
+
+        // Anything else needs a concrete projection, including an unprojected
+        // scan whose decoder output does not line up with the output schema.
+        let materialized_identity;
+        let projection = match projection {
+            Some(projection) => projection,
+            None => {
+                materialized_identity = ProjectionExprs::identity(output_schema);
+                &materialized_identity
+            }
+        };
+
         // Virtual columns are produced by the reader separately from the
         // projection mask, so strip them from the expressions we feed into
         // `build_projection_read_plan`. We substitute each virtual column
@@ -127,9 +168,11 @@ impl DecoderProjection {
 
         Ok(Self {
             projection_mask: read_plan.projection_mask,
-            projector,
-            output_schema: Arc::clone(output_schema),
-            replace_schema,
+            transform: Some(DecoderTransform {
+                projector,
+                output_schema: Arc::clone(output_schema),
+                replace_schema,
+            }),
         })
     }
 
@@ -145,17 +188,126 @@ impl DecoderProjection {
     /// batch with `output_schema` (some writers emit OPTIONAL fields even when
     /// the data has no nulls; some logical schemas carry field-level metadata
     /// the file schema does not).
-    pub(crate) fn map(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let projected = self.projector.project_batch(batch)?;
-        if !self.replace_schema {
+    ///
+    /// When the decoder already yields the output schema the batch is returned
+    /// untouched.
+    pub(crate) fn map(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        let Some(transform) = self.transform.as_ref() else {
+            return Ok(batch);
+        };
+        let projected = transform.projector.project_batch(&batch)?;
+        if !transform.replace_schema {
             return Ok(projected);
         }
         let (_stream_schema, arrays, num_rows) = projected.into_parts();
         let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
         Ok(RecordBatch::try_new_with_options(
-            Arc::clone(&self.output_schema),
+            Arc::clone(&transform.output_schema),
             arrays,
             &options,
         )?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::projection::ProjectionExpr;
+    use parquet::arrow::ArrowSchemaConverter;
+
+    fn test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]))
+    }
+
+    fn test_batch(schema: &SchemaRef) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["x", "y", "z"])),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn absent_projection_reads_all_columns_without_transform() {
+        let schema = test_schema();
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+
+        let decoder_projection =
+            DecoderProjection::try_new(None, &schema, &parquet_schema, &schema, None)
+                .unwrap();
+
+        assert!(decoder_projection.transform.is_none());
+        assert_eq!(decoder_projection.projection_mask(), &ProjectionMask::all());
+
+        let batch = test_batch(&schema);
+        let mapped = decoder_projection.map(batch.clone()).unwrap();
+        assert_eq!(mapped, batch);
+    }
+
+    #[test]
+    fn absent_projection_falls_back_when_the_output_schema_differs() {
+        // A file whose column carries metadata the table schema does not: the
+        // decoder's own output is not the output schema, so the fallback
+        // materializes the identity rather than passing batches through.
+        let output_schema = test_schema();
+        let physical_file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true).with_metadata(
+                std::iter::once(("k".to_string(), "v".to_string())).collect(),
+            ),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let parquet_schema = ArrowSchemaConverter::new()
+            .convert(&physical_file_schema)
+            .unwrap();
+
+        let decoder_projection = DecoderProjection::try_new(
+            None,
+            &physical_file_schema,
+            &parquet_schema,
+            &output_schema,
+            None,
+        )
+        .unwrap();
+
+        assert!(decoder_projection.transform.is_some());
+        let mapped = decoder_projection
+            .map(test_batch(&physical_file_schema))
+            .unwrap();
+        assert_eq!(mapped.schema(), output_schema);
+        assert_eq!(mapped, test_batch(&output_schema));
+    }
+
+    #[test]
+    fn narrowing_projection_masks_and_transforms() {
+        let schema = test_schema();
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let output_schema =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Utf8, true)]));
+
+        let projection = ProjectionExprs::new([ProjectionExpr::new(
+            Arc::new(Column::new("b", 1)),
+            "b",
+        )]);
+        let decoder_projection = DecoderProjection::try_new(
+            Some(&projection),
+            &schema,
+            &parquet_schema,
+            &output_schema,
+            None,
+        )
+        .unwrap();
+
+        assert!(decoder_projection.transform.is_some());
+        assert_ne!(decoder_projection.projection_mask(), &ProjectionMask::all());
     }
 }

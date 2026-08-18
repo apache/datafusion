@@ -30,9 +30,9 @@ mod proto;
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
-    file_compression_type::FileCompressionType, file_stream::FileStreamBuilder,
-    file_stream::work_source::SharedWorkSource, source::DataSource,
-    statistics::MinMaxStatistics,
+    file::projection_is_no_op, file_compression_type::FileCompressionType,
+    file_stream::FileStreamBuilder, file_stream::work_source::SharedWorkSource,
+    source::DataSource, statistics::MinMaxStatistics,
 };
 use arrow::datatypes::Fields;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
@@ -397,6 +397,9 @@ impl FileScanConfigBuilder {
         let Some(projection_exprs) = projection_exprs else {
             return Ok(self);
         };
+        if projection_is_no_op(self.file_source.as_ref(), &projection_exprs) {
+            return Ok(self);
+        }
         let new_source = self
             .file_source
             .try_pushdown_projection(&projection_exprs)
@@ -961,7 +964,12 @@ impl DataSource for FileScanConfig {
                         projection.project_statistics(stat.clone(), &output_schema)?,
                     ))
                 } else {
-                    Ok(Arc::new(stat.clone()))
+                    // No projection: column statistics carry over as-is, but
+                    // recompute the total byte size from the schema as
+                    // `project_statistics` would.
+                    let mut stat = stat.clone();
+                    stat.calculate_total_byte_size(&output_schema);
+                    Ok(Arc::new(stat))
                 };
             }
             // If no statistics available for this partition, return unknown
@@ -970,14 +978,15 @@ impl DataSource for FileScanConfig {
             )))
         } else {
             // Return aggregate statistics across all partitions
-            let statistics = self.statistics();
+            let mut statistics = self.statistics();
             let projection = self.file_source.projection();
             let output_schema = self.projected_schema()?;
             if let Some(projection) = &projection {
                 Ok(Arc::new(
-                    projection.project_statistics(statistics.clone(), &output_schema)?,
+                    projection.project_statistics(statistics, &output_schema)?,
                 ))
             } else {
+                statistics.calculate_total_byte_size(&output_schema);
                 Ok(Arc::new(statistics))
             }
         }
@@ -1012,6 +1021,13 @@ impl DataSource for FileScanConfig {
             && would_duplicate_costly_exprs(inner, projection)
         {
             return Ok(None);
+        }
+        // A no-op projection: report success with the scan unchanged so the
+        // caller drops the `ProjectionExec` without the source storing
+        // anything. `remove_unnecessary_projections` normally strips these
+        // before they reach a `DataSource`, so this is rarely hit.
+        if projection_is_no_op(self.file_source.as_ref(), projection) {
+            return Ok(Some(Arc::new(self.clone()) as Arc<dyn DataSource>));
         }
         match self.file_source.try_pushdown_projection(projection)? {
             Some(new_source) => {
@@ -2338,6 +2354,95 @@ mod tests {
     }
 
     #[test]
+    fn test_projection_is_no_op() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::from(&schema);
+
+        // `MockSource` reports the identity projection; the sort-pushdown
+        // source reports none. Either way the source's output is the table.
+        let projected: Arc<dyn FileSource> =
+            Arc::new(MockSource::new(table_schema.clone()));
+        let unprojected: Arc<dyn FileSource> =
+            Arc::new(InexactSortPushdownSource::new(table_schema.clone()));
+        assert!(projected.projection().is_some());
+        assert!(unprojected.projection().is_none());
+
+        let identity = ProjectionExprs::identity(&schema);
+        let narrowed = ProjectionExprs::from_indices(&[1], &schema);
+        let reordered = ProjectionExprs::from_indices(&[1, 0], &schema);
+        for source in [&projected, &unprojected] {
+            assert!(projection_is_no_op(source.as_ref(), &identity));
+            assert!(!projection_is_no_op(source.as_ref(), &narrowed));
+            assert!(!projection_is_no_op(source.as_ref(), &reordered));
+        }
+
+        // A source that already reorders: only a projection reproducing *that*
+        // output changes nothing, and the table's own identity does not.
+        let swapped = projected
+            .try_pushdown_projection(&reordered)
+            .unwrap()
+            .unwrap();
+        let over_swapped = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("b", 0)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 1)), "a"),
+        ]);
+        assert!(projection_is_no_op(swapped.as_ref(), &over_swapped));
+        assert!(!projection_is_no_op(swapped.as_ref(), &identity));
+    }
+
+    #[test]
+    fn test_full_width_projection_indices_are_no_op() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::from(&schema);
+        let source: Arc<dyn FileSource> =
+            Arc::new(InexactSortPushdownSource::new(table_schema));
+
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::clone(&source),
+        )
+        .with_projection_indices(Some(vec![0, 1]))
+        .unwrap()
+        .build();
+
+        assert!(config.file_source().projection().is_none());
+        assert_eq!(config.projected_schema().unwrap(), schema);
+    }
+
+    #[test]
+    fn test_projection_swap_reports_success_for_no_op() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::from(&schema);
+        let source: Arc<dyn FileSource> =
+            Arc::new(InexactSortPushdownSource::new(table_schema));
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            source,
+        )
+        .build();
+
+        // The swap reports success, so the caller drops its ProjectionExec,
+        // while the source stores nothing.
+        let identity = ProjectionExprs::identity(&schema);
+        let pushed = config
+            .try_swapping_with_projection(&identity)
+            .unwrap()
+            .expect("a no-op projection is reported as pushed");
+        let pushed = pushed.downcast_ref::<FileScanConfig>().unwrap();
+        assert!(pushed.file_source().projection().is_none());
+        assert_eq!(pushed.projected_schema().unwrap(), schema);
+    }
+
+    #[test]
     fn test_file_scan_config_builder() {
         let file_schema = aggr_test_schema();
         let object_store_url = ObjectStoreUrl::parse("test:///").unwrap();
@@ -2907,6 +3012,86 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_partition_statistics_no_projection_matches_identity() {
+        // A source returning `None` from `projection()` and one carrying the
+        // identity describe the same output, so their statistics must match,
+        // including `total_byte_size`, which the projected path recomputes
+        // from the output schema.
+        use crate::source::DataSourceExec;
+        use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col0", DataType::Int32, false),
+            Field::new("col1", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::from(&schema);
+
+        let file_group_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(1024),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    ..ColumnStatistics::new_unknown()
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(5),
+                    ..ColumnStatistics::new_unknown()
+                },
+            ],
+        };
+        let file_group = FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)])
+            .with_statistics(Arc::new(file_group_stats.clone()));
+
+        let statistics_of = |source: Arc<dyn FileSource>, projected: bool| {
+            let mut builder = FileScanConfigBuilder::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                source,
+            );
+            if projected {
+                builder = builder.with_projection_indices(Some(vec![0, 1])).unwrap();
+            }
+            let config = builder
+                .with_file_groups(vec![file_group.clone()])
+                .with_statistics(file_group_stats.clone())
+                .build();
+            let exec = DataSourceExec::from_data_source(config);
+            let context = StatisticsContext::new();
+            (
+                context
+                    .compute(exec.as_ref(), &StatisticsArgs::new().with_partition(None))
+                    .unwrap(),
+                context
+                    .compute(
+                        exec.as_ref(),
+                        &StatisticsArgs::new().with_partition(Some(0)),
+                    )
+                    .unwrap(),
+            )
+        };
+
+        // `InexactSortPushdownSource` does not override `projection()`, so it
+        // takes the `None` path; `MockSource` returns the identity projection.
+        let (unprojected_all, unprojected_partition) = statistics_of(
+            Arc::new(InexactSortPushdownSource::new(table_schema.clone())),
+            false,
+        );
+        let (projected_all, projected_partition) =
+            statistics_of(Arc::new(MockSource::new(table_schema)), true);
+
+        // 100 rows * 2 Int32 columns * 4 bytes
+        assert_eq!(unprojected_all.total_byte_size, Precision::Exact(800));
+        assert_eq!(
+            unprojected_all.total_byte_size,
+            projected_all.total_byte_size
+        );
+        assert_eq!(
+            unprojected_partition.total_byte_size,
+            projected_partition.total_byte_size
+        );
     }
 
     #[test]
