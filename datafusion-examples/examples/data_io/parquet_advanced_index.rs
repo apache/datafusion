@@ -465,7 +465,7 @@ impl TableProvider for IndexTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -501,7 +501,7 @@ impl TableProvider for IndexTableProvider {
         );
         let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
             .with_limit(limit)
-            .with_projection_indices(projection.cloned())?
+            .with_projection_indices(projection.map(|p| p.to_vec()))?
             .with_file(partitioned_file)
             .build();
 

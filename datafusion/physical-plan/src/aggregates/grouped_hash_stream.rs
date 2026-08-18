@@ -24,12 +24,14 @@ use std::vec;
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    AggregateArgumentMetrics, GroupByMetrics, GroupValues, new_group_values,
+};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
-    max_duplicate_ordinal,
+    aggregate_metric_label, create_schema, evaluate_group_by, evaluate_optional,
+    group_id_array, max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -52,6 +54,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use crate::sorts::IncrementalSortIterator;
 use datafusion_common::instant::Instant;
@@ -372,6 +375,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Aggregation-specific metrics
     group_by_metrics: GroupByMetrics,
 
+    /// Per-aggregate timing metrics for evaluating aggregate arguments.
+    aggregate_argument_metrics: AggregateArgumentMetrics,
+
     /// Reduction factor metric, calculated as `output_rows/input_rows` (only for partial aggregation)
     reduction_factor: Option<metrics::RatioMetrics>,
 }
@@ -392,6 +398,13 @@ impl GroupedHashAggregateStream {
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
+            &agg.metrics,
+            partition,
+            agg.aggr_expr
+                .iter()
+                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+        );
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -601,6 +614,7 @@ impl GroupedHashAggregateStream {
             exec_state,
             baseline_metrics,
             group_by_metrics,
+            aggregate_argument_metrics,
             batch_size,
             group_ordering,
             input_done: false,
@@ -860,11 +874,19 @@ impl GroupedHashAggregateStream {
         };
 
         // Evaluate the aggregation expressions.
-        let input_values = if self.spill_state.is_stream_merging {
-            evaluate_many(&self.spill_state.merging_aggregate_arguments, batch)?
+        let aggregate_arguments = if self.spill_state.is_stream_merging {
+            &self.spill_state.merging_aggregate_arguments
         } else {
-            evaluate_many(&self.aggregate_arguments, batch)?
+            &self.aggregate_arguments
         };
+        let input_values = aggregate_arguments
+            .iter()
+            .enumerate()
+            .map(|(idx, expr)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || evaluate_expressions_to_arrays(expr, batch))
+            })
+            .collect::<Result<Vec<_>>>()?;
         drop(timer);
 
         // Evaluate the filter expressions, if any, against the inputs
@@ -1371,7 +1393,17 @@ impl GroupedHashAggregateStream {
     /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let mut group_values = evaluate_group_by(&self.group_by, batch)?;
-        let input_values = evaluate_many(&self.aggregate_arguments, batch)?;
+        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
+        let input_values = self
+            .aggregate_arguments
+            .iter()
+            .enumerate()
+            .map(|(idx, expr)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || evaluate_expressions_to_arrays(expr, batch))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drop(timer);
         let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
 
         assert_eq_or_internal_err!(
@@ -1401,6 +1433,7 @@ impl GroupedHashAggregateStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ExecutionPlan;
     use crate::InputOrderMode;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
@@ -1442,7 +1475,7 @@ mod tests {
             ],
         )?;
 
-        let input_partitions = vec![vec![batch]];
+        let input_partitions = vec![vec![batch.clone(), batch]];
 
         // Create constrained memory to trigger early emission but not completely fail
         let runtime = RuntimeEnvBuilder::default()
@@ -1511,9 +1544,19 @@ mod tests {
         }
 
         assert_eq!(
-            total_output_groups, num_groups,
+            total_output_groups,
+            num_groups * 2,
             "Unexpected number of groups",
         );
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let agg_arguments_time = metrics.sum_by_name("aggregate_arguments_time");
+        assert!(agg_arguments_time.is_some());
+        assert!(agg_arguments_time.unwrap().as_usize() > 0);
+
+        let per_aggregate_time = metrics.sum_by_name("agg_expr_0_arguments_time");
+        assert!(per_aggregate_time.is_some());
+        assert!(per_aggregate_time.unwrap().as_usize() > 0);
 
         Ok(())
     }
