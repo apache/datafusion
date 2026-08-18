@@ -1996,6 +1996,10 @@ fn format_tree_aggregate_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
         .unwrap_or_else(|| Cow::Borrowed(agg.name()))
 }
 
+fn aggregate_metric_label(agg: &AggregateFunctionExpr) -> String {
+    format_tree_aggregate_expr(agg).into_owned()
+}
+
 fn format_human_display<'a>(
     human_display: Option<&'a str>,
     alias: Option<&'a str>,

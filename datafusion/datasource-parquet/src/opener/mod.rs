@@ -1435,7 +1435,7 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, rg_plan) = {
+        let (decoder, rg_plan, has_row_selection) = {
             let pushdown_predicate = prepared
                 .pushdown_filters
                 .then_some(prepared.predicate.as_ref())
@@ -1464,6 +1464,18 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
+            // #24355: a row selection (from page-index pruning, or an externally
+            // supplied `ParquetRowSelection`) is carried by the decoder as one
+            // flat selection over the concatenation of the remaining row groups.
+            // The runtime pruner's `into_builder().with_row_groups(...)` rebuild
+            // drops row groups without slicing that selection to match, so record
+            // whether a selection is present and disable runtime pruning below
+            // when it is (mirroring `reorder_by_statistics`, which also bails when
+            // a row selection is present). The proper fix that keeps pruning
+            // under a live selection is tracked in
+            // https://github.com/apache/arrow-rs/issues/10624 /
+            // https://github.com/apache/datafusion/issues/24358.
+            let has_row_selection = prepared_access_plan.row_selection.is_some();
             let rg_plan: VecDeque<RgPlanEntry> = prepared_access_plan
                 .row_group_indexes
                 .iter()
@@ -1482,7 +1494,7 @@ impl RowGroupsPrunedParquetOpen {
                 }
             }
 
-            (builder.build()?, rg_plan)
+            (builder.build()?, rg_plan, has_row_selection)
         };
 
         let predicate_cache_inner_records =
@@ -1504,24 +1516,30 @@ impl RowGroupsPrunedParquetOpen {
         // via the `DynamicFilterTracker` watch channel (#22460), so detecting
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
-        let row_group_pruner = match (&prepared.predicate, rg_plan.len() > 1) {
-            (Some(predicate), true)
-                if matches!(
-                    DynamicFilterTracking::classify(predicate),
-                    DynamicFilterTracking::Watching(_)
-                ) =>
-            {
-                Some(RowGroupPruner::new(
-                    Arc::clone(predicate),
-                    Arc::clone(&prepared.physical_file_schema),
-                    Arc::clone(reader_metadata.metadata()),
-                    prepared.predicate_creation_errors.clone(),
-                    prepared.file_metrics.predicate_evaluation_errors.clone(),
-                    prepared.max_in_list_size,
-                ))
-            }
-            _ => None,
-        };
+        // Also disabled when a row selection is live (#24355) — page-index
+        // pruning is the common source: the pruner rebuilds the decoder via
+        // `with_row_groups(...)`, which drops row groups without slicing the
+        // carried selection to match, so pruning under a live selection returns
+        // wrong results. Decline to prune in that case.
+        let row_group_pruner =
+            match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
+                (Some(predicate), true, false)
+                    if matches!(
+                        DynamicFilterTracking::classify(predicate),
+                        DynamicFilterTracking::Watching(_)
+                    ) =>
+                {
+                    Some(RowGroupPruner::new(
+                        Arc::clone(predicate),
+                        Arc::clone(&prepared.physical_file_schema),
+                        Arc::clone(reader_metadata.metadata()),
+                        prepared.predicate_creation_errors.clone(),
+                        prepared.file_metrics.predicate_evaluation_errors.clone(),
+                        prepared.max_in_list_size,
+                    ))
+                }
+                _ => None,
+            };
         let row_groups_pruned_dynamic = prepared
             .file_metrics
             .row_groups_pruned_dynamic_filter

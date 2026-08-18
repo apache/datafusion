@@ -1870,6 +1870,7 @@ dependencies = [
  "ctor",
  "datafusion",
  "datafusion-common",
+ "datafusion-spark",
  "dirs",
  "env_logger",
  "futures",
@@ -2195,6 +2196,7 @@ dependencies = [
  "indexmap 2.14.0",
  "insta",
  "itertools 0.15.0",
+ "rstest",
 ]
 
 [[package]]
@@ -2623,14 +2625,13 @@ dependencies = [
  "crc32fast",
  "criterion",
  "datafusion",
- "datafusion-catalog",
  "datafusion-common",
- "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-nested",
+ "datafusion-session",
  "log",
  "num-traits",
  "percent-encoding",

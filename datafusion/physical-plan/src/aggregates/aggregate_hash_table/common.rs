@@ -27,11 +27,14 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    AggregateArgumentMetrics, GroupByMetrics, GroupValues, new_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
+    evaluate_group_by,
 };
 
 /// Marker for raw rows -> partial state aggregation.
@@ -74,6 +77,9 @@ pub(in crate::aggregates) struct FinalMarker;
 pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
+
+    /// Per-aggregate timing metrics for evaluating aggregate arguments.
+    pub(super) aggregate_argument_metrics: AggregateArgumentMetrics,
 
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
@@ -134,8 +140,17 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
+        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
+            &agg.metrics,
+            partition,
+            agg.aggr_expr
+                .iter()
+                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+        );
+
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
+            aggregate_argument_metrics,
             input_schema,
             output_schema,
             state_schema,
@@ -169,7 +184,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .building()
             .accumulators
             .iter()
-            .map(|acc| acc.evaluate_acc_args(batch))
+            .enumerate()
+            .map(|(idx, acc)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_acc_args(batch))
+            })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
 
@@ -286,10 +305,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             }
             AggregateHashTableState::Done => 0,
         }
-    }
-
-    pub(in crate::aggregates) fn group_by_metrics(&self) -> &GroupByMetrics {
-        &self.group_by_metrics
     }
 
     /// Returns the number of distinct groups accumulated so far.

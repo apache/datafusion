@@ -241,14 +241,14 @@ impl TableProvider for ParquetMetadataTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -487,14 +487,14 @@ impl TableProvider for MetadataCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -604,14 +604,14 @@ impl TableProvider for StatisticsCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -753,14 +753,14 @@ impl TableProvider for ListFilesCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
