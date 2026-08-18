@@ -79,9 +79,9 @@ impl fmt::Debug for CliError {
 /// `CliSession` implements argument parsing, and construction of the default `CliSessionContext`.
 #[non_exhaustive]
 pub struct CliSession {
+    pub args: CliArgs,
     pub ctx: SessionContext,
     pub print_options: PrintOptions,
-    pub args: CliArgs,
 }
 
 /// A `Builder` API which allows you to construct a `CliSession` while customizing the build process.
@@ -316,8 +316,8 @@ impl CliSessionBuilder {
             instrumented_registry: Arc::clone(&instrumented_registry),
         };
         Ok(CliSession {
-            ctx,
             args,
+            ctx,
             print_options,
         })
     }
