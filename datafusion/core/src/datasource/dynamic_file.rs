@@ -54,6 +54,8 @@ impl DynamicListTableFactory {
 
 #[async_trait]
 impl UrlTableFactory for DynamicListTableFactory {
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn try_new<'life0, 'life1, 'async_trait>(
         &'life0 self,
         url: &'life1 str,

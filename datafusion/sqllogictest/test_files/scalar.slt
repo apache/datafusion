@@ -1444,6 +1444,17 @@ select a ^ b, c ^ d, e ^ f from signed_integers;
 -998 -133 -16
 NULL NULL NULL
 
+# repeated nullable operands must not be cancelled
+query III rowsort
+select
+  (a XOR b) XOR a AS left_associative,
+  a XOR (b XOR a) AS right_associative,
+  a XOR a AS self_xor
+from (values (NULL::INT, 7), (3, 7)) as t(a, b);
+----
+7 7 0
+NULL NULL NULL
+
 # bitwise xor with other operators
 query II rowsort
 select 2 * c - 1 ^ 856 + d + 3, d ^ 7 >> 4 from signed_integers;
