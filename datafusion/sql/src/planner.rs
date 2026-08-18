@@ -715,8 +715,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::Int32)
             }
             SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
-            SQLDataType::TinyIntUnsigned(_) => Ok(DataType::UInt8),
-            SQLDataType::SmallIntUnsigned(_) | SQLDataType::Int2Unsigned(_) => {
+            SQLDataType::TinyIntUnsigned(_) | SQLDataType::UTinyInt => Ok(DataType::UInt8),
+            SQLDataType::SmallIntUnsigned(_) 
+            | SQLDataType::Int2Unsigned(_) 
+            | SQLDataType::USmallInt => {
                 Ok(DataType::UInt16)
             }
             SQLDataType::IntUnsigned(_)
@@ -745,8 +747,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::UBigInt => {
                 Ok(DataType::UInt64)
             }
-            SQLDataType::Float(_) => Ok(DataType::Float32),
-            SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
+            SQLDataType::Float(_) 
+            | SQLDataType::Real 
+            | SQLDataType::Float4 => Ok(DataType::Float32),
             SQLDataType::Double(ExactNumberInfo::None)
             | SQLDataType::DoublePrecision
             | SQLDataType::Float8 => Ok(DataType::Float64),
@@ -907,8 +910,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::AnyType
             | SQLDataType::Table(_)
             | SQLDataType::VarBit(_)
-            | SQLDataType::UTinyInt
-            | SQLDataType::USmallInt
             | SQLDataType::HugeInt
             | SQLDataType::UHugeInt
             | SQLDataType::TimestampNtz{..}
