@@ -370,7 +370,9 @@ impl ExecutionPlan for AsOfJoinExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![false, false]
+        // ASOF emits exactly one row for each left row and never reorders the
+        // left input. The right input is scanned independently.
+        vec![true, false]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
