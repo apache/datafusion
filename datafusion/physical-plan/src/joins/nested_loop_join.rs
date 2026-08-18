@@ -2866,7 +2866,7 @@ fn build_row_join_batch(
     // in `col_indices`
     build_side: JoinSide,
 ) -> Result<Option<RecordBatch>> {
-    debug_assert!(build_side != JoinSide::None);
+    debug_assert_ne!(build_side, JoinSide::None);
 
     // TODO(perf): since the output might be projection of right batch, this
     // filtering step is more efficient to be done inside the column_index loop
@@ -3123,7 +3123,7 @@ fn build_unmatched_batch(
                 Vec::with_capacity(output_schema.fields().len());
 
             for column_index in col_indices {
-                debug_assert!(column_index.side == batch_side);
+                debug_assert_eq!(column_index.side, batch_side);
 
                 let col = batch.column(column_index.index);
                 let filtered_col = filter(col, &bitmap)?;

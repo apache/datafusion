@@ -1828,7 +1828,7 @@ impl AggregateExec {
                 None
             })
             .collect();
-        debug_assert!(all_cols.len() == supported_accumulators_info.len());
+        debug_assert_eq!(all_cols.len(), supported_accumulators_info.len());
         all_cols
     }
 

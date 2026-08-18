@@ -4002,7 +4002,7 @@ impl Aggregate {
             exprs.push(&INTERNAL_ID_EXPR);
         }
         exprs.extend(self.aggr_expr.iter());
-        debug_assert!(exprs.len() == self.schema.fields().len());
+        debug_assert_eq!(exprs.len(), self.schema.fields().len());
         Ok(exprs)
     }
 
