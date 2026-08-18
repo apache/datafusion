@@ -1171,7 +1171,7 @@ mod tests {
         let actual = exec
             .metrics()
             .expect("Metrics not recorded")
-            .sum(|metric| matches!(metric.value(), MetricValue::Count { name, .. } if name == "bytes_scanned"))
+            .sum(|metric| matches!(metric.value(), MetricValue::Count { name, .. } | MetricValue::BytesCount { name, .. } if name == "bytes_scanned"))
             .map(|t| t.as_usize())
             .expect("bytes_scanned metric not recorded");
 
