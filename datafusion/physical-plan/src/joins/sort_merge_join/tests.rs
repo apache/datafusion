@@ -5121,11 +5121,19 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
     // Inner: one key group (b2 = 1) spanning two batches. Only the first
     // batch satisfies the filter c1 < c2 (5 < 10); the second (5 < 0) does
     // not, so the outcome depends on the group's first spilled slice.
-    let right_batches = vec![
+    let right = build_table_from_batches(vec![
         build_table_i32(("a2", &vec![10]), ("b2", &vec![1]), ("c2", &vec![10])),
         build_table_i32(("a2", &vec![20]), ("b2", &vec![1]), ("c2", &vec![0])),
-    ];
-    let right = build_table_from_batches(right_batches);
+    ]);
+
+    // Right variants stream right and buffer left, so mirror the two-batch
+    // key group onto left. Again, only its first slice satisfies c1 < c2.
+    let mirrored_left = build_table_from_batches(vec![
+        build_table_i32(("a1", &vec![10]), ("b1", &vec![1]), ("c1", &vec![0])),
+        build_table_i32(("a1", &vec![20]), ("b1", &vec![1]), ("c1", &vec![10])),
+    ]);
+    let mirrored_right =
+        build_table(("a2", &vec![1]), ("b2", &vec![1]), ("c2", &vec![5]));
 
     let on: JoinOn = vec![(
         Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
@@ -5143,16 +5151,29 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
         )
         .build_arc()?;
 
-    for (join_type, expected_rows) in [(LeftSemi, 1), (LeftAnti, 0), (LeftMark, 1)] {
+    for (join_type, expected_rows) in [
+        (LeftSemi, 1),
+        (LeftAnti, 0),
+        (LeftMark, 1),
+        (RightSemi, 1),
+        (RightAnti, 0),
+        (RightMark, 1),
+    ] {
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::default().with_batch_size(1))
                 .with_runtime(Arc::clone(&runtime)),
         );
+        let (join_left, join_right) =
+            if matches!(join_type, RightSemi | RightAnti | RightMark) {
+                (&mirrored_left, &mirrored_right)
+            } else {
+                (&left, &right)
+            };
 
         let join = SortMergeJoinExec::try_new(
-            Arc::clone(&left),
-            Arc::clone(&right),
+            Arc::clone(join_left),
+            Arc::clone(join_right),
             on.clone(),
             Some(filter.clone()),
             join_type,
@@ -5167,7 +5188,7 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
             output_rows, expected_rows,
             "unexpected output rows for {join_type:?}",
         );
-        if matches!(join_type, LeftMark) {
+        if matches!(join_type, LeftMark | RightMark) {
             let batch = batches.iter().find(|b| b.num_rows() > 0).unwrap();
             let mark = batch
                 .column_by_name("mark")
