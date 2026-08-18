@@ -309,6 +309,15 @@ pub struct ParquetSource {
     pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
+    /// When true (set by the narrow-projection gate in
+    /// [`Self::try_pushdown_filters`]), the scan installs a `RowFilter`
+    /// built from only the dynamic-filter conjuncts of `predicate`. The
+    /// static conjuncts were declined by the gate and stay in the
+    /// `FilterExec` above the scan, so also running them in the scan's
+    /// `RowFilter` would evaluate them twice; they remain part of
+    /// `predicate` for stats / bloom / page-index pruning. Only
+    /// meaningful when `pushdown_filters` is enabled.
+    pub(crate) pushdown_dynamic_filters_only: bool,
     /// If true, the opener flips row-group iteration order. Within-
     /// row-group order is on-disk order, so the scan is `Inexact` and
     /// a `SortExec` is kept in the plan.
@@ -340,6 +349,7 @@ impl ParquetSource {
             metadata_size_hint: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
+            pushdown_dynamic_filters_only: false,
             reverse_row_groups: false,
             sort_order_for_reorder: None,
         }
@@ -660,6 +670,7 @@ impl FileSource for ParquetSource {
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
+            pushdown_dynamic_filters_only: self.pushdown_dynamic_filters_only,
             reorder_filters: self.reorder_filters(),
             force_filter_selections: self.force_filter_selections(),
             progressive_io: self.progressive_io(),
@@ -881,16 +892,20 @@ impl FileSource for ParquetSource {
         //
         // [#22883]: https://github.com/apache/datafusion/issues/22883
         const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
-        // Never gate a scan whose predicate already contains a dynamic
-        // filter — either in the incoming `filters` parameter, or already
-        // installed on `self.predicate` by an earlier optimizer rule (this
-        // is how `TopK`'s heap-threshold expression arrives: the sort
-        // pushdown / TopK rule injects the `DynamicFilterPhysicalExpr`
-        // into the scan's predicate before filter pushdown runs). Dynamic
-        // filters rely on the scan-time RowFilter/RowGroupPruner cascade
-        // to prune data as the threshold tightens, so declining pushdown
-        // here would silently disable the entire dynamic-RG-prune path
-        // for narrow `ORDER BY ... LIMIT` queries.
+        // When the scan involves a dynamic filter — either in the incoming
+        // `filters` parameter, or already installed on `self.predicate` by
+        // an earlier optimizer rule (this is how `TopK`'s heap-threshold
+        // expression arrives: the sort pushdown / TopK rule injects the
+        // `DynamicFilterPhysicalExpr` into the scan's predicate before
+        // filter pushdown runs) — the gate must not disable pushdown
+        // wholesale: dynamic filters rely on the scan-time
+        // RowFilter/RowGroupPruner cascade to prune data as the threshold
+        // tightens. Instead, for a narrow projection the gate declines
+        // only the *static* conjuncts (they stay in the `FilterExec`
+        // above) and keeps pushdown enabled for the dynamic conjuncts by
+        // setting `pushdown_dynamic_filters_only`; the opener then builds
+        // the RowFilter from only the dynamic-filter conjuncts of the
+        // scan predicate.
         let existing_predicate_has_dynamic = self.predicate.as_ref().is_some_and(|p| {
             DynamicFilterTracking::classify(p).contains_dynamic_filter()
         });
@@ -899,8 +914,8 @@ impl FileSource for ParquetSource {
             .any(|f| DynamicFilterTracking::classify(f).contains_dynamic_filter());
         let has_dynamic_filter =
             existing_predicate_has_dynamic || incoming_filters_have_dynamic;
+        let mut pushdown_dynamic_filters_only = false;
         if pushdown_filters
-            && !has_dynamic_filter
             && config.execution.parquet.pushdown_filter_mode
                 != ParquetPushdownFilterMode::Always
         {
@@ -924,7 +939,11 @@ impl FileSource for ParquetSource {
                 .collect::<std::collections::HashSet<_>>()
                 .len();
             if non_filter_projected < PUSHDOWN_MIN_NON_FILTER_COLS {
-                pushdown_filters = false;
+                if has_dynamic_filter {
+                    pushdown_dynamic_filters_only = true;
+                } else {
+                    pushdown_filters = false;
+                }
             }
         }
 
@@ -984,6 +1003,9 @@ impl FileSource for ParquetSource {
         // re-enabled). So flipping the flag to `false` here does not
         // permanently disable pushdown for future calls.
         source = source.with_pushdown_filters(pushdown_filters);
+        // Recomputed from scratch on every call, so a decision made for an
+        // earlier filter shape never leaks into later calls.
+        source.pushdown_dynamic_filters_only = pushdown_dynamic_filters_only;
         // `progressive_io` resolves table-or-session, the same way as
         // `pushdown_filters` above
         source = source.with_progressive_io(
@@ -995,6 +1017,30 @@ impl FileSource for ParquetSource {
         if !pushdown_filters {
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
                 vec![PushedDown::No; filters.len()],
+            )
+            .with_updated_node(source));
+        }
+        if pushdown_dynamic_filters_only {
+            // The gate declined the static conjuncts: parents keep them (a
+            // `FilterExec` above the scan evaluates them), and only
+            // dynamic-filter conjuncts are pushed into the scan's
+            // RowFilter. The static conjuncts were still merged into
+            // `source.predicate` above, where they drive stats / bloom /
+            // page-index pruning but not row filtering.
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                filters
+                    .iter()
+                    .map(|f| {
+                        if matches!(f.discriminant, PushedDown::Yes)
+                            && DynamicFilterTracking::classify(&f.predicate)
+                                .contains_dynamic_filter()
+                        {
+                            PushedDown::Yes
+                        } else {
+                            PushedDown::No
+                        }
+                    })
+                    .collect(),
             )
             .with_updated_node(source));
         }
@@ -2430,6 +2476,106 @@ mod tests {
              RG-prune / RowFilter cascade can drive the dynamic threshold — \
              the `||` recovery against the config default is what makes this \
              safe after the first call flipped the flag to false"
+        );
+        assert!(
+            after_dynamic.pushdown_dynamic_filters_only,
+            "narrow projection with a dynamic filter must push only the \
+             dynamic conjuncts, not disable the gate entirely"
+        );
+    }
+
+    /// When the projection is narrow AND the scan involves a dynamic filter
+    /// (the TopK shape, e.g. ClickBench Q24-Q26:
+    /// `SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> ''
+    ///  ORDER BY "EventTime" LIMIT 10`), the gate must:
+    ///
+    /// 1. keep `pushdown_filters` enabled (the dynamic threshold needs the
+    ///    scan-time RowFilter / RowGroupPruner cascade),
+    /// 2. mark the source `pushdown_dynamic_filters_only` so the opener
+    ///    builds the RowFilter from only the dynamic conjuncts, and
+    /// 3. report `PushedDown::No` for the *static* filters so the
+    ///    `FilterExec` above the scan keeps evaluating them (no double
+    ///    filtering: they are excluded from the scan's RowFilter).
+    ///
+    /// Before this change the gate skipped narrow-projection scans with a
+    /// dynamic filter entirely, so the static conjuncts were still pushed
+    /// as a RowFilter — reintroducing exactly the narrow-projection
+    /// regression the gate exists to prevent.
+    #[test]
+    fn test_narrow_projection_gate_with_dynamic_filter_pushes_only_dynamic() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_datasource::TableSchema;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let table_schema = TableSchema::from(file_schema);
+        let full_schema: arrow::datatypes::SchemaRef =
+            Arc::clone(table_schema.table_schema());
+
+        // Narrow projection: columns `a`, `b`; static filter on `a` leaves
+        // one non-filter projected column (< PUSHDOWN_MIN_NON_FILTER_COLS).
+        let projection = ProjectionExprs::from_indices(&[0usize, 1], &full_schema);
+        let mut source = ParquetSource::new(table_schema).with_pushdown_filters(true);
+        source.projection = projection;
+
+        // Simulate the TopK rule having already installed its dynamic
+        // threshold filter on the scan's predicate.
+        let dyn_col = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        source.predicate = Some(Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![dyn_col],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>);
+
+        let static_filter =
+            logical2physical(&col("a").eq(logical_lit(1i64)), &full_schema);
+        let config = ConfigOptions::default();
+        assert!(config.execution.parquet.pushdown_filters);
+
+        let prop = source
+            .try_pushdown_filters(vec![static_filter], &config)
+            .expect("try_pushdown_filters must not error");
+
+        // The static filter must stay with the parent (FilterExec).
+        assert_eq!(prop.filters.len(), 1);
+        assert!(
+            matches!(prop.filters[0], PushedDown::No),
+            "static conjunct must be declined so the FilterExec above the \
+             scan keeps it"
+        );
+
+        let updated = prop
+            .updated_node
+            .as_ref()
+            .expect("dynamic-only gate path must attach an updated source")
+            .downcast_ref::<ParquetSource>()
+            .expect("updated node must be a ParquetSource");
+        assert!(
+            updated.pushdown_filters(),
+            "pushdown must stay enabled so the dynamic threshold reaches \
+             the scan-time RowFilter / RowGroupPruner cascade"
+        );
+        assert!(
+            updated.pushdown_dynamic_filters_only,
+            "the source must be marked dynamic-only so the opener excludes \
+             the static conjuncts from the RowFilter"
+        );
+        // The static conjunct must still be merged into the scan predicate
+        // (for stats / bloom / page-index pruning).
+        let predicate = updated
+            .predicate
+            .as_ref()
+            .expect("predicate must be present");
+        assert!(
+            format!("{predicate:?}").contains("BinaryExpr"),
+            "static conjunct should be merged into the scan predicate for \
+             pruning, got: {predicate:?}"
         );
     }
 }
