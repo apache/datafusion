@@ -23,6 +23,7 @@ pub mod h2o;
 pub mod hj;
 pub mod imdb;
 pub mod nlj;
+pub mod push_down_topk;
 pub mod smj;
 pub mod sort_pushdown;
 pub mod sort_tpch;
