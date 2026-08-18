@@ -1656,6 +1656,8 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                             final_result: false,
                         } => self.prepare_for_final_results_after_exhaustion(),
                         SHJStreamState::BothExhausted { final_result: true } => {
+                            self.reservation.free();
+                            self.metrics.stream_memory_usage.set(0);
                             return Poll::Ready(None);
                         }
                     };
@@ -2202,6 +2204,18 @@ mod tests {
     fn stream_accounts_for_transformer_batches_once() {
         assert_stream_accounts_for_transformer(NoopBatchTransformer::new());
         assert_stream_accounts_for_transformer(BatchSplitter::new(3));
+    }
+
+    #[tokio::test]
+    async fn symmetric_hash_join_releases_reservation_when_complete() {
+        let schema = Arc::new(Schema::empty());
+        let mut stream = create_stream(NoopBatchTransformer::new(), schema);
+        stream.update_reservation().unwrap();
+        assert_ne!(stream.reservation.size(), 0);
+
+        stream.set_state(SHJStreamState::BothExhausted { final_result: true });
+        assert!(stream.next().await.is_none());
+        assert_eq!(stream.reservation.size(), 0);
     }
 
     fn assert_stream_deduplicates_nested_transformer_batch<T: BatchTransformer>(
