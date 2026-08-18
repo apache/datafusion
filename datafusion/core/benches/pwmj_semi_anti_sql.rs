@@ -246,20 +246,20 @@ const KINDS: [Kind; 4] = [
 #[derive(Clone, Copy)]
 enum Fraction {
     /// Saturated: every marked row matches.
-    AllMatch,
+    All,
     /// Saturated the other way: none does.
-    NoMatch,
+    None,
     /// A genuine mix, ~50%.
-    HalfMatch,
+    Half,
 }
 
 impl Fraction {
     /// Marked rows that have a match, or `None` when the answer is only pinned down as a mix.
     fn expected_matched_rows(self, marked_rows: usize) -> Option<usize> {
         match self {
-            Fraction::AllMatch => Some(marked_rows),
-            Fraction::NoMatch => Some(0),
-            Fraction::HalfMatch => None,
+            Fraction::All => Some(marked_rows),
+            Fraction::None => Some(0),
+            Fraction::Half => None,
         }
     }
 }
@@ -269,13 +269,13 @@ impl Fraction {
 /// `max(rhs.key)` and `RIGHT SEMI` via `min(lhs.key)` alike, and shifting it down empties both.
 const REGIMES: [(&str, i32, Fraction); 3] = [
     // Right keys entirely above the left range.
-    ("all_match", KEY_SPAN, Fraction::AllMatch),
+    ("all_match", KEY_SPAN, Fraction::All),
     // Right keys entirely below it, so a left-marking scan walks the whole buffered side
     // without marking anything.
-    ("no_match", -KEY_SPAN, Fraction::NoMatch),
+    ("no_match", -KEY_SPAN, Fraction::None),
     // Ranges half-overlap, so a left-marking scan marks only a suffix of the buffered side and
     // its depth varies per streamed row.
-    ("half_match", -KEY_SPAN / 2, Fraction::HalfMatch),
+    ("half_match", -KEY_SPAN / 2, Fraction::Half),
 ];
 
 fn physical_plan(
@@ -376,7 +376,7 @@ fn bench_case(
         let ctx = create_context(right_offset, pwmj, schema);
         let name = format!("{arm}_{label}_{regime}");
         let planned = assert_plan_operator(
-            &physical_plan(&ctx, rt, &sql),
+            &physical_plan(&ctx, rt, sql),
             &[kind.plan_fragment()],
             operators,
             &name,
@@ -398,7 +398,7 @@ fn bench_case(
     // wrong one.
     let rows: Vec<usize> = arms
         .iter()
-        .map(|(_, ctx, _)| run(physical_plan(ctx, rt, &sql), ctx, rt))
+        .map(|(_, ctx, _)| run(physical_plan(ctx, rt, sql), ctx, rt))
         .collect();
     assert_eq!(
         rows[0], rows[1],
@@ -435,7 +435,7 @@ fn bench_case(
         // so a second `collect` over the same instance would not repeat the work.
         group.bench_function(BenchmarkId::new(name.as_str(), RIGHT_ROWS), |b| {
             b.iter_batched(
-                || physical_plan(ctx, rt, &sql),
+                || physical_plan(ctx, rt, sql),
                 |plan| run(plan, ctx, rt),
                 BatchSize::SmallInput,
             )
