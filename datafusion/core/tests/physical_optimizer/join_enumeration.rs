@@ -179,8 +179,8 @@ fn formatted(plan: &Arc<dyn ExecutionPlan>) -> String {
     displayable(plan.as_ref()).indent(true).to_string()
 }
 
-#[tokio::test]
-async fn reorders_a_late_reducer() -> Result<()> {
+#[test]
+fn reorders_a_late_reducer() -> Result<()> {
     let plan = late_reducer_plan()?;
     // The planner's order: the two million row tables are joined first.
     assert_snapshot!(formatted(&plan), @r"
@@ -203,8 +203,8 @@ async fn reorders_a_late_reducer() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn respects_the_config_flag() -> Result<()> {
+#[test]
+fn respects_the_config_flag() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.optimizer.join_enumeration = false;
     let optimized = optimize(late_reducer_plan()?, &config)?;
@@ -221,8 +221,8 @@ async fn respects_the_config_flag() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn leaves_plans_without_statistics_alone() -> Result<()> {
+#[test]
+fn leaves_plans_without_statistics_alone() -> Result<()> {
     let fact = scan_without_statistics(&["f_id", "f_type"]);
     let other = scan_without_statistics(&["o_id"]);
     let types = scan_without_statistics(&["t_type"]);
@@ -243,8 +243,8 @@ async fn leaves_plans_without_statistics_alone() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn keeps_an_already_optimal_order() -> Result<()> {
+#[test]
+fn keeps_an_already_optimal_order() -> Result<()> {
     // Already in the cheap order, so the enumerator must not churn the plan.
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
@@ -263,7 +263,7 @@ async fn keeps_an_already_optimal_order() -> Result<()> {
 }
 
 /// A session over four in-memory tables shaped like a small star schema.
-async fn star_schema_context(join_enumeration: bool) -> Result<SessionContext> {
+fn star_schema_context(join_enumeration: bool) -> Result<SessionContext> {
     let mut config = SessionConfig::new();
     config.options_mut().optimizer.join_enumeration = join_enumeration;
     let ctx = SessionContext::new_with_config(config);
@@ -316,8 +316,8 @@ const STAR_QUERIES: [&str; 4] = [
 
 #[tokio::test]
 async fn reordering_returns_the_same_rows() -> Result<()> {
-    let enumerated = star_schema_context(true).await?;
-    let baseline = star_schema_context(false).await?;
+    let enumerated = star_schema_context(true)?;
+    let baseline = star_schema_context(false)?;
     let mut reordered_any = false;
     for query in STAR_QUERIES {
         let enumerated_plan = enumerated.sql(query).await?.create_physical_plan().await?;
@@ -361,8 +361,8 @@ fn late_semi_join_plan(anti: bool) -> Result<Arc<dyn ExecutionPlan>> {
     join_of_type(joined, wanted, &[("f_type", "w_type")], join_type, None)
 }
 
-#[tokio::test]
-async fn applies_a_selective_semi_join_first() -> Result<()> {
+#[test]
+fn applies_a_selective_semi_join_first() -> Result<()> {
     let plan = late_semi_join_plan(false)?;
     assert_snapshot!(formatted(&plan), @r"
     HashJoinExec: mode=Auto, join_type=LeftSemi, on=[(f_type@1, w_type@0)]
@@ -384,8 +384,8 @@ async fn applies_a_selective_semi_join_first() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn applies_an_anti_join_first() -> Result<()> {
+#[test]
+fn applies_an_anti_join_first() -> Result<()> {
     let optimized = optimize(late_semi_join_plan(true)?, &ConfigOptions::new())?;
     // The anti join is pushed down the same way.
     assert_snapshot!(formatted(&optimized), @r"
@@ -398,8 +398,8 @@ async fn applies_an_anti_join_first() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
+#[test]
+fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
     // `f_type > t_type` rides on the fact/types join, which moves below the join
     // with the second large table.
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);

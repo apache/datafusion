@@ -21,9 +21,8 @@
 //! tries to transform a non-runnable query (with the given infinite sources)
 //! into a runnable query by replacing pipeline-breaking join operations with
 //! pipeline-friendly ones. To achieve the second goal, it enumerates alternative
-//! join orders for subtrees of inner hash joins (see [`crate::join_enumeration`])
-//! and selects the proper `PartitionMode` and the build side using the available
-//! statistics for hash joins.
+//! join orders for subtrees of joins and selects the proper `PartitionMode` and
+//! the build side using the available statistics for hash joins.
 
 use crate::PhysicalOptimizerRule;
 use crate::join_enumeration::enumerate_join_order;
