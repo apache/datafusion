@@ -2266,7 +2266,7 @@ mod tests {
         let chunk_length = 2;
         let n_future_range = 1;
 
-        let timeout_duration = Duration::from_millis(2000);
+        let timeout_duration = Duration::from_secs(2);
 
         let source =
             generate_never_ending_source(n_rows, chunk_length, 1, true, false, 5)?;

@@ -497,14 +497,13 @@ impl ExternalSorter {
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
             let sorted_size = get_reserved_bytes_for_record_batch(&batch)?;
-            if self.reservation.try_grow(sorted_size).is_err() {
-                // Although the reservation is not enough, the batch is
-                // already in memory, so it's okay to combine it with previously
-                // sorted batches, and spill together.
-                globally_sorted_batches.push(batch);
+            let reservation_failed = self.reservation.try_grow(sorted_size).is_err();
+            // Even if the reservation is not enough, the batch is already in
+            // memory, so it's okay to combine it with previously sorted
+            // batches, and spill together.
+            globally_sorted_batches.push(batch);
+            if reservation_failed {
                 self.consume_and_spill_append(&mut globally_sorted_batches)?; // reservation is freed in spill()
-            } else {
-                globally_sorted_batches.push(batch);
             }
         }
 

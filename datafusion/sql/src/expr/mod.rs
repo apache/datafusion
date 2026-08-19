@@ -57,6 +57,12 @@ mod substring;
 mod unary_op;
 mod value;
 
+/// Returns `None` if `expr` is not a NULL literal, and `Some(span)` where
+/// `span` is the literal's span, if it has one.
+#[expect(
+    clippy::option_option,
+    reason = "The two levels mean different things, see above"
+)]
 fn null_value_span(expr: &SQLExpr) -> Option<Option<Span>> {
     if let SQLExpr::Value(ValueWithSpan {
         value: Value::Null,

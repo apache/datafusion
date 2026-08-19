@@ -370,7 +370,7 @@ impl EquivalenceGroup {
         let (mut idx, mut change) = (0, false);
         while idx < self.classes.len() {
             let cls = &mut self.classes[idx];
-            if let Some(AcrossPartitions::Heterogeneous) = cls.constant {
+            if cls.constant == Some(AcrossPartitions::Heterogeneous) {
                 change = true;
                 if cls.len() == 1 {
                     // If this class becomes trivial, remove it entirely:
