@@ -133,6 +133,7 @@ impl CaseBody {
         // Determine the set of columns that are used in all the expressions of the case body.
         // Use an ordered set so lambda variables continue to be positioned after columns
         let mut used_column_indices = BTreeSet::<usize>::new();
+        let mut supports_projection = true;
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
                 if let Some(column) = expr.downcast_ref::<Column>() {
@@ -141,6 +142,11 @@ impl CaseBody {
                     expr.downcast_ref::<LambdaVariable>()
                 {
                     used_column_indices.insert(lambda_variable.index());
+                } else if expr.downcast_ref::<Literal>().is_none()
+                    && expr.children().is_empty()
+                {
+                    // Unknown leaves may read input columns without exposing a Column child.
+                    supports_projection = false;
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
@@ -216,6 +222,7 @@ impl CaseBody {
         Ok(ProjectedCaseBody {
             projection,
             body: projected_body,
+            supports_projection,
         })
     }
 }
@@ -251,6 +258,7 @@ impl CaseBody {
 struct ProjectedCaseBody {
     projection: Vec<usize>,
     body: CaseBody,
+    supports_projection: bool,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -1056,7 +1064,7 @@ impl CaseExpr {
             .copied()
             .filter(|index| *index < batch.num_columns())
             .collect::<Vec<_>>();
-        if projection.len() < batch.num_columns() {
+        if projected.supports_projection && projection.len() < batch.num_columns() {
             let projected_batch = batch.project(&projection)?;
             projected
                 .body
@@ -1086,7 +1094,7 @@ impl CaseExpr {
             .copied()
             .filter(|index| *index < batch.num_columns())
             .collect::<Vec<_>>();
-        if projection.len() < batch.num_columns() {
+        if projected.supports_projection && projection.len() < batch.num_columns() {
             let projected_batch = batch.project(&projection)?;
             projected
                 .body
@@ -1212,7 +1220,7 @@ impl CaseExpr {
                 .copied()
                 .filter(|index| *index < batch.num_columns())
                 .collect::<Vec<_>>();
-            if projection.len() < batch.num_columns() {
+            if projected.supports_projection && projection.len() < batch.num_columns() {
                 // The case expressions do not use all the columns of the input batch.
                 // Project first to reduce time spent filtering.
                 let projected_batch = batch.project(&projection)?;
@@ -1599,6 +1607,55 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
 
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct CustomColumn {
+        inner: Column,
+    }
+
+    impl CustomColumn {
+        fn new(name: &str, index: usize) -> Self {
+            Self {
+                inner: Column::new(name, index),
+            }
+        }
+    }
+
+    impl std::fmt::Display for CustomColumn {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(&self.inner, f)
+        }
+    }
+
+    impl PhysicalExpr for CustomColumn {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.inner.data_type(input_schema)
+        }
+
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            self.inner.nullable(input_schema)
+        }
+
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.inner.evaluate(batch)
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert!(children.is_empty());
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.inner.fmt_sql(f)
+        }
+    }
+
     #[test]
     fn case_with_expr() -> Result<()> {
         let batch = case_test_batch()?;
@@ -1891,6 +1948,38 @@ mod tests {
 
         assert_eq!(expected, result);
 
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_with_custom_column() -> Result<()> {
+        let batch = case_test_batch()?;
+        let schema = batch.schema();
+
+        let when1 = binary(
+            Arc::new(CustomColumn::new("a", 0)),
+            Operator::Eq,
+            lit("foo"),
+            &schema,
+        )?;
+        let when2 = binary(
+            Arc::new(CustomColumn::new("a", 0)),
+            Operator::Eq,
+            lit("bar"),
+            &schema,
+        )?;
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, lit(123i32)), (when2, lit(456i32))],
+            None,
+            schema.as_ref(),
+        )?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(&expected, result);
         Ok(())
     }
 
