@@ -170,6 +170,7 @@ fn roundtrip_statement() -> Result<()> {
             SELECT j2_string as string FROM j2
             ORDER BY string DESC
             LIMIT 10"#,
+            r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1)"#,
             r#"SELECT col1, id FROM (
                 SELECT j1_string AS col1, j1_id AS id FROM j1
                 UNION ALL
@@ -436,6 +437,20 @@ fn roundtrip_statement_with_dialect_8() -> Result<(), DataFusionError> {
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
         expected: @"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_union_all_with_nested_distinct_union()
+-> Result<(), DataFusionError> {
+    // Mixed set quantifiers must stay per UNION node. A query-global
+    // distinct_union flag previously rewrote this to a flat distinct UNION.
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1.j1_string FROM j1 UNION ALL (SELECT j2.j2_string FROM j2 UNION SELECT j1.j1_string FROM j1)",
     );
     Ok(())
 }

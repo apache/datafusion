@@ -85,6 +85,29 @@ impl QueryBuilder {
     pub fn is_distinct_union(&self) -> bool {
         self.distinct_union
     }
+    /// Consume the distinct-UNION flag for the current `UNION` node.
+    ///
+    /// `Distinct(Union)` sets this on the enclosing query so that *this*
+    /// union unparses as `UNION` rather than `UNION ALL`. Taking the flag
+    /// keeps it from leaking to sibling or parent unions that share a
+    /// `QueryBuilder`.
+    pub fn take_distinct_union(&mut self) -> bool {
+        std::mem::replace(&mut self.distinct_union, false)
+    }
+    /// Whether this query carries clauses that bind to one operand of a
+    /// set operation (`ORDER BY`, `LIMIT`, `WITH`, ...). Those operands
+    /// must be parenthesized so the clauses do not apply to the whole
+    /// `UNION`.
+    pub fn has_operand_scoped_clauses(&self) -> bool {
+        self.with.is_some()
+            || self.order_by_kind.is_some()
+            || self.limit.is_some()
+            || self.offset.is_some()
+            || self.fetch.is_some()
+            || self.for_clause.is_some()
+            || !self.limit_by.is_empty()
+            || !self.locks.is_empty()
+    }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
         let order_by = self
             .order_by_kind

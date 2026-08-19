@@ -1591,25 +1591,47 @@ impl Unparser<'_> {
                     );
                 }
 
+                // Bind the set quantifier to this UNION node before walking
+                // inputs. A sticky query-level flag is insufficient: a nested
+                // Distinct(Union) would set it while the outer UNION ALL is
+                // still being built, and every later UNION would unparse as
+                // distinct.
+                let set_quantifier =
+                    if query.as_mut().is_some_and(|q| q.take_distinct_union()) {
+                        // None unparses as `UNION` rather than `UNION ALL`.
+                        ast::SetQuantifier::None
+                    } else {
+                        ast::SetQuantifier::All
+                    };
+
+                // Each operand gets its own QueryBuilder so a nested
+                // Distinct(Union) cannot leak `distinct_union` (or ORDER BY /
+                // LIMIT) into this node. sqlparser does not parenthesize
+                // nested SetOperations, so any non-SELECT or clause-bearing
+                // branch is wrapped as a parenthesized subquery.
                 let input_exprs: Vec<SetExpr> = union
                     .inputs
                     .iter()
-                    .map(|input| self.select_to_sql_expr(input, query))
+                    .map(|input| {
+                        let mut branch_query = Some(QueryBuilder::default());
+                        let body = self.select_to_sql_expr(input, &mut branch_query)?;
+                        match branch_query {
+                            Some(mut branch_query)
+                                if !matches!(body, SetExpr::Select(_))
+                                    || branch_query.has_operand_scoped_clauses() =>
+                            {
+                                let query = branch_query.body(Box::new(body)).build()?;
+                                Ok(SetExpr::Query(Box::new(query)))
+                            }
+                            _ => Ok(body),
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 assert_or_internal_err!(
                     input_exprs.len() >= 2,
                     "UNION operator requires at least 2 inputs"
                 );
-
-                let set_quantifier =
-                    if query.as_ref().is_some_and(|q| q.is_distinct_union()) {
-                        // Setting the SetQuantifier to None will unparse as a `UNION`
-                        // rather than a `UNION ALL`.
-                        ast::SetQuantifier::None
-                    } else {
-                        ast::SetQuantifier::All
-                    };
 
                 // Build the union expression tree bottom-up by reversing the order
                 // note that we are also swapping left and right inputs because of the rev
