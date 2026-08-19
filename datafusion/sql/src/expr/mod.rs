@@ -96,23 +96,36 @@ fn binary_op(left: SQLExpr, op: BinaryOperator, right: SQLExpr) -> SQLExpr {
 /// Returns `true` if `expr` contains an `IS [NOT] DISTINCT FROM` whose right
 /// operand swallowed a following `AND` / `OR`.
 ///
+/// Walks the `AND` / `OR` spine iteratively. This runs for every expression the
+/// planner sees, so its traversal belongs on the heap for the same reason the
+/// stack machine in [`SqlToRel::sql_expr_to_logical_expr`] does: deep
+/// `AND` / `OR` chains are common, and nothing here should put their depth back
+/// on the call stack.
+///
 /// See [`fix_distinct_from_precedence`].
-#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn has_greedy_distinct_from(expr: &SQLExpr) -> bool {
-    match expr {
-        SQLExpr::BinaryOp { left, op, right } if is_and_or(op) => {
-            has_greedy_distinct_from(left) || has_greedy_distinct_from(right)
+    let mut stack = vec![expr];
+    while let Some(expr) = stack.pop() {
+        match expr {
+            SQLExpr::BinaryOp { left, op, right } if is_and_or(op) => {
+                stack.push(left);
+                stack.push(right);
+            }
+            SQLExpr::IsDistinctFrom(_, right) | SQLExpr::IsNotDistinctFrom(_, right) => {
+                if matches!(right.as_ref(), SQLExpr::BinaryOp { op, .. } if is_and_or(op))
+                {
+                    return true;
+                }
+                stack.push(right);
+            }
+            SQLExpr::UnaryOp {
+                op: UnaryOperator::Not,
+                expr,
+            } => stack.push(expr),
+            _ => {}
         }
-        SQLExpr::IsDistinctFrom(_, right) | SQLExpr::IsNotDistinctFrom(_, right) => {
-            matches!(right.as_ref(), SQLExpr::BinaryOp { op, .. } if is_and_or(op))
-                || has_greedy_distinct_from(right)
-        }
-        SQLExpr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr,
-        } => has_greedy_distinct_from(expr),
-        _ => false,
     }
+    false
 }
 
 /// Restores the expected operator precedence around `IS [NOT] DISTINCT FROM`.
@@ -150,60 +163,111 @@ fn has_greedy_distinct_from(expr: &SQLExpr) -> bool {
 /// Operands are not descended into; a parenthesised sub-expression is fixed when
 /// the planner recurses into it.
 fn fix_distinct_from_precedence(expr: SQLExpr) -> SQLExpr {
-    let (first, rest) = flatten_and_or(expr);
-    rebuild_and_or(first, rest)
+    let (operands, ops) = flatten_and_or(expr);
+    rebuild_and_or(operands, ops)
 }
 
-/// Flattens the `AND` / `OR` spine of `expr` into its first operand followed by
-/// the remaining `(operator, operand)` pairs in source order, moving whatever an
-/// `IS [NOT] DISTINCT FROM` greedily absorbed back onto the spine.
-#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-fn flatten_and_or(expr: SQLExpr) -> (SQLExpr, Vec<(BinaryOperator, SQLExpr)>) {
-    match expr {
-        SQLExpr::BinaryOp { left, op, right } if is_and_or(&op) => {
-            let (first, mut rest) = flatten_and_or(*left);
-            let (right_first, right_rest) = flatten_and_or(*right);
-            rest.push((op, right_first));
-            rest.extend(right_rest);
-            (first, rest)
-        }
-        // Only the first operand of the right hand side belongs to the
-        // comparison, the rest stays on the spine.
-        SQLExpr::IsDistinctFrom(left, right) => {
-            let (right_first, rest) = flatten_and_or(*right);
-            (distinct_from_expr(*left, right_first, false), rest)
-        }
-        SQLExpr::IsNotDistinctFrom(left, right) => {
-            let (right_first, rest) = flatten_and_or(*right);
-            (distinct_from_expr(*left, right_first, true), rest)
-        }
-        // `NOT` binds more tightly than `AND` / `OR` too, so it only negates the
-        // first operand of its operand's spine.
-        SQLExpr::UnaryOp {
-            op: op @ UnaryOperator::Not,
-            expr,
-        } => {
-            let (first, rest) = flatten_and_or(*expr);
-            (
-                SQLExpr::UnaryOp {
-                    op,
-                    expr: Box::new(first),
-                },
-                rest,
-            )
-        }
-        other => (other, vec![]),
+/// An operator that the parser attached to the wrong operand, waiting to be
+/// re-applied to the next operand emitted by [`flatten_and_or`].
+enum Postponed {
+    /// The left operand of an `IS [NOT] DISTINCT FROM`
+    DistinctFrom { left: Box<SQLExpr>, negated: bool },
+    /// A prefix `NOT`
+    Not,
+}
+
+/// Flattens the `AND` / `OR` spine of `expr` into its operands and the operators
+/// separating them, both in source order, moving whatever an
+/// `IS [NOT] DISTINCT FROM` or a `NOT` greedily absorbed back onto the spine.
+///
+/// Always emits at least one operand, and exactly one more operand than
+/// operators. Iterative for the same reason as [`has_greedy_distinct_from`].
+fn flatten_and_or(expr: SQLExpr) -> (Vec<SQLExpr>, Vec<BinaryOperator>) {
+    enum Work {
+        Expr(Box<SQLExpr>),
+        Op(BinaryOperator),
     }
+
+    let mut work = vec![Work::Expr(Box::new(expr))];
+    // Operators whose operand has not been reached yet. The last one pushed is
+    // the innermost, so they are applied in reverse.
+    let mut postponed: Vec<Postponed> = vec![];
+    let mut operands = vec![];
+    let mut ops = vec![];
+
+    while let Some(item) = work.pop() {
+        let expr = match item {
+            Work::Op(op) => {
+                ops.push(op);
+                continue;
+            }
+            Work::Expr(expr) => *expr,
+        };
+
+        match expr {
+            SQLExpr::BinaryOp { left, op, right } if is_and_or(&op) => {
+                // Pushed in reverse so that the left operand is visited first
+                work.push(Work::Expr(right));
+                work.push(Work::Op(op));
+                work.push(Work::Expr(left));
+            }
+            // Only the first operand of the right hand side belongs to the
+            // comparison, the rest stays on the spine.
+            SQLExpr::IsDistinctFrom(left, right) => {
+                postponed.push(Postponed::DistinctFrom {
+                    left,
+                    negated: false,
+                });
+                work.push(Work::Expr(right));
+            }
+            SQLExpr::IsNotDistinctFrom(left, right) => {
+                postponed.push(Postponed::DistinctFrom {
+                    left,
+                    negated: true,
+                });
+                work.push(Work::Expr(right));
+            }
+            // `NOT` binds more tightly than `AND` / `OR` too, so it only negates
+            // the first operand of its operand's spine.
+            SQLExpr::UnaryOp {
+                op: UnaryOperator::Not,
+                expr,
+            } => {
+                postponed.push(Postponed::Not);
+                work.push(Work::Expr(expr));
+            }
+            mut operand => {
+                for op in postponed.drain(..).rev() {
+                    operand = match op {
+                        Postponed::DistinctFrom { left, negated } => {
+                            distinct_from_expr(*left, operand, negated)
+                        }
+                        Postponed::Not => SQLExpr::UnaryOp {
+                            op: UnaryOperator::Not,
+                            expr: Box::new(operand),
+                        },
+                    };
+                }
+                operands.push(operand);
+            }
+        }
+    }
+
+    (operands, ops)
 }
 
 /// Rebuilds the flattened spine produced by [`flatten_and_or`] with `AND`
 /// binding more tightly than `OR`, both left associative.
-fn rebuild_and_or(first: SQLExpr, rest: Vec<(BinaryOperator, SQLExpr)>) -> SQLExpr {
+fn rebuild_and_or(operands: Vec<SQLExpr>, ops: Vec<BinaryOperator>) -> SQLExpr {
+    debug_assert_eq!(operands.len(), ops.len() + 1);
+    let mut operands = operands.into_iter();
     // `AND` binds more tightly, so fold consecutive `AND`s into a group and
     // combine the completed groups with `OR` as they are closed.
-    let mut and_group = first;
+    let mut and_group = operands
+        .next()
+        .expect("flatten_and_or always emits at least one operand");
     let mut or_expr: Option<SQLExpr> = None;
-    for (op, right) in rest {
+    for (op, right) in ops.into_iter().zip(operands) {
         if matches!(op, BinaryOperator::Or) {
             let completed = std::mem::replace(&mut and_group, right);
             or_expr = Some(match or_expr.take() {
@@ -1731,6 +1795,53 @@ mod tests {
     test_stack_overflow!(test_stack_overflow_2048, 2048);
     test_stack_overflow!(test_stack_overflow_4096, 4096);
     test_stack_overflow!(test_stack_overflow_8192, 8192);
+
+    /// A single `IS NOT DISTINCT FROM` followed by a long `OR` chain.
+    ///
+    /// The greedy parse pulls the whole chain into the right operand of the
+    /// comparison, so this covers the precedence fixup in
+    /// `sql_expr_to_logical_expr` at the same spine depths as
+    /// `test_stack_overflow` covers the stack machine it runs in front of. Like
+    /// those tests it is a scale check rather than a proof: the fixup walks the
+    /// spine iteratively so that its cost is heap rather than stack, but its
+    /// frames are small enough that a recursive walk would survive these depths
+    /// too.
+    ///
+    /// The chain deliberately uses `=` rather than more
+    /// `IS NOT DISTINCT FROM`: a chain of the latter nests in the AST instead of
+    /// looping, so `sqlparser` itself overflows while parsing it, well before
+    /// any of this crate's code runs.
+    macro_rules! test_stack_overflow_distinct_from {
+        ($name:ident, $num_expr:expr) => {
+            #[test]
+            fn $name() {
+                let schema = DFSchema::empty();
+                let mut planner_context = PlannerContext::default();
+
+                let mut expr_str = "column1 IS NOT DISTINCT FROM 'value'".to_string();
+                for i in 0..$num_expr {
+                    expr_str.push_str(&format!(" OR column1 = 'value{:?}'", i));
+                }
+
+                let dialect = GenericDialect {};
+                let mut parser = Parser::new(&dialect)
+                    .try_with_sql(expr_str.as_str())
+                    .unwrap();
+                let sql_expr = parser.parse_expr().unwrap();
+
+                let context_provider = TestContextProvider::new();
+                let sql_to_rel = SqlToRel::new(&context_provider);
+
+                // Should not stack overflow
+                sql_to_rel
+                    .sql_expr_to_logical_expr(sql_expr, &schema, &mut planner_context)
+                    .unwrap();
+            }
+        };
+    }
+
+    test_stack_overflow_distinct_from!(test_stack_overflow_distinct_from_1024, 1024);
+    test_stack_overflow_distinct_from!(test_stack_overflow_distinct_from_8192, 8192);
     #[test]
     fn test_sql_to_expr_with_alias() {
         let schema = DFSchema::empty();
