@@ -1772,7 +1772,7 @@ impl PartitionedTopKRank {
         let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
 
         for pk in sorted_pks {
-            let RankPartitionState { mut heap, ties, .. } =
+            let RankPartitionState { mut heap, ties } =
                 states.remove(&pk).expect("key from states.keys()");
             if let Some(batch) = heap.emit()? {
                 (&batch).record_output(&metrics.baseline);
@@ -1811,10 +1811,454 @@ impl PartitionedTopKRank {
     }
 }
 
+/// A run of rows from a single source [`RecordBatch`] sharing one
+/// distinct ORDER BY value. Materialized at emit time via
+/// [`take_record_batch`].
+///
+/// The batch is referenced by `batch_id` rather than held directly, so the
+/// operator-scoped [`RecordBatchStore`] can charge each distinct source
+/// batch once however many entries reference it. Holding a batch per entry
+/// and charging its bytes per entry would inflate the reservation by a
+/// factor of (partitions × K), since a single batch contributes an entry to
+/// every partition and ob group it touches.
+#[derive(Debug)]
+struct GroupEntry {
+    /// Indices into the batch identified by `batch_id`. Always non-empty
+    /// by construction.
+    row_indices: Vec<u32>,
+    /// Key into `PartitionedTopKDenseRank::store`.
+    batch_id: u32,
+}
+
+/// Per-partition state for `DENSE_RANK()` semantics.
+///
+/// A `HashMap<Vec<u8>, Vec<GroupEntry>>` keyed by the row-encoded ORDER
+/// BY bytes, capped at `k` distinct keys. Each key's `Vec<GroupEntry>`
+/// holds every row seen at that ob value, one entry per contributing
+/// source `RecordBatch`.
+#[derive(Default)]
+struct DenseRankPartitionState {
+    groups: HashMap<Vec<u8>, Vec<GroupEntry>>,
+    /// The same keys as `groups`, in a max-heap: the admission boundary
+    /// (the largest tracked ob value) is an O(1) `peek()` check, and
+    /// admission / removal are O(log K).
+    ///
+    /// INVARIANT: `keys` and `groups.keys()` hold the same set. Every
+    /// insertion into / removal from `groups` must mirror into `keys`.
+    keys: BinaryHeap<Vec<u8>>,
+}
+
+impl DenseRankPartitionState {
+    fn size(&self) -> usize {
+        let table_overhead = self.groups.capacity()
+            * (size_of::<Vec<u8>>() + size_of::<Vec<GroupEntry>>());
+        let contents: usize = self
+            .groups
+            .iter()
+            .map(|(key, entries)| {
+                key.capacity()
+                    + entries.capacity() * size_of::<GroupEntry>()
+                    + entries
+                        .iter()
+                        .map(|e| e.row_indices.capacity() * size_of::<u32>())
+                        .sum::<usize>()
+            })
+            .sum();
+        // `keys` duplicates every key's bytes; charge for them plus the
+        // heap's backing Vec (one `Vec<u8>` slot per reserved element).
+        let keys_overhead: usize = self.keys.capacity() * size_of::<Vec<u8>>()
+            + self.keys.iter().map(|k| k.capacity()).sum::<usize>();
+        table_overhead + contents + keys_overhead
+    }
+}
+
+/// Sibling to [`PartitionedTopK`] / [`PartitionedTopKRank`] implementing
+/// `DENSE_RANK()` semantics.
+///
+/// Per partition, retains every row whose ORDER BY value is among the K
+/// distinct-smallest ob values seen for that partition. The total row
+/// count kept per partition is unbounded in `rows_per_distinct_value`
+/// (unlike `RANK`, which is bounded above by K + boundary ties).
+///
+/// Like [`PartitionedTopK`], the [`RowConverter`], [`MemoryReservation`],
+/// scratch [`Rows`] buffer, and [`TopKMetrics`] are shared across all
+/// partitions for this operator instance. So is the
+/// [`RecordBatchStore`]: retained rows are held as `(batch_id, indices)`
+/// so each source batch is charged once for the whole operator, however
+/// many partitions and ob groups reference it.
+///
+/// # Algorithm (per batch)
+///
+/// Evaluate + encode partition-by and order-by columns once, then group
+/// the batch's row indices by partition key. For each partition, bucket
+/// that partition's rows by distinct ob value (a within-call
+/// accumulation), then merge each bucket into the partition state. Every
+/// bucket is built from the current batch's rows, so each `GroupEntry` is
+/// pinned to the batch its `row_indices` point into.
+///
+/// For each partition, for each distinct `ob_key` run in this batch:
+/// - `ob_key` already in `state.groups` → push this batch's run as a
+///   new `GroupEntry` (one entry per contributing batch).
+/// - `ob_key` new, `state.groups.len() < k` → insert the run as a new
+///   group.
+/// - `ob_key` new, `state.groups.len() == k` → the largest tracked ob
+///   value is the admission boundary, read from the `state.keys` max-heap
+///   in O(1):
+///   - `ob_key < max` → remove the max key (evict the entire max-key
+///     group — up to many rows) and insert the run. The evicted group's
+///     row count is added to the `row_replacements` metric.
+///   - `ob_key >= max` → drop the whole run; no map mutation.
+pub(crate) struct PartitionedTopKDenseRank {
+    schema: SchemaRef,
+    metrics: TopKMetrics,
+    reservation: MemoryReservation,
+    /// ORDER BY expressions (excludes PARTITION BY).
+    expr: LexOrdering,
+    /// Encoder for ORDER BY columns. Reused across partitions.
+    row_converter: RowConverter,
+    /// Scratch row buffer reused across `insert_batch` calls.
+    scratch_rows: Rows,
+    /// PARTITION BY expressions.
+    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// Encoder for the partition key.
+    partition_converter: RowConverter,
+    /// Scratch row buffer for partition-key encoding. Reused across
+    /// `insert_batch` calls (cleared + appended each batch).
+    partition_scratch_rows: Rows,
+    /// One state per distinct partition key seen so far. Keyed by the
+    /// row-encoded PARTITION BY bytes (byte-comparable encoding, so the
+    /// `Vec<u8>` hashes, compares, and sorts identically to an
+    /// `OwnedRow`) which lets `insert_batch` look partitions up with
+    /// `entry_ref` — allocating a key only on first sight of a partition
+    /// rather than once per row.
+    states: HashMap<Vec<u8>, DenseRankPartitionState>,
+    /// Scratch map reused across `insert_batch` calls to group a batch's
+    /// row indices by partition key. Drained (not reallocated) each batch
+    /// so its backing table is allocated once, not per batch.
+    partition_groups: HashMap<Vec<u8>, Vec<u32>>,
+    /// Scratch map reused across partitions within a batch to bucket a
+    /// partition's rows by distinct ORDER BY value. Drained (not
+    /// reallocated) per partition so its backing table is allocated once,
+    /// not once per distinct partition key.
+    ob_runs: HashMap<Vec<u8>, Vec<u32>>,
+    /// Source batches referenced by the retained `GroupEntry`s, held once
+    /// for the whole operator with a use count per batch. This is what
+    /// keeps the reservation proportional to the batches actually pinned
+    /// rather than to the number of entries pointing at them.
+    store: RecordBatchStore,
+    k: usize,
+    batch_size: usize,
+}
+
+impl PartitionedTopKDenseRank {
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn try_new(
+        partition_id: usize,
+        schema: SchemaRef,
+        partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        partition_sort_fields: Vec<SortField>,
+        order_expr: LexOrdering,
+        k: usize,
+        batch_size: usize,
+        runtime: &Arc<RuntimeEnv>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        assert!(k > 0, "PartitionedTopKDenseRank requires k > 0");
+        let reservation =
+            MemoryConsumer::new(format!("PartitionedTopKDenseRank[{partition_id}]"))
+                .register(&runtime.memory_pool);
+
+        let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
+        let row_converter = RowConverter::new(order_sort_fields)?;
+        let scratch_rows =
+            row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+
+        let partition_converter = RowConverter::new(partition_sort_fields)?;
+        let partition_scratch_rows = partition_converter
+            .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+
+        Ok(Self {
+            schema,
+            metrics: TopKMetrics::new(metrics, partition_id),
+            reservation,
+            expr: order_expr,
+            row_converter,
+            scratch_rows,
+            partition_exprs,
+            partition_converter,
+            partition_scratch_rows,
+            states: HashMap::new(),
+            partition_groups: HashMap::new(),
+            ob_runs: HashMap::new(),
+            store: RecordBatchStore::new(),
+            k,
+            batch_size,
+        })
+    }
+
+    /// Encode PARTITION BY and ORDER BY columns once, demultiplex the
+    /// batch's rows by partition key, then per partition bucket the rows
+    /// by distinct ob value and merge each bucket into the partition
+    /// state as one [`GroupEntry`].
+    pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let baseline = self.metrics.baseline.clone();
+        let _timer = baseline.elapsed_compute().timer();
+
+        let num_rows = batch.num_rows();
+        if num_rows == 0 {
+            return Ok(());
+        }
+
+        // Register this batch with the store up front. `uses` is bumped
+        // once per `GroupEntry` created below but lives on this local
+        // entry, so the store sees a single insert per batch rather than
+        // one per group — and `insert` drops batches that retained
+        // nothing without ever charging for them.
+        let mut batch_entry = self.store.register(batch.clone());
+        let batch_id = batch_entry.id;
+
+        // 1. Encode partition columns.
+        let pk_arrays: Vec<ArrayRef> = self
+            .partition_exprs
+            .iter()
+            .map(|e| e.evaluate(batch).and_then(|v| v.into_array(num_rows)))
+            .collect::<Result<_>>()?;
+        self.partition_scratch_rows.clear();
+        self.partition_converter
+            .append(&mut self.partition_scratch_rows, &pk_arrays)?;
+
+        // 2. Group this batch's row indices by partition key.
+        //    `partition_groups` is a reused scratch map: taken out here
+        //    and drained below, so its backing table is allocated once
+        //    for the operator, not once per batch. `entry_ref` owns the
+        //    key only on Vacant, so it allocates one `Vec<u8>` per
+        //    distinct partition rather than one per row.
+        let mut groups = std::mem::take(&mut self.partition_groups);
+        groups.clear();
+        {
+            let pk_rows = &self.partition_scratch_rows;
+            for i in 0..num_rows {
+                groups
+                    .entry_ref(pk_rows.row(i).as_ref())
+                    .or_default()
+                    .push(i as u32);
+            }
+        }
+
+        // 3. Evaluate ORDER BY columns and encode ONCE.
+        let ob_arrays: Vec<ArrayRef> = self
+            .expr
+            .iter()
+            .map(|e| e.expr.evaluate(batch).and_then(|v| v.into_array(num_rows)))
+            .collect::<Result<_>>()?;
+        self.scratch_rows.clear();
+        self.row_converter
+            .append(&mut self.scratch_rows, &ob_arrays)?;
+
+        let k = self.k;
+        let mut replacements: usize = 0;
+
+        // 4. Per-partition: bucket this batch's rows by distinct ob value
+        //    (within-call accumulation), then merge each bucket into the
+        //    partition state as a single `GroupEntry`.
+        for (pk, indices) in groups.drain() {
+            let state = self
+                .states
+                .entry(pk)
+                .or_insert_with(DenseRankPartitionState::default);
+
+            // Bucket by ob key. `ob_runs` is a reused scratch map (taken
+            // out and drained below) so its backing table is allocated
+            // once, not once per distinct partition key. `entry_ref` owns
+            // the key only on Vacant, so repeated rows of the same ob
+            // value don't re-allocate.
+            let mut runs = std::mem::take(&mut self.ob_runs);
+            runs.clear();
+            for &orig_idx in &indices {
+                let ob_row = self.scratch_rows.row(orig_idx as usize);
+                runs.entry_ref(ob_row.as_ref()).or_default().push(orig_idx);
+            }
+
+            for (ob_key, run_indices) in runs.drain() {
+                // Case A: ob already tracked — push this batch's run as a
+                // new `GroupEntry` (one entry per contributing batch).
+                if let Some(entries) = state.groups.get_mut(&ob_key) {
+                    batch_entry.uses += 1;
+                    entries.push(GroupEntry {
+                        row_indices: run_indices,
+                        batch_id,
+                    });
+                    continue;
+                }
+
+                // Case B: new ob, room available.
+                if state.groups.len() < k {
+                    batch_entry.uses += 1;
+                    state.keys.push(ob_key.clone());
+                    state.groups.insert(
+                        ob_key,
+                        vec![GroupEntry {
+                            row_indices: run_indices,
+                            batch_id,
+                        }],
+                    );
+                    continue;
+                }
+
+                // Case C: new ob, at K distinct keys. The largest tracked
+                // ob value is the admission boundary.
+                let max_key = state.keys.peek().expect("state.groups has k >= 1 keys");
+                if ob_key.as_slice() < max_key.as_slice() {
+                    // Evict the entire max-key group, from both the map
+                    // and its ordered mirror.
+                    let evicted_key = state.keys.pop().expect("max key present");
+                    let evicted = state
+                        .groups
+                        .remove(&evicted_key)
+                        .expect("keys mirrors groups");
+                    for e in &evicted {
+                        replacements += e.row_indices.len();
+                        if e.batch_id == batch_id {
+                            // Admitted earlier in this same call, so the
+                            // store has not seen `batch_entry` yet — drop
+                            // the pending use rather than calling `unuse`,
+                            // which panics on an unregistered id.
+                            batch_entry.uses -= 1;
+                        } else {
+                            self.store.unuse(e.batch_id);
+                        }
+                    }
+                    batch_entry.uses += 1;
+                    state.keys.push(ob_key.clone());
+                    state.groups.insert(
+                        ob_key,
+                        vec![GroupEntry {
+                            row_indices: run_indices,
+                            batch_id,
+                        }],
+                    );
+                }
+                // else: ob >= max — drop the whole run.
+            }
+
+            // Return the drained scratch map (capacity retained) for the
+            // next partition to reuse.
+            self.ob_runs = runs;
+        }
+
+        // Return the drained scratch map (capacity retained) for the next
+        // batch to reuse.
+        self.partition_groups = groups;
+
+        // Charges `batch` once if any group retained rows from it.
+        self.store.insert(batch_entry);
+
+        if replacements > 0 {
+            self.metrics.row_replacements.add(replacements);
+        }
+        self.reservation.try_resize(self.size())?;
+        Ok(())
+    }
+
+    /// Drain all per-partition maps in partition-key order and return
+    /// the rows as a stream of coalesced [`RecordBatch`]es ordered by
+    /// `(partition_keys, order_keys)`. Within a partition the distinct
+    /// ob keys are sorted (byte-comparable encoding == sort order) so
+    /// emitted rows are in ob-sorted order.
+    pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
+        let Self {
+            schema,
+            metrics,
+            reservation: _,
+            expr: _,
+            row_converter: _,
+            scratch_rows: _,
+            partition_exprs: _,
+            partition_converter: _,
+            partition_scratch_rows: _,
+            mut states,
+            partition_groups: _,
+            ob_runs: _,
+            store,
+            k: _,
+            batch_size,
+        } = self;
+        let _timer = metrics.baseline.elapsed_compute().timer();
+
+        let mut sorted_pks: Vec<Vec<u8>> = states.keys().cloned().collect();
+        sorted_pks.sort();
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
+
+        for pk in sorted_pks {
+            let DenseRankPartitionState { groups, keys: _ } =
+                states.remove(&pk).expect("key from states.keys()");
+            // Sort the <= K distinct ob keys so rows emit ascending
+            // (byte-comparable encoding == sort order).
+            let mut sorted_obs: Vec<(Vec<u8>, Vec<GroupEntry>)> =
+                groups.into_iter().collect();
+            sorted_obs.sort_by(|a, b| a.0.cmp(&b.0));
+            for (_ob, entries) in sorted_obs {
+                for entry in entries {
+                    let batch = &store
+                        .get(entry.batch_id)
+                        .expect("retained batch_id present in store")
+                        .batch;
+                    let indices = UInt32Array::from(entry.row_indices);
+                    let sub = take_record_batch(batch, &indices)?;
+                    (&sub).record_output(&metrics.baseline);
+                    coalescer.push_batch(sub)?;
+                }
+            }
+        }
+        coalescer.finish_buffered_batch()?;
+
+        let mut out: Vec<Result<RecordBatch>> = Vec::new();
+        while let Some(b) = coalescer.next_completed_batch() {
+            out.push(Ok(b));
+        }
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::iter(out),
+        )))
+    }
+
+    /// Total memory currently held, including all per-partition states.
+    fn size(&self) -> usize {
+        // Per partition: the state itself plus the encoded partition key
+        // owned by the map. The key bytes are a heap allocation the table
+        // slot doesn't cover, and with wide or numerous partition keys
+        // they dominate the fixed-size slots.
+        let states_contents: usize = self
+            .states
+            .iter()
+            .map(|(pk, state)| pk.capacity() + state.size())
+            .sum();
+        // `partition_groups` and `ob_runs` are drained, not dropped, so
+        // their backing tables outlive every `insert_batch` call. Both are
+        // empty by the time `size()` runs (drained above), so only the
+        // retained capacity is charged.
+        let scratch_tables = self.partition_groups.capacity()
+            * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
+            + self.ob_runs.capacity() * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>());
+        size_of::<Self>()
+            + self.row_converter.size()
+            + self.partition_converter.size()
+            + self.scratch_rows.size()
+            + self.partition_scratch_rows.size()
+            + states_contents
+            + self.states.capacity()
+                * (size_of::<Vec<u8>>() + size_of::<DenseRankPartitionState>())
+            + scratch_tables
+            + self.store.size()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{BooleanArray, Float64Array, Int32Array};
+    use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;
@@ -2537,7 +2981,7 @@ mod tests {
     }
 
     /// Multiple distinct partition keys interleaved within a single
-    /// input batch — the per-batch demux, per-partition heap eviction,
+    /// input batch — grouping rows by partition key, per-partition heap eviction,
     /// and partition-key-ordered emit must all behave correctly.
     #[tokio::test]
     async fn test_partitioned_topk_multi_partition_within_batch() -> Result<()> {
@@ -2831,7 +3275,7 @@ mod tests {
     }
 
     /// Multiple distinct partition keys interleaved within a single
-    /// input batch — the per-batch demux, per-partition heap eviction,
+    /// input batch — grouping rows by partition key, per-partition heap eviction,
     /// and partition-key-ordered emit must all behave correctly. No
     /// ties: result should match a `ROW_NUMBER` top-K under the same K.
     #[tokio::test]
@@ -3160,6 +3604,721 @@ mod tests {
                 "| 1  | 5   |",
                 "| 1  | 10  |",
                 "| 1  | 10  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    // ====================================================================
+    // PartitionedTopKDenseRank operator tests
+    //
+    // These mirror the RANK tests plus DENSE_RANK-specific cases: rows
+    // sharing an ob key coalesce into one `GroupEntry`, unbounded
+    // rows-per-distinct-key, and eviction removes the entire max group
+    // when a strictly-smaller distinct ob arrives.
+    // ====================================================================
+
+    /// Builds a `(pk Int32, val Int32)` schema and a
+    /// `PartitionedTopKDenseRank` keyed on `pk ASC` (partition) and
+    /// `val ASC` (ORDER BY).
+    fn build_partitioned_topk_dense_rank(
+        k: usize,
+    ) -> Result<(Arc<Schema>, PartitionedTopKDenseRank)> {
+        build_partitioned_topk_dense_rank_with_opts(k, SortOptions::default(), false)
+    }
+
+    fn build_partitioned_topk_dense_rank_with_opts(
+        k: usize,
+        val_sort_options: SortOptions,
+        val_nullable: bool,
+    ) -> Result<(Arc<Schema>, PartitionedTopKDenseRank)> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("val", DataType::Int32, val_nullable),
+        ]));
+
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let pk_sort_expr = PhysicalSortExpr {
+            expr: Arc::clone(&pk_expr),
+            options: SortOptions::default(),
+        };
+        let val_sort_expr = PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: val_sort_options,
+        };
+
+        let partition_sort_fields = build_sort_fields(&[pk_sort_expr], &schema)?;
+        let order_expr = LexOrdering::from([val_sort_expr]);
+
+        let state = PartitionedTopKDenseRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            order_expr,
+            k,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+        )?;
+        Ok((schema, state))
+    }
+
+    /// Single-batch DENSE_RANK top-2 across multiple partitions with
+    /// distinct ob values only — should behave identically to a
+    /// ROW_NUMBER top-2. Exercises per-partition grouping + emit order.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_multi_partition_within_batch() -> Result<()>
+    {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        // pk=1 vals: 10, 5, 8 → distinct-top-2 ASC = {5, 8}
+        // pk=2 vals: 20, 15   → distinct-top-2 ASC = {15, 20}
+        // pk=3 vals: 7        → distinct-top-2 ASC = {7}
+        let batch =
+            pk_val_batch(&schema, vec![1, 2, 1, 2, 1, 3], vec![10, 20, 5, 15, 8, 7])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 8   |",
+                "| 2  | 15  |",
+                "| 2  | 20  |",
+                "| 3  | 7   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// DENSE_RANK-specific: heavy ties within a batch. All rows at each
+    /// distinct ob value must be kept — within-call bucketing groups them
+    /// into one `GroupEntry` per distinct ob.
+    ///
+    /// vals per partition (sorted logically):
+    ///   pk=1: 1, 1, 1, 2, 2, 3, 3, 3, 4
+    ///   distinct-top-2 = {1, 2} → all 5 rows at those values retained.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_heavy_ties_coalesced() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        let batch = pk_val_batch(
+            &schema,
+            vec![1, 1, 1, 1, 1, 1, 1, 1, 1],
+            vec![1, 3, 1, 2, 3, 1, 2, 3, 4],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 1   |",
+                "| 1  | 1   |",
+                "| 1  | 1   |",
+                "| 1  | 2   |",
+                "| 1  | 2   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Rows tied at the same ob across two source batches must both
+    /// land under the same map key as separate `GroupEntry`s — one per
+    /// source batch — but emit as a single contiguous run.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_cross_batch_same_key() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        // Batch 1: pk=1 with ob values {5, 5, 8}. groups after: {5→[..], 8→[..]}.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1, 1], vec![5, 5, 8])?)?;
+
+        // Batch 2: pk=1 with more 5s and an 8, plus a 20 that's dropped.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1, 1], vec![5, 8, 20])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 5   |",
+                "| 1  | 5   |",
+                "| 1  | 8   |",
+                "| 1  | 8   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Refactor guard: the full RANK-style path in one run — multi-partition
+    /// per-batch grouping, within-batch bucketing of scattered same-ob rows,
+    /// cross-batch append to an existing group, cross-batch new-key insert,
+    /// and cross-batch eviction of a whole max group. Every `GroupEntry` is
+    /// built from its own source batch (no cross-batch coalescing), so the
+    /// retained rows must be exactly the K=2 smallest distinct ob values
+    /// per partition with all their rows, regardless of arrival order.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_multi_batch_multi_partition() -> Result<()>
+    {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        // Batch 1 interleaves pk=1 and pk=2, with same-ob rows scattered:
+        //   pk=1 vals: 10, 20, 10, 20, 10  → {10:[×3], 20:[×2]}
+        //   pk=2 vals: 100, 100            → {100:[×2]}
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 1, 2, 1, 1],
+            vec![10, 100, 20, 20, 100, 10, 10],
+        )?)?;
+
+        // Batch 2:
+        //   pk=1 vals: 20, 5, 10 → append a 20, insert 5 (evicts the whole
+        //              20 group), append a 10 → retained distinct {5, 10}.
+        //   pk=2 vals: 50        → insert 5th... new key, room → {50, 100}.
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 1],
+            vec![20, 50, 5, 10],
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        // pk=1: val=5 (×1 from batch 2), val=10 (×3 batch 1 + ×1 batch 2 = ×4).
+        //       All 20s dropped (evicted). pk=2: val=50 (×1), val=100 (×2).
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 10  |",
+                "| 1  | 10  |",
+                "| 1  | 10  |",
+                "| 1  | 10  |",
+                "| 2  | 50  |",
+                "| 2  | 100 |",
+                "| 2  | 100 |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// DENSE_RANK-specific: eviction removes the entire max group when
+    /// a strictly-smaller distinct ob arrives. Multiple rows at the
+    /// evicted key all disappear.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_max_group_eviction() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        // Batch 1: pk=1 with {10, 10, 20, 20}. groups={10→[..], 20→[..]}, at K.
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 1, 1, 1],
+            vec![10, 10, 20, 20],
+        )?)?;
+
+        // Batch 2: pk=1 with 5 — strictly smaller than max=20, evict entire
+        // 20 group; now groups={10, 5}. Then a 30 comes in and is dropped.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![5, 30])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 10  |",
+                "| 1  | 10  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Empty input must produce an empty output stream, not panic.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_empty_input() -> Result<()> {
+        let (_schema, state) = build_partitioned_topk_dense_rank(3)?;
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert!(results.is_empty(), "empty input → empty output");
+        Ok(())
+    }
+
+    /// `fetch = 1` retains only the smallest distinct ob per partition,
+    /// with all rows at that value kept.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_fetch_one() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(1)?;
+
+        // pk=1 vals: 5, 3, 5, 3, 7 → distinct-top-1 = {3} → both 3s kept.
+        // pk=2 vals: 9, 4          → distinct-top-1 = {4} → single 4.
+        let batch = pk_val_batch(
+            &schema,
+            vec![1, 1, 1, 2, 1, 2, 1],
+            vec![5, 3, 5, 9, 3, 4, 7],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 3   |",
+                "| 1  | 3   |",
+                "| 2  | 4   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `K > distinct_ob_count` — nothing should be dropped.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_k_exceeds_distinct() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(10)?;
+
+        // Only 3 distinct ob values under pk=1; all rows must be retained.
+        let batch = pk_val_batch(&schema, vec![1, 1, 1, 1], vec![5, 3, 3, 7])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 3   |",
+                "| 1  | 3   |",
+                "| 1  | 5   |",
+                "| 1  | 7   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ORDER BY val DESC` — the row-encoded key ordering must reflect
+    /// the direction so the "distinct-K best" set is the K *largest*
+    /// distinct ob values.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_desc_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank_with_opts(
+            2,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            false,
+        )?;
+
+        // pk=1 vals: 10, 5, 8, 12, 10 → distinct-top-2 DESC = {12, 10}
+        //   → keep both 10s and 12.
+        let batch = pk_val_batch(&schema, vec![1, 1, 1, 1, 1], vec![10, 5, 8, 12, 10])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 12  |",
+                "| 1  | 10  |",
+                "| 1  | 10  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Cross-partition eviction independence — Case-C eviction in one
+    /// partition must not affect another partition's state.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_partition_independence() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        // Batch 1: pk=1 fills {10, 20}; pk=2 fills {30, 40}.
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 1, 2, 2],
+            vec![10, 20, 30, 40],
+        )?)?;
+
+        // Batch 2: pk=1 sees 5 (evicts 20). pk=2 sees 25 (evicts 40).
+        // Each partition's Case-C branch is independent.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 2], vec![5, 25])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 10  |",
+                "| 2  | 25  |",
+                "| 2  | 30  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// NULL sort values exercise the shared encoder's null-ordering
+    /// through the row-encoded key byte order. With `ASC NULLS
+    /// LAST`, a NULL is the *largest* distinct ob, so a partition with
+    /// >= K non-NULL distinct values evicts its NULLs, while a partition
+    /// whose only distinct value is NULL still emits it.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_nulls_last_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank_with_opts(
+            2,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 10, 20, NULL → distinct-top-2 NULLS LAST = {10, 20}
+        // pk=2 vals: NULL               → distinct-top-2            = {NULL}
+        // pk=3 vals: 3, 3               → distinct-top-2            = {3}
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 1, 1, 1, 2, 3, 3],
+            vec![None, Some(10), Some(20), None, None, Some(3), Some(3)],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 10  |",
+                "| 1  | 20  |",
+                "| 2  |     |",
+                "| 3  | 3   |",
+                "| 3  | 3   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ASC NULLS FIRST` sorts NULLs *before* every non-NULL value, so a
+    /// NULL is the smallest distinct ob and is kept preferentially. Every
+    /// row at a retained distinct ob — including all tied NULLs — emits.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_nulls_first_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank_with_opts(
+            2,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 5, NULL, 8 → distinct-top-2 NULLS FIRST = {NULL, 5}
+        // pk=2 vals: 7, NULL          → distinct-top-2             = {NULL, 7}
+        // pk=3 vals: 3, 1             → distinct-top-2             = {1, 3}
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 3, 1, 2, 1, 3],
+            vec![
+                None,
+                Some(7),
+                Some(5),
+                Some(3),
+                None,
+                None,
+                Some(8),
+                Some(1),
+            ],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  |     |",
+                "| 1  |     |",
+                "| 1  | 5   |",
+                "| 2  |     |",
+                "| 2  | 7   |",
+                "| 3  | 1   |",
+                "| 3  | 3   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Total `GroupEntry` count across all partitions.
+    fn dense_rank_entry_count(state: &PartitionedTopKDenseRank) -> usize {
+        state
+            .states
+            .values()
+            .flat_map(|s| s.groups.values())
+            .map(|entries| entries.len())
+            .sum()
+    }
+
+    /// One source batch feeding many retained groups must be charged
+    /// once, not once per group.
+    ///
+    /// Dense-rank retains up to K distinct-ob groups per partition and
+    /// each can draw rows from the same batch, so charging per entry
+    /// inflates the reservation by (partitions × K) — here 6× — and can
+    /// trip a spurious `ResourcesExhausted`.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_charges_batch_once() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(3)?;
+
+        // pk=1 retains {1,2,3}, pk=2 retains {10,20,30}: 6 groups, all
+        // from this one batch.
+        let batch = pk_val_batch(
+            &schema,
+            vec![1, 1, 1, 1, 2, 2, 2, 2],
+            vec![1, 2, 3, 4, 10, 20, 30, 40],
+        )?;
+        let batch_bytes = get_record_batch_memory_size(&batch);
+        state.insert_batch(&batch)?;
+
+        assert_eq!(dense_rank_entry_count(&state), 6);
+        assert_eq!(state.store.len(), 1);
+        assert_eq!(state.store.batches_size, batch_bytes);
+        Ok(())
+    }
+
+    /// Evicting the last group referencing a batch must release the
+    /// batch's bytes, or the reservation only ever grows.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_releases_evicted_batch() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        let first = pk_val_batch(&schema, vec![1, 1], vec![50, 60])?;
+        state.insert_batch(&first)?;
+        assert_eq!(state.store.len(), 1);
+
+        // Both values beat {50, 60}, so every group from `first` is
+        // evicted and only `second` remains charged.
+        let second = pk_val_batch(&schema, vec![1, 1], vec![5, 6])?;
+        let second_bytes = get_record_batch_memory_size(&second);
+        state.insert_batch(&second)?;
+
+        assert_eq!(state.store.len(), 1);
+        assert_eq!(state.store.batches_size, second_bytes);
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 6   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// The mirror of the above: a batch whose every run is rejected must
+    /// not be charged at all.
+    ///
+    /// Nothing references it, so nothing would ever release it — charging
+    /// it would pin both the bytes and the batch for the operator's
+    /// lifetime.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_ignores_fully_rejected_batch() -> Result<()>
+    {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        let first = pk_val_batch(&schema, vec![1, 1], vec![5, 6])?;
+        let first_bytes = get_record_batch_memory_size(&first);
+        state.insert_batch(&first)?;
+        assert_eq!(state.store.len(), 1);
+
+        // At K=2 with {5, 6} tracked, both values lose to the boundary, so
+        // no `GroupEntry` points at `second`.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![50, 60])?)?;
+
+        assert_eq!(dense_rank_entry_count(&state), 2);
+        assert_eq!(state.store.len(), 1);
+        assert_eq!(state.store.batches_size, first_bytes);
+        Ok(())
+    }
+
+    /// `keys` must grow on demand rather than reserve K slots when a
+    /// partition is first seen. `size()` charges `keys.capacity()`, so
+    /// eager sizing reserves O(partitions * K) for slots that never hold
+    /// a key — enough to fail a memory limit on a high-cardinality input
+    /// whose partitions each keep a handful of distinct values.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_heap_grows_on_demand() -> Result<()> {
+        const K: usize = 512;
+        const PARTITIONS: usize = 64;
+        let (schema, mut state) = build_partitioned_topk_dense_rank(K)?;
+
+        // One row per partition: every partition holds exactly one
+        // distinct ob value, K - 1 slots short of capacity.
+        let pks: Vec<i32> = (0..PARTITIONS as i32).collect();
+        let vals = pks.clone();
+        state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+
+        assert_eq!(state.states.len(), PARTITIONS);
+        let heap_slots: usize = state.states.values().map(|s| s.keys.capacity()).sum();
+        // Eager `with_capacity(K)` would reserve PARTITIONS * K = 32768.
+        assert!(
+            heap_slots <= PARTITIONS * 8,
+            "reserved {heap_slots} heap slots to hold {PARTITIONS} keys"
+        );
+        Ok(())
+    }
+
+    /// The encoded partition keys owned by `states`, and the backing
+    /// tables the drained scratch maps keep, are long-lived heap
+    /// allocations `size()` must charge: they persist for the operator's
+    /// life yet belong to no `GroupEntry`, so per-entry accounting can't
+    /// see them. With numerous or wide partition keys the key bytes are
+    /// the larger term.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_size_covers_keys_and_scratch() -> Result<()>
+    {
+        const PARTITIONS: usize = 64;
+        const KEY_WIDTH: usize = 1024;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Utf8, false),
+            Field::new("val", DataType::Int32, false),
+        ]));
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let partition_sort_fields = build_sort_fields(
+            &[PhysicalSortExpr {
+                expr: Arc::clone(&pk_expr),
+                options: SortOptions::default(),
+            }],
+            &schema,
+        )?;
+        let order_expr = LexOrdering::from([PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: SortOptions::default(),
+        }]);
+        let mut state = PartitionedTopKDenseRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            order_expr,
+            4,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+        )?;
+
+        // One row per partition, each with a wide key.
+        let pks: Vec<String> = (0..PARTITIONS)
+            .map(|i| format!("{}{i:04}", "p".repeat(KEY_WIDTH - 4)))
+            .collect();
+        let vals: Vec<i32> = (0..PARTITIONS as i32).collect();
+        state.insert_batch(&RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(pks)),
+                Arc::new(Int32Array::from(vals)),
+            ],
+        )?)?;
+        assert_eq!(state.states.len(), PARTITIONS);
+
+        let key_bytes: usize = state.states.keys().map(|pk| pk.capacity()).sum();
+        let scratch_bytes = state.partition_groups.capacity()
+            * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
+            + state.ob_runs.capacity() * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>());
+        assert!(key_bytes >= PARTITIONS * KEY_WIDTH, "key bytes {key_bytes}");
+        assert!(scratch_bytes > 0, "scratch tables never allocated");
+
+        // Reconstruct the total from its parts. Both terms above have to
+        // appear for this to balance, so dropping either from `size()`
+        // fails here rather than being absorbed by the slack in some
+        // other term.
+        let expected = size_of::<PartitionedTopKDenseRank>()
+            + state.row_converter.size()
+            + state.partition_converter.size()
+            + state.scratch_rows.size()
+            + state.partition_scratch_rows.size()
+            + key_bytes
+            + state.states.values().map(|s| s.size()).sum::<usize>()
+            + state.states.capacity()
+                * (size_of::<Vec<u8>>() + size_of::<DenseRankPartitionState>())
+            + scratch_bytes
+            + state.store.size();
+        assert_eq!(state.size(), expected);
+        Ok(())
+    }
+
+    /// A group admitted and then evicted within the *same*
+    /// `insert_batch` call: the batch is still pending (not yet handed to
+    /// the store), so releasing it must decrement the in-flight use count
+    /// rather than call `unuse` on an unregistered id.
+    ///
+    /// `ob_runs` drains in hash order, so with K=1 and many distinct
+    /// values the minimum is almost never seen first and the run
+    /// admit-then-evict path is taken repeatedly.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_evicts_same_call_group() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(1)?;
+
+        let pks = vec![1; 32];
+        let vals: Vec<i32> = (0..32).rev().collect();
+        let batch = pk_val_batch(&schema, pks, vals)?;
+        let batch_bytes = get_record_batch_memory_size(&batch);
+        state.insert_batch(&batch)?;
+
+        assert_eq!(dense_rank_entry_count(&state), 1);
+        assert_eq!(state.store.len(), 1);
+        assert_eq!(state.store.batches_size, batch_bytes);
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 0   |",
                 "+----+-----+",
             ],
             &results
