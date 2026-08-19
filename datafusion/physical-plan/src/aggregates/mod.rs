@@ -5656,6 +5656,7 @@ mod tests {
             .map(|m| m.as_usize())
             .unwrap_or(0);
         assert_eq!(skipped_rows, 3);
+        assert_accumulator_phase_times(&aggregate_exec, &["convert_to_state"]);
 
         Ok(())
     }

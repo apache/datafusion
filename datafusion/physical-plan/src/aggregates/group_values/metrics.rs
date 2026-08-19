@@ -61,6 +61,7 @@ pub(crate) enum AccumulatorPhase {
     Update,
     Merge,
     State,
+    ConvertToState,
     Evaluate,
 }
 
@@ -69,6 +70,7 @@ pub(crate) struct AggregateAccumulatorMetrics {
     update_times: Option<Vec<Time>>,
     merge_times: Option<Vec<Time>>,
     state_times: Option<Vec<Time>>,
+    convert_to_state_times: Option<Vec<Time>>,
     evaluate_times: Option<Vec<Time>>,
 }
 
@@ -108,6 +110,9 @@ impl AggregateAccumulatorMetrics {
             state_times: phases
                 .contains(&AccumulatorPhase::State)
                 .then(|| new_phase_metrics("state")),
+            convert_to_state_times: phases
+                .contains(&AccumulatorPhase::ConvertToState)
+                .then(|| new_phase_metrics("convert_to_state")),
             evaluate_times: phases
                 .contains(&AccumulatorPhase::Evaluate)
                 .then(|| new_phase_metrics("evaluate")),
@@ -124,6 +129,7 @@ impl AggregateAccumulatorMetrics {
             AccumulatorPhase::Update => self.update_times.as_ref(),
             AccumulatorPhase::Merge => self.merge_times.as_ref(),
             AccumulatorPhase::State => self.state_times.as_ref(),
+            AccumulatorPhase::ConvertToState => self.convert_to_state_times.as_ref(),
             AccumulatorPhase::Evaluate => self.evaluate_times.as_ref(),
         };
         debug_assert!(
@@ -209,7 +215,10 @@ mod tests {
             .iter()
             .filter_map(|metric| match metric.value() {
                 MetricValue::Time { name, .. }
-                    if name.starts_with("agg_expr_") && name.ends_with(suffix) =>
+                    if name
+                        .strip_prefix("agg_expr_")
+                        .and_then(|name| name.split_once('_'))
+                        .is_some_and(|(_, metric)| metric == suffix) =>
                 {
                     let aggregate_label = metric
                         .labels()
@@ -243,7 +252,10 @@ mod tests {
             matches!(
                 metric.value(),
                 MetricValue::Time { name, .. }
-                    if name.starts_with("agg_expr_") && name.ends_with(suffix)
+                    if name
+                        .strip_prefix("agg_expr_")
+                        .and_then(|name| name.split_once('_'))
+                        .is_some_and(|(_, phase)| phase == suffix)
             )
         }) {
             found = true;

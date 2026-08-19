@@ -226,7 +226,7 @@ impl AggregateHashTable<PartialSkipMarker> {
         {
             output.extend(accumulator_metrics.time(
                 idx,
-                AccumulatorPhase::State,
+                AccumulatorPhase::ConvertToState,
                 || acc.convert_to_state(values),
             )?);
         }

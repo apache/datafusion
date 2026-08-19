@@ -35,7 +35,11 @@ use crate::aggregates::{AggregateExec, AggregateMode, aggregate_metric_label};
 
 pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
     match mode {
-        AggregateMode::Partial => &[AccumulatorPhase::Update, AccumulatorPhase::State],
+        AggregateMode::Partial => &[
+            AccumulatorPhase::Update,
+            AccumulatorPhase::State,
+            AccumulatorPhase::ConvertToState,
+        ],
         AggregateMode::PartialReduce => {
             &[AccumulatorPhase::Merge, AccumulatorPhase::State]
         }
@@ -103,7 +107,11 @@ mod tests {
         let cases: [(AggregateMode, &[AccumulatorPhase]); 6] = [
             (
                 AggregateMode::Partial,
-                &[AccumulatorPhase::Update, AccumulatorPhase::State],
+                &[
+                    AccumulatorPhase::Update,
+                    AccumulatorPhase::State,
+                    AccumulatorPhase::ConvertToState,
+                ],
             ),
             (
                 AggregateMode::PartialReduce,
