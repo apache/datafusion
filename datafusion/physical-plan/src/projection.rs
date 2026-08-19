@@ -197,9 +197,19 @@ impl ProjectionExec {
     /// Like [`Self::try_from_projector`], but reuses `eq_group` as the output
     /// equivalence group instead of projecting the input's group again.
     ///
-    /// Only sound when the caller has established that the input's equivalence
-    /// group and this projection's mapping are both unchanged, since
-    /// [`EquivalenceGroup::project`] is a pure function of the two.
+    /// [`EquivalenceGroup::project`] is a pure function of the group and the
+    /// mapping, so reuse is sound exactly when both are unchanged.
+    ///
+    /// The caller establishes the first by comparing the old and new child
+    /// groups. The second holds because the mapping comes from
+    /// `projector.projection()`, carried over untouched, and from the child's
+    /// schema, which `ProjectionMapping::try_new` consults only for field names
+    /// and indices -- never for types or nullability. So a child differing only
+    /// in nullability keeps the same mapping. A child that renamed or reordered
+    /// those fields would change the group too, since its members are `Column`s
+    /// carrying those names, and the comparison above would reject it; were one
+    /// to slip through anyway, `try_new`'s name assertion errors out rather than
+    /// letting a stale group into the plan.
     fn try_from_projector_reusing_eq_group(
         projector: Projector,
         input: Arc<dyn ExecutionPlan>,
@@ -2280,10 +2290,20 @@ mod tests {
     /// `EmptyExec(a, b, c)` under a filter that equates `lhs` and `rhs`, so the
     /// child carries a non-trivial equivalence group.
     fn filtered_source(lhs: &str, rhs: &str) -> Result<Arc<dyn ExecutionPlan>> {
+        filtered_source_with_nullability(lhs, rhs, false)
+    }
+
+    /// As [`filtered_source`], but `nullable` varies the schema's nullability
+    /// while leaving field names and order alone.
+    fn filtered_source_with_nullability(
+        lhs: &str,
+        rhs: &str,
+        nullable: bool,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
+            Field::new("a", DataType::Int32, nullable),
+            Field::new("b", DataType::Int32, nullable),
+            Field::new("c", DataType::Int32, nullable),
         ]));
         let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let predicate = binary(
@@ -2430,6 +2450,53 @@ mod tests {
         // The fast path must agree with building the projection from scratch.
         let expected = ProjectionExec::try_new(exprs, sorted)?;
         assert_same_properties(replaced.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_reuses_eq_group_across_a_nullability_change() -> Result<()> {
+        // Reuse is sound only if the projection mapping is unchanged as well.
+        // `ProjectionMapping::try_new` reads the child schema for field names
+        // and indices alone, so a child differing only in nullability keeps the
+        // same mapping and must still take the fast path.
+        //
+        // The comparison is against `try_from_projector`, the path this one
+        // replaces, rather than a freshly built projection: `replace_children`
+        // carries the existing `Projector` over, so the output schema stays as
+        // it was, while `try_new` would derive a new one from the new child.
+        // That difference is inherent to `replace_children` and not something
+        // this fast path introduces, so the meaningful contract is that the two
+        // `replace_children` paths agree.
+        let child = filtered_source("a", "b")?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection = Arc::new(ProjectionExec::try_new(exprs, Arc::clone(&child))?);
+
+        let nullable_child = filtered_source_with_nullability("a", "b", true)?;
+        assert_ne!(
+            child.schema(),
+            nullable_child.schema(),
+            "the two children were meant to differ in nullability"
+        );
+        assert_eq!(
+            child.properties().equivalence_properties().eq_group(),
+            nullable_child
+                .properties()
+                .equivalence_properties()
+                .eq_group(),
+            "nullability moved the equivalence group, so the fast path is no longer under test"
+        );
+
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![Arc::clone(&nullable_child)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let recomputed = ProjectionExec::try_from_projector(
+            projection.projector.clone(),
+            nullable_child,
+        )?;
+
+        assert_same_properties(replaced.as_ref(), &recomputed);
 
         Ok(())
     }
