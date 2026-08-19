@@ -23,9 +23,10 @@ use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err}
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    CurrentlyExecutingSqlTracker, DataFusion, Filter, TestContext, df_value_validator,
-    read_dir_recursive, setup_scratch_dir, should_skip_file, should_skip_record,
-    value_normalizer,
+    ConfigMatrixCombination, CurrentlyExecutingSqlTracker, DataFusion, Filter,
+    TestContext, describe_combination, df_value_validator, iter_matrix_combinations,
+    parse_config_matrix_from_file, read_dir_recursive, setup_scratch_dir,
+    should_skip_file, should_skip_record, value_normalizer,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -467,7 +468,7 @@ async fn run_test_file_substrait_round_trip(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let res = run_file_in_runner(path, &mut runner, filters, colored_output).await;
+    let res = run_file_in_runner(path, &mut runner, filters, colored_output, None).await;
     pb.finish_and_clear();
     res
 }
@@ -502,17 +503,94 @@ async fn run_test_file(
         path,
         relative_path,
     } = test_file;
+
+    let matrices = parse_config_matrix_from_file(&path)?;
+    let combinations = iter_matrix_combinations(&matrices);
+
+    // No matrix -> preserve the original single-pass behavior byte-for-byte.
+    if combinations.is_empty() {
+        return run_test_file_once(
+            path,
+            relative_path,
+            validator,
+            mp,
+            mp_style,
+            filters,
+            currently_executing_sql_tracker,
+            colored_output,
+            None,
+        )
+        .await;
+    }
+
+    // Scratch dir is cleared once for the whole file — combos share it,
+    // matching the "same test, different config" contract.
+    setup_scratch_dir(&relative_path)?;
+
+    for combo in combinations {
+        run_test_file_once(
+            path.clone(),
+            relative_path.clone(),
+            validator,
+            mp.clone(),
+            mp_style.clone(),
+            filters,
+            currently_executing_sql_tracker.clone(),
+            colored_output,
+            Some(&combo),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Run a single pass of the test file. If `combo` is `Some`, the config
+/// values are applied to a fresh `SessionContext` before the runner starts,
+/// and any failure is annotated with the matrix key/value.
+///
+/// If `combo` is `None`, this replicates the pre-existing single-run
+/// behavior exactly, including the scratch-dir setup.
+#[expect(clippy::too_many_arguments)]
+async fn run_test_file_once(
+    path: PathBuf,
+    relative_path: PathBuf,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+    filters: &[Filter],
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
+    combo: Option<&ConfigMatrixCombination>,
+) -> Result<()> {
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
-    setup_scratch_dir(&relative_path)?;
+
+    // Only set up the scratch dir here for the non-matrix path. In the
+    // matrix path the caller cleared it once for the whole file to avoid
+    // repeated wipes between combos.
+    if combo.is_none() {
+        setup_scratch_dir(&relative_path)?;
+    }
+
+    if let Some(combo) = combo {
+        apply_config_matrix_combination(&test_ctx, combo, &relative_path)?;
+    }
 
     let count: u64 = get_record_count(&path, "Datafusion".to_string());
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(relative_path.display().to_string());
+    let pb_message = match combo {
+        Some(combo) => format!(
+            "{} [{}]",
+            relative_path.display(),
+            describe_combination(combo)
+        ),
+        None => relative_path.display().to_string(),
+    };
+    pb.set_message(pb_message);
 
     // If DataFusion configuration has changed during test file runs, errors will be
     // pushed to this vec.
@@ -532,14 +610,54 @@ async fn run_test_file(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, &mut runner, filters, colored_output).await;
+    let result =
+        run_file_in_runner(path, &mut runner, filters, colored_output, combo).await;
     pb.finish_and_clear();
 
     result?;
 
     // If there was no correctness error, check that the config is unchanged.
     runner.shutdown_async().await;
-    config_change_result(&config_change_errors)
+    annotate_with_matrix(config_change_result(&config_change_errors), combo)
+}
+
+/// Apply the matrix values to the given `TestContext`'s config in-place.
+/// Any unknown key or invalid value is reported with a user-friendly error
+/// naming the file, key, and value.
+fn apply_config_matrix_combination(
+    test_ctx: &TestContext,
+    combo: &ConfigMatrixCombination,
+    relative_path: &Path,
+) -> Result<()> {
+    let session_ctx = test_ctx.session_ctx();
+    let state_ref = session_ctx.state_ref();
+    let mut state = state_ref.write();
+    let opts = state.config_mut().options_mut();
+    for (key, value) in combo {
+        opts.set(key, value).map_err(|e| {
+            exec_datafusion_err!(
+                "configMatrix in {}: failed to set `{key}` = `{value}`: {e}",
+                relative_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Prefix a matrix-scoped failure with `[configMatrix: k=v]` so CI logs
+/// point at the offending combination instead of just the file name.
+fn annotate_with_matrix(
+    result: Result<()>,
+    combo: Option<&ConfigMatrixCombination>,
+) -> Result<()> {
+    let Some(combo) = combo else {
+        return result;
+    };
+    result.map_err(|e| {
+        DataFusionError::External(
+            format!("{e} [configMatrix: {}]", describe_combination(combo)).into(),
+        )
+    })
 }
 
 async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
@@ -547,6 +665,7 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     runner: &mut sqllogictest::Runner<D, M>,
     filters: &[Filter],
     colored_output: bool,
+    combo: Option<&ConfigMatrixCombination>,
 ) -> Result<()> {
     let path = path.canonicalize()?;
     let records =
@@ -569,7 +688,17 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     }
 
     if !errs.is_empty() {
-        let mut msg = format!("{} errors in file {}\n\n", errs.len(), path.display());
+        // Embed `[configMatrix: ...]` directly in the "N errors in file X"
+        // banner so the offending combination is visible on the first line
+        // instead of dangling after the diff.
+        let matrix_suffix = combo
+            .map(|c| format!(" [configMatrix: {}]", describe_combination(c)))
+            .unwrap_or_default();
+        let mut msg = format!(
+            "{} errors in file {}{matrix_suffix}\n\n",
+            errs.len(),
+            path.display()
+        );
         for (i, err) in errs.iter().enumerate() {
             if i >= ERRS_PER_FILE_LIMIT {
                 msg.push_str(&format!(
@@ -646,7 +775,7 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, &mut runner, filters, false).await;
+    let result = run_file_in_runner(path, &mut runner, filters, false, None).await;
     pb.finish_and_clear();
     result
 }
