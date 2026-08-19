@@ -47,7 +47,7 @@ impl StatsCache {
         partition: Option<usize>,
     ) -> Option<&Arc<Statistics>> {
         let key = (
-            plan as *const dyn ExecutionPlan as *const () as usize,
+            std::ptr::from_ref::<dyn ExecutionPlan>(plan) as *const () as usize,
             partition,
         );
         self.0.get(&key)
@@ -60,7 +60,7 @@ impl StatsCache {
         stats: Arc<Statistics>,
     ) {
         let key = (
-            plan as *const dyn ExecutionPlan as *const () as usize,
+            std::ptr::from_ref::<dyn ExecutionPlan>(plan) as *const () as usize,
             partition,
         );
         self.0.insert(key, stats);
