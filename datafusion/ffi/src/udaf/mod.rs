@@ -777,9 +777,7 @@ mod tests {
         let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         let metadata: HashMap<String, String> =
-            [("a_key".to_string(), "a_value".to_string())]
-                .into_iter()
-                .collect();
+            std::iter::once(("a_key".to_string(), "a_value".to_string())).collect();
         let input_field = Arc::new(
             Field::new("a", DataType::Float64, false).with_metadata(metadata.clone()),
         );

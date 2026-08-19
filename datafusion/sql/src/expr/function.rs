@@ -48,24 +48,17 @@ pub fn suggest_valid_function(
     is_window_func: bool,
     ctx: &dyn ContextProvider,
 ) -> Option<String> {
-    let valid_funcs = if is_window_func {
+    let mut valid_funcs = Vec::new();
+    if is_window_func {
         // All aggregate functions and builtin window functions
-        let mut funcs = Vec::new();
-
-        funcs.extend(ctx.udaf_names());
-        funcs.extend(ctx.udwf_names());
-
-        funcs
+        valid_funcs.extend(ctx.udaf_names());
+        valid_funcs.extend(ctx.udwf_names());
     } else {
         // All scalar functions and aggregate functions
-        let mut funcs = Vec::new();
-
-        funcs.extend(ctx.udf_names());
-        funcs.extend(ctx.higher_order_function_names());
-        funcs.extend(ctx.udaf_names());
-
-        funcs
-    };
+        valid_funcs.extend(ctx.udf_names());
+        valid_funcs.extend(ctx.higher_order_function_names());
+        valid_funcs.extend(ctx.udaf_names());
+    }
     find_closest_match(valid_funcs, input_function_name)
 }
 

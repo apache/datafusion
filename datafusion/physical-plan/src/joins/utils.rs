@@ -1833,6 +1833,7 @@ impl BuildProbeJoinMetrics {
             .ratio_metrics("avg_fanout", partition);
 
         Self {
+            baseline,
             build_time,
             build_input_batches,
             build_input_rows,
@@ -1840,7 +1841,6 @@ impl BuildProbeJoinMetrics {
             join_time,
             input_batches,
             input_rows,
-            baseline,
             probe_hit_rate,
             avg_fanout,
         }
