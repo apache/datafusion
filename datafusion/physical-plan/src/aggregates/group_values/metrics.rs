@@ -430,6 +430,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
+            Field::new("c", DataType::Float64, false),
         ]));
 
         let batches = (0..3)
@@ -443,6 +444,11 @@ mod tests {
                             (i + 1) as f64,
                             (i + 2) as f64,
                         ])),
+                        Arc::new(Float64Array::from(vec![
+                            (i + 3) as f64,
+                            (i + 4) as f64,
+                            (i + 5) as f64,
+                        ])),
                     ],
                 )
                 .unwrap()
@@ -455,14 +461,17 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates = vec![sum_aggregate(&schema, "b", "SUM(b)")?];
+        let aggregates = vec![
+            sum_aggregate(&schema, "b", "SUM(b)")?,
+            sum_aggregate(&schema, "c", "SUM(c)")?,
+        ];
 
         // Create partial aggregate
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregates.clone(),
-            vec![None],
+            vec![None, None],
             partial_input,
             Arc::clone(&schema),
         )?);
@@ -472,7 +481,7 @@ mod tests {
             AggregateMode::Final,
             group_by.as_final(),
             aggregates,
-            vec![None],
+            vec![None, None],
             partial_aggregate,
             schema,
         )?);
@@ -490,11 +499,17 @@ mod tests {
         assert_groupby_metrics(&metrics);
         assert_eq!(
             aggregate_metric_names_and_labels(&metrics, "merge_time"),
-            vec![("agg_expr_0_merge_time".to_string(), "SUM(b)".to_string())]
+            vec![
+                ("agg_expr_0_merge_time".to_string(), "SUM(b)".to_string()),
+                ("agg_expr_1_merge_time".to_string(), "SUM(c)".to_string()),
+            ]
         );
         assert_eq!(
             aggregate_metric_names_and_labels(&metrics, "evaluate_time"),
-            vec![("agg_expr_0_evaluate_time".to_string(), "SUM(b)".to_string())]
+            vec![
+                ("agg_expr_0_evaluate_time".to_string(), "SUM(b)".to_string()),
+                ("agg_expr_1_evaluate_time".to_string(), "SUM(c)".to_string()),
+            ]
         );
         assert_aggregate_metric_times_positive(&metrics, "merge_time");
         assert_aggregate_metric_times_positive(&metrics, "evaluate_time");
