@@ -70,6 +70,7 @@ use datafusion_functions_aggregate::expr_fn::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_expr::extension_types::DFArrayFormatterFactory;
+use futures::future::BoxFuture;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -2439,7 +2440,7 @@ impl DataFrame {
     }
 
     /// Fill null values in specified columns with a given value
-    /// If no columns are specified (empty vector), applies to all columns
+    /// If no columns are specified (empty slice), applies to all columns
     /// Only fills if the value can be cast to the column's type
     ///
     /// # Arguments
@@ -2458,19 +2459,14 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// // Fill nulls in only columns "a" and "c":
-    /// let df = df.fill_null(ScalarValue::from(0), vec!["a".to_owned(), "c".to_owned()])?;
+    /// let df = df.fill_null(&ScalarValue::from(0), &["a", "c"])?;
     /// // Fill nulls across all columns:
-    /// let df = df.fill_null(ScalarValue::from(0), vec![])?;
+    /// let df = df.fill_null(&ScalarValue::from(0), &[])?;
     /// # Ok(())
     /// # }
     /// ```
-    #[expect(clippy::needless_pass_by_value)]
-    pub fn fill_null(
-        &self,
-        value: ScalarValue,
-        columns: Vec<String>,
-    ) -> Result<DataFrame> {
-        self.fill_columns(&value, &columns, &coalesce(), |_| true)
+    pub fn fill_null(&self, value: &ScalarValue, columns: &[&str]) -> Result<DataFrame> {
+        self.fill_columns(value, columns, &coalesce(), |_| true)
     }
 
     // Helper to find columns from names
@@ -2721,10 +2717,41 @@ impl TableProvider for DataFrameTableProvider {
         self.table_type
     }
 
-    async fn scan(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
+    }
+}
+
+impl DataFrameTableProvider {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

@@ -272,8 +272,8 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
 01)SortPreservingMergeExec: [c2@0 ASC NULLS LAST]
-02)--SortExec: expr=[c2@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+02)--ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+03)----SortExec: expr=[c2@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
 05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
@@ -291,8 +291,8 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
 01)SortPreservingMergeExec: [total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST]
-02)--SortExec: expr=[total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+02)--ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+03)----SortExec: expr=[sum(aggregate_test_100.c3)@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
 05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
@@ -674,8 +674,8 @@ SELECT DISTINCT time as "first_seen" FROM t ORDER BY 1;
 statement ok
 drop table t;
 
-# Create a table having 3 columns which are ordering equivalent by the source. In the next step,
-# we will expect to observe the removed SortExec by propagating the orders across projection.
+# Create a table with three independently ordered columns. Their sum is not
+# necessarily ordered because integer addition can wrap.
 statement ok
 CREATE EXTERNAL TABLE multiple_ordered_table (
   a0 INTEGER,
@@ -702,9 +702,108 @@ logical_plan
 03)----TableScan: multiple_ordered_table projection=[a, b, c]
 physical_plan
 01)SortPreservingMergeExec: [result@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
+02)--SortExec: expr=[result@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
+
+statement ok
+drop table multiple_ordered_table;
+
+
+# Create a table having dependent sort order
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Test without repartition so removal of sort is more apperant
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# A strictly order-preserving scalar function is one-to-one, so an ordering on
+# its argument carries over to its result. `from_unixtime` reinterprets the
+# input integer as a timestamp without changing the value, so the whole
+# ordering is preserved and no SortExec is needed.
+query TT
+EXPLAIN SELECT from_unixtime(a) AS a_, from_unixtime(b) AS b_, from_unixtime(c) AS c_
+FROM multiple_ordered_table
+ORDER BY a_, b_, c_;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, b_ ASC NULLS LAST, c_ ASC NULLS LAST
+02)--Projection: from_unixtime(CAST(multiple_ordered_table.a AS Int64)) AS a_, from_unixtime(CAST(multiple_ordered_table.b AS Int64)) AS b_, from_unixtime(CAST(multiple_ordered_table.c AS Int64)) AS c_
+03)----TableScan: multiple_ordered_table projection=[a, b, c]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[from_unixtime(CAST(a@1 AS Int64)) as a_, from_unixtime(CAST(b@2 AS Int64)) as b_, from_unixtime(CAST(c@3 AS Int64)) as c_], file_type=csv, has_header=true
+
+# Being one-to-one also justifies keeping the *suffix* sort keys: data sorted
+# by [a, b] is also sorted by [from_unixtime(a), b], because rows with equal
+# `a_` have equal `a`, within which `b` is already sorted.
+query TT
+EXPLAIN SELECT from_unixtime(a) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: from_unixtime(CAST(multiple_ordered_table.a AS Int64)) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[from_unixtime(CAST(a@1 AS Int64)) as a_, b], file_type=csv, has_header=true
+
+# A widening CAST is one-to-one too:
+query TT
+EXPLAIN SELECT CAST(a AS BIGINT) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: CAST(multiple_ordered_table.a AS Int64) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[CAST(a@1 AS Int64) as a_, b], file_type=csv, has_header=true
+
+# In contrast, a merely monotone (`preserves_lex_ordering`, but not strictly
+# order-preserving) function such as floor() does NOT justify the suffix keys:
+# in general floor() collapses distinct inputs into one output value, and `b`
+# is not sorted within such a run, so a SortExec must remain.
+query TT
+EXPLAIN SELECT floor(CAST(a AS DOUBLE)) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: floor(CAST(multiple_ordered_table.a AS Float64)) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan
+01)SortExec: expr=[a_@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[floor(CAST(a@1 AS Float64)) as a_, b], file_type=csv, has_header=true
+
+# Monotonicity alone is still enough when the expression is the *only* sort
+# key, so here the SortExec is removed even though floor() is not strict:
+query TT
+EXPLAIN SELECT floor(CAST(a AS DOUBLE)) AS a_
+FROM multiple_ordered_table
+ORDER BY a_;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST
+02)--Projection: floor(CAST(multiple_ordered_table.a AS Float64)) AS a_
+03)----TableScan: multiple_ordered_table projection=[a]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[floor(CAST(a@1 AS Float64)) as a_], file_type=csv, has_header=true
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
 
 statement ok
 drop table multiple_ordered_table;
@@ -1386,7 +1485,9 @@ physical_plan
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
-# Boolean to integer casts preserve the order.
+# The cast preserves the order, but the comparison does not: `inc_col` is
+# ASC NULLS LAST while `desc_col` is DESC NULLS FIRST, so `inc_col > desc_col`
+# is null at both ends and the sort has to stay.
 statement ok
 CREATE EXTERNAL TABLE annotated_data_finite (
   ts INTEGER,
@@ -1408,9 +1509,87 @@ logical_plan
 03)----TableScan: annotated_data_finite projection=[inc_col, desc_col]
 physical_plan
 01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
+02)--SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], file_type=csv, has_header=true
+
+# With matching null placement the comparison keeps its order: no sort needed.
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite_nulls_last (
+  ts INTEGER,
+  inc_col INTEGER,
+  desc_col INTEGER,
+)
+STORED AS CSV
+WITH ORDER (inc_col ASC NULLS LAST)
+WITH ORDER (desc_col DESC NULLS LAST)
+LOCATION '../core/tests/data/window_1.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT CAST((inc_col>desc_col) as integer) as c from annotated_data_finite_nulls_last order by c;
+----
+logical_plan
+01)Sort: c ASC NULLS LAST
+02)--Projection: CAST(annotated_data_finite_nulls_last.inc_col > annotated_data_finite_nulls_last.desc_col AS Int32) AS c
+03)----TableScan: annotated_data_finite_nulls_last projection=[inc_col, desc_col]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], file_type=csv, has_header=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC NULLS LAST]], file_type=csv, has_header=true
+
+# Regression test for #11596. `a` is ASC NULLS FIRST and `b` is ASC NULLS LAST,
+# so `a + b` is null at both ends of the scan: (NULL, 3, 6, NULL). No nulls
+# placement describes that.
+query I
+COPY (VALUES (NULL, 1), (1, 2), (2, 4), (3, NULL))
+TO 'test_files/scratch/order/mixed_null_placement.csv'
+OPTIONS ('format.has_header' 'true');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE mixed_null_placement (
+  a BIGINT,
+  b BIGINT
+)
+STORED AS CSV
+WITH ORDER (a ASC NULLS FIRST)
+WITH ORDER (b ASC NULLS LAST)
+LOCATION 'test_files/scratch/order/mixed_null_placement.csv'
+OPTIONS ('format.has_header' 'true');
+
+# The sort has to happen. Without it, this comes back in scan order.
+query I
+SELECT a + b AS s FROM mixed_null_placement ORDER BY s;
+----
+3
+6
+NULL
+NULL
+
+# Same at the plan level. Two separate things keep this sort: `add()` won't
+# merge mismatched `nulls_first`, and `arithmetic_sort_properties` gives up on
+# any `col + col` with unbounded ranges, which is every column read from a
+# file. The second masks the first today.
+query TT
+EXPLAIN SELECT a + b AS s FROM mixed_null_placement ORDER BY s;
+----
+logical_plan
+01)Sort: s ASC NULLS LAST
+02)--Projection: mixed_null_placement.a + mixed_null_placement.b AS s
+03)----TableScan: mixed_null_placement projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [s@0 ASC NULLS LAST]
+02)--SortExec: expr=[s@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[a@0 + b@1 as s]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/mixed_null_placement.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC NULLS LAST]], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE mixed_null_placement;
 
 # Union a query with the actual data and one with a constant
 query I
@@ -1747,6 +1926,38 @@ EXPLAIN SELECT a, named_struct('a', a, 'b', b) AS s FROM ordered_by_a ORDER BY s
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, named_struct(a, a@0, b, b@1) as s], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
+query I
+COPY (
+  SELECT * FROM (VALUES (1, 1), (2, 3), (200, 10), (255, 10)) AS t(a, b)
+  ORDER BY a
+)
+TO 'test_files/scratch/order/uint8_overflow.csv'
+OPTIONS ('format.has_header' 'false');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE ordered_u8 (
+  a TINYINT UNSIGNED NOT NULL,
+  b TINYINT UNSIGNED NOT NULL
+)
+STORED AS CSV
+LOCATION 'test_files/scratch/order/uint8_overflow.csv'
+OPTIONS ('format.has_header' 'false')
+WITH ORDER (a ASC)
+WITH ORDER (b ASC);
+
+query I
+SELECT (a + b) AS result FROM ordered_u8 ORDER BY result ASC;
+----
+2
+5
+9
+210
+
+statement ok
+DROP TABLE ordered_u8;
+
 # Config reset
 statement ok
 reset datafusion.catalog.information_schema;
@@ -1770,3 +1981,71 @@ reset datafusion.sql_parser.default_null_ordering;
 
 statement ok
 reset datafusion.sql_parser.dialect;
+
+# A global sort feeding a sink (CopyTo) must keep a leading key that is constant
+# within each partition but differs across them ("a" is 2 on one union branch,
+# 1 on the other). The merge above the union has to reorder rows across branches,
+# so the physical plan must keep "a" in its ordering; dropping it (leaving only
+# [b@1 ASC]) silently loses the global order under the sink.
+statement ok
+CREATE TABLE t2(b INT) AS VALUES (10), (20);
+
+query TT
+EXPLAIN COPY (
+  SELECT 2 AS a, b FROM t2
+  UNION ALL
+  SELECT 1 AS a, b FROM t2
+  ORDER BY a, b
+) TO 'test_files/scratch/order/sort_key_sink.parquet';
+----
+logical_plan
+01)CopyTo: format=parquet output_url=test_files/scratch/order/sort_key_sink.parquet options: ()
+02)--Sort: a ASC NULLS LAST, b ASC NULLS LAST
+03)----Union
+04)------Projection: Int64(2) AS a, t2.b
+05)--------TableScan: t2 projection=[b]
+06)------Projection: Int64(1) AS a, t2.b
+07)--------TableScan: t2 projection=[b]
+physical_plan
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+03)----UnionExec
+04)------SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[2 as a, b@0 as b]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------ProjectionExec: expr=[1 as a, b@0 as b]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Actually execute the COPY and verify the rows written to the file are in
+# global (a, b) order, interleaving the two union branches. If "a" were
+# dropped from the sort, the file would instead contain rows ordered only
+# by "b" within each branch.
+query I
+COPY (
+  SELECT 2 AS a, b FROM t2
+  UNION ALL
+  SELECT 1 AS a, b FROM t2
+  ORDER BY a, b
+) TO 'test_files/scratch/order/sort_key_sink.parquet';
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE sort_key_sink STORED AS PARQUET
+LOCATION 'test_files/scratch/order/sort_key_sink.parquet';
+
+# Note: no ORDER BY here, so this checks the order rows were written in
+query II
+SELECT * FROM sort_key_sink;
+----
+1 10
+1 20
+2 10
+2 20
+
+statement ok
+DROP TABLE sort_key_sink;
+
+statement ok
+DROP TABLE t2;

@@ -17,24 +17,24 @@
 
 //! Execution plan for reading CSV files
 
+use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::fmt;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::sync::Arc;
-use std::task::Poll;
 
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    FileRange, ListingTableUrl, PartitionedFile, RangeCalculation, TableSchema,
-    as_file_source, calculate_range,
+    FileRange, ListingTableUrl, PartitionedFile, TableSchema, as_file_source,
 };
 
 use arrow::csv;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -309,6 +309,58 @@ impl FileSource for CsvSource {
             DisplayFormatType::TreeRender => Ok(()),
         }
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
+    }
+
+    /// Emit a `CsvScan` node wrapping the shared base config and CSV options.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let node = protobuf::CsvScanExecNode {
+            base_conf: Some(base.try_to_proto(ctx)?),
+            has_header: self.has_header(),
+            delimiter: proto_byte_to_string(self.delimiter(), "delimiter")?,
+            quote: proto_byte_to_string(self.quote(), "quote")?,
+            optional_escape: self
+                .escape()
+                .map(|escape| {
+                    Ok::<_, DataFusionError>(
+                        protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                            proto_byte_to_string(escape, "escape")?,
+                        ),
+                    )
+                })
+                .transpose()?,
+            optional_comment: self
+                .comment()
+                .map(|comment| {
+                    Ok::<_, DataFusionError>(
+                        protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                            proto_byte_to_string(comment, "comment")?,
+                        ),
+                    )
+                })
+                .transpose()?,
+            newlines_in_values: self.newlines_in_values(),
+            truncate_rows: self.truncate_rows(),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CsvScan(node)),
+        }))
+    }
 }
 
 impl FileOpener for CsvOpener {
@@ -367,43 +419,53 @@ impl FileOpener for CsvOpener {
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
+            let file_size = partitioned_file.object_meta.size;
+            let location = partitioned_file.object_meta.location;
 
-            let calculated_range =
-                calculate_range(&partitioned_file, &store, terminator).await?;
+            if let Some(file_range) = partitioned_file.range.as_ref() {
+                let raw_start: u64 = file_range.start.try_into().map_err(|_| {
+                    exec_datafusion_err!(
+                        "Expected start range to fit in u64, got {}",
+                        file_range.start
+                    )
+                })?;
+                let raw_end: u64 = file_range.end.try_into().map_err(|_| {
+                    exec_datafusion_err!(
+                        "Expected end range to fit in u64, got {}",
+                        file_range.end
+                    )
+                })?;
 
-            let range = match calculated_range {
-                RangeCalculation::Range(None) => None,
-                RangeCalculation::Range(Some(range)) => Some(range.into()),
-                RangeCalculation::TerminateEarly => {
-                    return Ok(
-                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    );
-                }
-            };
+                let aligned_stream = AlignedBoundaryStream::new(
+                    Arc::clone(&store),
+                    location.clone(),
+                    raw_start,
+                    raw_end,
+                    file_size,
+                    terminator.unwrap_or(b'\n'),
+                )
+                .await?
+                .map_err(DataFusionError::from);
 
-            let options = GetOptions {
-                range,
-                ..Default::default()
-            };
+                let decoder = config.builder().build_decoder();
+                let input = file_compression_type
+                    .convert_stream(aligned_stream.boxed())?
+                    .fuse();
+                let stream = deserialize_stream(
+                    input,
+                    DecoderDeserializer::new(CsvDecoder::new(decoder)),
+                );
+                return Ok(stream.map_err(Into::into).boxed());
+            }
 
-            let result = store
-                .get_opts(&partitioned_file.object_meta.location, options)
-                .await?;
+            // No range specified — read the entire file
+            let options = GetOptions::default();
+            let result = store.get_opts(&location, options).await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
-                    let is_whole_file_scanned = partitioned_file.range.is_none();
-                    let decoder = if is_whole_file_scanned {
-                        // Don't seek if no range as breaks FIFO files
-                        file_compression_type.convert_read(file)?
-                    } else {
-                        file.seek(SeekFrom::Start(result.range.start as _))?;
-                        file_compression_type.convert_read(
-                            file.take((result.range.end - result.range.start) as u64),
-                        )?
-                    };
-
+                GetResultPayload::File(file, _) => {
+                    let decoder = file_compression_type.convert_read(file)?;
                     let mut reader = config.open(decoder)?;
 
                     // Use std::iter::from_fn to wrap execution of iterator's next() method.
@@ -491,4 +553,98 @@ pub async fn plan_to_csv(
     }
 
     Ok(())
+}
+
+#[cfg(feature = "proto")]
+fn proto_byte_to_string(b: u8, description: &str) -> Result<String> {
+    let bytes = &[b];
+    let s = std::str::from_utf8(bytes).map_err(|_| {
+        datafusion_common::internal_datafusion_err!(
+            "Invalid CSV {description}: can not represent {bytes:0x?} as utf8"
+        )
+    })?;
+    Ok(s.to_owned())
+}
+
+#[cfg(feature = "proto")]
+fn proto_str_to_byte(s: &str, description: &str) -> Result<u8> {
+    datafusion_common::assert_eq_or_internal_err!(
+        s.len(),
+        1,
+        "Invalid CSV {description}: expected single character, got {s}"
+    );
+    Ok(s.as_bytes()[0])
+}
+
+#[cfg(feature = "proto")]
+impl CsvSource {
+    /// Reconstructs a `DataSourceExec` from a protobuf `CsvScan`.
+    ///
+    /// Custom line terminators are not represented in the wire format.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::config::CsvOptions;
+        use datafusion_datasource::file_compression_type::FileCompressionType;
+        use datafusion_datasource::file_scan_config::{
+            FileScanConfig, FileScanConfigBuilder,
+        };
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => scan,
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not a CsvScan"
+                );
+            }
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "CsvScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        let escape = match &scan.optional_escape {
+            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) => {
+                Some(proto_str_to_byte(escape, "escape")?)
+            }
+            None => None,
+        };
+        let comment = match &scan.optional_comment {
+            Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(comment)) => {
+                Some(proto_str_to_byte(comment, "comment")?)
+            }
+            None => None,
+        };
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+
+        let csv_options = CsvOptions {
+            has_header: Some(scan.has_header),
+            delimiter: proto_str_to_byte(&scan.delimiter, "delimiter")?,
+            quote: proto_str_to_byte(&scan.quote, "quote")?,
+            newlines_in_values: Some(scan.newlines_in_values),
+            truncated_rows: Some(scan.truncate_rows),
+            ..Default::default()
+        };
+        let source = Arc::new(
+            CsvSource::new(table_schema)
+                .with_csv_options(csv_options)
+                .with_escape(escape)
+                .with_comment(comment),
+        );
+
+        // The compression type is not on the wire; CSV scans always
+        // deserialize as uncompressed.
+        let conf = FileScanConfigBuilder::from(FileScanConfig::try_from_proto(
+            base_conf, ctx, source,
+        )?)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build();
+        Ok(DataSourceExec::from_data_source(conf))
+    }
 }

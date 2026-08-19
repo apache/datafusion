@@ -325,7 +325,9 @@ fn cast_array_by_name(
     ) {
         datafusion_common::nested_struct::cast_column(array, cast_type, cast_options)
     } else {
-        ensure_temporal_array_timestamp_bounds(array, cast_type)?;
+        if !cast_options.safe {
+            ensure_temporal_array_timestamp_bounds(array, cast_type)?;
+        }
         Ok(kernels::cast::cast_with_options(
             array,
             cast_type,
@@ -765,5 +767,33 @@ mod tests {
                 .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn safe_cast_timestamp_array_to_timestamp_overflow_returns_null() {
+        let overflow_value = i64::MAX / 1_000_000_000 + 1;
+        let array: ArrayRef =
+            Arc::new(TimestampSecondArray::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = value
+            .cast_to(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                Some(&safe_options),
+            )
+            .expect("expected safe cast to return null");
+
+        let ColumnarValue::Array(array) = casted else {
+            panic!("expected array after cast");
+        };
+        let array = array
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("expected TimestampNanosecondArray");
+        assert!(array.is_null(0));
     }
 }

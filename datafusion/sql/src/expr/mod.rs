@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::ControlFlow;
+
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
@@ -22,13 +24,14 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, StructField, Subscript,
-    TrimWhereField, TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, Spanned, StructField,
+    Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
+use sqlparser::ast::{Query, Visit, Visitor};
 
 use datafusion_common::{
-    DFSchema, Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    DFSchema, Diagnostic, Result, ScalarValue, Span, internal_datafusion_err,
+    internal_err, not_impl_err, plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
@@ -54,7 +57,92 @@ mod substring;
 mod unary_op;
 mod value;
 
+/// Returns `None` if `expr` is not a NULL literal, and `Some(span)` where
+/// `span` is the literal's span, if it has one.
+#[expect(
+    clippy::option_option,
+    reason = "The two levels mean different things, see above"
+)]
+fn null_value_span(expr: &SQLExpr) -> Option<Option<Span>> {
+    if let SQLExpr::Value(ValueWithSpan {
+        value: Value::Null,
+        span,
+    }) = expr
+    {
+        Some(Span::try_from_sqlparser_span(*span))
+    } else {
+        None
+    }
+}
+
+fn null_equality_warning(expr: &SQLExpr) -> Option<Diagnostic> {
+    let SQLExpr::BinaryOp { left, op, right } = expr else {
+        return None;
+    };
+
+    let null_span = null_value_span(left).or_else(|| null_value_span(right))?;
+
+    let (message, help) = match op {
+        BinaryOperator::Eq => (
+            "comparison with NULL using `=` always evaluates to NULL",
+            "use `IS NULL` to check for NULL values",
+        ),
+        BinaryOperator::NotEq => (
+            "comparison with NULL using `<>` always evaluates to NULL",
+            "use `IS NOT NULL` to check for non-NULL values",
+        ),
+        _ => return None,
+    };
+
+    Some(
+        Diagnostic::new_warning(message, Span::try_from_sqlparser_span(expr.span()))
+            .with_help(help, null_span),
+    )
+}
+
+struct NullEqualityPredicateVisitor<'a, 'b, S: ContextProvider> {
+    sql_to_rel: &'a SqlToRel<'b, S>,
+    subquery_depth: usize,
+}
+
+impl<'a, 'b, S: ContextProvider> NullEqualityPredicateVisitor<'a, 'b, S> {
+    fn new(sql_to_rel: &'a SqlToRel<'b, S>) -> Self {
+        Self {
+            sql_to_rel,
+            subquery_depth: 0,
+        }
+    }
+}
+
+impl<S: ContextProvider> Visitor for NullEqualityPredicateVisitor<'_, '_, S> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &SQLExpr) -> ControlFlow<Self::Break> {
+        if self.subquery_depth == 0
+            && let Some(warning) = null_equality_warning(expr)
+        {
+            self.sql_to_rel.add_warning(warning);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
+    pub(crate) fn warn_on_null_equality_predicate(&self, predicate: &SQLExpr) {
+        let mut visitor = NullEqualityPredicateVisitor::new(self);
+        let _ = predicate.visit(&mut visitor);
+    }
+
     pub(crate) fn sql_expr_to_logical_expr_with_alias(
         &self,
         sql: SQLExprWithAlias,
@@ -926,10 +1014,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return plan_err!("Invalid pattern in SIMILAR TO expression");
-        }
         let escape_char = match escape_char.map(|v| v.value) {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
@@ -1514,5 +1598,33 @@ mod tests {
             .unwrap();
 
         assert!(matches!(expr, Expr::Alias(_)));
+    }
+
+    #[test]
+    fn test_parse_numbers_with_underscores() {
+        use datafusion_common::ScalarValue::*;
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        // (input, positive result, negative result)
+        let test_cases = [
+            ("1_000", Int64(Some(1000)), Int64(Some(-1000))),
+            ("100_000", Int64(Some(100000)), Int64(Some(-100000))),
+            ("1_2_3_4", Int64(Some(1234)), Int64(Some(-1234))),
+            ("0_0", Int64(Some(0)), Int64(Some(-0))),
+            ("1_23.4_56", Float64(Some(123.456)), Float64(Some(-123.456))),
+        ];
+
+        for (literal, out_positive, out_negative) in test_cases {
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, false).unwrap(),
+                Expr::Literal(out_positive, None)
+            );
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, true).unwrap(),
+                Expr::Literal(out_negative, None)
+            );
+        }
     }
 }

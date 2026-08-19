@@ -24,6 +24,7 @@
 
 //! Physical expression schema adaptation utilities for DataFusion
 
+pub mod rewrite;
 pub mod schema_rewriter;
 
 pub use schema_rewriter::{

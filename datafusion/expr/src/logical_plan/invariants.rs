@@ -21,7 +21,7 @@ use datafusion_common::{
 };
 
 use crate::{
-    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
+    Aggregate, DmlStatement, Expr, Filter, Join, JoinType, LogicalPlan, Window, WriteOp,
     expr::{Exists, InSubquery, SetComparison},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
@@ -185,11 +185,7 @@ pub fn check_subquery_expr(
                     }
                 }
                 _ => {
-                    if inner_plan
-                        .max_rows()
-                        .filter(|max_row| *max_row <= 1)
-                        .is_some()
-                    {
+                    if inner_plan.max_rows().is_some_and(|max_row| max_row <= 1) {
                         Ok(())
                     } else {
                         plan_err!(
@@ -221,7 +217,6 @@ pub fn check_subquery_expr(
                 ),
             }?;
         }
-        check_correlations_in_subquery(inner_plan)
     } else {
         if let Expr::InSubquery(subquery) = expr {
             // InSubquery should only return one column
@@ -253,7 +248,11 @@ pub fn check_subquery_expr(
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) => Ok(()),
+            | LogicalPlan::Join(_)
+            | LogicalPlan::Dml(DmlStatement {
+                op: WriteOp::MergeInto(_),
+                ..
+            }) => Ok(()),
             _ => plan_err!(
                 "In/Exist/SetComparison subquery can only be used in \
                 Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
@@ -261,8 +260,8 @@ pub fn check_subquery_expr(
                 outer_plan.display()
             ),
         }?;
-        check_correlations_in_subquery(inner_plan)
     }
+    check_correlations_in_subquery(inner_plan)
 }
 
 // Recursively check the unsupported outer references in the sub query plan.

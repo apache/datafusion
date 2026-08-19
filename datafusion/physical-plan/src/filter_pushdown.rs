@@ -302,6 +302,9 @@ pub struct ChildFilterDescription {
     /// Description of which parent filters can be pushed down into this node.
     /// Since we need to transmit filter pushdown results back to this node's parent
     /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
+    /// The entries must stay in the same order as the input parent filters: the
+    /// filter pushdown optimizer maps child results back to parent filters by
+    /// position.
     pub(crate) parent_filters: Vec<PushedDownPredicate>,
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays

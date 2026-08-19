@@ -78,9 +78,9 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.88.0"
+rust-version = "1.94.0"
 # Define DataFusion version
-version = "54.0.0"
+version = "54.1.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -89,30 +89,30 @@ version = "54.0.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "59.0.0", features = [
+arrow = { version = "59.2.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = { version = "59.0.0", default-features = false, features = [
+arrow-avro = { version = "59.2.0", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",
     "bzip2",
     "xz",
 ] }
-arrow-buffer = { version = "59.0.0", default-features = false }
-arrow-data = { version = "59.0.0", default-features = false }
-arrow-flight = { version = "59.0.0", features = [
+arrow-buffer = { version = "59.2.0", default-features = false }
+arrow-data = { version = "59.2.0", default-features = false }
+arrow-flight = { version = "59.2.0", features = [
     "flight-sql-experimental",
 ] }
 # Both codecs are required here to make sure that code paths like
 # file-spilling have access to all compression codecs.
-arrow-ipc = { version = "59.0.0", default-features = false, features = [
+arrow-ipc = { version = "59.2.0", default-features = false, features = [
     "lz4",
     "zstd",
 ] }
-arrow-ord = { version = "59.0.0", default-features = false }
-arrow-schema = { version = "59.0.0", default-features = false }
+arrow-ord = { version = "59.2.0", default-features = false }
+arrow-schema = { version = "59.2.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -121,44 +121,44 @@ chrono = { version = "0.4.45", default-features = false }
 criterion = "0.8"
 ctor = "1.0.7"
 dashmap = "6.2.1"
-datafusion = { path = "datafusion/core", version = "54.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "54.0.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "54.0.0" }
-datafusion-common = { path = "datafusion/common", version = "54.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "54.0.0" }
-datafusion-datasource = { path = "datafusion/datasource", version = "54.0.0", default-features = false }
-datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "54.0.0", default-features = false }
-datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "54.0.0", default-features = false }
-datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "54.0.0", default-features = false }
-datafusion-datasource-json = { path = "datafusion/datasource-json", version = "54.0.0", default-features = false }
-datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "54.0.0", default-features = false }
-datafusion-doc = { path = "datafusion/doc", version = "54.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "54.0.0", default-features = false }
-datafusion-expr = { path = "datafusion/expr", version = "54.0.0", default-features = false }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "54.0.0" }
-datafusion-ffi = { path = "datafusion/ffi", version = "54.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "54.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "54.0.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "54.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "54.0.0", default-features = false }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "54.0.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "54.0.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "54.0.0" }
-datafusion-macros = { path = "datafusion/macros", version = "54.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "54.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "54.0.0", default-features = false }
-datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "54.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "54.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "54.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "54.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "54.0.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "54.0.0" }
-datafusion-proto-models = { path = "datafusion/proto-models", version = "54.0.0" }
-datafusion-pruning = { path = "datafusion/pruning", version = "54.0.0" }
-datafusion-session = { path = "datafusion/session", version = "54.0.0" }
-datafusion-spark = { path = "datafusion/spark", version = "54.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "54.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "54.0.0" }
+datafusion = { path = "datafusion/core", version = "54.1.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "54.1.0" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "54.1.0" }
+datafusion-common = { path = "datafusion/common", version = "54.1.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "54.1.0" }
+datafusion-datasource = { path = "datafusion/datasource", version = "54.1.0", default-features = false }
+datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "54.1.0", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "54.1.0", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "54.1.0", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "54.1.0", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "54.1.0", default-features = false }
+datafusion-doc = { path = "datafusion/doc", version = "54.1.0" }
+datafusion-execution = { path = "datafusion/execution", version = "54.1.0", default-features = false }
+datafusion-expr = { path = "datafusion/expr", version = "54.1.0", default-features = false }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "54.1.0" }
+datafusion-ffi = { path = "datafusion/ffi", version = "54.1.0" }
+datafusion-functions = { path = "datafusion/functions", version = "54.1.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "54.1.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "54.1.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "54.1.0", default-features = false }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "54.1.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "54.1.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "54.1.0" }
+datafusion-macros = { path = "datafusion/macros", version = "54.1.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "54.1.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "54.1.0", default-features = false }
+datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "54.1.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "54.1.0", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "54.1.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "54.1.0" }
+datafusion-proto = { path = "datafusion/proto", version = "54.1.0", default-features = false }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "54.1.0" }
+datafusion-proto-models = { path = "datafusion/proto-models", version = "54.1.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "54.1.0" }
+datafusion-session = { path = "datafusion/session", version = "54.1.0" }
+datafusion-spark = { path = "datafusion/spark", version = "54.1.0" }
+datafusion-sql = { path = "datafusion/sql", version = "54.1.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "54.1.0" }
 
 doc-comment = "0.3"
 env_logger = "0.11"
@@ -170,7 +170,7 @@ hashbrown = { version = "0.17.1" }
 hex = { version = "0.4.3" }
 indexmap = "2.14.0"
 insta = { version = "1.47.2", features = ["glob", "filters"] }
-itertools = "0.14"
+itertools = "0.15"
 itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
@@ -178,14 +178,16 @@ memchr = "2.8.1"
 num-traits = { version = "0.2" }
 object_store = { version = "0.13.2", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "59.0.0", default-features = false, features = [
+parquet = { version = "59.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
 ] }
 pbjson = { version = "0.9.0" }
 pbjson-types = "0.9"
+percent-encoding = "2.3"
 pin-project = "1"
+pin-project-lite = "^0.2.7"
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"
@@ -195,6 +197,7 @@ rstest = "0.26.1"
 serde_json = "1"
 sha2 = "^0.11.0"
 sqlparser = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
+stacker = "0.1.24"
 strum = "0.28.0"
 strum_macros = "0.28.0"
 tempfile = "3"
@@ -206,25 +209,133 @@ url = "2.5.7"
 uuid = "1.23"
 zstd = { version = "0.13", default-features = false }
 
+# Keep this list sorted alphabetically.
+# See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
+# picking useful non-default lints.
 [workspace.lints.clippy]
-# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
-large_futures = "warn"
-used_underscore_binding = "warn"
-or_fun_call = "warn"
-unnecessary_lazy_evaluations = "warn"
-uninlined_format_args = "warn"
-inefficient_to_string = "warn"
-# https://github.com/apache/datafusion/issues/18503
-needless_pass_by_value = "warn"
 # https://github.com/apache/datafusion/issues/18881
 allow_attributes = "warn"
+as_ptr_cast_mut = "warn"
 assigning_clones = "warn"
+bool_to_int_with_if = "warn"
+branches_sharing_code = "warn"
+checked_conversions = "warn"
+clear_with_drain = "warn"
+coerce_container_to_any = "warn"
+debug_assert_with_mut_call = "warn"
+decimal_bitwise_operands = "warn"
+default_union_representation = "warn"
+doc_include_without_cfg = "warn"
+duration_suboptimal_units = "warn"
+elidable_lifetime_names = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_enums = "warn"
+equatable_if_let = "warn"
+exit = "warn"
+expl_impl_clone_on_copy = "warn"
+explicit_deref_methods = "warn"
+filter_map_next = "warn"
+flat_map_option = "warn"
+fn_params_excessive_bools = "warn"
+fn_to_numeric_cast_any = "warn"
+ignore_without_reason = "warn"
+imprecise_flops = "warn"
+inconsistent_struct_constructor = "warn"
+index_refutable_slice = "warn"
+inefficient_to_string = "warn"
+infinite_loop = "warn"
+into_iter_without_iter = "warn"
+invalid_upcast_comparisons = "warn"
+ip_constant = "warn"
+iter_filter_is_ok = "warn"
+iter_filter_is_some = "warn"
+iter_not_returning_iterator = "warn"
+iter_on_empty_collections = "warn"
+iter_on_single_items = "warn"
+iter_without_into_iter = "warn"
+# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
+large_futures = "warn"
+large_include_file = "warn"
+# Like `large_futures`, these guard against stack overflows
+large_stack_arrays = "warn"
+large_stack_frames = "warn"
+large_types_passed_by_value = "warn"
+linkedlist = "warn"
+# Catches `"{foo}"` where the string is never actually formatted
+literal_string_with_formatting_args = "warn"
+macro_use_imports = "warn"
+manual_assert = "warn"
+manual_ilog2 = "warn"
+manual_instant_elapsed = "warn"
+manual_is_power_of_two = "warn"
+manual_is_variant_and = "warn"
+# `(a + b) / 2` can overflow; `a.midpoint(b)` cannot
+manual_midpoint = "warn"
+match_wild_err_arm = "warn"
+mem_forget = "warn"
+mismatching_type_param_order = "warn"
+mut_mut = "warn"
+# https://github.com/apache/datafusion/issues/18503
+needless_pass_by_value = "warn"
+needless_type_cast = "warn"
+negative_feature_names = "warn"
+# Prefer `std::sync::LazyLock` over the `lazy_static`/`once_cell` crates
+non_std_lazy_statics = "warn"
+non_zero_suggestions = "warn"
+nonstandard_macro_braces = "warn"
+option_as_ref_cloned = "warn"
+option_option = "warn"
+or_fun_call = "warn"
+path_buf_push_overwrite = "warn"
+pathbuf_init_then_push = "warn"
+precedence_bits = "warn"
+ptr_cast_constness = "warn"
+pub_underscore_fields = "warn"
+pub_without_shorthand = "warn"
+rc_mutex = "warn"
+ref_as_ptr = "warn"
+ref_option_ref = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+# Catches copy-paste bugs in `if`/`else if` chains
+same_functions_in_if_condition = "warn"
+same_length_and_capacity = "warn"
+# Catches a `&self` argument that is only threaded through recursive calls
+self_only_used_in_recursion = "warn"
+# Avoids hashing the key twice
+set_contains_or_insert = "warn"
+single_option_map = "warn"
+str_split_at_newline = "warn"
+string_add_assign = "warn"
+string_lit_as_bytes = "warn"
+string_lit_chars_any = "warn"
+suspicious_xor_used_as_pow = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+transmute_ptr_to_ptr = "warn"
+# Subtracting `Instant`s panics on overflow; use `saturating_duration_since`
+unchecked_time_subtraction = "warn"
+uninhabited_references = "warn"
+uninlined_format_args = "warn"
+unnecessary_box_returns = "warn"
+# `{:?}` on a `Path` quotes and escapes it; `{}` on `.display()` does not
+unnecessary_debug_formatting = "warn"
+unnecessary_lazy_evaluations = "warn"
+unnecessary_safety_doc = "warn"
+unnecessary_self_imports = "warn"
+unnecessary_struct_initialization = "warn"
+unused_async = "warn"
+unused_peekable = "warn"
+unused_rounding = "warn"
+used_underscore_binding = "warn"
+verbose_file_reads = "warn"
+wildcard_dependencies = "warn"
+zero_sized_map_values = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
-    "cfg(tarpaulin)",
-    "cfg(tarpaulin_include)",
+    "cfg(coverage)",
+    "cfg(coverage_nightly)",
 ] }
 unused_qualifications = "deny"
 
@@ -240,8 +351,11 @@ unused_qualifications = "deny"
 # To use a profile: `cargo [ build | run | ... ] --profile <profile-name>`
 #
 # Profiles available:
-# - dev: default debug build; fastest to compile, slowest to run, full debug info.
-#     For everyday development; default for "cargo [ build | test | run ]".
+# - dev: default debug build; fastest to compile, slowest to run. Carries line
+#     tables only, so panics and backtraces still name a file and line but a
+#     debugger cannot inspect variables; build with `CARGO_PROFILE_DEV_DEBUG=2`
+#     when you need that. For everyday development; default for
+#     "cargo [ build | test | run ]".
 # - release: fully optimized build; slowest to compile, fastest to run, smallest
 #     binaries. For public releases; default for "cargo [ bench | install ]".
 # - release-nonlto: skips LTO, so it builds much faster while staying close to
@@ -256,6 +370,15 @@ unused_qualifications = "deny"
 #
 # If you want to optimize compilation, the `compile_profile` benchmark can be useful.
 # See `benchmarks/README.md` for more details.
+# `dev` is the profile every `cargo build`/`cargo test` uses, so its debug info
+# is generated over and over. `line-tables-only` keeps file and line numbers --
+# so panics and `RUST_BACKTRACE` output stay useful -- while dropping the
+# variable-level DWARF that only an interactive debugger consumes. Build with
+# `CARGO_PROFILE_DEV_DEBUG=2 cargo build` when you need to step through code in a
+# debugger.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 codegen-units = 1
 lto = true

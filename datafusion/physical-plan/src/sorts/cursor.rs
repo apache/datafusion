@@ -16,6 +16,7 @@
 // under the License.
 
 use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -25,14 +26,18 @@ use arrow::array::{
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
-use arrow::row::Rows;
+use arrow::row::{OwnedRow, Rows};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]
 ///
 /// This is a trait as there are several specialized implementations, such as for
 /// single columns or for normalized multi column keys ([`Rows`])
-pub trait CursorValues {
+pub trait CursorValues: Debug + Sync + Send {
+    /// An owned copy of a single value, decoupled from any buffer that this
+    /// `CursorValues` holds (e.g. a shared `Buffer`/`Rows`).
+    type SingleRowValue: Send + Sync + Unpin;
+
     fn len(&self) -> usize;
 
     /// Returns true if `l[l_idx] == r[r_idx]`
@@ -44,6 +49,21 @@ pub trait CursorValues {
 
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
+
+    /// Extract an owned copy of the value at `idx`.
+    fn get_value(&self, idx: usize) -> Self::SingleRowValue;
+
+    /// Returns true if `l[l_idx] == r`, where `r` was previously extracted
+    /// via [`Self::get_value`].
+    fn eq_to_single_row_value(l: &Self, l_idx: usize, r: &Self::SingleRowValue) -> bool;
+
+    /// Notifies the values that the owning [`Cursor`] moved to `offset` (always
+    /// `< len()`), so caching implementations can refresh the value(s) read by
+    /// the hot comparisons. Default no-op (e.g. byte/row cursors don't benefit).
+    #[inline]
+    fn set_offset(&mut self, offset: usize) {
+        let _ = offset;
+    }
 }
 
 /// A comparable cursor, used by sort operations
@@ -68,14 +88,10 @@ pub trait CursorValues {
 /// │                       │
 /// │     CursorValues      │
 /// └───────────────────────┘
+/// ```
 ///
-///
-/// Store logical rows using
-/// one of several  formats,
-/// with specialized
-/// implementations
-/// depending on the column
-/// types
+/// Store logical rows using one of several  formats, with specialized
+/// implementations depending on the column types
 #[derive(Debug)]
 pub struct Cursor<T: CursorValues> {
     offset: usize,
@@ -89,29 +105,46 @@ impl<T: CursorValues> Cursor<T> {
     }
 
     /// Returns true if there are no more rows in this cursor
+    #[inline]
     pub fn is_finished(&self) -> bool {
         self.offset == self.values.len()
     }
 
     /// Advance the cursor, returning the previous row index
+    #[inline]
     pub fn advance(&mut self) -> usize {
         let t = self.offset;
         self.offset += 1;
+        // Refresh the cache for the new position. The guard keeps `set_offset`
+        // in bounds; a finished cursor's stale cache is never read (it is taken
+        // before the next comparison).
+        if self.offset < self.values.len() {
+            self.values.set_offset(self.offset);
+        }
         t
     }
 
-    pub fn is_eq_to_prev_one(&self, prev_cursor: Option<&Cursor<T>>) -> bool {
+    pub fn is_eq_to_prev_one(&self, prev_value: Option<&T::SingleRowValue>) -> bool {
         if self.offset > 0 {
             self.is_eq_to_prev_row()
-        } else if let Some(prev_cursor) = prev_cursor {
-            self.is_eq_to_prev_row_in_prev_batch(prev_cursor)
+        } else if let Some(prev_value) = prev_value {
+            T::eq_to_single_row_value(&self.values, self.offset, prev_value)
         } else {
             false
         }
     }
+
+    /// Extract an owned copy of the last row in this cursor, decoupled from
+    /// any buffer the cursor's [`CursorValues`] holds. Used to remember a
+    /// partition's last row across a batch boundary without keeping the
+    /// whole exhausted batch's memory alive (see [`Self::is_eq_to_prev_one`]).
+    pub fn last_value(&self) -> T::SingleRowValue {
+        self.values.get_value(self.values.len() - 1)
+    }
 }
 
 impl<T: CursorValues> PartialEq for Cursor<T> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         T::eq(&self.values, self.offset, &other.values, other.offset)
     }
@@ -120,16 +153,6 @@ impl<T: CursorValues> PartialEq for Cursor<T> {
 impl<T: CursorValues> Cursor<T> {
     fn is_eq_to_prev_row(&self) -> bool {
         T::eq_to_previous(&self.values, self.offset)
-    }
-
-    fn is_eq_to_prev_row_in_prev_batch(&self, other: &Self) -> bool {
-        assert_eq!(self.offset, 0);
-        T::eq(
-            &self.values,
-            self.offset,
-            &other.values,
-            other.values.len() - 1,
-        )
     }
 }
 
@@ -142,6 +165,7 @@ impl<T: CursorValues> PartialOrd for Cursor<T> {
 }
 
 impl<T: CursorValues> Ord for Cursor<T> {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         T::compare(&self.values, self.offset, &other.values, other.offset)
     }
@@ -180,10 +204,19 @@ impl RowValues {
 }
 
 impl CursorValues for RowValues {
+    // Reuse arrow-row's own owned-row type: `Row::owned()` copies just that
+    // row's bytes out of the shared `Rows` buffer, with no `RowConverter`
+    // needed (unlike building a new single-row `Rows`, which would).
+    type SingleRowValue = OwnedRow;
+
+    #[inline]
     fn len(&self) -> usize {
         self.rows.num_rows()
     }
 
+    // No inline hint on purpose: for the heavyweight `Rows` byte comparison the
+    // compiler's own choice wins — both `#[inline]` and `#[inline(never)]`
+    // measurably regress the multi-column merge path.
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         l.rows.row(l_idx) == r.rows.row(r_idx)
     }
@@ -196,6 +229,14 @@ impl CursorValues for RowValues {
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         l.rows.row(l_idx).cmp(&r.rows.row(r_idx))
     }
+
+    fn get_value(&self, idx: usize) -> OwnedRow {
+        self.rows.row(idx).owned()
+    }
+
+    fn eq_to_single_row_value(l: &Self, l_idx: usize, r: &OwnedRow) -> bool {
+        l.rows.row(l_idx) == r.row()
+    }
 }
 
 /// An [`Array`] that can be converted into [`CursorValues`]
@@ -205,42 +246,105 @@ pub trait CursorArray: Array + 'static {
     fn values(&self) -> Self::Values;
 }
 
-impl<T: ArrowPrimitiveType> CursorArray for PrimitiveArray<T> {
+impl<T: ArrowPrimitiveType> CursorArray for PrimitiveArray<T>
+where
+    T::Native: Unpin,
+{
     type Values = PrimitiveValues<T::Native>;
 
     fn values(&self) -> Self::Values {
-        PrimitiveValues(self.values().clone())
+        PrimitiveValues::new(self.values().clone())
+    }
+}
+
+/// [`CursorValues`] for a primitive column.
+///
+/// Caches the value at the current (and previous) offset, refreshed once per
+/// [`Cursor::advance`] via [`CursorValues::set_offset`], so the hot loser-tree
+/// comparisons read a cached field instead of indexing the buffer each time.
+#[derive(Debug)]
+pub struct PrimitiveValues<T: ArrowNativeTypeOp> {
+    values: ScalarBuffer<T>,
+    /// Cached `values[offset]`.
+    current: T,
+    /// Cached `values[offset - 1]` (read by `eq_to_previous`, only past offset 0).
+    previous: T,
+    /// Current offset; used only to `debug_assert!` the cache is read in sync.
+    offset: usize,
+}
+
+impl<T: ArrowNativeTypeOp> PrimitiveValues<T> {
+    fn new(values: ScalarBuffer<T>) -> Self {
+        // Non-empty in practice; `unwrap_or_default` just avoids a panic.
+        let first = values.first().copied().unwrap_or_default();
+        Self {
+            values,
+            current: first,
+            previous: first,
+            offset: 0,
+        }
+    }
+}
+
+impl<T: ArrowNativeTypeOp + Unpin> CursorValues for PrimitiveValues<T> {
+    // Already `Copy`, so no buffer is retained by holding one.
+    type SingleRowValue = T;
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    #[inline(always)]
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Arbitrary indices (cross-batch comparison), so index directly.
+        l.values[l_idx].is_eq(r.values[r_idx])
+    }
+
+    #[inline(always)]
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        assert!(idx > 0);
+        debug_assert_eq!(idx, cursor.offset);
+        cursor.current.is_eq(cursor.previous)
+    }
+
+    #[inline(always)]
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        debug_assert_eq!(l_idx, l.offset);
+        debug_assert_eq!(r_idx, r.offset);
+        l.current.compare(r.current)
+    }
+
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        // The caller (`Cursor::advance`) guarantees `offset < len`; inlined, that
+        // guard dominates the index below so its bounds check is elided — the
+        // length is checked once per row, not per comparison. The old `current`
+        // is `values[offset - 1]`, so it becomes `previous`.
+        self.previous = self.current;
+        self.current = self.values[offset];
+        self.offset = offset;
+    }
+
+    #[inline(always)]
+    fn get_value(&self, idx: usize) -> T {
+        self.values[idx]
+    }
+
+    #[inline(always)]
+    fn eq_to_single_row_value(l: &Self, l_idx: usize, r: &T) -> bool {
+        l.values[l_idx].is_eq(*r)
     }
 }
 
 #[derive(Debug)]
-pub struct PrimitiveValues<T: ArrowNativeTypeOp>(ScalarBuffer<T>);
-
-impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
-        l.0[l_idx].is_eq(r.0[r_idx])
-    }
-
-    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
-        assert!(idx > 0);
-        cursor.0[idx].is_eq(cursor.0[idx - 1])
-    }
-
-    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        l.0[l_idx].compare(r.0[r_idx])
-    }
-}
-
 pub struct ByteArrayValues<T: OffsetSizeTrait> {
     offsets: OffsetBuffer<T>,
     values: Buffer,
 }
 
 impl<T: OffsetSizeTrait> ByteArrayValues<T> {
+    #[inline]
     fn value(&self, idx: usize) -> &[u8] {
         assert!(idx < self.len());
         // Safety: offsets are valid and checked bounds above
@@ -253,21 +357,35 @@ impl<T: OffsetSizeTrait> ByteArrayValues<T> {
 }
 
 impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
+    type SingleRowValue = Box<[u8]>;
+
+    #[inline]
     fn len(&self) -> usize {
         self.offsets.len() - 1
     }
 
+    #[inline]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         l.value(l_idx) == r.value(r_idx)
     }
 
+    #[inline]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
         cursor.value(idx) == cursor.value(idx - 1)
     }
 
+    #[inline]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         l.value(l_idx).cmp(r.value(r_idx))
+    }
+
+    fn get_value(&self, idx: usize) -> Box<[u8]> {
+        self.value(idx).into()
+    }
+
+    fn eq_to_single_row_value(l: &Self, l_idx: usize, r: &Box<[u8]>) -> bool {
+        l.value(l_idx) == r.as_ref()
     }
 }
 
@@ -290,6 +408,8 @@ impl CursorArray for StringViewArray {
 }
 
 impl CursorValues for StringViewArray {
+    type SingleRowValue = Box<[u8]>;
+
     fn len(&self) -> usize {
         self.views().len()
     }
@@ -352,6 +472,14 @@ impl CursorValues for StringViewArray {
 
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
     }
+
+    fn get_value(&self, idx: usize) -> Box<[u8]> {
+        self.value(idx).as_bytes().into()
+    }
+
+    fn eq_to_single_row_value(l: &Self, l_idx: usize, r: &Box<[u8]>) -> bool {
+        l.value(l_idx).as_bytes() == r.as_ref()
+    }
 }
 
 /// A collection of sorted, nullable [`CursorValues`]
@@ -394,16 +522,22 @@ impl<T: CursorValues> ArrayValues<T> {
         }
     }
 
+    #[inline(always)]
     fn is_null(&self, idx: usize) -> bool {
         (idx < self.null_threshold) == self.options.nulls_first
     }
 }
 
 impl<T: CursorValues> CursorValues for ArrayValues<T> {
+    // `None` represents a null value.
+    type SingleRowValue = Option<T::SingleRowValue>;
+
+    #[inline(always)]
     fn len(&self) -> usize {
         self.values.len()
     }
 
+    #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => true,
@@ -412,15 +546,19 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
         }
     }
 
+    #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
         match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
             (true, true) => true,
-            (false, false) => T::eq(&cursor.values, idx, &cursor.values, idx - 1),
+            // Delegate to inner `eq_to_previous` so a caching cursor can answer
+            // without indexing.
+            (false, false) => T::eq_to_previous(&cursor.values, idx),
             _ => false,
         }
     }
 
+    #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
@@ -436,6 +574,34 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
                 true => T::compare(&r.values, r_idx, &l.values, l_idx),
                 false => T::compare(&l.values, l_idx, &r.values, r_idx),
             },
+        }
+    }
+
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        // Forward to the wrapped values (e.g. caching `PrimitiveValues`).
+        self.values.set_offset(offset);
+    }
+
+    #[inline(always)]
+    fn get_value(&self, idx: usize) -> Option<T::SingleRowValue> {
+        if self.is_null(idx) {
+            None
+        } else {
+            Some(T::get_value(&self.values, idx))
+        }
+    }
+
+    #[inline(always)]
+    fn eq_to_single_row_value(
+        l: &Self,
+        l_idx: usize,
+        r: &Option<T::SingleRowValue>,
+    ) -> bool {
+        match (l.is_null(l_idx), r) {
+            (true, None) => true,
+            (false, Some(r)) => T::eq_to_single_row_value(&l.values, l_idx, r),
+            _ => false,
         }
     }
 }
@@ -463,7 +629,7 @@ mod tests {
         let reservation = consumer.register(&memory_pool);
 
         let values = ArrayValues {
-            values: PrimitiveValues(values),
+            values: PrimitiveValues::new(values),
             null_threshold,
             options,
             _reservation: reservation,

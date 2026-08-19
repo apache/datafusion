@@ -36,7 +36,10 @@ pub use ddl::{
     CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView, DdlStatement,
     DropCatalogSchema, DropFunction, DropTable, DropView, OperateFunctionArg,
 };
-pub use dml::{DmlStatement, WriteOp};
+pub use dml::{
+    DmlStatement, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+    WriteOp,
+};
 pub use plan::{
     Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct, DistinctOn,
     EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter, Join,

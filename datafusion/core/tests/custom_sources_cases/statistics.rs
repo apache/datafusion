@@ -33,9 +33,13 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::Session;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ReplaceChildrenOptions, StatisticsArgs, StatisticsContext,
+};
 
 use async_trait::async_trait;
 
@@ -87,7 +91,7 @@ impl TableProvider for StatisticsValidation {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
         _limit: Option<usize>,
@@ -98,7 +102,7 @@ impl TableProvider for StatisticsValidation {
             filters.len(),
             "Unsupported expressions should not be pushed down"
         );
-        let projection = match projection.cloned() {
+        let projection = match projection.map(|p| p.to_vec()) {
             Some(p) => p,
             None => (0..self.schema.fields().len()).collect(),
         };
@@ -158,11 +162,22 @@ impl ExecutionPlan for StatisticsValidation {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -173,12 +188,25 @@ impl ExecutionPlan for StatisticsValidation {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_some() {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
             Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {
             Ok(Arc::new(self.stats.clone()))
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -230,7 +258,11 @@ async fn sql_basic() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
-    assert_eq!(stats, *physical_plan.partition_statistics(None)?);
+    assert_eq!(
+        stats,
+        *StatisticsContext::new()
+            .compute(physical_plan.as_ref(), &StatisticsArgs::new())?
+    );
 
     Ok(())
 }
@@ -246,7 +278,8 @@ async fn sql_filter() -> Result<()> {
         .unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
-    let stats = physical_plan.partition_statistics(None)?;
+    let stats = StatisticsContext::new()
+        .compute(physical_plan.as_ref(), &StatisticsArgs::new())?;
     assert_eq!(stats.num_rows, Precision::Inexact(7));
 
     Ok(())
@@ -261,7 +294,8 @@ async fn sql_limit() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines we mark the statistics as inexact
     // and cap NDV at the new row count
-    let limit_stats = physical_plan.partition_statistics(None)?;
+    let limit_stats = StatisticsContext::new()
+        .compute(physical_plan.as_ref(), &StatisticsArgs::new())?;
     assert_eq!(limit_stats.num_rows, Precision::Exact(5));
     // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
@@ -280,7 +314,11 @@ async fn sql_limit() -> Result<()> {
         .unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
-    assert_eq!(stats, *physical_plan.partition_statistics(None)?);
+    assert_eq!(
+        stats,
+        *StatisticsContext::new()
+            .compute(physical_plan.as_ref(), &StatisticsArgs::new())?
+    );
 
     Ok(())
 }
@@ -297,7 +335,8 @@ async fn sql_window() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    let result = physical_plan.partition_statistics(None)?;
+    let result = StatisticsContext::new()
+        .compute(physical_plan.as_ref(), &StatisticsArgs::new())?;
 
     assert_eq!(stats.num_rows, result.num_rows);
     let col_stats = &result.column_statistics;

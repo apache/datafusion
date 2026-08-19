@@ -182,6 +182,7 @@ mod tests {
     use arrow::array::{AsArray, RecordBatch};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::DataFusionError;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -1106,15 +1107,49 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that `partitioned_by_file_group` disables shared work stealing.
+    /// Verifies that declared output partitioning disables shared work stealing.
     #[tokio::test]
-    async fn morsel_partitioned_by_file_group_keeps_files_local() -> Result<()> {
+    async fn morsel_declared_output_partitioning_keeps_files_local() -> Result<()> {
         // same fixture as `morsel_shared_files_can_be_stolen` but marked as
         // preserve-partitioned
         let test = two_partition_morsel_test()
-            .with_partitioned_by_file_group(true)
+            .with_declared_output_partitioning(true)
             .with_file_stream_events(false);
 
+        insta::assert_snapshot!(test.run().await.unwrap(), @r"
+        ----- Partition 0 -----
+        Batch: 101
+        Batch: 102
+        Batch: 103
+        Done
+        ----- Partition 1 -----
+        Batch: 201
+        Done
+        ----- File Stream Events -----
+        (omitted due to with_file_stream_events(false))
+        ");
+
+        Ok(())
+    }
+
+    /// Verifies that disabling `enable_file_stream_work_stealing` keeps each
+    /// stream's files local, so a sibling cannot steal them at runtime.
+    ///
+    /// Covers <https://github.com/apache/datafusion/issues/23293>: executors
+    /// that run each output partition as an isolated task in a separate process
+    /// (Ballista, datafusion-distributed) poll only their own partition, so the
+    /// shared work queue would let that one partition drain files belonging to
+    /// its siblings. Disabling the flag falls back to per-partition file groups.
+    #[tokio::test]
+    async fn morsel_disabled_work_stealing_keeps_files_local() -> Result<()> {
+        // same fixture as `morsel_shared_files_can_be_stolen`, but with work
+        // stealing disabled via config
+        let test = two_partition_morsel_test()
+            .with_enable_file_stream_work_stealing(false)
+            .with_file_stream_events(false);
+
+        // Even though Partition 1 is polled first, it cannot steal the three
+        // files assigned to Partition 0; each partition reads only its own.
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
         ----- Partition 0 -----
         Batch: 101
@@ -1216,7 +1251,7 @@ mod tests {
         let unlimited_config = test.test_config();
         let limited_config = test.clone().with_limit(1).test_config();
         let shared_work_source = limited_config
-            .create_sibling_state()
+            .create_sibling_state(&ConfigOptions::default())
             .and_then(|state| state.as_ref().downcast_ref::<SharedWorkSource>().cloned())
             .expect("shared work source");
         let limited_metrics = ExecutionPlanMetricsSet::new();
@@ -1331,7 +1366,8 @@ mod tests {
         morselizer: MockMorselizer,
         partition_files: BTreeMap<PartitionId, Vec<String>>,
         preserve_order: bool,
-        partitioned_by_file_group: bool,
+        declared_output_partitioning: bool,
+        enable_file_stream_work_stealing: bool,
         file_stream_events: bool,
         build_streams_on_first_read: bool,
         reads: Vec<PartitionId>,
@@ -1345,7 +1381,8 @@ mod tests {
                 morselizer: MockMorselizer::new(),
                 partition_files: BTreeMap::new(),
                 preserve_order: false,
-                partitioned_by_file_group: false,
+                declared_output_partitioning: false,
+                enable_file_stream_work_stealing: true,
                 file_stream_events: true,
                 build_streams_on_first_read: false,
                 reads: vec![],
@@ -1381,13 +1418,21 @@ mod tests {
             self
         }
 
-        /// Marks the test scan as pre-partitioned by file group, which should
-        /// force each stream to keep its own files local.
-        fn with_partitioned_by_file_group(
+        /// Declares the test scan's output partitioning, which should force
+        /// each stream to keep its own files local.
+        fn with_declared_output_partitioning(
             mut self,
-            partitioned_by_file_group: bool,
+            declared_output_partitioning: bool,
         ) -> Self {
-            self.partitioned_by_file_group = partitioned_by_file_group;
+            self.declared_output_partitioning = declared_output_partitioning;
+            self
+        }
+
+        /// Sets `datafusion.execution.enable_file_stream_work_stealing`. When
+        /// disabled, each stream keeps its own files local instead of sharing a
+        /// work queue with its siblings.
+        fn with_enable_file_stream_work_stealing(mut self, enable: bool) -> Self {
+            self.enable_file_stream_work_stealing = enable;
             self
         }
 
@@ -1468,9 +1513,13 @@ mod tests {
             // `FileStream`s directly, bypassing `DataSourceExec`, so they must
             // perform the same setup explicitly when exercising sibling-stream
             // work stealing.
-            let shared_work_source = config.create_sibling_state().and_then(|state| {
-                state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
-            });
+            let mut options = ConfigOptions::default();
+            options.execution.enable_file_stream_work_stealing =
+                self.enable_file_stream_work_stealing;
+            let shared_work_source =
+                config.create_sibling_state(&options).and_then(|state| {
+                    state.as_ref().downcast_ref::<SharedWorkSource>().cloned()
+                });
             if !self.build_streams_on_first_read {
                 for partition in build_order {
                     let stream = FileStreamBuilder::new(&config)
@@ -1581,6 +1630,16 @@ mod tests {
                     DataType::Int32,
                     false,
                 )])));
+            // Declaring an output partitioning marks the scan as pre-grouped, which
+            // keeps each stream's files local (disables shared work stealing).
+            let output_partitioning = self.declared_output_partitioning.then(|| {
+                datafusion_physical_expr::Partitioning::Hash(
+                    vec![Arc::new(
+                        datafusion_physical_expr::expressions::Column::new("i", 0),
+                    )],
+                    file_groups.len(),
+                )
+            });
             FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
@@ -1588,7 +1647,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(self.limit)
             .with_preserve_order(self.preserve_order)
-            .with_partitioned_by_file_group(self.partitioned_by_file_group)
+            .with_output_partitioning(output_partitioning)
             .build()
         }
     }

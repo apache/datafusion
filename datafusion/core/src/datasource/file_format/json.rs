@@ -36,6 +36,7 @@ mod tests {
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
     use datafusion_datasource::file_format::FileFormat;
+    use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::compute::concat_batches;
@@ -117,9 +118,16 @@ mod tests {
         assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
-        assert_eq!(exec.partition_statistics(None)?.num_rows, Precision::Absent);
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
+            Precision::Absent
+        );
+        assert_eq!(
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent
         );
 
@@ -225,7 +233,7 @@ mod tests {
             .collect()
             .await?;
 
-        let plan = format!("{}", &pretty::pretty_format_batches(&result)?);
+        let plan = format!("{}", pretty::pretty_format_batches(&result)?);
 
         let re = Regex::new(r"file_groups=\{(\d+) group").unwrap();
 

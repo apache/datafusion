@@ -54,6 +54,9 @@ use crate::cast::{
 use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
+use crate::scalar::consts::{
+    DECIMAL32_ONES, DECIMAL64_ONES, DECIMAL128_ONES, DECIMAL256_ONES,
+};
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
@@ -83,15 +86,20 @@ use arrow::datatypes::{
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
     FieldRef, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime,
     IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, RunEndIndexType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
-    UInt16Type, UInt32Type, UInt64Type, UnionFields, UnionMode, i256,
-    validate_decimal_precision_and_scale,
+    IntervalYearMonthType, MAX_DECIMAL32_FOR_EACH_PRECISION,
+    MAX_DECIMAL64_FOR_EACH_PRECISION, MAX_DECIMAL128_FOR_EACH_PRECISION,
+    MAX_DECIMAL256_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
+    MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION,
+    MIN_DECIMAL256_FOR_EACH_PRECISION, RunEndIndexType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionFields,
+    UnionMode, i256, validate_decimal_precision_and_scale,
 };
 use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 use chrono::{Duration, NaiveDate};
 use half::f16;
+use num_traits::ToPrimitive;
 pub use struct_builder::ScalarStructBuilder;
 
 const SECONDS_PER_DAY: i64 = 86_400;
@@ -1803,48 +1811,56 @@ impl ScalarValue {
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match 10_i32.checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal32(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL32_ONES[*scale as usize];
+                ScalarValue::Decimal32(Some(one), *precision, *scale)
             }
             DataType::Decimal64(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal64Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i64::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal64(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL64_ONES[*scale as usize];
+                ScalarValue::Decimal64(Some(one), *precision, *scale)
             }
             DataType::Decimal128(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal128Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i128::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal128(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL128_ONES[*scale as usize];
+                ScalarValue::Decimal128(Some(one), *precision, *scale)
             }
             DataType::Decimal256(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal256Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i256::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal256(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL256_ONES[*scale as usize];
+                ScalarValue::Decimal256(Some(one), *precision, *scale)
             }
             _ => {
                 return _not_impl_err!(
@@ -1857,10 +1873,10 @@ impl ScalarValue {
     /// Create a negative one value in the given type.
     pub fn new_negative_one(datatype: &DataType) -> Result<ScalarValue> {
         Ok(match datatype {
-            DataType::Int8 | DataType::UInt8 => ScalarValue::Int8(Some(-1)),
-            DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
-            DataType::Int32 | DataType::UInt32 => ScalarValue::Int32(Some(-1)),
-            DataType::Int64 | DataType::UInt64 => ScalarValue::Int64(Some(-1)),
+            DataType::Int8 => ScalarValue::Int8(Some(-1)),
+            DataType::Int16 => ScalarValue::Int16(Some(-1)),
+            DataType::Int32 => ScalarValue::Int32(Some(-1)),
+            DataType::Int64 => ScalarValue::Int64(Some(-1)),
             DataType::Float16 => ScalarValue::Float16(Some(f16::NEG_ONE)),
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
@@ -1869,48 +1885,56 @@ impl ScalarValue {
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match 10_i32.checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal32(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent negative one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL32_ONES[*scale as usize];
+                ScalarValue::Decimal32(Some(-one), *precision, *scale)
             }
             DataType::Decimal64(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal64Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i64::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal64(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent negative one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL64_ONES[*scale as usize];
+                ScalarValue::Decimal64(Some(-one), *precision, *scale)
             }
             DataType::Decimal128(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal128Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i128::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal128(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent negative one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL128_ONES[*scale as usize];
+                ScalarValue::Decimal128(Some(-one), *precision, *scale)
             }
             DataType::Decimal256(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal256Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i256::from(10).checked_pow(*scale as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal256(Some(-value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    *precision != *scale as u8,
+                    "Can't represent one at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                let one = DECIMAL256_ONES[*scale as usize];
+                ScalarValue::Decimal256(Some(-one), *precision, *scale)
             }
             _ => {
                 return _not_impl_err!(
@@ -1938,48 +1962,64 @@ impl ScalarValue {
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match 10_i32.checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal32(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    (*precision - *scale as u8) > 1,
+                    "Can't represent ten at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL32_ONES[*scale as usize + 1];
+                ScalarValue::Decimal32(Some(ten), *precision, *scale)
             }
             DataType::Decimal64(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal64Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i64::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal64(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    (*precision - *scale as u8) > 1,
+                    "Can't represent ten at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL64_ONES[*scale as usize + 1];
+                ScalarValue::Decimal64(Some(ten), *precision, *scale)
             }
             DataType::Decimal128(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal128Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i128::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal128(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    (*precision - *scale as u8) > 1,
+                    "Can't represent ten at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL128_ONES[*scale as usize + 1];
+                ScalarValue::Decimal128(Some(ten), *precision, *scale)
             }
             DataType::Decimal256(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal256Type>(
                     *precision, *scale,
                 )?;
                 assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i256::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal256(Some(value), *precision, *scale)
-                    }
-                    None => return _internal_err!("Unsupported scale {scale}"),
-                }
+                assert_or_internal_err!(
+                    (*precision - *scale as u8) > 1,
+                    "Can't represent ten at scale {} with precision {}",
+                    *scale,
+                    *precision
+                );
+                // +1 safe since we validate above that scale must be less than
+                // the max possible scale
+                let ten = DECIMAL256_ONES[*scale as usize + 1];
+                ScalarValue::Decimal256(Some(ten), *precision, *scale)
             }
             _ => {
                 return _not_impl_err!(
@@ -2298,7 +2338,18 @@ impl ScalarValue {
             | ScalarValue::Int64(None)
             | ScalarValue::Float16(None)
             | ScalarValue::Float32(None)
-            | ScalarValue::Float64(None) => Ok(self.clone()),
+            | ScalarValue::Float64(None)
+            | ScalarValue::IntervalYearMonth(None)
+            | ScalarValue::IntervalDayTime(None)
+            | ScalarValue::IntervalMonthDayNano(None)
+            | ScalarValue::Decimal32(None, _, _)
+            | ScalarValue::Decimal64(None, _, _)
+            | ScalarValue::Decimal128(None, _, _)
+            | ScalarValue::Decimal256(None, _, _)
+            | ScalarValue::TimestampSecond(None, _)
+            | ScalarValue::TimestampMillisecond(None, _)
+            | ScalarValue::TimestampMicrosecond(None, _)
+            | ScalarValue::TimestampNanosecond(None, _) => Ok(self.clone()),
             ScalarValue::Float16(Some(v)) => Ok(ScalarValue::Float16(Some(-v))),
             ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
             ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
@@ -2585,63 +2636,107 @@ impl ScalarValue {
     /// distance is greater than [`usize::MAX`]. If the type is a float, then the distance will be
     /// rounded to the nearest integer.
     ///
-    ///
     /// Note: the datatype itself must support subtraction.
     pub fn distance(&self, other: &ScalarValue) -> Option<usize> {
+        self.distance_u64(other)
+            .and_then(|d| usize::try_from(d).ok())
+    }
+
+    /// Helper to convert a rounded float distance to u64, returning None if it exceeds u64::MAX, is negative, or is not finite.
+    fn rounded_float_distance_u64(diff: f64) -> Option<u64> {
+        if diff.is_finite() && diff >= 0.0 && diff < u64::MAX as f64 {
+            Some(diff as u64)
+        } else {
+            None
+        }
+    }
+
+    /// Absolute distance between two numeric values (of the same type). This method will return
+    /// None if either one of the arguments are null. It might also return None if the resulting
+    /// distance is greater than [`u64::MAX`]. If the type is a float, then the distance will be
+    /// rounded to the nearest integer.
+    ///
+    /// Note: the datatype itself must support subtraction.
+    pub fn distance_u64(&self, other: &ScalarValue) -> Option<u64> {
         match (self, other) {
-            (Self::Int8(Some(l)), Self::Int8(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::Int16(Some(l)), Self::Int16(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::Int32(Some(l)), Self::Int32(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::Int64(Some(l)), Self::Int64(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::UInt8(Some(l)), Self::UInt8(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::UInt16(Some(l)), Self::UInt16(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::UInt32(Some(l)), Self::UInt32(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::UInt64(Some(l)), Self::UInt64(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::Int8(Some(l)), Self::Int8(Some(r))) => Some(l.abs_diff(*r) as u64),
+            (Self::Int16(Some(l)), Self::Int16(Some(r))) => Some(l.abs_diff(*r) as u64),
+            (Self::Int32(Some(l)), Self::Int32(Some(r))) => Some(l.abs_diff(*r) as u64),
+            (Self::Int64(Some(l)), Self::Int64(Some(r))) => Some(l.abs_diff(*r)),
+            (Self::UInt8(Some(l)), Self::UInt8(Some(r))) => Some(l.abs_diff(*r) as u64),
+            (Self::UInt16(Some(l)), Self::UInt16(Some(r))) => Some(l.abs_diff(*r) as u64),
+            (Self::UInt32(Some(l)), Self::UInt32(Some(r))) => Some(l.abs_diff(*r) as u64),
+            (Self::UInt64(Some(l)), Self::UInt64(Some(r))) => Some(l.abs_diff(*r)),
             // TODO: we might want to look into supporting ceil/floor here for floats.
             (Self::Float16(Some(l)), Self::Float16(Some(r))) => {
-                Some((f16::to_f32(*l) - f16::to_f32(*r)).abs().round() as _)
+                let diff = (f16::to_f32(*l) - f16::to_f32(*r)).abs().round();
+                Self::rounded_float_distance_u64(diff as f64)
             }
             (Self::Float32(Some(l)), Self::Float32(Some(r))) => {
-                Some((l - r).abs().round() as _)
+                let diff = (l - r).abs().round();
+                Self::rounded_float_distance_u64(diff as f64)
             }
             (Self::Float64(Some(l)), Self::Float64(Some(r))) => {
-                Some((l - r).abs().round() as _)
+                let diff = (l - r).abs().round();
+                Self::rounded_float_distance_u64(diff)
             }
-            (Self::Date32(Some(l)), Self::Date32(Some(r))) => Some(l.abs_diff(*r) as _),
-            (Self::Date64(Some(l)), Self::Date64(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::Date32(Some(l)), Self::Date32(Some(r))) => Some(l.abs_diff(*r) as u64),
+            (Self::Date64(Some(l)), Self::Date64(Some(r))) => Some(l.abs_diff(*r)),
             // Timestamp values are stored as epoch ticks regardless of timezone
             // annotation, so the distance is tz-independent (tz is display metadata).
             (Self::TimestampSecond(Some(l), _), Self::TimestampSecond(Some(r), _)) => {
-                Some(l.abs_diff(*r) as _)
+                Some(l.abs_diff(*r))
             }
             (
                 Self::TimestampMillisecond(Some(l), _),
                 Self::TimestampMillisecond(Some(r), _),
-            ) => Some(l.abs_diff(*r) as _),
+            ) => Some(l.abs_diff(*r)),
             (
                 Self::TimestampMicrosecond(Some(l), _),
                 Self::TimestampMicrosecond(Some(r), _),
-            ) => Some(l.abs_diff(*r) as _),
+            ) => Some(l.abs_diff(*r)),
             (
                 Self::TimestampNanosecond(Some(l), _),
                 Self::TimestampNanosecond(Some(r), _),
-            ) => Some(l.abs_diff(*r) as _),
+            ) => Some(l.abs_diff(*r)),
             (
-                Self::Decimal128(Some(l), lprecision, lscale),
-                Self::Decimal128(Some(r), rprecision, rscale),
+                Self::Decimal32(Some(l), _, lscale),
+                Self::Decimal32(Some(r), _, rscale),
             ) => {
-                if lprecision == rprecision && lscale == rscale {
-                    l.checked_sub(*r)?.checked_abs()?.to_usize()
+                // In order to be aligned with PartialOrd we only
+                // check for equal scale, ignoring precision
+                if lscale == rscale {
+                    Some(l.abs_diff(*r) as u64)
                 } else {
                     None
                 }
             }
             (
-                Self::Decimal256(Some(l), lprecision, lscale),
-                Self::Decimal256(Some(r), rprecision, rscale),
+                Self::Decimal64(Some(l), _, lscale),
+                Self::Decimal64(Some(r), _, rscale),
             ) => {
-                if lprecision == rprecision && lscale == rscale {
-                    l.checked_sub(*r)?.checked_abs()?.to_usize()
+                if lscale == rscale {
+                    Some(l.abs_diff(*r))
+                } else {
+                    None
+                }
+            }
+            (
+                Self::Decimal128(Some(l), _, lscale),
+                Self::Decimal128(Some(r), _, rscale),
+            ) => {
+                if lscale == rscale {
+                    l.checked_sub(*r)?.checked_abs()?.to_u64()
+                } else {
+                    None
+                }
+            }
+            (
+                Self::Decimal256(Some(l), _, lscale),
+                Self::Decimal256(Some(r), _, rscale),
+            ) => {
+                if lscale == rscale {
+                    l.checked_sub(*r)?.checked_abs()?.to_u64()
                 } else {
                     None
                 }
@@ -3214,7 +3309,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3276,7 +3372,8 @@ impl ScalarValue {
         let values = if values.len() == 0 {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values).unwrap()
+            let arr = Self::iter_to_array(values).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3319,7 +3416,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(SingleRowListArrayBuilder::new(values).build_large_list_array())
     }
@@ -4292,7 +4390,14 @@ impl ScalarValue {
             .or_else(|| timestamp_to_timestamp_multiplier(&source_type, target_type))
             && let Some(value) = self.temporal_scalar_value_as_i64()
         {
-            ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
+            match ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)
+            {
+                Ok(()) => {}
+                Err(_) if cast_options.safe => {
+                    return ScalarValue::try_new_null(target_type);
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         let scalar_array = self.to_array()?;
@@ -5001,28 +5106,21 @@ impl ScalarValue {
             DataType::Float16 => Some(ScalarValue::Float16(Some(f16::NEG_INFINITY))),
             DataType::Float32 => Some(ScalarValue::Float32(Some(f32::NEG_INFINITY))),
             DataType::Float64 => Some(ScalarValue::Float64(Some(f64::NEG_INFINITY))),
+            DataType::Decimal32(precision, scale) => {
+                let min = MIN_DECIMAL32_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal32(Some(min), *precision, *scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                let min = MIN_DECIMAL64_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal64(Some(min), *precision, *scale))
+            }
             DataType::Decimal128(precision, scale) => {
-                // For decimal, min is -10^(precision-scale) + 10^(-scale)
-                // But for simplicity, we use the minimum i128 value that fits the precision
-                let max_digits = 10_i128.pow(*precision as u32) - 1;
-                Some(ScalarValue::Decimal128(
-                    Some(-max_digits),
-                    *precision,
-                    *scale,
-                ))
+                let min = MIN_DECIMAL128_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal128(Some(min), *precision, *scale))
             }
             DataType::Decimal256(precision, scale) => {
-                // Similar to Decimal128 but with i256
-                // For now, use a large negative value
-                let max_digits = i256::from_i128(10_i128)
-                    .checked_pow(*precision as u32)
-                    .and_then(|v| v.checked_sub(i256::from_i128(1)))
-                    .unwrap_or(i256::MAX);
-                Some(ScalarValue::Decimal256(
-                    Some(max_digits.neg_wrapping()),
-                    *precision,
-                    *scale,
-                ))
+                let min = MIN_DECIMAL256_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal256(Some(min), *precision, *scale))
             }
             DataType::Date32 => Some(ScalarValue::Date32(Some(i32::MIN))),
             DataType::Date64 => Some(ScalarValue::Date64(Some(i64::MIN))),
@@ -5097,27 +5195,21 @@ impl ScalarValue {
             DataType::Float16 => Some(ScalarValue::Float16(Some(f16::INFINITY))),
             DataType::Float32 => Some(ScalarValue::Float32(Some(f32::INFINITY))),
             DataType::Float64 => Some(ScalarValue::Float64(Some(f64::INFINITY))),
+            DataType::Decimal32(precision, scale) => {
+                let max = MAX_DECIMAL32_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal32(Some(max), *precision, *scale))
+            }
+            DataType::Decimal64(precision, scale) => {
+                let max = MAX_DECIMAL64_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal64(Some(max), *precision, *scale))
+            }
             DataType::Decimal128(precision, scale) => {
-                // For decimal, max is 10^(precision-scale) - 10^(-scale)
-                // But for simplicity, we use the maximum i128 value that fits the precision
-                let max_digits = 10_i128.pow(*precision as u32) - 1;
-                Some(ScalarValue::Decimal128(
-                    Some(max_digits),
-                    *precision,
-                    *scale,
-                ))
+                let max = MAX_DECIMAL128_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal128(Some(max), *precision, *scale))
             }
             DataType::Decimal256(precision, scale) => {
-                // Similar to Decimal128 but with i256
-                let max_digits = i256::from_i128(10_i128)
-                    .checked_pow(*precision as u32)
-                    .and_then(|v| v.checked_sub(i256::from_i128(1)))
-                    .unwrap_or(i256::MAX);
-                Some(ScalarValue::Decimal256(
-                    Some(max_digits),
-                    *precision,
-                    *scale,
-                ))
+                let max = MAX_DECIMAL256_FOR_EACH_PRECISION[*precision as usize];
+                Some(ScalarValue::Decimal256(Some(max), *precision, *scale))
             }
             DataType::Date32 => Some(ScalarValue::Date32(Some(i32::MAX))),
             DataType::Date64 => Some(ScalarValue::Date64(Some(i64::MAX))),
@@ -5213,7 +5305,8 @@ impl ScalarValue {
 /// as necessary.
 pub fn copy_array_data(src_data: &ArrayData) -> ArrayData {
     let mut copy = MutableArrayData::new(vec![&src_data], true, src_data.len());
-    copy.extend(0, 0, src_data.len());
+    copy.try_extend(0, 0, src_data.len())
+        .expect("copy_array_data failed due to offset overflow");
     copy.freeze()
 }
 
@@ -9437,8 +9530,8 @@ mod tests {
             ),
         ];
         for (lhs, rhs, expected) in cases.iter() {
-            let distance = lhs.distance(rhs).unwrap();
-            assert_eq!(distance, *expected);
+            let distance = lhs.distance_u64(rhs).unwrap();
+            assert_eq!(distance, *expected as u64);
         }
     }
 
@@ -9455,7 +9548,7 @@ mod tests {
             ),
         ];
         for (lhs, rhs) in cases.iter() {
-            let distance = lhs.distance(rhs);
+            let distance = lhs.distance_u64(rhs);
             assert!(distance.is_none(), "{lhs} vs {rhs}");
         }
     }
@@ -9502,12 +9595,8 @@ mod tests {
                 ScalarValue::Decimal128(Some(120), 5, 3),
             ),
             (
-                ScalarValue::Decimal128(Some(123), 5, 5),
-                ScalarValue::Decimal128(Some(120), 3, 5),
-            ),
-            (
                 ScalarValue::Decimal256(Some(123.into()), 5, 5),
-                ScalarValue::Decimal256(Some(120.into()), 3, 5),
+                ScalarValue::Decimal256(Some(120.into()), 5, 3),
             ),
             // Distance 2 * 2^50 is larger than usize
             (
@@ -9529,9 +9618,122 @@ mod tests {
             ),
         ];
         for (lhs, rhs) in cases {
-            let distance = lhs.distance(&rhs);
+            let distance = lhs.distance_u64(&rhs);
             assert!(distance.is_none());
         }
+    }
+
+    #[test]
+    fn test_scalar_distance_u64_boundaries() {
+        // 1. Full-domain integer ranges
+        // i64::MIN to i64::MAX -> distance is u64::MAX
+        let lhs = ScalarValue::Int64(Some(i64::MIN));
+        let rhs = ScalarValue::Int64(Some(i64::MAX));
+        assert_eq!(lhs.distance_u64(&rhs), Some(u64::MAX));
+        assert_eq!(rhs.distance_u64(&lhs), Some(u64::MAX));
+
+        // u64::MIN to u64::MAX -> distance is u64::MAX
+        let lhs = ScalarValue::UInt64(Some(u64::MIN));
+        let rhs = ScalarValue::UInt64(Some(u64::MAX));
+        assert_eq!(lhs.distance_u64(&rhs), Some(u64::MAX));
+        assert_eq!(rhs.distance_u64(&lhs), Some(u64::MAX));
+
+        // 2. Decimal128 overflow edges (around u64::MAX)
+        // distance equal to u64::MAX fits
+        let lhs = ScalarValue::Decimal128(Some(0), 20, 0);
+        let rhs = ScalarValue::Decimal128(Some(u64::MAX as i128), 20, 0);
+        assert_eq!(lhs.distance_u64(&rhs), Some(u64::MAX));
+
+        // distance greater than u64::MAX overflows
+        let lhs = ScalarValue::Decimal128(Some(0), 20, 0);
+        let rhs = ScalarValue::Decimal128(Some(u64::MAX as i128 + 1), 20, 0);
+        assert_eq!(lhs.distance_u64(&rhs), None);
+
+        // 3. Decimal256 overflow edges (around u64::MAX)
+        // distance equal to u64::MAX fits
+        let lhs = ScalarValue::Decimal256(Some(i256::from_parts(0, 0)), 20, 0);
+        let rhs =
+            ScalarValue::Decimal256(Some(i256::from_parts(u64::MAX as u128, 0)), 20, 0);
+        assert_eq!(lhs.distance_u64(&rhs), Some(u64::MAX));
+
+        // distance greater than u64::MAX overflows
+        let lhs = ScalarValue::Decimal256(Some(i256::from_parts(0, 0)), 20, 0);
+        let rhs = ScalarValue::Decimal256(
+            Some(i256::from_parts(u64::MAX as u128 + 1, 0)),
+            20,
+            0,
+        );
+        assert_eq!(lhs.distance_u64(&rhs), None);
+
+        // 4. Float64 overflow edges (around u64::MAX)
+        let lhs = ScalarValue::Float64(Some(0.0));
+        let val: f64 = 18446744073709500000.0;
+        let rhs = ScalarValue::Float64(Some(val));
+        assert_eq!(lhs.distance_u64(&rhs), Some(18446744073709500416));
+
+        // float value > u64::MAX overflows
+        let rhs = ScalarValue::Float64(Some(1.9e19));
+        assert_eq!(lhs.distance_u64(&rhs), None);
+
+        // exact 2^64 boundary (18446744073709551616.0) is greater than u64::MAX, so it should return None
+        let exact_2_64_f64 = ScalarValue::Float64(Some(18446744073709551616.0));
+        assert_eq!(lhs.distance_u64(&exact_2_64_f64), None);
+
+        // exact 2^64 boundary as Float32 should also return None
+        let lhs_f32 = ScalarValue::Float32(Some(0.0));
+        let exact_2_64_f32 = ScalarValue::Float32(Some(18446744073709551616.0));
+        assert_eq!(lhs_f32.distance_u64(&exact_2_64_f32), None);
+
+        // largest float32 value below 2^64 (2^64 - 2^41 = 18446741874686296064.0) should fit
+        let below_2_64_f32 = ScalarValue::Float32(Some(18446741874686296064.0));
+        assert_eq!(
+            lhs_f32.distance_u64(&below_2_64_f32),
+            Some(18446741874686296064)
+        );
+
+        // Inf, NegInf, NaN
+        let inf = ScalarValue::Float64(Some(f64::INFINITY));
+        let neg_inf = ScalarValue::Float64(Some(f64::NEG_INFINITY));
+        let nan = ScalarValue::Float64(Some(f64::NAN));
+        assert_eq!(lhs.distance_u64(&inf), None);
+        assert_eq!(lhs.distance_u64(&neg_inf), None);
+        assert_eq!(lhs.distance_u64(&nan), None);
+
+        let inf_f32 = ScalarValue::Float32(Some(f32::INFINITY));
+        let neg_inf_f32 = ScalarValue::Float32(Some(f32::NEG_INFINITY));
+        let nan_f32 = ScalarValue::Float32(Some(f32::NAN));
+        assert_eq!(lhs_f32.distance_u64(&inf_f32), None);
+        assert_eq!(lhs_f32.distance_u64(&neg_inf_f32), None);
+        assert_eq!(lhs_f32.distance_u64(&nan_f32), None);
+
+        let lhs_f16 = ScalarValue::Float16(Some(f16::ZERO));
+        let inf_f16 = ScalarValue::Float16(Some(f16::INFINITY));
+        let neg_inf_f16 = ScalarValue::Float16(Some(f16::NEG_INFINITY));
+        let nan_f16 = ScalarValue::Float16(Some(f16::NAN));
+        assert_eq!(lhs_f16.distance_u64(&inf_f16), None);
+        assert_eq!(lhs_f16.distance_u64(&neg_inf_f16), None);
+        assert_eq!(lhs_f16.distance_u64(&nan_f16), None);
+
+        // 5. Date and Timestamp boundaries
+        // Date32: i32::MIN to i32::MAX
+        let lhs = ScalarValue::Date32(Some(i32::MIN));
+        let rhs = ScalarValue::Date32(Some(i32::MAX));
+        assert_eq!(lhs.distance_u64(&rhs), Some(u32::MAX as u64));
+
+        // TimestampSecond: i64::MIN to i64::MAX
+        let lhs = ScalarValue::TimestampSecond(Some(i64::MIN), None);
+        let rhs = ScalarValue::TimestampSecond(Some(i64::MAX), None);
+        assert_eq!(lhs.distance_u64(&rhs), Some(u64::MAX));
+
+        // 6. Decimal scale matching (ignoring precision)
+        let lhs = ScalarValue::Decimal128(Some(100), 10, 2);
+        let rhs = ScalarValue::Decimal128(Some(150), 15, 2);
+        assert_eq!(lhs.distance_u64(&rhs), Some(50));
+        assert_eq!(rhs.distance_u64(&lhs), Some(50));
+
+        let lhs = ScalarValue::Decimal128(Some(100), 10, 2);
+        let rhs = ScalarValue::Decimal128(Some(150), 10, 3);
+        assert_eq!(lhs.distance_u64(&rhs), None);
     }
 
     #[test]
@@ -10125,22 +10327,19 @@ mod tests {
         const SECS_IN_ONE_DAY: i32 = 86_400;
         const MICROSECS_IN_ONE_DAY: i64 = 86_400_000_000;
         for i in 0..vector_size {
+            let days = rng.random_range(0..5000);
             if i % 4 == 0 {
-                let days = rng.random_range(0..5000);
                 // to not break second precision
                 let millis = rng.random_range(0..SECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_dt(days, millis));
             } else if i % 4 == 1 {
-                let days = rng.random_range(0..5000);
                 let millisec = rng.random_range(0..(MILLISECS_IN_ONE_DAY as i32));
                 intervals.push(ScalarValue::new_interval_dt(days, millisec));
             } else if i % 4 == 2 {
-                let days = rng.random_range(0..5000);
                 // to not break microsec precision
                 let nanosec = rng.random_range(0..MICROSECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             } else {
-                let days = rng.random_range(0..5000);
                 let nanosec = rng.random_range(0..NANOSECS_IN_ONE_DAY);
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             }
@@ -10191,6 +10390,24 @@ mod tests {
     }
 
     #[test]
+    fn safe_cast_date_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::Date32(Some(i32::MAX));
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
+    }
+
+    #[test]
     fn cast_timestamp_to_timestamp_overflow_returns_error() {
         let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
         let err = scalar
@@ -10201,6 +10418,24 @@ mod tests {
                 .contains("converted value exceeds the representable i64 range"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn safe_cast_timestamp_to_timestamp_overflow_returns_null() {
+        let scalar = ScalarValue::TimestampSecond(Some(i64::MAX), None);
+        let safe_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let casted = scalar
+            .cast_to_with_options(
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                &safe_options,
+            )
+            .expect("expected safe cast to return null");
+
+        assert_eq!(casted, ScalarValue::TimestampNanosecond(None, None));
     }
 
     #[test]
@@ -11261,5 +11496,115 @@ mod tests {
         let keys = arr.entries().column(0).as_string_view();
         assert_eq!(utf8view_buffer_bytes(keys), one_len);
         assert_eq!(keys.value(0), strings.value(0));
+    }
+
+    #[test]
+    fn test_zero_size_fsl() {
+        let s = ScalarValue::new_default(&DataType::FixedSizeList(
+            Field::new("a", DataType::Int32, true).into(),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(s.to_string(), "[]");
+    }
+
+    #[test]
+    fn test_decimal_value_bounds() {
+        fn run_tests<D: DecimalType>() {
+            // 0.1111, 0.2222, etc.
+            let max_scale = D::TYPE_CONSTRUCTOR(D::MAX_PRECISION, D::MAX_SCALE);
+            // 1.111, 2.222, etc.
+            let max_scale_less_one =
+                D::TYPE_CONSTRUCTOR(D::MAX_PRECISION, D::MAX_SCALE - 1);
+            // 11.11, 22.22, etc.
+            let max_scale_less_two =
+                D::TYPE_CONSTRUCTOR(D::MAX_PRECISION, D::MAX_SCALE - 2);
+
+            // Invalid (can't represent the value)
+            assert!(ScalarValue::new_one(&max_scale).is_err());
+            assert!(ScalarValue::new_negative_one(&max_scale).is_err());
+            assert!(ScalarValue::new_ten(&max_scale).is_err());
+            assert!(ScalarValue::new_ten(&max_scale_less_one).is_err());
+
+            // Valid
+            let one = ScalarValue::Int32(Some(1));
+            let neg_one = ScalarValue::Int32(Some(-1));
+            let ten = ScalarValue::Int32(Some(10));
+
+            let num = ScalarValue::new_one(&max_scale_less_one).unwrap();
+            assert_eq!(num.cast_to(&DataType::Int32).unwrap(), one);
+            let num = ScalarValue::new_negative_one(&max_scale_less_one).unwrap();
+            assert_eq!(num.cast_to(&DataType::Int32).unwrap(), neg_one);
+            let num = ScalarValue::new_ten(&max_scale_less_two).unwrap();
+            assert_eq!(num.cast_to(&DataType::Int32).unwrap(), ten);
+        }
+
+        run_tests::<Decimal32Type>();
+        run_tests::<Decimal64Type>();
+        run_tests::<Decimal128Type>();
+        run_tests::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_new_list_nested_nullability_mismatch_issue_24022() {
+        // requested element type: Struct(n: Int32 nullable=true)
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+
+        // inferred from concrete values: Struct(n: Int32 nullable=false)
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let value = ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])));
+
+        let expected_struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("n", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+
+        // Test new_list
+        let list = ScalarValue::new_list(
+            std::slice::from_ref(&value),
+            &requested_element_type,
+            true,
+        );
+        assert_eq!(
+            list.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(
+                requested_element_type.clone(),
+                true
+            )))
+        );
+        assert_eq!(&list.value(0), &expected_array);
+
+        // Test new_list_from_iter
+        let list_from_iter = ScalarValue::new_list_from_iter(
+            std::iter::once(value.clone()),
+            &requested_element_type,
+            true,
+        );
+        assert_eq!(
+            list_from_iter.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(
+                requested_element_type.clone(),
+                true
+            )))
+        );
+        assert_eq!(&list_from_iter.value(0), &expected_array);
+
+        // Test new_large_list
+        let large_list = ScalarValue::new_large_list(&[value], &requested_element_type);
+        assert_eq!(
+            large_list.data_type(),
+            &DataType::LargeList(Arc::new(Field::new(
+                "item",
+                requested_element_type.clone(),
+                true
+            )))
+        );
+        assert_eq!(&large_list.value(0), &expected_array);
     }
 }

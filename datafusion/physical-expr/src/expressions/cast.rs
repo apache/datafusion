@@ -179,11 +179,8 @@ impl CastExpr {
                 | (UInt8, UInt16 | UInt32 | UInt64)
                 | (UInt16, UInt32 | UInt64)
                 | (UInt32, UInt64)
-                | (
-                    Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32,
-                    Float32 | Float64
-                )
-                | (Int64 | UInt64, Float64)
+                | (Int8 | Int16 | UInt8 | UInt16, Float32)
+                | (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32, Float64)
                 | (Utf8, LargeUtf8)
         )
     }
@@ -214,8 +211,18 @@ pub(crate) fn cast_expr_properties(
     target_type: &DataType,
 ) -> Result<ExprProperties> {
     let unbounded = Interval::make_unbounded(target_type)?;
-    if is_order_preserving_cast_family(&child.range.data_type(), target_type) {
-        Ok(child.clone().with_range(unbounded))
+    let source_type = child.range.data_type();
+    // A widening cast is additionally one-to-one, so it is strictly
+    // order-preserving; a narrowing cast may collapse distinct values,
+    // breaking the ordering of subsequent sort keys.
+    let bigger_cast = CastExpr::check_bigger_cast(target_type, &source_type);
+    if is_order_preserving_cast_family(&source_type, target_type) || bigger_cast {
+        Ok(child
+            .clone()
+            .with_range(unbounded)
+            .with_strictly_order_preserving(
+                child.strictly_order_preserving && bigger_cast,
+            ))
     } else {
         Ok(ExprProperties::new_unknown().with_range(unbounded))
     }
@@ -1176,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: https://github.com/apache/datafusion/issues/5396
+    #[ignore = "TODO: https://github.com/apache/datafusion/issues/5396"]
     fn test_cast_decimal() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", Int64, false)]);
         let a = Int64Array::from(vec![100]);
@@ -1207,6 +1214,31 @@ mod tests {
         assert_eq!(sql_string, "CAST(b AS Int32)");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_check_bigger_cast_precision_loss() {
+        use DataType::*;
+
+        // Exact conversions without precision loss
+        assert!(CastExpr::check_bigger_cast(&Int16, &Int8));
+        assert!(CastExpr::check_bigger_cast(&Int64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float32, &Int16));
+        assert!(CastExpr::check_bigger_cast(&Float32, &UInt16));
+        assert!(CastExpr::check_bigger_cast(&Float64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float64, &UInt32));
+        assert!(CastExpr::check_bigger_cast(&LargeUtf8, &Utf8));
+
+        // Precision-losing int-to-float conversions should return false
+        assert!(!CastExpr::check_bigger_cast(&Float32, &Int32));
+        assert!(!CastExpr::check_bigger_cast(&Float32, &UInt32));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &Int64));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &UInt64));
+
+        // Signed <-> Unsigned conversions should return false (not order-preserving due to negative values)
+        assert!(!CastExpr::check_bigger_cast(&UInt16, &Int8));
+        assert!(!CastExpr::check_bigger_cast(&UInt32, &Int16));
+        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt8));
     }
 }
 

@@ -48,24 +48,17 @@ pub fn suggest_valid_function(
     is_window_func: bool,
     ctx: &dyn ContextProvider,
 ) -> Option<String> {
-    let valid_funcs = if is_window_func {
+    let mut valid_funcs = Vec::new();
+    if is_window_func {
         // All aggregate functions and builtin window functions
-        let mut funcs = Vec::new();
-
-        funcs.extend(ctx.udaf_names());
-        funcs.extend(ctx.udwf_names());
-
-        funcs
+        valid_funcs.extend(ctx.udaf_names());
+        valid_funcs.extend(ctx.udwf_names());
     } else {
         // All scalar functions and aggregate functions
-        let mut funcs = Vec::new();
-
-        funcs.extend(ctx.udf_names());
-        funcs.extend(ctx.higher_order_function_names());
-        funcs.extend(ctx.udaf_names());
-
-        funcs
-    };
+        valid_funcs.extend(ctx.udf_names());
+        valid_funcs.extend(ctx.higher_order_function_names());
+        valid_funcs.extend(ctx.udaf_names());
+    }
     find_closest_match(valid_funcs, input_function_name)
 }
 
@@ -546,15 +539,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        // Build Unnest expression
-        if name.eq("unnest") {
+        // Build Unnest expression.
+        //
+        // `unnest(col)` drops `NULL` and empty input lists (default SQL
+        // semantics, matching DuckDB/PostgreSQL). `unnest_outer(col)` sets
+        // `outer = true` so the downstream planner picks
+        // `NullHandling::PreserveAndExpandEmpty`, which preserves `NULL`
+        // and empty input lists as a single `NULL` output row.
+        if name.eq("unnest") || name.eq("unnest_outer") {
+            let outer = name.eq("unnest_outer");
             let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
-                return plan_err!("unnest() requires exactly one argument");
+                return plan_err!("{name}() requires exactly one argument");
             }
             let expr = exprs.swap_remove(0);
             Self::check_unnest_arg(&expr, schema)?;
-            return Ok(Expr::Unnest(Unnest::new(expr)));
+            return Ok(Expr::Unnest(Unnest {
+                expr: Box::new(expr),
+                outer,
+            }));
         }
 
         if !order_by.is_empty() && is_function_window {

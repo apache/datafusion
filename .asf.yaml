@@ -78,6 +78,7 @@ github:
           - "cargo test (macos-aarch64)"
           - "Verify Vendored Code"
           - "Check cargo fmt"
+          - "Check GitHub Actions install tooling"
           - "clippy"
           - "check Cargo.toml formatting"
           - "check configs.md and ***_functions.md is up-to-date"
@@ -103,6 +104,9 @@ github:
     branch-54:
       required_pull_request_reviews:
         required_approving_review_count: 1
+    branch-55:
+      required_pull_request_reviews:
+        required_approving_review_count: 1
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true
@@ -114,4 +118,3 @@ github:
 # https://datafusion.apache.org/
 publish:
   whoami: asf-site
-

@@ -42,7 +42,7 @@ use datafusion::parquet::arrow::{
     ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use std::collections::HashSet;
@@ -218,7 +218,7 @@ impl TableProvider for IndexTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -242,7 +242,7 @@ impl TableProvider for IndexTableProvider {
             Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
         let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, source)
-                .with_projection_indices(projection.cloned())?
+                .with_projection_indices(projection.map(|p| p.to_vec()))?
                 .with_limit(limit);
 
         // Transform to the format needed to pass to DataSourceExec
@@ -274,7 +274,8 @@ impl TableProvider for IndexTableProvider {
 /// Simple in memory secondary index for a set of parquet files
 ///
 /// The index is represented as an arrow [`RecordBatch`] that can be passed
-/// directly by the DataFusion [`PruningPredicate`] API
+/// directly by the DataFusion
+/// [`datafusion::physical_optimizer::pruning::PruningPredicate`] API
 ///
 /// The `RecordBatch` looks as follows.
 ///
@@ -362,8 +363,9 @@ impl ParquetMetadataIndex {
     ) -> Result<Vec<(&str, u64)>> {
         // Use the PruningPredicate API to determine which files can not
         // possibly have any relevant data.
-        let pruning_predicate =
-            PruningPredicate::try_new(predicate, self.schema().clone())?;
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(self.schema().clone())
+            .try_build(predicate)?;
 
         // Now evaluate the pruning predicate into a boolean mask, one element per
         // file in the index. If the mask is true, the file may have rows that
@@ -499,7 +501,8 @@ impl ParquetMetadataIndexBuilder {
         let file_size = file.metadata()?.len();
 
         let file = File::open(file).map_err(|e| {
-            DataFusionError::from(e).context(format!("Error opening file {file:?}"))
+            DataFusionError::from(e)
+                .context(format!("Error opening file {}", file.display()))
         })?;
 
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -619,12 +622,15 @@ fn read_dir(dir: &Path) -> Result<Vec<DirEntry>> {
     let mut files = dir
         .read_dir()
         .map_err(|e| {
-            DataFusionError::from(e).context(format!("Error reading directory {dir:?}"))
+            DataFusionError::from(e)
+                .context(format!("Error reading directory {}", dir.display()))
         })?
         .map(|entry| {
             entry.map_err(|e| {
-                DataFusionError::from(e)
-                    .context(format!("Error reading directory entry in {dir:?}"))
+                DataFusionError::from(e).context(format!(
+                    "Error reading directory entry in {}",
+                    dir.display()
+                ))
             })
         })
         .collect::<Result<Vec<DirEntry>>>()?;

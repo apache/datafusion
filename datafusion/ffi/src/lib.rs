@@ -36,8 +36,10 @@ pub mod ffi_option;
 pub mod insert_op;
 pub mod physical_expr;
 pub mod physical_optimizer;
+pub mod placement;
 pub mod plan_properties;
 pub mod proto;
+pub mod query_planner;
 pub mod record_batch_stream;
 pub mod schema_provider;
 pub mod session;
@@ -83,7 +85,7 @@ static LIBRARY_MARKER: u8 = 0;
 ///
 /// See the crate's `README.md` for additional information.
 pub extern "C" fn get_library_marker_id() -> usize {
-    &LIBRARY_MARKER as *const u8 as usize
+    std::ptr::from_ref::<u8>(&LIBRARY_MARKER) as usize
 }
 
 /// For unit testing in this crate we need to trick the providers

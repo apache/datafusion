@@ -51,7 +51,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 mod state;
 
-use state::{BytesValueState, PrimitiveValueState, ValueState};
+use state::{BytesValueState, GenericValueState, PrimitiveValueState, ValueState};
 
 create_func!(FirstValue, first_value_udaf);
 create_func!(LastValue, last_value_udaf);
@@ -171,6 +171,23 @@ fn create_groups_accumulator(
             BytesValueState::try_new(data_type.clone())?,
         ),
 
+        // Nested / composite types fall through to a generic ScalarValue-backed
+        // state. Slower per-batch than the primitive/bytes fast paths but still
+        // avoids the per-row ScalarValue churn of the per-group `Accumulator`
+        // path: winner extraction happens once per group per batch, not once
+        // per candidate row.
+        DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Struct(_)
+        | DataType::Map(_, _) => create_groups_accumulator_helper(
+            args,
+            is_first,
+            GenericValueState::new(data_type.clone()),
+        ),
+
         _ => internal_err!(
             "GroupsAccumulator not supported for {}({})",
             function_name,
@@ -209,6 +226,13 @@ fn groups_accumulator_supported(args: &AccumulatorArgs) -> bool {
                 | Binary
                 | LargeBinary
                 | BinaryView
+                | List(_)
+                | LargeList(_)
+                | ListView(_)
+                | LargeListView(_)
+                | FixedSizeList(_, _)
+                | Struct(_)
+                | Map(_, _)
         )
 }
 
@@ -555,8 +579,15 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         for (idx_in_val, group_idx) in group_indices.iter().enumerate() {
             let group_idx = *group_idx;
 
-            let passed_filter = opt_filter.is_none_or(|x| x.value(idx_in_val));
-            let is_set = is_set_arr.is_none_or(|x| x.value(idx_in_val));
+            // A row passes the FILTER clause only when the predicate is
+            // `true`; rows whose predicate evaluates to `null` are excluded.
+            let passed_filter =
+                opt_filter.is_none_or(|x| x.is_valid(idx_in_val) && x.value(idx_in_val));
+            // `is_set_arr` carries the user FILTER clause (including its
+            // nulls) when the state was produced by `convert_to_state`, so
+            // the validity check is required here as well (#22666).
+            let is_set =
+                is_set_arr.is_none_or(|x| x.is_valid(idx_in_val) && x.value(idx_in_val));
 
             if !passed_filter || !is_set {
                 continue;
@@ -671,7 +702,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
@@ -690,7 +720,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         let groups = self.get_filtered_extreme_of_each_group(
             &val_and_order_cols[1..],
             group_indices,
-            opt_filter,
+            None,
             vals,
             Some(is_set_arr),
         )?;
@@ -713,11 +743,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
             + self.extreme_of_each_group_buf.1.capacity() / 8
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn convert_to_state(
         &self,
         values: &[ArrayRef],
@@ -1192,7 +1217,7 @@ impl Accumulator for TrivialLastValueAccumulator {
         if let Some(last) = filtered_states.last()
             && !last.is_empty()
         {
-            self.last = ScalarValue::try_from_array(last, 0)?;
+            self.last = ScalarValue::try_from_array(last, last.len() - 1)?;
             self.is_set = true;
         }
         Ok(())
@@ -1416,6 +1441,7 @@ mod tests {
 
     use arrow::{
         array::{BooleanArray, Int64Array, ListArray, PrimitiveArray, StringArray},
+        buffer::NullBuffer,
         compute::SortOptions,
         datatypes::Schema,
     };
@@ -1523,7 +1549,21 @@ mod tests {
 
         let merged_state = last_accumulator.state()?;
         assert_eq!(merged_state.len(), state1.len());
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(10)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_trivial_last_value_merge_all_flags_false() -> Result<()> {
+        let mut acc = TrivialLastValueAccumulator::try_new(&DataType::Int64, false)?;
+        let states: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![None, None])),
+            Arc::new(BooleanArray::from(vec![false, false])),
+        ];
+
+        acc.merge_batch(&states)?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
         Ok(())
     }
 
@@ -1587,12 +1627,7 @@ mod tests {
             group_acc.compute_size_of_orderings()
         );
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         assert_eq!(
             group_acc.size_of_orderings,
@@ -1608,8 +1643,11 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0 keeps merged value=1 (ordering=1).
+        // group 1 keeps merged value=-6 (ordering=-6 < 6, so -6 is "first").
+        // group 2 had no merged value (is_set=false), so update_batch value=6 wins.
         let expect: PrimitiveArray<Int64Type> =
-            Int64Array::from(vec![Some(1), Some(6), Some(6), None]);
+            Int64Array::from(vec![Some(1), Some(-6), Some(6), None]);
 
         assert_eq!(eval_result, &expect);
 
@@ -1680,7 +1718,7 @@ mod tests {
                 group_acc.compute_size_of_orderings()
             );
 
-            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), None, 100)?;
+            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), 100)?;
             assert_eq!(
                 group_acc.size_of_orderings,
                 group_acc.compute_size_of_orderings()
@@ -1753,12 +1791,7 @@ mod tests {
         ];
         assert_eq!(state, expected_state);
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         val_with_orderings.clear();
         val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
@@ -1769,9 +1802,125 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0: merged value=1 (ordering=1, is_set=true), update not called.
+        // group 1: merged value=-6 (ordering=-6, is_set=true); update ordering=66 > -6
+        //          → LAST_VALUE keeps the higher ordering, so group 1 becomes 66.
+        // group 2: is_set=false after merge; update_batch sets it to 6.
         let expect: PrimitiveArray<Int64Type> =
             Int64Array::from(vec![Some(1), Some(66), Some(6), None]);
 
+        assert_eq!(eval_result, &expect);
+
+        Ok(())
+    }
+
+    /// Rows whose FILTER predicate evaluates to `null` must not pass the
+    /// filter, even when the underlying value bit at the null slot is `true`
+    /// (#22666).
+    #[test]
+    fn test_group_acc_filter_null_predicate() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        let mut group_acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_keys.into(),
+            true,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        let val_with_orderings: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![10, 20, 30])),
+            Arc::new(Int64Array::from(vec![10, 20, 30])),
+        ];
+
+        // Row 0: predicate is null (but its value bit is true, as produced by
+        // kernels such as `b < 1` when the null slot's underlying value is 0)
+        // Row 1: predicate is false
+        // Row 2: predicate is true
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![false, true, false, true]),
+            Some(NullBuffer::from(BooleanBuffer::from(vec![
+                true, false, true, true,
+            ]))),
+        )
+        .slice(1, 3);
+        assert_eq!(filter.offset(), 1);
+
+        group_acc.update_batch(&val_with_orderings, &[0, 0, 1], Some(&filter), 2)?;
+
+        let binding = group_acc.evaluate(EmitTo::All)?;
+        let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // Group 0 has no row with a `true` predicate, so it must stay unset.
+        // Group 1 takes the only row with a `true` predicate.
+        let expect: PrimitiveArray<Int64Type> = Int64Array::from(vec![None, Some(30)]);
+        assert_eq!(eval_result, &expect);
+
+        Ok(())
+    }
+
+    /// `convert_to_state` stores the user FILTER clause (including its nulls)
+    /// in the `is_set` state column, so `merge_batch` must not treat a null
+    /// `is_set` entry with a set value bit as "is set" (#22666).
+    #[test]
+    fn test_group_acc_merge_null_is_set() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        let group_acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_keys.clone().into(),
+            true,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        let val_with_orderings: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![10, 20])),
+            Arc::new(Int64Array::from(vec![10, 20])),
+        ];
+
+        // Same null-with-set-value-bit filter as above, carried into the state
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true]),
+            Some(NullBuffer::from(BooleanBuffer::from(vec![false, true]))),
+        );
+
+        let state = group_acc.convert_to_state(&val_with_orderings, Some(&filter))?;
+        assert_eq!(state.len(), 3);
+
+        let mut merging_acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_keys.into(),
+            true,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        merging_acc.merge_batch(&state, &[0, 0], 1)?;
+
+        let binding = merging_acc.evaluate(EmitTo::All)?;
+        let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // Only the second row is valid and passes; the null-predicate row must
+        // be skipped even though its value bit is true.
+        let expect: PrimitiveArray<Int64Type> = Int64Array::from(vec![Some(20)]);
         assert_eq!(eval_result, &expect);
 
         Ok(())
@@ -1920,6 +2069,321 @@ mod tests {
                 .contains("is_set flags contain nulls")
         );
 
+        Ok(())
+    }
+
+    /// End-to-end integration test for the nested-type support added to
+    /// [`FirstLastGroupsAccumulator`]: build the accumulator directly with a
+    /// [`GenericValueState`] for `List<Int32>` and verify that winners are
+    /// selected correctly across multiple batches.
+    ///
+    /// Mirrors the shape produced by SQL like:
+    /// ```sql
+    /// SELECT first_value(list_col ORDER BY o DESC) FROM t GROUP BY p
+    /// ```
+    /// which previously fell back to the per-group `Accumulator` path and
+    /// blew up on wide payloads.
+    #[test]
+    fn test_first_group_acc_list_int32() -> Result<()> {
+        let value_type =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("val", value_type.clone(), true),
+            Field::new("ord", DataType::Int64, true),
+        ]));
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("ord", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }];
+
+        let mut group_acc = FirstLastGroupsAccumulator::try_new(
+            GenericValueState::new(value_type.clone()),
+            sort_keys.into(),
+            false,
+            &[DataType::Int64],
+            /* pick_first = */ true,
+        )?;
+
+        // Batch 1: four rows across two groups.
+        // Winners (largest ord per group with pick_first=true + DESC):
+        //   group 0 -> ord=30 -> [3, 3, 3]
+        //   group 1 -> ord=40 -> [4, 4, 4, 4]
+        let values_1 = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(1)]),
+            Some(vec![Some(2), Some(2)]),
+            Some(vec![Some(3), Some(3), Some(3)]),
+            Some(vec![Some(4), Some(4), Some(4), Some(4)]),
+        ]);
+        let orderings_1 = Int64Array::from(vec![10, 20, 30, 40]);
+        group_acc.update_batch(
+            &[
+                Arc::new(values_1) as ArrayRef,
+                Arc::new(orderings_1) as ArrayRef,
+            ],
+            &[0, 1, 0, 1],
+            None,
+            2,
+        )?;
+
+        // Batch 2: group 0 gets a new winner ord=50 -> [9, 9]; group 1
+        // keeps its previous winner (5 < 40).
+        let values_2 = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(9), Some(9)]),
+            Some(vec![Some(8)]),
+        ]);
+        let orderings_2 = Int64Array::from(vec![50, 5]);
+        group_acc.update_batch(
+            &[
+                Arc::new(values_2) as ArrayRef,
+                Arc::new(orderings_2) as ArrayRef,
+            ],
+            &[0, 1],
+            None,
+            2,
+        )?;
+
+        let result = group_acc.evaluate(EmitTo::All)?;
+        let result = result.as_list::<i32>();
+        assert_eq!(result.len(), 2);
+        let g0 = result.value(0);
+        let g0 = g0.as_primitive::<Int32Type>();
+        assert_eq!(g0.len(), 2);
+        assert_eq!(g0.value(0), 9);
+        assert_eq!(g0.value(1), 9);
+        let g1 = result.value(1);
+        let g1 = g1.as_primitive::<Int32Type>();
+        assert_eq!(g1.len(), 4);
+        for i in 0..4 {
+            assert_eq!(g1.value(i), 4);
+        }
+        Ok(())
+    }
+
+    /// Regression test for the wide-payload memory blow-up: run the full
+    /// aggregate loop over a batch large enough that the per-group
+    /// `Accumulator` path would have generated N * batch-worth of state
+    /// (via `ScalarValue::List` clones) and verify that the reported
+    /// accumulator size stays proportional to `#groups`, not `#rows`.
+    #[test]
+    fn test_first_group_acc_list_size_bounded_by_groups() -> Result<()> {
+        let value_type =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("val", value_type.clone(), true),
+            Field::new("ord", DataType::Int64, true),
+        ]));
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("ord", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }];
+        let mut group_acc = FirstLastGroupsAccumulator::try_new(
+            GenericValueState::new(value_type),
+            sort_keys.into(),
+            false,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        // 10 groups × 10_000 candidate rows per group (100_000 total). Each
+        // list value has ~10 elements. Under the old per-group `Accumulator`
+        // + Arc-slice code path this would pin every batch in memory.
+        const GROUPS: usize = 10;
+        const ROWS_PER_GROUP: usize = 10_000;
+        const N: usize = GROUPS * ROWS_PER_GROUP;
+        let values = ListArray::from_iter_primitive::<Int32Type, _, _>(
+            repeat_with(|| Some(vec![Some(1_i32); 10])).take(N),
+        );
+        let orderings = Int64Array::from((0..N as i64).collect::<Vec<_>>());
+        let group_indices: Vec<usize> = (0..N).map(|i| i % GROUPS).collect();
+
+        group_acc.update_batch(
+            &[
+                Arc::new(values) as ArrayRef,
+                Arc::new(orderings) as ArrayRef,
+            ],
+            &group_indices,
+            None,
+            GROUPS,
+        )?;
+
+        // Sanity: the retained size must be small — well under what a single
+        // input batch worth of list buffers would occupy. The exact number is
+        // implementation-dependent, but should be O(GROUPS * per-list), not
+        // O(N * per-list).
+        let size = group_acc.size();
+        assert!(
+            size < 100_000,
+            "accumulator size {size} bytes is not bounded by #groups (10 groups × ~10 int32 list elements)"
+        );
+
+        // Winner per group is the row with the largest ord — with our layout
+        // that's the last row assigned to each group.
+        let result = group_acc.evaluate(EmitTo::All)?;
+        let result = result.as_list::<i32>();
+        assert_eq!(result.len(), GROUPS);
+        for g in 0..GROUPS {
+            let winner = result.value(g);
+            let winner = winner.as_primitive::<Int32Type>();
+            assert_eq!(winner.len(), 10);
+            for i in 0..10 {
+                assert_eq!(winner.value(i), 1);
+            }
+        }
+        Ok(())
+    }
+
+    /// End-to-end memory-savings regression test.
+    ///
+    /// Streams many independent batches of wide `List<Int32>` payload through
+    /// the accumulator, dropping each source batch immediately after feeding
+    /// it in. The test then verifies three things:
+    ///
+    ///   1. The accumulator still emits the correct winners after every
+    ///      source batch has been dropped (proves that stored values are
+    ///      owned copies, not `Arc` slices into batches that no longer
+    ///      exist).
+    ///   2. No buffer of any past source batch is shared by the emitted
+    ///      output — the raw data-buffer pointer of every source batch is
+    ///      recorded, and the final output's buffers must not alias any of
+    ///      them (proves `compact()` copied the winners into owned memory).
+    ///   3. The accumulator's reported `size()` stays bounded by
+    ///      `#groups * per-group-cost`, independent of `#batches * #rows`.
+    ///
+    /// This is the regression test for the wide-payload pinning behaviour
+    /// that motivated this PR.
+    #[test]
+    fn test_first_group_acc_list_no_source_batch_pinning() -> Result<()> {
+        let value_type =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("val", value_type.clone(), true),
+            Field::new("ord", DataType::Int64, true),
+        ]));
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("ord", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }];
+        let mut group_acc = FirstLastGroupsAccumulator::try_new(
+            GenericValueState::new(value_type),
+            sort_keys.into(),
+            false,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        const GROUPS: usize = 4;
+        const BATCHES: usize = 50;
+        const ROWS_PER_BATCH: usize = 256;
+
+        // Record the raw pointer of each source batch's Int32 value-data
+        // buffer. If `compact()` did its job, the accumulator's final
+        // output must not share any of these pointers — every winner
+        // value should have been copied into an owned buffer.
+        let mut source_value_ptrs: Vec<*const u8> = Vec::with_capacity(BATCHES);
+
+        // Track the running-max ord we have fed to each group so the test's
+        // "expected winner" oracle matches the accumulator's choice.
+        let mut expected_ord = [i64::MIN; GROUPS];
+        let mut expected_val_repeat = [0_i32; GROUPS];
+
+        for batch in 0..BATCHES {
+            // Each batch's list values are `[batch as i32; group_idx + 1]`
+            // — a distinct payload per (batch, row) so we can verify the
+            // winner by content.
+            let values = ListArray::from_iter_primitive::<Int32Type, _, _>(
+                (0..ROWS_PER_BATCH).map(|i| {
+                    let g = i % GROUPS;
+                    Some(vec![Some(batch as i32); g + 1])
+                }),
+            );
+            let orderings = Int64Array::from(
+                (0..ROWS_PER_BATCH as i64)
+                    .map(|i| batch as i64 * ROWS_PER_BATCH as i64 + i)
+                    .collect::<Vec<_>>(),
+            );
+            let group_indices: Vec<usize> =
+                (0..ROWS_PER_BATCH).map(|i| i % GROUPS).collect();
+
+            // Update the oracle: the last row in this batch that hits each
+            // group has the largest ord for that group in this batch.
+            for i in (0..ROWS_PER_BATCH).rev() {
+                let g = i % GROUPS;
+                let ord = batch as i64 * ROWS_PER_BATCH as i64 + i as i64;
+                if ord > expected_ord[g] {
+                    expected_ord[g] = ord;
+                    expected_val_repeat[g] = batch as i32;
+                }
+            }
+
+            // Capture the raw pointer of this batch's Int32 value-data
+            // buffer *before* handing ownership to the accumulator. Int32
+            // arrays have a single value buffer at index 0.
+            source_value_ptrs.push(values.values().to_data().buffers()[0].as_ptr());
+
+            let values_arc: Arc<dyn Array> = Arc::new(values);
+            let orderings_arc: Arc<dyn Array> = Arc::new(orderings);
+
+            group_acc.update_batch(
+                &[values_arc, orderings_arc],
+                &group_indices,
+                None,
+                GROUPS,
+            )?;
+
+            // Drop happens implicitly at end of scope.
+        }
+
+        // (2) Size is bounded by #groups. The exact number is
+        // implementation-dependent but should be orders of magnitude below
+        // `BATCHES * ROWS_PER_BATCH * per-list-cost` (the amount that would
+        // be retained under the old Arc-slice pinning bug).
+        let size = group_acc.size();
+        assert!(
+            size < 10_000,
+            "accumulator size {size} bytes is not bounded by #groups \
+             (expected O({GROUPS}) not O({BATCHES} * {ROWS_PER_BATCH}))"
+        );
+
+        // (1) Winners are still readable and match the oracle.
+        let result = group_acc.evaluate(EmitTo::All)?;
+        let result_list = result.as_list::<i32>();
+        assert_eq!(result_list.len(), GROUPS);
+        for (g, expected_repeat) in expected_val_repeat.iter().enumerate().take(GROUPS) {
+            let winner = result_list.value(g);
+            let winner = winner.as_primitive::<Int32Type>();
+            assert_eq!(winner.len(), g + 1, "winner list length for group {g}");
+            for i in 0..winner.len() {
+                assert_eq!(
+                    winner.value(i),
+                    *expected_repeat,
+                    "winner payload mismatch for group {g}"
+                );
+            }
+        }
+
+        // (3) The critical byte-level check: the emitted output's Int32
+        // value-data buffer must NOT share a raw pointer with any of the
+        // source batches. If `compact()` were omitted, `list_array.value(i)`
+        // would yield a slice whose backing buffer points into the source
+        // batch — the accumulator would then either pin the batch or emit
+        // an output that shares its buffer.
+        let result_values_ptr = result_list.values().to_data().buffers()[0].as_ptr();
+        for (i, src_ptr) in source_value_ptrs.iter().enumerate() {
+            assert_ne!(
+                *src_ptr, result_values_ptr,
+                "emitted result's Int32 value buffer aliases source batch \
+                 {i}'s buffer; compact() is not making an owned copy"
+            );
+        }
         Ok(())
     }
 }

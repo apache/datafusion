@@ -1333,18 +1333,56 @@ inner join join_t2 on join_t1.t1_id = join_t2.t2_id
 ----
 logical_plan
 01)Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[]]
-02)--Projection: join_t1.t1_id
-03)----Inner Join: join_t1.t1_id = join_t2.t2_id
-04)------TableScan: join_t1 projection=[t1_id]
-05)------TableScan: join_t2 projection=[t2_id]
+02)--LeftSemi Join: join_t1.t1_id = join_t2.t2_id
+03)----TableScan: join_t1 projection=[t1_id]
+04)----TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[]
 02)--RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 03)----AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[]
-04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
+04)------HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# A single `count(DISTINCT col)` over a join whose other side is used only as an
+# existence filter can be rewritten to a semi join.
+query TT
+EXPLAIN
+select join_t1.t1_id, count(distinct join_t1.t1_int)
+from join_t1
+inner join join_t2 on join_t1.t1_id = join_t2.t2_id
+group by join_t1.t1_id
+----
+logical_plan
+01)Projection: join_t1.t1_id, count(alias1) AS count(DISTINCT join_t1.t1_int)
+02)--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[join_t1.t1_id, join_t1.t1_int AS alias1]], aggr=[[]]
+04)------LeftSemi Join: join_t1.t1_id = join_t2.t2_id
+05)--------TableScan: join_t1 projection=[t1_id, t1_int]
+06)--------TableScan: join_t2 projection=[t2_id]
+
+# A similar query with two DISTINCT aggregates is currently not rewritten
+# TODO: https://github.com/apache/datafusion/issues/22644
+query TT
+EXPLAIN
+select join_t1.t1_id, count(distinct join_t1.t1_int), count(distinct join_t1.t1_name)
+from join_t1
+inner join join_t2 on join_t1.t1_id = join_t2.t2_id
+group by join_t1.t1_id
+----
+logical_plan
+01)Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count(DISTINCT join_t1.t1_int), count(DISTINCT join_t1.t1_name)]]
+02)--Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
+03)----Inner Join: join_t1.t1_id = join_t2.t2_id
+04)------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+05)------TableScan: join_t2 projection=[t2_id]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
 
 # Join on struct
 query TT
@@ -1411,10 +1449,9 @@ logical_plan
 01)Projection: count(alias1) AS count(DISTINCT join_t1.t1_id)
 02)--Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
 03)----Aggregate: groupBy=[[join_t1.t1_id AS alias1]], aggr=[[]]
-04)------Projection: join_t1.t1_id
-05)--------Inner Join: join_t1.t1_id = join_t2.t2_id
-06)----------TableScan: join_t1 projection=[t1_id]
-07)----------TableScan: join_t2 projection=[t2_id]
+04)------LeftSemi Join: join_t1.t1_id = join_t2.t2_id
+05)--------TableScan: join_t1 projection=[t1_id]
+06)--------TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT join_t1.t1_id)]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
@@ -1423,7 +1460,7 @@ physical_plan
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------RepartitionExec: partitioning=Hash([alias1@0], 2), input_partitions=2
 07)------------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
-08)--------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
+08)--------------HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(t1_id@0, t2_id@0)]
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 10)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 11)------------------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1952,7 +1989,7 @@ where join_t1.t1_id + 12 not in
     (select join_t2.t2_id + 1 from join_t2 where join_t1.t1_int > 0)
 ----
 logical_plan
-01)LeftAnti Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int > UInt32(0)
+01)LeftAnti Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int > UInt32(0) null_aware
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
@@ -5148,7 +5185,7 @@ LEFT ANTI JOIN (
 ) t2 ON t1.k = t2.k;
 ----
 Plan with Metrics
-01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_mem_used=<slt:ignore>, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), probe_hit_rate=0% (0/2)]     
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, build_mem_used=<slt:ignore>, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), probe_hit_rate=0% (0/2)]
 02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, expr_0_eval_time=<slt:ignore>]
 03)----FilterExec: column1@0 != 1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, selectivity=0% (0/1)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
@@ -5365,10 +5402,10 @@ LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
 ORDER BY l.id;
 ----
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
-03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement count 0
@@ -5506,7 +5543,7 @@ statement count 0
 DROP TABLE t2;
 
 statement ok
-CREATE TABLE t1(a INT, b INT) AS VALUES 
+CREATE TABLE t1(a INT, b INT) AS VALUES
   (NULL, 1), (NULL, 2), (NULL, 3), (NULL, 4), (NULL, 5);
 
 statement ok
@@ -5518,7 +5555,7 @@ CREATE TABLE t2(c INT) AS VALUES (1), (2);
 query II
 SELECT sub.a, sub.b FROM (
   SELECT * FROM t1 ORDER BY b LIMIT 1
-) sub 
+) sub
 JOIN t2 ON sub.a = t2.c;
 ----
 
@@ -5571,3 +5608,616 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 reset datafusion.execution.batch_size;
+
+##########
+# Eliminate unused outer joins (`EliminateJoin` rule)
+#
+# An outer join whose non-preserved side is unreferenced above the join is
+# removed entirely when it cannot duplicate the preserved side's rows: either
+# the non-preserved side is unique on the join keys (e.g. PRIMARY KEY /
+# UNIQUE constraint or GROUP BY), or the join's ancestors are
+# duplicate-insensitive. Most cases below exercise the LEFT JOIN direction;
+# RIGHT JOIN is symmetric and covered at the end of the section.
+##########
+
+statement ok
+CREATE TABLE elim_users (id INT primary key, name VARCHAR) AS VALUES
+  (1, 'alice'),
+  (2, 'bob'),
+  (4, 'dave');
+
+statement ok
+CREATE TABLE elim_orders (order_id INT, user_id INT, amount INT) AS VALUES
+  (1, 1, 100),
+  (2, 1, 200),
+  (3, 3, 50);
+
+# The right side is unique on the join key (primary key) and unused above the
+# join: the LEFT JOIN is removed from the plan.
+query TT
+EXPLAIN SELECT order_id, amount FROM elim_orders LEFT JOIN elim_users ON user_id = id;
+----
+logical_plan TableScan: elim_orders projection=[order_id, amount]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# All orders are returned, including the one with no matching user.
+query II rowsort
+SELECT order_id, amount FROM elim_orders LEFT JOIN elim_users ON user_id = id;
+----
+1 100
+2 200
+3 50
+
+# A WHERE clause on left-side columns does not block the rewrite.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id WHERE amount > 100;
+----
+logical_plan
+01)Projection: elim_orders.order_id
+02)--Filter: elim_orders.amount > Int32(100)
+03)----TableScan: elim_orders projection=[order_id, amount]
+physical_plan
+01)FilterExec: amount@1 > 100, projection=[order_id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id WHERE amount > 100;
+----
+2
+
+# An extra join filter on right-side columns does not block the rewrite: for a
+# left join it only decides whether a left row is matched or null-padded, and
+# either way the row is emitted.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id AND name <> 'bob';
+----
+logical_plan TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id AND name <> 'bob';
+----
+1
+2
+3
+
+# count(*) is duplicate-sensitive, but the unique join key guarantees each
+# order appears exactly once, so the join is still removed.
+query TT
+EXPLAIN SELECT count(*) FROM elim_orders LEFT JOIN elim_users ON user_id = id;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: elim_orders projection=[]
+physical_plan
+01)ProjectionExec: expr=[3 as count(*)]
+02)--PlaceholderRowExec
+
+query I
+SELECT count(*) FROM elim_orders LEFT JOIN elim_users ON user_id = id;
+----
+3
+
+# A DISTINCT (or GROUP BY) right side is unique on its keys even without
+# declared constraints, so the join is removed.
+query TT
+EXPLAIN SELECT o.order_id FROM elim_orders o LEFT JOIN (SELECT DISTINCT user_id FROM elim_orders) d ON o.user_id = d.user_id;
+----
+logical_plan
+01)SubqueryAlias: o
+02)--TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT o.order_id FROM elim_orders o LEFT JOIN (SELECT DISTINCT user_id FROM elim_orders) d ON o.user_id = d.user_id;
+----
+1
+2
+3
+
+# Negative case: the right side is referenced in the SELECT list, so the join
+# must stay.
+query TT
+EXPLAIN SELECT order_id, name FROM elim_orders LEFT JOIN elim_users ON user_id = id;
+----
+logical_plan
+01)Projection: elim_orders.order_id, elim_users.name
+02)--Left Join: elim_orders.user_id = elim_users.id
+03)----TableScan: elim_orders projection=[order_id, user_id]
+04)----TableScan: elim_users projection=[id, name]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(user_id@1, id@0)], projection=[order_id@0, name@3]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Negative case: the right side is not unique on the join key, so a left row
+# may match several right rows; the join must stay.
+query TT
+EXPLAIN SELECT elim_users.id FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id;
+----
+logical_plan
+01)Projection: elim_users.id
+02)--Left Join: elim_users.id = elim_orders.user_id
+03)----TableScan: elim_users projection=[id]
+04)----TableScan: elim_orders projection=[user_id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ... and the duplicates it produces are observable: user 1 has two orders.
+query I rowsort
+SELECT elim_users.id FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id;
+----
+1
+1
+2
+4
+
+# The same non-unique right side under a DISTINCT: the join's ancestors are
+# duplicate-insensitive, so the extra matches only affect row multiplicity
+# and the join is removed even without uniqueness on the join key.
+query TT
+EXPLAIN SELECT DISTINCT name FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id;
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_users.name]], aggr=[[]]
+02)--TableScan: elim_users projection=[name]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+02)--RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T rowsort
+SELECT DISTINCT name FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id;
+----
+alice
+bob
+dave
+
+# Negative case: count(*) observes row multiplicity and the right side is not
+# unique on the join key, so the join must stay (user 1 has two orders).
+query TT
+EXPLAIN SELECT count(*) FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Left Join: elim_users.id = elim_orders.user_id
+05)--------TableScan: elim_users projection=[id]
+06)--------TableScan: elim_orders projection=[user_id]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT count(*) FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id;
+----
+4
+
+# A left join with no equi-join keys at all (ON true) matches every left row
+# with every right row. Under a duplicate-insensitive ancestor (DISTINCT) the
+# multiplication is unobservable and the join is removed.
+query TT
+EXPLAIN SELECT DISTINCT order_id FROM elim_orders LEFT JOIN elim_users ON true;
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_orders.order_id]], aggr=[[]]
+02)--TableScan: elim_orders projection=[order_id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[order_id@0 as order_id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([order_id@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[order_id@0 as order_id], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT DISTINCT order_id FROM elim_orders LEFT JOIN elim_users ON true;
+----
+1
+2
+3
+
+# Negative case: without the DISTINCT the multiplication is observable (each
+# order is repeated once per user), so the join must stay.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN elim_users ON true;
+----
+logical_plan
+01)Left Join:
+02)--TableScan: elim_orders projection=[order_id]
+03)--TableScan: elim_users projection=[]
+physical_plan
+01)NestedLoopJoinExec: join_type=Right
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN elim_users ON true;
+----
+1
+1
+1
+2
+2
+2
+3
+3
+3
+
+# A LIMIT makes the row count observable, but the uniqueness path does not
+# depend on duplicate-insensitivity: the unique (PK) right side is unused, so
+# the join is removed even under a LIMIT.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--TableScan: elim_orders projection=[order_id], fetch=2
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id LIMIT 2;
+----
+1
+2
+
+# Negative case: a LIMIT between the join and a DISTINCT ancestor makes the
+# row count observable, so the DISTINCT's duplicate-insensitivity does not
+# reach the join; with a non-unique right side the join must stay.
+query TT
+EXPLAIN SELECT DISTINCT id FROM (SELECT elim_users.id FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id LIMIT 5);
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_users.id]], aggr=[[]]
+02)--Projection: elim_users.id
+03)----Limit: skip=0, fetch=5
+04)------Left Join: elim_users.id = elim_orders.user_id
+05)--------Limit: skip=0, fetch=5
+06)----------TableScan: elim_users projection=[id], fetch=5
+07)--------TableScan: elim_orders projection=[user_id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0], fetch=5
+06)----------DataSourceExec: partitions=1, partition_sizes=[1], fetch=5
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT DISTINCT id FROM (SELECT elim_users.id FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id LIMIT 5);
+----
+1
+2
+4
+
+# LEFT JOIN LATERAL decorrelates into a plain left join, with equality
+# predicates extracted as join keys: the unique (PK) lateral side is unused,
+# so the join is removed.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id = user_id) AS u ON true;
+----
+logical_plan TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id = user_id) AS u ON true;
+----
+1
+2
+3
+
+# A non-equality lateral predicate becomes a join filter, which does not
+# block removal under a duplicate-insensitive ancestor (DISTINCT).
+query TT
+EXPLAIN SELECT DISTINCT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_orders.order_id]], aggr=[[]]
+02)--TableScan: elim_orders projection=[order_id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[order_id@0 as order_id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([order_id@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[order_id@0 as order_id], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT DISTINCT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+1
+2
+3
+
+# Negative case: without the DISTINCT a filter-only lateral can multiply left
+# rows observably (each order matches every user with a greater id), so the
+# join must stay.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+logical_plan
+01)Projection: elim_orders.order_id
+02)--Left Join:  Filter: u.id > elim_orders.user_id
+03)----TableScan: elim_orders projection=[order_id, user_id]
+04)----SubqueryAlias: u
+05)------TableScan: elim_users projection=[id]
+physical_plan
+01)NestedLoopJoinExec: join_type=Right, filter=id@1 > user_id@0, projection=[order_id@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+1
+1
+2
+2
+3
+
+# RIGHT JOIN is symmetric: the join is removed when its *left* side is
+# unreferenced above the join and cannot duplicate right rows.
+
+# The left side is unique on the join key (primary key) and unused above the
+# join: the RIGHT JOIN is removed from the plan.
+query TT
+EXPLAIN SELECT order_id, amount FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+logical_plan TableScan: elim_orders projection=[order_id, amount]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# All orders are returned, including the one with no matching user.
+query II rowsort
+SELECT order_id, amount FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+1 100
+2 200
+3 50
+
+# An extra join filter on left-side columns does not block the rewrite: for a
+# right join it only decides whether a right row is matched or null-padded,
+# and either way the row is emitted.
+query TT
+EXPLAIN SELECT order_id FROM elim_users RIGHT JOIN elim_orders ON id = user_id AND name <> 'bob';
+----
+logical_plan TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_users RIGHT JOIN elim_orders ON id = user_id AND name <> 'bob';
+----
+1
+2
+3
+
+# count(*) is duplicate-sensitive, but the unique join key guarantees each
+# order appears exactly once, so the join is still removed.
+query TT
+EXPLAIN SELECT count(*) FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: elim_orders projection=[]
+physical_plan
+01)ProjectionExec: expr=[3 as count(*)]
+02)--PlaceholderRowExec
+
+query I
+SELECT count(*) FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+3
+
+# The left side is not unique on the join key, but a DISTINCT ancestor makes
+# the extra matches unobservable, so the join is removed even without
+# uniqueness on the join key.
+query TT
+EXPLAIN SELECT DISTINCT name FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_users.name]], aggr=[[]]
+02)--TableScan: elim_users projection=[name]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+02)--RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T rowsort
+SELECT DISTINCT name FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+alice
+bob
+dave
+
+# Negative case: the left side is referenced in the SELECT list, so the join
+# must stay.
+query TT
+EXPLAIN SELECT order_id, name FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+logical_plan
+01)Projection: elim_orders.order_id, elim_users.name
+02)--Right Join: elim_users.id = elim_orders.user_id
+03)----TableScan: elim_users projection=[id, name]
+04)----TableScan: elim_orders projection=[order_id, user_id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(user_id@1, id@0)], projection=[order_id@0, name@3]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Negative case: the left side is not unique on the join key, so a right row
+# may match several left rows; the join must stay.
+query TT
+EXPLAIN SELECT elim_users.id FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+logical_plan
+01)Projection: elim_users.id
+02)--Right Join: elim_orders.user_id = elim_users.id
+03)----TableScan: elim_orders projection=[user_id]
+04)----TableScan: elim_users projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(user_id@0, id@0)], projection=[id@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ... and the duplicates it produces are observable: user 1 has two orders.
+query I rowsort
+SELECT elim_users.id FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+1
+1
+2
+4
+
+statement ok
+DROP TABLE elim_users;
+
+statement ok
+DROP TABLE elim_orders;
+
+# A UNIQUE constraint, unlike PRIMARY KEY, permits NULLs — and per SQL
+# semantics several NULLs may coexist in a UNIQUE column. Whether a nullable
+# UNIQUE key proves uniqueness on the join keys therefore depends on the
+# join's null semantics.
+statement ok
+CREATE TABLE elim_null_keys (id INT, k INT) AS VALUES
+  (1, 10),
+  (2, NULL),
+  (3, 30);
+
+statement ok
+CREATE TABLE elim_null_lookup (ukey INT UNIQUE, payload INT) AS VALUES
+  (10, 100),
+  (NULL, 200),
+  (NULL, 300);
+
+# Under the default null semantics (`=`), NULL keys match nothing, so the
+# nullable UNIQUE right side still yields at most one match per left row and
+# the join is removed.
+query TT
+EXPLAIN SELECT id FROM elim_null_keys LEFT JOIN elim_null_lookup ON k = ukey;
+----
+logical_plan TableScan: elim_null_keys projection=[id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The NULL-keyed left row matches nothing and is emitted exactly once.
+query I rowsort
+SELECT id FROM elim_null_keys LEFT JOIN elim_null_lookup ON k = ukey;
+----
+1
+2
+3
+
+# Negative case: IS NOT DISTINCT FROM compares NULLs as equal, so both NULL
+# rows in the UNIQUE column match a NULL left key; the right side is not
+# unique under these semantics and the join must stay.
+query TT
+EXPLAIN SELECT id FROM elim_null_keys LEFT JOIN elim_null_lookup ON k IS NOT DISTINCT FROM ukey;
+----
+logical_plan
+01)Projection: elim_null_keys.id
+02)--Left Join: elim_null_keys.k = elim_null_lookup.ukey
+03)----TableScan: elim_null_keys projection=[id, k]
+04)----TableScan: elim_null_lookup projection=[ukey]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(ukey@0, k@1)], projection=[id@1], NullsEqual: true
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ... and the duplicates are observable: the NULL-keyed left row matches both
+# NULL lookup rows.
+query I rowsort
+SELECT id FROM elim_null_keys LEFT JOIN elim_null_lookup ON k IS NOT DISTINCT FROM ukey;
+----
+1
+2
+2
+3
+
+statement ok
+DROP TABLE elim_null_keys;
+
+statement ok
+DROP TABLE elim_null_lookup;
+
+# Regression test: a `CollectLeft` `HashJoinExec` requires `SinglePartition` on its build
+# (left) child, and the `CoalescePartitionsExec` that satisfies it must survive the
+# sort-parallelization phase of `EnsureRequirements`. It used to be removed positionally
+# (the traversal descends into the join because the *probe* side is linked to a coalesce),
+# leaving a multi-partition build side that `SanityCheckPlan` rejects with
+# "does not satisfy distribution requirements: SinglePartition".
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+# Keep the scan multi-partition as written, i.e. one partition per file.
+statement ok
+set datafusion.optimizer.repartition_file_scans = false;
+
+statement ok
+CREATE TABLE collect_left_src (id INT, ts INT) AS VALUES (1, 10), (2, 20), (3, 30);
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/0.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/1.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/2.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/3.parquet' STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE collect_left STORED AS PARQUET LOCATION 'test_files/scratch/joins/collect_left/';
+
+# The build side is the 4-partition scan; the probe side is the `DISTINCT ON` aggregate,
+# whose `CoalescePartitionsExec` is what makes the traversal reach the join.
+query I
+SELECT a.id
+FROM collect_left a
+LEFT JOIN (SELECT DISTINCT ON (id) id, ts FROM collect_left ORDER BY id, ts) f
+  ON a.id = f.id
+ORDER BY a.id;
+----
+1
+1
+1
+1
+2
+2
+2
+2
+3
+3
+3
+3
+
+statement ok
+DROP TABLE collect_left;
+
+statement ok
+DROP TABLE collect_left_src;
+
+statement ok
+reset datafusion.optimizer.repartition_file_scans;
+
+statement ok
+set datafusion.execution.target_partitions = 4;

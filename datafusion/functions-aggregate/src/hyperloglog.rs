@@ -55,14 +55,7 @@ where
     phantom: PhantomData<T>,
 }
 
-/// Fixed seed for the hashing so that values are consistent across runs
-///
-/// Note that when we later move on to have serialized HLL register binaries
-/// shared across cluster, this HLL_HASH_STATE will have to be consistent across all
-/// parties otherwise we might have corruption. So ideally for later this seed
-/// shall be part of the serialized form (or stay unchanged across versions).
-pub(crate) const HLL_HASH_STATE: foldhash::quality::FixedState =
-    foldhash::quality::FixedState::with_seed(0);
+pub(crate) use datafusion_common::hash_utils::HLL_RANDOM_STATE as HLL_HASH_STATE;
 
 impl<T> Default for HyperLogLog<T>
 where
@@ -86,6 +79,10 @@ where
     /// Creates a HyperLogLog from already populated registers
     /// note that this method should not be invoked in untrusted environment
     /// because the internal structure of registers are not examined.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "The registers are moved into the returned `Self`, so taking a reference would only add a copy"
+    )]
     pub(crate) fn new_with_registers(registers: [u8; NUM_REGISTERS]) -> Self {
         Self {
             registers,
@@ -93,9 +90,8 @@ where
         }
     }
 
-    /// choice of hash function: foldhash is already an dependency
-    /// and it fits the requirements of being a 64bit hash with
-    /// reasonable performance.
+    /// The HLL hash state is shared through `datafusion_common::hash_utils`
+    /// so sketches remain compatible across accumulators.
     #[inline]
     fn hash_value(&self, obj: &T) -> u64 {
         HLL_HASH_STATE.hash_one(obj)

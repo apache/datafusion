@@ -22,7 +22,7 @@ use crate::{
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use datafusion_common::Result;
+use datafusion_common::{Result, tree_node::TreeNodeRecursion};
 use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
@@ -91,7 +91,7 @@ impl FileSource for MockSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+        Arc::new(self.clone())
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
@@ -125,9 +125,45 @@ impl FileSource for MockSource {
     ) -> Option<&datafusion_physical_plan::projection::ProjectionExprs> {
         Some(&self.projection.source)
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
 }
 
 /// Create a column expression
 pub(crate) fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(Column::new_with_schema(name, schema)?))
+}
+
+/// Chunk sizes exercised by every parameterised test.
+///
+/// `usize::MAX` is intentionally included: `ChunkedStore` treats it as
+/// "one chunk containing everything", giving the single-chunk fast path.
+pub(crate) const CHUNK_SIZES: &[usize] = &[1, 2, 3, 4, 5, 7, 8, 11, 13, 16, usize::MAX];
+
+/// Seed a fresh `InMemory` store with `data` and wrap it in a
+/// [`ChunkedStore`] that splits every GET response into `chunk_size`-byte
+/// pieces.
+pub(crate) async fn make_chunked_store(
+    data: &[u8],
+    chunk_size: usize,
+) -> (Arc<dyn ObjectStore>, object_store::path::Path) {
+    use bytes::Bytes;
+    use object_store::ObjectStoreExt;
+    use object_store::PutPayload;
+    use object_store::chunked::ChunkedStore;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+
+    let inner = Arc::new(InMemory::new());
+    let path = Path::from("test");
+    inner
+        .put(&path, PutPayload::from(Bytes::copy_from_slice(data)))
+        .await
+        .unwrap();
+    (Arc::new(ChunkedStore::new(inner, chunk_size)), path)
 }

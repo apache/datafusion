@@ -156,6 +156,24 @@ impl JoinType {
                 | JoinType::RightSemi
         )
     }
+
+    /// Returns true when an empty build-side map necessarily produces an empty
+    /// result for this join type, even if the build side still contains rows.
+    ///
+    /// Every output row of these join types requires a matching build row, so
+    /// when the map has no matchable keys the result is empty regardless of the
+    /// probe side. Note this is a subset of
+    /// [`Self::empty_build_side_produces_empty_result`]: an empty build side
+    /// yields an empty map, but the map can also be empty when every build row
+    /// has a NULL join key under [`NullEquality::NullEqualsNothing`].
+    ///
+    /// [`NullEquality::NullEqualsNothing`]: crate::NullEquality::NullEqualsNothing
+    pub fn empty_map_produces_empty_result(self) -> bool {
+        matches!(
+            self,
+            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+        )
+    }
 }
 
 impl Display for JoinType {

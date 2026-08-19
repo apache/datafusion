@@ -122,6 +122,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinConstraint::On(sql_expr) => {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
+                self.warn_on_null_equality_predicate(&sql_expr);
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
                 LogicalPlanBuilder::from(left)
                     .join_on(right, join_type, Some(expr))?

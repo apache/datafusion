@@ -309,6 +309,7 @@ impl MetricsSet {
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
+            MetricValue::PeakMemoryUsage { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
             MetricValue::PruningMetrics { name, .. } => name == metric_name,
@@ -414,6 +415,21 @@ impl MetricsSet {
                     .unwrap_or(MetricCategory::Uncategorized);
                 allowed.contains(&cat)
             })
+            .collect::<Vec<_>>();
+        Self { metrics }
+    }
+
+    /// Returns a new `MetricsSet` filtered by metric name.
+    /// Only metrics with the names appearing the list will be kept.
+    pub fn filter_by_names(self, names: &[String]) -> Self {
+        if names.is_empty() {
+            return Self { metrics: vec![] };
+        }
+
+        let metrics = self
+            .metrics
+            .into_iter()
+            .filter(|metric| names.iter().any(|name| name == metric.value().name()))
             .collect::<Vec<_>>();
         Self { metrics }
     }
@@ -963,6 +979,31 @@ mod tests {
         assert_eq!(
             "output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp",
             metric_names(&metrics)
+        );
+    }
+
+    #[test]
+    fn test_filter_by_names() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics).output_rows(0);
+        MetricBuilder::new(&metrics).counter("custom_counter", 0);
+
+        assert!(
+            metrics
+                .clone_inner()
+                .filter_by_names(&[])
+                .iter()
+                .next()
+                .is_none()
+        );
+
+        let names = vec!["output_rows".to_string()];
+        let filtered = metrics.clone_inner().filter_by_names(&names);
+
+        assert_eq!(filtered.iter().count(), 1);
+        assert_eq!(
+            filtered.iter().next().unwrap().value().name(),
+            "output_rows"
         );
     }
 }

@@ -64,6 +64,10 @@ name = "scalar_to_array"
 harness = false
 name = "stats_merge"
 
+[[bench]]
+harness = false
+name = "record_batch_memory"
+
 [dependencies]
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
@@ -77,6 +81,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 libc = "0.2.185"
 log = { workspace = true }
+num-traits = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 recursive = { workspace = true, optional = true }

@@ -65,9 +65,9 @@ limit 10;
 logical_plan
 01)Sort: supplier.s_acctbal DESC NULLS FIRST, nation.n_name ASC NULLS LAST, supplier.s_name ASC NULLS LAST, part.p_partkey ASC NULLS LAST, fetch=10
 02)--Projection: supplier.s_acctbal, supplier.s_name, nation.n_name, part.p_partkey, part.p_mfgr, supplier.s_address, supplier.s_phone, supplier.s_comment
-03)----Inner Join: part.p_partkey = __scalar_sq_1.ps_partkey, partsupp.ps_supplycost = __scalar_sq_1.min(partsupp.ps_supplycost)
+03)----LeftSemi Join: part.p_partkey = __scalar_sq_1.ps_partkey, partsupp.ps_supplycost = __scalar_sq_1.min(partsupp.ps_supplycost)
 04)------Projection: part.p_partkey, part.p_mfgr, supplier.s_name, supplier.s_address, supplier.s_phone, supplier.s_acctbal, supplier.s_comment, partsupp.ps_supplycost, nation.n_name
-05)--------Inner Join: nation.n_regionkey = region.r_regionkey
+05)--------LeftSemi Join: nation.n_regionkey = region.r_regionkey
 06)----------Projection: part.p_partkey, part.p_mfgr, supplier.s_name, supplier.s_address, supplier.s_phone, supplier.s_acctbal, supplier.s_comment, partsupp.ps_supplycost, nation.n_name, nation.n_regionkey
 07)------------Inner Join: supplier.s_nationkey = nation.n_nationkey
 08)--------------Projection: part.p_partkey, part.p_mfgr, supplier.s_name, supplier.s_address, supplier.s_nationkey, supplier.s_phone, supplier.s_acctbal, supplier.s_comment, partsupp.ps_supplycost
@@ -87,7 +87,7 @@ logical_plan
 22)--------Projection: min(partsupp.ps_supplycost), partsupp.ps_partkey
 23)----------Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[min(partsupp.ps_supplycost)]]
 24)------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost
-25)--------------Inner Join: nation.n_regionkey = region.r_regionkey
+25)--------------LeftSemi Join: nation.n_regionkey = region.r_regionkey
 26)----------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, nation.n_regionkey
 27)------------------Inner Join: supplier.s_nationkey = nation.n_nationkey
 28)--------------------Projection: partsupp.ps_partkey, partsupp.ps_supplycost, supplier.s_nationkey
@@ -101,9 +101,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[s_acctbal@0 DESC, n_name@2 ASC NULLS LAST, s_name@1 ASC NULLS LAST, p_partkey@3 ASC NULLS LAST], preserve_partitioning=[true]
-03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@0, ps_partkey@1), (ps_supplycost@7, min(partsupp.ps_supplycost)@0)], projection=[s_acctbal@5, s_name@2, n_name@8, p_partkey@0, p_mfgr@1, s_address@3, s_phone@4, s_comment@6]
+03)----HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(p_partkey@0, ps_partkey@1), (ps_supplycost@7, min(partsupp.ps_supplycost)@0)], projection=[s_acctbal@5, s_name@2, n_name@8, p_partkey@0, p_mfgr@1, s_address@3, s_phone@4, s_comment@6]
 04)------RepartitionExec: partitioning=Hash([p_partkey@0, ps_supplycost@7], 4), input_partitions=4
-05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@9, r_regionkey@0)], projection=[p_partkey@0, p_mfgr@1, s_name@2, s_address@3, s_phone@4, s_acctbal@5, s_comment@6, ps_supplycost@7, n_name@8]
+05)--------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@9, r_regionkey@0)], projection=[p_partkey@0, p_mfgr@1, s_name@2, s_address@3, s_phone@4, s_acctbal@5, s_comment@6, ps_supplycost@7, n_name@8]
 06)----------RepartitionExec: partitioning=Hash([n_regionkey@9], 4), input_partitions=4
 07)------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@4, n_nationkey@0)], projection=[p_partkey@0, p_mfgr@1, s_name@2, s_address@3, s_phone@5, s_acctbal@6, s_comment@7, ps_supplycost@8, n_name@10, n_regionkey@11]
 08)--------------RepartitionExec: partitioning=Hash([s_nationkey@4], 4), input_partitions=4
@@ -128,7 +128,7 @@ physical_plan
 27)----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
 28)------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
 29)--------------AggregateExec: mode=Partial, gby=[ps_partkey@0 as ps_partkey], aggr=[min(partsupp.ps_supplycost)]
-30)----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@2, r_regionkey@0)], projection=[ps_partkey@0, ps_supplycost@1]
+30)----------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@2, r_regionkey@0)], projection=[ps_partkey@0, ps_supplycost@1]
 31)------------------RepartitionExec: partitioning=Hash([n_regionkey@2], 4), input_partitions=4
 32)--------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[ps_partkey@0, ps_supplycost@1, n_regionkey@4]
 33)----------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4

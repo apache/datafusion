@@ -20,248 +20,138 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
-    UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
+    Result, ScalarValue, SplitPoint, TableReference, exec_datafusion_err, internal_err,
+    plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::registry::FunctionRegistry;
-use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
+use datafusion_expr::dml::{
+    InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+};
+use datafusion_expr::expr::{
+    Alias, Lambda, LambdaVariable, NullTreatment, Placeholder, Sort,
+};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
-    JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    Like, Operator, TryCast, WindowFrame,
     expr::{self, InList, WindowFunction},
-    logical_plan::{PlanType, StringifiedPlan},
 };
 use datafusion_expr::{ExprFunctionExt, WriteOp};
 use datafusion_proto_common::{FromProtoError as Error, from_proto::FromOptionalField};
 
-use crate::protobuf::plan_type::PlanTypeEnum::{
-    FinalPhysicalPlanWithSchema, InitialPhysicalPlanWithSchema,
-};
-use crate::protobuf::{
-    self, AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
-    plan_type::PlanTypeEnum::{
-        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
-        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
-        OptimizedPhysicalPlan, PhysicalPlanError,
-    },
-};
-
-use crate::convert::{FromProto, TryFromProto};
+use crate::protobuf::{self, CubeNode, GroupingSetNode, PlaceholderNode, RollupNode};
 
 use super::{AsLogicalPlan, LogicalExtensionCodec};
 
-impl FromProto<&protobuf::UnnestOptions> for UnnestOptions {
-    fn from_proto(opts: &protobuf::UnnestOptions) -> Self {
-        Self {
-            preserve_nulls: opts.preserve_nulls,
-            recursions: opts
-                .recursions
+/// Reconstruct a [`WriteOp`] from a [`protobuf::DmlNode`], reading the
+/// `merge_into` payload when the type tag is `MergeInto`.
+pub fn parse_write_op(
+    node: &protobuf::DmlNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<WriteOp, Error> {
+    let typ = node.dml_type();
+    Ok(match typ {
+        protobuf::dml_node::Type::Update => WriteOp::Update,
+        protobuf::dml_node::Type::Delete => WriteOp::Delete,
+        protobuf::dml_node::Type::InsertAppend => WriteOp::Insert(InsertOp::Append),
+        protobuf::dml_node::Type::InsertOverwrite => WriteOp::Insert(InsertOp::Overwrite),
+        protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
+        protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
+        protobuf::dml_node::Type::Truncate => WriteOp::Truncate,
+        protobuf::dml_node::Type::MergeInto => {
+            let merge_into = node.merge_into.as_deref().ok_or_else(|| {
+                Error::General(
+                    "DmlNode with MERGE_INTO type is missing the merge_into payload"
+                        .to_string(),
+                )
+            })?;
+            WriteOp::MergeInto(Box::new(parse_merge_into_op(merge_into, ctx, codec)?))
+        }
+    })
+}
+
+fn parse_merge_into_op(
+    op: &protobuf::MergeIntoOpNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<MergeIntoOp, Error> {
+    let on = op.on.as_ref().ok_or_else(|| {
+        Error::General("MergeIntoOpNode is missing required `on` expression".to_string())
+    })?;
+    let on = parse_expr(on, ctx, codec)?;
+    let clauses = op
+        .clauses
+        .iter()
+        .map(|c| parse_merge_into_clause(c, ctx, codec))
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(MergeIntoOp { on, clauses })
+}
+
+fn parse_merge_into_clause(
+    clause: &protobuf::MergeIntoClauseNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<MergeIntoClause, Error> {
+    let kind = protobuf::merge_into_clause_node::Kind::try_from(clause.kind)
+        .map_err(|_| {
+            Error::General(format!(
+                "MergeIntoClauseNode has unknown kind tag {}",
+                clause.kind
+            ))
+        })
+        .map(MergeIntoClauseKind::from)?;
+    let predicate = clause
+        .predicate
+        .as_ref()
+        .map(|e| parse_expr(e, ctx, codec))
+        .transpose()?;
+    let action = clause.action.as_ref().ok_or_else(|| {
+        Error::General("MergeIntoClauseNode is missing required `action`".to_string())
+    })?;
+    let action = parse_merge_into_action(action, ctx, codec)?;
+    Ok(MergeIntoClause {
+        kind,
+        predicate,
+        action,
+    })
+}
+
+fn parse_merge_into_action(
+    action: &protobuf::MergeIntoActionNode,
+    ctx: &TaskContext,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<MergeIntoAction, Error> {
+    use protobuf::merge_into_action_node::Action;
+    let action = action.action.as_ref().ok_or_else(|| {
+        Error::General("MergeIntoActionNode is missing the `action` oneof".to_string())
+    })?;
+    Ok(match action {
+        Action::Update(update) => {
+            let assignments = update
+                .assignments
                 .iter()
-                .map(|r| RecursionUnnestOption {
-                    input_column: r.input_column.as_ref().unwrap().into(),
-                    output_column: r.output_column.as_ref().unwrap().into(),
-                    depth: r.depth as usize,
+                .map(|a| {
+                    let value = a.value.as_ref().ok_or_else(|| {
+                        Error::General(format!(
+                            "MergeAssignment for column `{}` is missing its value",
+                            a.column
+                        ))
+                    })?;
+                    Ok((a.column.clone(), parse_expr(value, ctx, codec)?))
                 })
-                .collect::<Vec<_>>(),
+                .collect::<Result<Vec<_>, Error>>()?;
+            MergeIntoAction::Update(assignments)
         }
-    }
-}
-
-impl FromProto<protobuf::WindowFrameUnits> for WindowFrameUnits {
-    fn from_proto(units: protobuf::WindowFrameUnits) -> Self {
-        match units {
-            protobuf::WindowFrameUnits::Rows => Self::Rows,
-            protobuf::WindowFrameUnits::Range => Self::Range,
-            protobuf::WindowFrameUnits::Groups => Self::Groups,
-        }
-    }
-}
-
-impl TryFromProto<protobuf::TableReference> for TableReference {
-    type Error = Error;
-
-    fn try_from_proto(value: protobuf::TableReference) -> Result<Self, Self::Error> {
-        use protobuf::table_reference::TableReferenceEnum;
-        let table_reference_enum = value
-            .table_reference_enum
-            .ok_or_else(|| Error::required("table_reference_enum"))?;
-
-        match table_reference_enum {
-            TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(TableReference::bare(table))
-            }
-            TableReferenceEnum::Partial(protobuf::PartialTableReference {
-                schema,
-                table,
-            }) => Ok(TableReference::partial(schema, table)),
-            TableReferenceEnum::Full(protobuf::FullTableReference {
-                catalog,
-                schema,
-                table,
-            }) => Ok(TableReference::full(catalog, schema, table)),
-        }
-    }
-}
-
-impl FromProto<&protobuf::StringifiedPlan> for StringifiedPlan {
-    fn from_proto(stringified_plan: &protobuf::StringifiedPlan) -> Self {
-        Self {
-            plan_type: match stringified_plan
-                .plan_type
-                .as_ref()
-                .and_then(|pt| pt.plan_type_enum.as_ref())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Cannot create protobuf::StringifiedPlan from {stringified_plan:?}"
-                    )
-                }) {
-                InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
-                AnalyzedLogicalPlan(AnalyzedLogicalPlanType { analyzer_name }) => {
-                    PlanType::AnalyzedLogicalPlan {
-                        analyzer_name:analyzer_name.clone()
-                    }
-                }
-                FinalAnalyzedLogicalPlan(_) => PlanType::FinalAnalyzedLogicalPlan,
-                OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
-                    PlanType::OptimizedLogicalPlan {
-                        optimizer_name: optimizer_name.clone(),
-                    }
-                }
-                FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
-                InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
-                InitialPhysicalPlanWithStats(_) => PlanType::InitialPhysicalPlanWithStats,
-                InitialPhysicalPlanWithSchema(_) => PlanType::InitialPhysicalPlanWithSchema,
-                OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
-                    PlanType::OptimizedPhysicalPlan {
-                        optimizer_name: optimizer_name.clone(),
-                    }
-                }
-                FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
-                FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
-                FinalPhysicalPlanWithSchema(_) => PlanType::FinalPhysicalPlanWithSchema,
-                PhysicalPlanError(_) => PlanType::PhysicalPlanError,
-            },
-            plan: Arc::new(stringified_plan.plan.clone()),
-        }
-    }
-}
-
-impl TryFromProto<protobuf::WindowFrame> for WindowFrame {
-    type Error = Error;
-
-    fn try_from_proto(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
-        let units = WindowFrameUnits::from_proto(
-            protobuf::WindowFrameUnits::try_from(window.window_frame_units).map_err(
-                |_| Error::unknown("WindowFrameUnits", window.window_frame_units),
-            )?,
-        );
-        let start_bound = WindowFrameBound::try_from_proto(
-            window
-                .start_bound
-                .ok_or_else(|| Error::required("start_bound"))?,
-        )?;
-        let end_bound = window
-            .end_bound
-            .map(|end_bound| match end_bound {
-                protobuf::window_frame::EndBound::Bound(end_bound) => {
-                    WindowFrameBound::try_from_proto(end_bound)
-                }
-            })
-            .transpose()?
-            .unwrap_or(WindowFrameBound::CurrentRow);
-        Ok(WindowFrame::new_bounds(units, start_bound, end_bound))
-    }
-}
-
-impl TryFromProto<protobuf::WindowFrameBound> for WindowFrameBound {
-    type Error = Error;
-
-    fn try_from_proto(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
-        let bound_type =
-            protobuf::WindowFrameBoundType::try_from(bound.window_frame_bound_type)
-                .map_err(|_| {
-                    Error::unknown("WindowFrameBoundType", bound.window_frame_bound_type)
-                })?;
-        match bound_type {
-            protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
-            protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
-                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
-                None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
-            },
-            protobuf::WindowFrameBoundType::Following => match bound.bound_value {
-                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
-                None => Ok(Self::Following(ScalarValue::UInt64(None))),
-            },
-        }
-    }
-}
-
-impl FromProto<protobuf::JoinType> for JoinType {
-    fn from_proto(t: protobuf::JoinType) -> Self {
-        match t {
-            protobuf::JoinType::Inner => JoinType::Inner,
-            protobuf::JoinType::Left => JoinType::Left,
-            protobuf::JoinType::Right => JoinType::Right,
-            protobuf::JoinType::Full => JoinType::Full,
-            protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
-            protobuf::JoinType::Rightsemi => JoinType::RightSemi,
-            protobuf::JoinType::Leftanti => JoinType::LeftAnti,
-            protobuf::JoinType::Rightanti => JoinType::RightAnti,
-            protobuf::JoinType::Leftmark => JoinType::LeftMark,
-            protobuf::JoinType::Rightmark => JoinType::RightMark,
-        }
-    }
-}
-
-impl FromProto<protobuf::JoinConstraint> for JoinConstraint {
-    fn from_proto(t: protobuf::JoinConstraint) -> Self {
-        match t {
-            protobuf::JoinConstraint::On => JoinConstraint::On,
-            protobuf::JoinConstraint::Using => JoinConstraint::Using,
-        }
-    }
-}
-
-impl FromProto<protobuf::NullEquality> for NullEquality {
-    fn from_proto(t: protobuf::NullEquality) -> Self {
-        match t {
-            protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
-            protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
-        }
-    }
-}
-
-impl FromProto<protobuf::dml_node::Type> for WriteOp {
-    fn from_proto(t: protobuf::dml_node::Type) -> Self {
-        match t {
-            protobuf::dml_node::Type::Update => WriteOp::Update,
-            protobuf::dml_node::Type::Delete => WriteOp::Delete,
-            protobuf::dml_node::Type::InsertAppend => WriteOp::Insert(InsertOp::Append),
-            protobuf::dml_node::Type::InsertOverwrite => {
-                WriteOp::Insert(InsertOp::Overwrite)
-            }
-            protobuf::dml_node::Type::InsertReplace => WriteOp::Insert(InsertOp::Replace),
-            protobuf::dml_node::Type::Ctas => WriteOp::Ctas,
-            protobuf::dml_node::Type::Truncate => WriteOp::Truncate,
-        }
-    }
-}
-
-impl FromProto<protobuf::NullTreatment> for NullTreatment {
-    fn from_proto(t: protobuf::NullTreatment) -> Self {
-        match t {
-            protobuf::NullTreatment::RespectNulls => NullTreatment::RespectNulls,
-            protobuf::NullTreatment::IgnoreNulls => NullTreatment::IgnoreNulls,
-        }
-    }
+        Action::Insert(insert) => MergeIntoAction::Insert {
+            columns: insert.columns.clone(),
+            values: parse_exprs(&insert.values, ctx, codec)?,
+        },
+        Action::Delete(_) => MergeIntoAction::Delete,
+    })
 }
 
 pub fn parse_expr(
@@ -312,7 +202,7 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame = WindowFrame::try_from_proto(window_frame.clone())?;
+                    let window_frame = WindowFrame::try_from(window_frame.clone())?;
                     window_frame
                         .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
@@ -330,7 +220,7 @@ pub fn parse_expr(
                             "Received a WindowExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from_proto(null_treatment))
+                    Some(NullTreatment::from(null_treatment))
                 }
                 None => None,
             };
@@ -379,7 +269,7 @@ pub fn parse_expr(
             alias
                 .relation
                 .first()
-                .map(|r| TableReference::try_from_proto(r.clone()))
+                .map(|r| TableReference::try_from(r.clone()))
                 .transpose()?,
             alias.alias.clone(),
         ))),
@@ -566,7 +456,10 @@ pub fn parse_expr(
             if exprs.len() != 1 {
                 return Err(proto_error("Unnest must have exactly one expression"));
             }
-            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
+            Ok(Expr::Unnest(Unnest {
+                expr: Box::new(exprs.swap_remove(0)),
+                outer: unnest.outer,
+            }))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
@@ -581,7 +474,7 @@ pub fn parse_expr(
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
             let qualifier = qualifier
                 .to_owned()
-                .map(TableReference::try_from_proto)
+                .map(TableReference::try_from)
                 .transpose()?;
             #[expect(deprecated)]
             Ok(Expr::Wildcard {
@@ -605,6 +498,22 @@ pub fn parse_expr(
                 parse_exprs(args, ctx, codec)?,
             )))
         }
+        ExprType::HigherOrderUdfExpr(protobuf::HigherOrderUdfExprNode {
+            fun_name,
+            args,
+            fun_definition,
+        }) => {
+            let hof_fn = match fun_definition {
+                Some(buf) => codec.try_decode_higher_order_function(fun_name, buf)?,
+                None => ctx
+                    .higher_order_function(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_higher_order_function(fun_name, &[]))?,
+            };
+            Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+                hof_fn,
+                parse_exprs(args, ctx, codec)?,
+            )))
+        }
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = match &pb.fun_definition {
                 Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
@@ -620,7 +529,7 @@ pub fn parse_expr(
                             "Received an AggregateUdfExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from_proto(null_treatment))
+                    Some(NullTreatment::from(null_treatment))
                 }
                 None => None,
             };
@@ -677,6 +586,16 @@ pub fn parse_expr(
                 codec,
             )?;
             Ok(Expr::ScalarSubquery(subquery))
+        }
+        ExprType::Lambda(lambda) => Ok(Expr::Lambda(Lambda::new(
+            lambda.params.clone(),
+            parse_required_expr(lambda.body.as_deref(), ctx, "body", codec)?,
+        ))),
+        ExprType::LambdaVariable(lambda_variable) => {
+            Ok(Expr::LambdaVariable(LambdaVariable::new(
+                lambda_variable.name.clone(),
+                lambda_variable.field.as_ref().optional()?.map(Arc::new),
+            )))
         }
     }
 }
@@ -785,4 +704,15 @@ fn parse_required_expr(
 
 fn proto_error<S: Into<String>>(message: S) -> Error {
     Error::General(message.into())
+}
+
+pub(super) fn parse_protobuf_range_split_point(
+    split_point: &protobuf::RangeSplitPoint,
+) -> Result<SplitPoint, Error> {
+    let values = split_point
+        .value
+        .iter()
+        .map(ScalarValue::try_from)
+        .collect::<Result<_, Error>>()?;
+    Ok(SplitPoint::new(values))
 }

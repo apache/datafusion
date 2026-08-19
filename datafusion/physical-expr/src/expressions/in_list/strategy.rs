@@ -23,35 +23,25 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
-use super::primitive_filter::*;
-use super::static_filter::StaticFilter;
+use super::primitive_filter::instantiate_primitive_filter;
+use super::static_filter::StaticFilterRef;
 
-pub(super) fn instantiate_static_filter(
-    in_array: ArrayRef,
-) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+pub(super) fn instantiate_static_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
+    let in_array = flatten_dictionary_haystack(in_array)?;
+
+    if let Some(filter) = instantiate_primitive_filter(&in_array)? {
+        return Ok(filter);
+    }
+
+    Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
+}
+
+fn flatten_dictionary_haystack(in_array: ArrayRef) -> Result<ArrayRef> {
     // Flatten dictionary-encoded haystacks to their value type so that
-    // specialized filters (e.g. Int32StaticFilter) are used instead of
-    // falling through to the generic ArrayStaticFilter.
-    let in_array = match in_array.data_type() {
-        DataType::Dictionary(_, value_type) => cast(&in_array, value_type.as_ref())?,
-        _ => in_array,
-    };
+    // specialized primitive filters are used instead of falling through to the
+    // generic ArrayStaticFilter.
     match in_array.data_type() {
-        // Integer primitive types
-        DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),
-        DataType::Int16 => Ok(Arc::new(Int16StaticFilter::try_new(&in_array)?)),
-        DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
-        DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-        DataType::UInt8 => Ok(Arc::new(UInt8StaticFilter::try_new(&in_array)?)),
-        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
-        DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
-        DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
-        // Float primitive types (use ordered wrappers for Hash/Eq)
-        DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
-        DataType::Float64 => Ok(Arc::new(Float64StaticFilter::try_new(&in_array)?)),
-        _ => {
-            /* fall through to generic implementation for unsupported types (Struct, etc.) */
-            Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
-        }
+        DataType::Dictionary(_, value_type) => Ok(cast(&in_array, value_type.as_ref())?),
+        _ => Ok(in_array),
     }
 }

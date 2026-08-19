@@ -462,18 +462,7 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
                 impl_integer_array_round!(array, UInt32Type, scale, enable_ansi_mode)
             }
             DataType::UInt64 => {
-                let array = array.as_primitive::<UInt64Type>();
-                let result: PrimitiveArray<UInt64Type> = array.try_unary(|x| {
-                    let v_i64 = i64::try_from(x).map_err(|_| {
-                        (exec_err!(
-                            "round: UInt64 value {x} exceeds i64::MAX and cannot be rounded"
-                        ) as Result<(), _>)
-                            .unwrap_err()
-                    })?;
-                    round_integer(v_i64, scale, enable_ansi_mode)
-                        .map(|v| v as u64)
-                })?;
-                Ok(ColumnarValue::Array(Arc::new(result)))
+                impl_integer_array_round!(array, UInt64Type, scale, enable_ansi_mode)
             }
 
             // Float types
@@ -588,16 +577,20 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
                 Ok(ColumnarValue::Scalar(ScalarValue::UInt32(Some(result))))
             }
             ScalarValue::UInt64(Some(v)) => {
-                let v_i64 = i64::try_from(*v).map_err(|_| {
-                    (exec_err!(
-                        "round: UInt64 value {v} exceeds i64::MAX and cannot be rounded"
-                    ) as Result<(), _>)
-                        .unwrap_err()
-                })?;
-                let result = round_integer(v_i64, scale, enable_ansi_mode)?;
-                Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(
-                    result as u64,
-                ))))
+                if scale >= 0 {
+                    Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(*v))))
+                } else {
+                    let v_i64 = i64::try_from(*v).map_err(|_| {
+                        (exec_err!(
+                            "round: UInt64 value {v} exceeds i64::MAX and cannot be rounded"
+                        ) as Result<(), _>)
+                            .unwrap_err()
+                    })?;
+                    let result = round_integer(v_i64, scale, enable_ansi_mode)?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(
+                        result as u64,
+                    ))))
+                }
             }
 
             // Float scalars

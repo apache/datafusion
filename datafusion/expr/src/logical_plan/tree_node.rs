@@ -37,13 +37,15 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
+use std::sync::Arc;
+
 use crate::logical_plan::plan::RangePartitioning;
 use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
     DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
     LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
     Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, dml::CopyTo,
+    Values, Window, WriteOp, builder::unnest_with_options, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -478,6 +480,10 @@ impl LogicalPlan {
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             },
+            LogicalPlan::Dml(DmlStatement {
+                op: WriteOp::MergeInto(merge_op),
+                ..
+            }) => merge_op.exprs().apply_ref_elements(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
@@ -686,9 +692,60 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::Unnest(Unnest {
+                input,
+                exec_columns,
+                options,
+                ..
+            }) => {
+                let exprs: Vec<Expr> =
+                    exec_columns.into_iter().map(Expr::Column).collect();
+                exprs.map_elements(f)?.map_data(|mapped_exprs| {
+                    let new_columns = mapped_exprs
+                        .into_iter()
+                        .map(|e| match e {
+                            Expr::Column(c) => Ok(c),
+                            other => internal_err!(
+                                "Expected Expr::Column for Unnest exec_columns, got {other:?}"
+                            ),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    // Rebuild through `unnest_with_options` so the derived
+                    // `list_type_columns`, `struct_type_columns`,
+                    // `dependency_indices`, and `schema` are recomputed from
+                    // the (possibly rewritten) columns rather than carried over
+                    // stale. This keeps `map_expressions` consistent with
+                    // `with_new_exprs`.
+                    unnest_with_options(
+                        Arc::unwrap_or_clone(input),
+                        new_columns,
+                        options,
+                    )
+                })?
+            }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::MergeInto(merge_op),
+                input,
+                output_schema,
+            }) => {
+                let owned_exprs: Vec<Expr> =
+                    merge_op.exprs().into_iter().cloned().collect();
+                owned_exprs.map_elements(f)?.transform_data(|new_exprs| {
+                    Ok(Transformed::no(LogicalPlan::Dml(DmlStatement {
+                        table_name,
+                        target,
+                        op: WriteOp::MergeInto(Box::new(
+                            merge_op.with_new_exprs(new_exprs)?,
+                        )),
+                        input,
+                        output_schema,
+                    })))
+                })?
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
