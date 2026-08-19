@@ -119,9 +119,15 @@ impl ScalarUDFImpl for SparkDatePart {
 
         let part_expr = Expr::Literal(ScalarValue::new_utf8(part), None);
 
-        let date_part_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
-            datafusion_functions::datetime::date_part(),
-            vec![part_expr, date_expr],
+        // DataFusion's `date_part` follows PostgreSQL and returns
+        // `Float64`. Spark's `date_part` returns `Int32` for the parts we
+        // handle here, so cast the result back to preserve Spark semantics.
+        let date_part_expr = Expr::Cast(datafusion_expr::expr::Cast::new(
+            Box::new(Expr::ScalarFunction(ScalarFunction::new_udf(
+                datafusion_functions::datetime::date_part(),
+                vec![part_expr, date_expr],
+            ))),
+            DataType::Int32,
         ));
 
         match part {
