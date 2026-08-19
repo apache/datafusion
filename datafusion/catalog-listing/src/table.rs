@@ -490,10 +490,12 @@ impl TableProvider for ListingTable {
         TableType::Base
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
-        projection: Option<&'life2 Vec<usize>>,
+        projection: Option<&'life2 [usize]>,
         filters: &'life3 [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'async_trait, datafusion_common::Result<Arc<dyn ExecutionPlan>>>
@@ -507,6 +509,8 @@ impl TableProvider for ListingTable {
         self.scan_boxed(state, projection, filters, limit)
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
@@ -549,6 +553,8 @@ impl TableProvider for ListingTable {
         self.definition.as_deref()
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn insert_into<'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
@@ -577,10 +583,10 @@ impl ListingTable {
         Box::pin(self.scan_with_args_inner(state, args))
     }
 
-    async fn scan_with_args_inner<'a>(
+    async fn scan_with_args_inner(
         &self,
         state: &dyn Session,
-        args: ScanArgs<'a>,
+        args: ScanArgs<'_>,
     ) -> datafusion_common::Result<ScanResult> {
         let projection = args.projection().map(|p| p.to_vec());
         let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
@@ -747,7 +753,7 @@ impl ListingTable {
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,
-        projection: Option<&'a Vec<usize>>,
+        projection: Option<&'a [usize]>,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> BoxFuture<'a, datafusion_common::Result<Arc<dyn ExecutionPlan>>> {
@@ -757,12 +763,12 @@ impl ListingTable {
     async fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
+            .with_projection(projection)
             .with_filters(Some(filters))
             .with_limit(limit);
         Ok(self.scan_with_args(state, options).await?.into_inner())

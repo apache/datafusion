@@ -48,7 +48,8 @@ SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
 1 a
 3 c
 
-# Verify the plan uses LeftAnti join
+# The logical plan remains LeftAnti, while JoinSelection swaps the physical
+# join to RightAnti so the smaller subquery is the build side.
 query TT
 EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
 ----
@@ -58,7 +59,7 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: inner_table_no_null projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -198,11 +199,10 @@ WHERE id NOT IN (SELECT id FROM inner_table_with_null WHERE value = 'x');
 # so this behaves like regular anti join (not null-aware)
 
 #############
-## Test 11: Verify NULL-aware flag is set for LeftAnti joins
+## Test 11: Verify the null-aware LeftAnti logical join is physically swapped
 #############
 
-# Check that the physical plan shows null-aware anti join
-# Note: The exact format may vary, but we should see LeftAnti join type
+# Check that JoinSelection builds on the smaller subquery using RightAnti.
 query TT
 EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
 ----
@@ -212,7 +212,7 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: inner_table_with_null projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 

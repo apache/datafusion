@@ -3303,6 +3303,10 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The `{testdata}` placeholder is substituted with `str::replace`"
+)]
 async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     repartition_sorts: bool,
 ) -> Result<String> {

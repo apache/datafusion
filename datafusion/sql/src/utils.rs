@@ -563,12 +563,10 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
             if self.top_most_unnest.is_none() {
                 self.top_most_unnest = Some(unnest_expr.clone());
             }
-
-            Ok(Transformed::no(expr))
         } else {
             self.consecutive_unnest.push(None);
-            Ok(Transformed::no(expr))
         }
+        Ok(Transformed::no(expr))
     }
 
     /// The rewriting only happens when the traversal has reached the top-most unnest expr

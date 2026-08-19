@@ -453,7 +453,7 @@ async fn run_test_file_substrait_round_trip(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusionSubstraitRoundTrip::new(
@@ -512,7 +512,7 @@ async fn run_test_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     // If DataFusion configuration has changed during test file runs, errors will be
     // pushed to this vec.
@@ -631,7 +631,7 @@ async fn run_test_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(
@@ -690,7 +690,7 @@ async fn run_complete_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let config_change_errors = Arc::new(Mutex::new(Vec::new()));
     let mut runner = sqllogictest::Runner::new(|| async {
@@ -746,7 +746,7 @@ async fn run_complete_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(

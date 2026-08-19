@@ -170,7 +170,7 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, SendableRecordBatchStream, Statistics,
+    InputOrderMode, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
@@ -1015,7 +1015,7 @@ impl AggregateExec {
             .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
             .collect();
 
-        let input_order_mode = if indices.len() == groupby_exprs.len()
+        let mut input_order_mode = if indices.len() == groupby_exprs.len()
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
@@ -1026,19 +1026,29 @@ impl AggregateExec {
             InputOrderMode::Linear
         };
 
+        // To keep the ordering optimization simple, grouping sets are not supported.
+        // See [`OrderedPartialAggregateStream`] for more details about this optimization.
+        if group_by.has_grouping_set() {
+            input_order_mode = InputOrderMode::Linear;
+        }
+
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
             ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
 
-        let cache = Self::compute_properties(
-            &input,
-            Arc::clone(&schema),
-            &group_expr_mapping,
-            group_by.is_true_no_grouping(),
-            &mode,
-            &input_order_mode,
-            aggr_expr.as_ref(),
-        )?;
+        let cache = if group_by.has_grouping_set() {
+            Self::compute_grouping_set_properties(&input, Arc::clone(&schema))
+        } else {
+            Self::compute_properties(
+                &input,
+                Arc::clone(&schema),
+                &group_expr_mapping,
+                group_by.is_true_no_grouping(),
+                &mode,
+                &input_order_mode,
+                aggr_expr.as_ref(),
+            )?
+        };
 
         let mut exec = AggregateExec {
             mode,
@@ -1436,6 +1446,22 @@ impl AggregateExec {
             emission_type,
             input.boundedness(),
         ))
+    }
+
+    fn compute_grouping_set_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanProperties {
+        // Grouping-set expansion can replace group keys with nulls and adds a
+        // grouping ID, so input properties do not project through unchanged.
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(
+                input.output_partitioning().partition_count(),
+            ),
+            EmissionType::Final,
+            input.boundedness(),
+        )
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -1985,25 +2011,32 @@ impl DisplayAs for AggregateExec {
 
 fn format_aggregate_exec_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
     match agg.human_display_alias() {
-        Some(_) => format_human_display(agg.human_display(), agg.human_display_alias())
+        Some(_) => agg
+            .human_display()
+            .map(|display| format_human_display(display, agg.human_display_alias()))
             .unwrap_or_else(|| Cow::Borrowed(agg.name())),
         None => Cow::Borrowed(agg.name()),
     }
 }
 
 fn format_tree_aggregate_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
-    format_human_display(agg.human_display(), agg.human_display_alias())
+    agg.human_display()
+        .map(|display| format_human_display(display, agg.human_display_alias()))
         .unwrap_or_else(|| Cow::Borrowed(agg.name()))
 }
 
+fn aggregate_metric_label(agg: &AggregateFunctionExpr) -> String {
+    format_tree_aggregate_expr(agg).into_owned()
+}
+
 fn format_human_display<'a>(
-    human_display: Option<&'a str>,
+    human_display: &'a str,
     alias: Option<&'a str>,
-) -> Option<Cow<'a, str>> {
-    human_display.map(|human_display| match alias {
+) -> Cow<'a, str> {
+    match alias {
         Some(alias) => Cow::Owned(format!("{human_display} as {alias}")),
         None => Cow::Borrowed(human_display),
-    })
+    }
 }
 
 impl ExecutionPlan for AggregateExec {
@@ -3047,9 +3080,9 @@ pub(crate) fn group_id_array(
              {max_ordinal} require {total_bits} bits, which exceeds 64"
         );
     }
-    let semantic_id = group.iter().fold(0u64, |acc, &is_null| {
-        (acc << 1) | if is_null { 1 } else { 0 }
-    });
+    let semantic_id = group
+        .iter()
+        .fold(0u64, |acc, &is_null| (acc << 1) | u64::from(is_null));
     let full_id = semantic_id | ((ordinal as u64) << n);
     if total_bits <= 8 {
         Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
