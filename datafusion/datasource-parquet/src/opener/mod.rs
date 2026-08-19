@@ -60,7 +60,6 @@ use datafusion_common::{
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
-use datafusion_physical_expr::utils::{conjunction_opt, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -261,11 +260,6 @@ pub(super) struct ParquetMorselizer {
     /// Should the filters be evaluated during the parquet scan using
     /// [`DatafusionArrowPredicate`](crate::row_filter::DatafusionArrowPredicate)?
     pub pushdown_filters: bool,
-    /// When true (and `pushdown_filters` is enabled), build the scan's
-    /// RowFilter from only the dynamic-filter conjuncts of the predicate;
-    /// static conjuncts stay in the `FilterExec` above the scan. Set by
-    /// the narrow-projection gate in `ParquetSource::try_pushdown_filters`.
-    pub(crate) pushdown_dynamic_filters_only: bool,
     /// Should the filters be reordered to optimize the scan?
     pub reorder_filters: bool,
     /// Should we force the reader to use RowSelections for filtering
@@ -458,7 +452,6 @@ struct PreparedParquetOpen {
     virtual_state: Option<Arc<VirtualColumnsState>>,
     reorder_predicates: bool,
     pushdown_filters: bool,
-    pushdown_dynamic_filters_only: bool,
     force_filter_selections: bool,
     progressive_io: bool,
     enable_page_index: bool,
@@ -857,7 +850,6 @@ impl ParquetMorselizer {
             virtual_state: self.virtual_state.as_ref().map(Arc::clone),
             reorder_predicates: self.reorder_filters,
             pushdown_filters: self.pushdown_filters,
-            pushdown_dynamic_filters_only: self.pushdown_dynamic_filters_only,
             force_filter_selections: self.force_filter_selections,
             progressive_io: self.progressive_io,
             enable_page_index: self.enable_page_index,
@@ -1452,37 +1444,10 @@ impl RowGroupsPrunedParquetOpen {
         )?;
 
         let (decoder, rg_plan, one_shot_ranges) = {
-            // When the narrow-projection gate declined the static conjuncts
-            // but kept pushdown enabled for a dynamic filter
-            // (`pushdown_dynamic_filters_only`), build the RowFilter from
-            // only the dynamic-filter conjuncts: the static conjuncts are
-            // evaluated by the `FilterExec` above the scan, so also running
-            // them here would evaluate them twice per batch. They remain in
-            // `prepared.predicate`, where they drive stats / bloom /
-            // page-index pruning.
-            let dynamic_only_predicate = (prepared.pushdown_filters
-                && prepared.pushdown_dynamic_filters_only)
+            let pushdown_predicate = prepared
+                .pushdown_filters
                 .then_some(prepared.predicate.as_ref())
-                .flatten()
-                .and_then(|predicate| {
-                    conjunction_opt(
-                        split_conjunction(predicate)
-                            .into_iter()
-                            .map(Arc::clone)
-                            .filter(|conjunct| {
-                                DynamicFilterTracking::classify(conjunct)
-                                    .contains_dynamic_filter()
-                            }),
-                    )
-                });
-            let pushdown_predicate = if prepared.pushdown_dynamic_filters_only {
-                dynamic_only_predicate.as_ref()
-            } else {
-                prepared
-                    .pushdown_filters
-                    .then_some(prepared.predicate.as_ref())
-                    .flatten()
-            };
+                .flatten();
             let mut row_filter_generator = RowFilterGenerator::new(
                 pushdown_predicate,
                 &prepared.physical_file_schema,
@@ -1867,7 +1832,6 @@ mod test {
         metrics: ExecutionPlanMetricsSet,
         parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
         pushdown_filters: bool,
-        pushdown_dynamic_filters_only: bool,
         reorder_filters: bool,
         force_filter_selections: bool,
         progressive_io: bool,
@@ -2080,7 +2044,6 @@ mod test {
                 metrics: ExecutionPlanMetricsSet::new(),
                 parquet_file_reader_factory: None,
                 pushdown_filters: false,
-                pushdown_dynamic_filters_only: false,
                 reorder_filters: false,
                 force_filter_selections: false,
                 progressive_io: false,
@@ -2251,7 +2214,6 @@ mod test {
                         Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
                     }),
                 pushdown_filters: self.pushdown_filters,
-                pushdown_dynamic_filters_only: self.pushdown_dynamic_filters_only,
                 reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
                 progressive_io: self.progressive_io,
