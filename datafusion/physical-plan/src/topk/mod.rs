@@ -807,17 +807,20 @@ impl TopK {
         // local emitter marks the dynamic filter complete.
         filter.read().mark_topk_emitted();
 
-        // break into record batches as needed
+        // Record output metrics on each batch actually sent to the consumer
+        // after splitting to `batch_size`. Recording the pre-split heap
+        // batch once would leave `output_batches` stuck at 1.
         let mut batches = vec![];
         if let Some(mut batch) = heap.emit()? {
-            (&batch).record_output(&metrics.baseline);
-
             loop {
                 if batch.num_rows() <= batch_size {
+                    (&batch).record_output(&metrics.baseline);
                     batches.push(Ok(batch));
                     break;
                 } else {
-                    batches.push(Ok(batch.slice(0, batch_size)));
+                    let next = batch.slice(0, batch_size);
+                    (&next).record_output(&metrics.baseline);
+                    batches.push(Ok(next));
                     let remaining_length = batch.num_rows() - batch_size;
                     batch = batch.slice(batch_size, remaining_length);
                 }
