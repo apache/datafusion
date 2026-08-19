@@ -1557,3 +1557,109 @@ fn get_expr_properties(
         expr.get_properties(&child_states)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::equivalence::tests::create_test_params;
+    use crate::expressions::col;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    /// Renames `a`, `b`, `c` and `d` so the projection is non-trivial while
+    /// still carrying every ordering and the `a = c` class across.
+    fn renaming_mapping(
+        schema: &SchemaRef,
+        output_schema: &SchemaRef,
+    ) -> Result<ProjectionMapping> {
+        [
+            ("a", "a1", 0),
+            ("b", "b1", 1),
+            ("c", "c1", 2),
+            ("d", "d1", 3),
+        ]
+        .into_iter()
+        .map(|(source, target, index)| {
+            Ok((
+                col(source, schema)?,
+                vec![(col(target, output_schema)?, index)].into(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|entries| entries.into_iter().collect())
+    }
+
+    fn renamed_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("b1", DataType::Int32, true),
+            Field::new("c1", DataType::Int32, true),
+            Field::new("d1", DataType::Int32, true),
+        ]))
+    }
+
+    #[test]
+    fn test_project_with_eq_group_matches_project() -> Result<()> {
+        let (schema, eq_properties) = create_test_params()?;
+        let output_schema = renamed_schema();
+        let mapping = renaming_mapping(&schema, &output_schema)?;
+
+        let baseline = eq_properties.project(&mapping, Arc::clone(&output_schema));
+        // Handing back exactly what `project` would have computed must
+        // reproduce it in full: this is the invariant the `ProjectionExec`
+        // fast path relies on.
+        let reused = eq_properties.project_with_eq_group(
+            &mapping,
+            Arc::clone(&output_schema),
+            eq_properties.eq_group().project(&mapping),
+        );
+
+        // Guard against a vacuous comparison.
+        assert!(
+            !baseline.eq_group().is_empty(),
+            "the projection dropped the equivalence class, nothing is being tested"
+        );
+        assert!(
+            !baseline.oeq_class().is_empty(),
+            "the projection dropped every ordering, nothing is being tested"
+        );
+
+        assert_eq!(baseline.eq_group(), reused.eq_group(), "equivalence group");
+        assert_eq!(baseline.oeq_class(), reused.oeq_class(), "orderings");
+        assert_eq!(baseline.constraints(), reused.constraints(), "constraints");
+        assert_eq!(baseline.schema(), reused.schema(), "schema");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_with_eq_group_derives_orderings_from_the_caller_group() -> Result<()>
+    {
+        // `project_with_eq_group` must not silently ignore the group it is
+        // handed: orderings are normalized against it, so passing an empty
+        // group has to produce a different result than passing the real one.
+        let (schema, eq_properties) = create_test_params()?;
+        let output_schema = renamed_schema();
+        let mapping = renaming_mapping(&schema, &output_schema)?;
+
+        let with_real_group = eq_properties.project_with_eq_group(
+            &mapping,
+            Arc::clone(&output_schema),
+            eq_properties.eq_group().project(&mapping),
+        );
+        let with_empty_group = eq_properties.project_with_eq_group(
+            &mapping,
+            Arc::clone(&output_schema),
+            EquivalenceGroup::default(),
+        );
+
+        assert_ne!(
+            with_real_group.eq_group(),
+            with_empty_group.eq_group(),
+            "the supplied group was not used"
+        );
+
+        Ok(())
+    }
+}

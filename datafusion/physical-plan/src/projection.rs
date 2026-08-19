@@ -1495,6 +1495,8 @@ mod tests {
 
     use crate::common::collect;
     use crate::empty::EmptyExec;
+    use crate::filter::FilterExec;
+    use crate::sorts::sort::SortExec;
 
     use crate::filter_pushdown::PushedDown;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
@@ -2271,6 +2273,199 @@ mod tests {
             format!("{}", pushed_filters.predicate),
             "DynamicFilter [ b@0 - 1 > 5 ]"
         );
+
+        Ok(())
+    }
+
+    /// `EmptyExec(a, b, c)` under a filter that equates `lhs` and `rhs`, so the
+    /// child carries a non-trivial equivalence group.
+    fn filtered_source(lhs: &str, rhs: &str) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let predicate = binary(
+            col(lhs, &schema)?,
+            Operator::Eq,
+            col(rhs, &schema)?,
+            &schema,
+        )?;
+        Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+    }
+
+    /// `[a AS x, b AS y, c AS z]` against `filtered_source`'s schema.
+    fn renaming_exprs(schema: &SchemaRef) -> Result<Vec<ProjectionExpr>> {
+        [("a", "x"), ("b", "y"), ("c", "z")]
+            .into_iter()
+            .map(|(source, alias)| {
+                Ok(ProjectionExpr {
+                    expr: col(source, schema)?,
+                    alias: alias.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    fn assert_same_properties(actual: &dyn ExecutionPlan, expected: &ProjectionExec) {
+        let actual_props = actual.properties().equivalence_properties();
+        let expected_props = expected.properties().equivalence_properties();
+        assert_eq!(
+            actual_props.eq_group(),
+            expected_props.eq_group(),
+            "equivalence group"
+        );
+        assert_eq!(
+            actual_props.oeq_class(),
+            expected_props.oeq_class(),
+            "orderings"
+        );
+        assert_eq!(
+            actual_props.constraints(),
+            expected_props.constraints(),
+            "constraints"
+        );
+        assert_eq!(actual_props.schema(), expected_props.schema(), "schema");
+        assert_eq!(
+            format!("{:?}", actual.properties().output_partitioning()),
+            format!("{:?}", expected.properties().output_partitioning()),
+            "partitioning"
+        );
+    }
+
+    #[test]
+    fn test_sort_below_changes_orderings_but_not_the_equivalence_group() -> Result<()> {
+        // The premise the fast path rests on. If a sort ever starts altering
+        // the equivalence group, reusing the cached group becomes unsound and
+        // this test is the one that should fail first.
+        let child = filtered_source("a", "b")?;
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "c",
+            &child.schema(),
+        )?)])
+        .expect("non-empty ordering");
+        let sorted = SortExec::new(ordering, Arc::clone(&child));
+
+        let child_props = child.properties().equivalence_properties();
+        let sorted_props = sorted.properties().equivalence_properties();
+
+        assert!(
+            !child_props.eq_group().is_empty(),
+            "the filter did not produce an equivalence class"
+        );
+        assert_eq!(
+            child_props.eq_group(),
+            sorted_props.eq_group(),
+            "sorting altered the equivalence group"
+        );
+        assert_ne!(
+            child_props.oeq_class(),
+            sorted_props.oeq_class(),
+            "sorting did not alter the orderings"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_reuses_eq_group_when_only_orderings_change() -> Result<()> {
+        let child = filtered_source("a", "b")?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection =
+            Arc::new(ProjectionExec::try_new(exprs.clone(), Arc::clone(&child))?);
+
+        // Sorting below the projection changes which orderings hold but leaves
+        // the equivalence group untouched -- the case the fast path targets.
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "c",
+            &child.schema(),
+        )?)])
+        .expect("non-empty ordering");
+        let sorted: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(ordering, Arc::clone(&child)));
+
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![Arc::clone(&sorted)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // Guard against vacuity: the group must be worth reusing, and the sort
+        // must genuinely have added an ordering the original did not have.
+        assert!(
+            !projection
+                .properties()
+                .equivalence_properties()
+                .eq_group()
+                .is_empty(),
+            "the projection carries no equivalence class, nothing is being reused"
+        );
+        assert!(
+            projection
+                .properties()
+                .equivalence_properties()
+                .oeq_class()
+                .is_empty(),
+            "the unsorted projection was already ordered"
+        );
+        assert!(
+            !replaced
+                .properties()
+                .equivalence_properties()
+                .oeq_class()
+                .is_empty(),
+            "the sort did not introduce an ordering"
+        );
+
+        // The fast path must agree with building the projection from scratch.
+        let expected = ProjectionExec::try_new(exprs, sorted)?;
+        assert_same_properties(replaced.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_recomputes_when_eq_group_changes() -> Result<()> {
+        let child = filtered_source("a", "b")?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection =
+            Arc::new(ProjectionExec::try_new(exprs.clone(), Arc::clone(&child))?);
+
+        // This child equates a different pair, so the cached group is stale and
+        // reusing it would be unsound: the guard has to fall through.
+        let other = filtered_source("a", "c")?;
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![Arc::clone(&other)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        assert_ne!(
+            replaced.properties().equivalence_properties().eq_group(),
+            projection.properties().equivalence_properties().eq_group(),
+            "the projection kept the previous child's equivalence group"
+        );
+
+        let expected = ProjectionExec::try_new(exprs, other)?;
+        assert_same_properties(replaced.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_keep_mode_carries_properties_over() -> Result<()> {
+        // `Keep` is the caller's promise that the new child's properties match
+        // the old one's, so the cached properties must survive verbatim rather
+        // than being derived again.
+        let child = filtered_source("a", "b")?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection = Arc::new(ProjectionExec::try_new(exprs, Arc::clone(&child))?);
+
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![filtered_source("a", "b")?],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )?;
+
+        assert_same_properties(replaced.as_ref(), &projection);
 
         Ok(())
     }

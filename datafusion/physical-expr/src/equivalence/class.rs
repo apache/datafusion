@@ -932,7 +932,7 @@ mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::{BinaryExpr, Column, binary, col, lit};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion_expr::Operator;
 
@@ -1250,6 +1250,70 @@ mod tests {
         let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
 
         assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    /// Builds a group from a list of equated column pairs.
+    fn group_of(schema: &SchemaRef, pairs: &[(&str, &str)]) -> Result<EquivalenceGroup> {
+        let mut group = EquivalenceGroup::default();
+        for (lhs, rhs) in pairs {
+            group.add_equal_conditions(col(lhs, schema)?, col(rhs, schema)?);
+        }
+        Ok(group)
+    }
+
+    fn abc_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]))
+    }
+
+    #[test]
+    fn test_equivalence_group_eq_compares_classes() -> Result<()> {
+        let schema = abc_schema();
+
+        // Two empty groups agree.
+        assert_eq!(group_of(&schema, &[])?, group_of(&schema, &[])?);
+        // The same class, built the same way.
+        assert_eq!(
+            group_of(&schema, &[("a", "b")])?,
+            group_of(&schema, &[("a", "b")])?
+        );
+        // A class is a set, so the order within a pair is immaterial.
+        assert_eq!(
+            group_of(&schema, &[("a", "b")])?,
+            group_of(&schema, &[("b", "a")])?
+        );
+        // A populated group is not an empty one.
+        assert_ne!(group_of(&schema, &[("a", "b")])?, group_of(&schema, &[])?);
+        // Equating a different pair yields a different group.
+        assert_ne!(
+            group_of(&schema, &[("a", "b")])?,
+            group_of(&schema, &[("a", "c")])?
+        );
+        // Widening a class yields a different group.
+        assert_ne!(
+            group_of(&schema, &[("a", "b")])?,
+            group_of(&schema, &[("a", "b"), ("b", "c")])?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_equivalence_group_eq_ignores_the_map() -> Result<()> {
+        // `map` indexes into `classes`, so equal classes must imply equal
+        // groups no matter how the classes were arrived at. Bridging `a = b`
+        // and `b = c` into one class must match stating `a = c` and `a = b`.
+        let schema = abc_schema();
+        let bridged = group_of(&schema, &[("a", "b"), ("b", "c")])?;
+        let direct = group_of(&schema, &[("a", "c"), ("a", "b")])?;
+
+        assert_eq!(bridged.len(), 1, "expected a single bridged class");
+        assert_eq!(bridged, direct);
 
         Ok(())
     }
