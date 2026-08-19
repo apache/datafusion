@@ -337,8 +337,12 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// True when `when` / `then` is the divide-by-zero protection pattern
 /// `CASE WHEN y {>, !=, <} 0 THEN x / y`.
 ///
-/// Both divide operands must be cheap (column, literal, or cast of those) so
-/// evaluating them on the full batch cannot introduce errors on skipped rows.
+/// Both divide operands must be cheap (column, literal, or cast of those).
+/// [`CastExpr`]s that are provably fallible (for example a narrowing
+/// `Int32` → `Int8` of a literal) are rejected so CASE short-circuit
+/// semantics are preserved. Column casts whose source type is not known
+/// until evaluation are re-checked with the batch schema in
+/// [`CaseExpr::divide_by_zero_protection`].
 fn is_divide_by_zero_protection(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
@@ -350,8 +354,10 @@ fn is_divide_by_zero_protection(
         return false;
     };
     unwrap_casts(divisor).eq(unwrap_casts(checked))
-        && is_cheap_for_full_batch(numerator)
-        && is_cheap_for_full_batch(divisor)
+        && is_column_literal_or_cast(numerator)
+        && is_column_literal_or_cast(divisor)
+        && !has_provably_fallible_cast(numerator)
+        && !has_provably_fallible_cast(divisor)
 }
 
 /// Operand being tested for a non-zero (or strictly positive / negative) value.
@@ -412,13 +418,92 @@ fn is_literal_zero(expr: &dyn PhysicalExpr) -> bool {
     }
 }
 
-fn is_cheap_for_full_batch(expr: &Arc<dyn PhysicalExpr>) -> bool {
+/// Column, literal, or (possibly nested) `Cast` / `TryCast` of those.
+///
+/// This only describes the *shape* of the tree: evaluating it on a full
+/// batch is cheap. It does **not** mean a `CastExpr` is safe — use
+/// [`is_cheap_for_full_batch`] for that.
+fn is_column_literal_or_cast(expr: &Arc<dyn PhysicalExpr>) -> bool {
     if expr.is::<Column>() || expr.is::<Literal>() {
         true
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        is_cheap_for_full_batch(cast.expr())
+        is_column_literal_or_cast(cast.expr())
     } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
-        is_cheap_for_full_batch(try_cast.expr())
+        is_column_literal_or_cast(try_cast.expr())
+    } else {
+        false
+    }
+}
+
+/// True when `expr` is cheap **and** safe to evaluate on every row of a
+/// batch, including rows that CASE would otherwise skip.
+///
+/// `CastExpr` is allowed only when it cannot fail: safe-mode casts,
+/// [`TryCastExpr`] (returns NULL on failure), same-type casts, and
+/// widening numeric casts identified by [`CastExpr::check_bigger_cast`].
+/// Narrowing casts such as `Int32` → `Int8` return false.
+///
+/// When `schema` is `None`, column types are unknown, so a `CastExpr` over
+/// a column cannot be proven infallible and is rejected.
+fn is_cheap_for_full_batch(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: Option<&Schema>,
+) -> bool {
+    if expr.is::<Column>() || expr.is::<Literal>() {
+        true
+    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        is_infallible_cast(cast, schema) && is_cheap_for_full_batch(cast.expr(), schema)
+    } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
+        // TRY_CAST never errors (it yields NULL on failure).
+        is_cheap_for_full_batch(try_cast.expr(), schema)
+    } else {
+        false
+    }
+}
+
+/// True when a `CastExpr` is known to be unable to error.
+fn is_infallible_cast(cast: &CastExpr, schema: Option<&Schema>) -> bool {
+    // Safe-mode CAST returns NULL on failure rather than erroring.
+    if cast.cast_options().safe {
+        return true;
+    }
+    let Some(source_type) = expr_data_type(cast.expr(), schema) else {
+        return false;
+    };
+    CastExpr::check_bigger_cast(cast.cast_type(), &source_type)
+}
+
+/// Best-effort data type of `expr`. With a schema this uses
+/// [`PhysicalExpr::data_type`]; without one, only literals and casts
+/// (which know their output type) can be resolved.
+fn expr_data_type(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: Option<&Schema>,
+) -> Option<DataType> {
+    if let Some(schema) = schema {
+        return expr.data_type(schema).ok();
+    }
+    if let Some(lit) = expr.downcast_ref::<Literal>() {
+        return Some(lit.value().data_type());
+    }
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        return Some(cast.cast_type().clone());
+    }
+    expr.downcast_ref::<TryCastExpr>()
+        .map(|try_cast| try_cast.cast_type().clone())
+}
+
+/// Walk a column / literal / cast tree and report whether any `CastExpr`
+/// is known to be fallible without a schema (typically a narrowing cast
+/// of a literal or of another cast whose output type is known).
+fn has_provably_fallible_cast(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        let known_fallible = !cast.cast_options().safe
+            && expr_data_type(cast.expr(), None)
+                .is_some_and(|src| !CastExpr::check_bigger_cast(cast.cast_type(), &src));
+        known_fallible || has_provably_fallible_cast(cast.expr())
+    } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
+        has_provably_fallible_cast(try_cast.expr())
     } else {
         false
     }
@@ -875,6 +960,18 @@ impl CaseExpr {
                 "THEN expression of divide-by-zero protection must be a division"
             )
         })?;
+
+        // Mixed WHEN: the fast path evaluates the divisor on the full batch.
+        // Fallible casts (e.g. Int32 → Int8) can error on excluded rows and
+        // must use filtered CASE evaluation instead. Widening casts such as
+        // Int32 → Float64 stay on the fast path.
+        let schema = batch.schema();
+        if !is_cheap_for_full_batch(binary.left(), Some(schema.as_ref()))
+            || !is_cheap_for_full_batch(binary.right(), Some(schema.as_ref()))
+        {
+            let projected = self.body.project()?;
+            return self.expr_or_expr(batch, &projected);
+        }
 
         let num_rows = batch.num_rows();
         let numerator = binary.left().evaluate(batch)?.into_array(num_rows)?;
@@ -1746,7 +1843,7 @@ mod tests {
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
-    use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::cast::{as_float64_array, as_int8_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::type_union_coercion;
@@ -2805,6 +2902,79 @@ mod tests {
             "ELSE 0 must not use DivideByZeroProtection, got {:?}",
             expr.eval_method
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_skips_fallible_cast() -> Result<()> {
+        // CASE WHEN d < 0 THEN CAST(10 AS TINYINT) / CAST(d AS TINYINT) END
+        // over (-1), (1000), (0) => -10, NULL, NULL
+        //
+        // CAST(1000 AS TINYINT) would error, but 1000 is excluded by WHEN so
+        // CASE short-circuiting must yield NULL instead of failing.
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(-1),
+                Some(1000),
+                Some(0),
+            ]))],
+        )?;
+
+        let when = binary(col("d", &schema)?, Operator::Lt, lit(0i32), &schema)?;
+        let then = binary(
+            cast(lit(10i32), &schema, DataType::Int8)?,
+            Operator::Divide,
+            cast(col("d", &schema)?, &schema, DataType::Int8)?,
+            &schema,
+        )?;
+
+        let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+        assert!(
+            !matches!(expr.eval_method, EvalMethod::DivideByZeroProtection),
+            "fallible CAST must not specialize, got {:?}",
+            expr.eval_method
+        );
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int8_array(&result)?;
+        let expected = &Int8Array::from(vec![Some(-10), None, None]);
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_fallible_column_cast_does_not_error() -> Result<()>
+    {
+        // Numerator is already Int8, so construction cannot prove the
+        // CAST(d AS TINYINT) narrowing is fallible. Evaluation must still
+        // fall back to filtered CASE and not error on the excluded 1000.
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(-1),
+                Some(1000),
+                Some(0),
+            ]))],
+        )?;
+
+        let when = binary(col("d", &schema)?, Operator::Lt, lit(0i32), &schema)?;
+        let then = binary(
+            lit(10i8),
+            Operator::Divide,
+            cast(col("d", &schema)?, &schema, DataType::Int8)?,
+            &schema,
+        )?;
+
+        let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int8_array(&result)?;
+        let expected = &Int8Array::from(vec![Some(-10), None, None]);
+        assert_eq!(expected, result);
 
         Ok(())
     }
