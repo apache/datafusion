@@ -48,8 +48,7 @@ mod test_context;
 mod util;
 
 pub use config_matrix::{
-    ConfigMatrix, ConfigMatrixCombination, describe_combination,
-    iter_matrix_combinations, parse_config_matrix_from_file,
+    ConfigMatrixCombination, matrix_tag, parse_config_matrix_from_file,
 };
 pub use filters::*;
 pub use test_context::TestContext;

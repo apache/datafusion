@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Apache DataFusion sqllogictest
+# Apache DataFusion SqlLogicTest
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
@@ -186,20 +186,18 @@ Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_serie
 
 ## Cookbook: Sweeping config with `configMatrix`
 
-Run the same `.slt` file once per combination of DataFusion config values. Each directive is a comment of the form:
+Runs the same `.slt` once per combination of config values. Each directive is a comment:
 
 ```text
 # configMatrix: <key>=<v1>,<v2>[,...]
 ```
 
-Rules:
+- Repeat the directive to nest keys. Values are the cartesian product.
+- Whitespace-trimmed and deduped; repeated keys merge value lists.
+- Unknown key or invalid value fails fast, naming the file, key, and value.
+- Test failures include `[configMatrix: k=v, ...]` in the `N errors in file …` banner.
 
-- Repeat the directive to nest keys — every combination in the cartesian product is executed.
-- Values are trimmed of surrounding whitespace and deduplicated (first occurrence wins). Repeating the same key across directives merges the value lists.
-- Unknown keys and invalid values fail fast with a message naming the file, key, and value.
-- Test failures include `[configMatrix: k=v, ...]` in the "N errors in file …" banner so the offending combination is visible on the first line.
-
-Nested example — 2 units × 2 timezones = 4 runs:
+Nested example (2 × 2 = 4 runs):
 
 ```text
 # configMatrix: datafusion.execution.parquet.coerce_int96=ms,us
@@ -210,19 +208,13 @@ CREATE EXTERNAL TABLE int96_from_spark
 STORED AS PARQUET
 LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 
-# `<slt:ignore>` masks the parts that legitimately vary per combination.
-query TTT
-describe int96_from_spark
-----
-a Timestamp<slt:ignore> YES
-
 query I
 select count(*) from int96_from_spark
 ----
 6
 ```
 
-Failure output shape:
+Failure banner:
 
 ```text
 External error: 1 errors in file .../parquet_int96_matrix.slt [configMatrix: datafusion.execution.parquet.coerce_int96=ms, datafusion.execution.parquet.coerce_int96_tz=UTC]
