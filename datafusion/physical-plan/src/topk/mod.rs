@@ -857,6 +857,25 @@ impl TopKMetrics {
     }
 }
 
+/// Finish the coalescer and emit its completed batches, recording
+/// baseline output metrics against the batches actually sent to the
+/// consumer (not the pre-coalesce per-partition heap batches).
+fn emit_coalesced_batches(
+    schema: SchemaRef,
+    coalescer: &mut BatchCoalescer,
+    metrics: &TopKMetrics,
+) -> Result<SendableRecordBatchStream> {
+    coalescer.finish_buffered_batch()?;
+    let mut out = Vec::new();
+    while let Some(batch) = coalescer.next_completed_batch() {
+        out.push(Ok(batch.record_output(&metrics.baseline)));
+    }
+    Ok(Box::pin(RecordBatchStreamAdapter::new(
+        schema,
+        futures::stream::iter(out),
+    )))
+}
+
 /// This structure keeps at most the *smallest* k items, using the
 /// [arrow::row] format for sort keys. While it is called "topK" for
 /// values like `1, 2, 3, 4, 5` the "top 3" really means the
@@ -1430,21 +1449,11 @@ impl PartitionedTopK {
         for pk in sorted_pks {
             let mut heap = heaps.remove(&pk).expect("key from heaps.keys()");
             if let Some(batch) = heap.emit()? {
-                (&batch).record_output(&metrics.baseline);
                 coalescer.push_batch(batch)?;
             }
         }
-        coalescer.finish_buffered_batch()?;
 
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
-            out.push(Ok(b));
-        }
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::iter(out),
-        )))
+        emit_coalesced_batches(schema, &mut coalescer, &metrics)
     }
 
     /// Total memory currently held by this operator, including all
@@ -1775,27 +1784,16 @@ impl PartitionedTopKRank {
             let RankPartitionState { mut heap, ties } =
                 states.remove(&pk).expect("key from states.keys()");
             if let Some(batch) = heap.emit()? {
-                (&batch).record_output(&metrics.baseline);
                 coalescer.push_batch(batch)?;
             }
             for tie in ties {
                 let indices = UInt32Array::from(tie.row_indices);
                 let tie_batch = take_record_batch(&tie.batch, &indices)?;
-                (&tie_batch).record_output(&metrics.baseline);
                 coalescer.push_batch(tie_batch)?;
             }
         }
-        coalescer.finish_buffered_batch()?;
 
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
-            out.push(Ok(b));
-        }
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::iter(out),
-        )))
+        emit_coalesced_batches(schema, &mut coalescer, &metrics)
     }
 
     /// Total memory currently held, including all per-partition states.
@@ -2206,22 +2204,12 @@ impl PartitionedTopKDenseRank {
                         .batch;
                     let indices = UInt32Array::from(entry.row_indices);
                     let sub = take_record_batch(batch, &indices)?;
-                    (&sub).record_output(&metrics.baseline);
                     coalescer.push_batch(sub)?;
                 }
             }
         }
-        coalescer.finish_buffered_batch()?;
 
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
-            out.push(Ok(b));
-        }
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::iter(out),
-        )))
+        emit_coalesced_batches(schema, &mut coalescer, &metrics)
     }
 
     /// Total memory currently held, including all per-partition states.
