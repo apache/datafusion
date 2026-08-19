@@ -1355,7 +1355,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
+            let extra_left_space = usize::from(!total_spaces.is_multiple_of(2));
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),

@@ -562,7 +562,7 @@ mod tests {
         // Put cache in config WITH a different TTL set
         let config = CacheManagerConfig::default()
             .with_list_files_cache(Some(Arc::new(list_file_cache)))
-            .with_list_files_cache_ttl(Some(Duration::from_secs(60)));
+            .with_list_files_cache_ttl(Some(Duration::from_mins(1)));
 
         // Create CacheManager from config
         let cache_manager = CacheManager::try_new(&config).unwrap();
@@ -572,7 +572,7 @@ mod tests {
 
         assert_eq!(
             cache_ttl,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             "TTL should be overridden to 60 seconds when set in config"
         );
     }

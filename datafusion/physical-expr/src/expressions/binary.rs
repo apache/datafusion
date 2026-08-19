@@ -5592,7 +5592,7 @@ mod tests {
             .unwrap()
             .into_array(batch.num_rows())
             .unwrap();
-        let expected: BooleanArray = [None].iter().collect();
+        let expected: BooleanArray = std::iter::once(&None).collect();
         assert_eq!(result.as_ref(), &expected);
     }
 

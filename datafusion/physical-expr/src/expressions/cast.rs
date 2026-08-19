@@ -1183,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: https://github.com/apache/datafusion/issues/5396
+    #[ignore = "TODO: https://github.com/apache/datafusion/issues/5396"]
     fn test_cast_decimal() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", Int64, false)]);
         let a = Int64Array::from(vec![100]);
