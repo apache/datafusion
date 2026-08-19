@@ -19,9 +19,11 @@ use std::fs::{File, create_dir_all, remove_dir_all};
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{
+    ArrayRef, Int32Array, Int64Array, StringArray, TimestampNanosecondArray,
+};
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::common::{ScalarValue, SplitPoint};
@@ -29,7 +31,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::logical_expr::{Partitioning, RangePartitioning, col};
+use datafusion::logical_expr::{Partitioning, RangePartitioning, SortExpr, col};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::{
     Partitioning as PhysicalPartitioning, PhysicalSortExpr,
@@ -291,4 +293,174 @@ fn range_batch(schema: SchemaRef, rows: &[(i32, i32, i32)]) -> RecordBatch {
         ],
     )
     .expect("range batch should be valid")
+}
+
+// ==============================================================================
+// Metrics table: range-partitioned on timestamp, sorted on (key, timestamp)
+// ==============================================================================
+
+/// Unix nanoseconds for `2024-01-01 00:00:00 UTC`.
+const METRICS_EPOCH_NS: i64 = 1_704_067_200_000_000_000;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
+const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
+
+/// Timestamp helper: minutes and seconds after `2024-01-01 00:00:00 UTC`.
+fn metrics_ts(minutes: i64, seconds: i64) -> i64 {
+    METRICS_EPOCH_NS + minutes * NANOS_PER_MINUTE + seconds * NANOS_PER_SECOND
+}
+
+/// Row: (key, zone, host, pod, service, timestamp_ns, value)
+type MetricsRow = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    i64,
+    i64,
+);
+
+/// Registers `metrics_range_sorted` for time-bin aggregation plan tests.
+///
+/// Two file groups, each covering a 60-minute timestamp range:
+/// - partition 0: `[2024-01-01 00:00, 01:00)`
+/// - partition 1: `[2024-01-01 01:00, 02:00)`
+///
+/// Files are range-partitioned on `timestamp` and sorted on `(key, timestamp)`.
+/// Because `date_bin(60 seconds, timestamp)` does not straddle the hour split,
+/// grouping by `(key, time_bin)` is partition-disjoint. Today's planner still
+/// inserts a hash shuffle; the test pins that plan so a follow-up can remove it.
+pub(super) fn register_metrics_range_sorted_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Utf8, false),
+        Field::new("zone", DataType::Utf8, false),
+        Field::new("host", DataType::Utf8, false),
+        Field::new("pod", DataType::Utf8, false),
+        Field::new("service", DataType::Utf8, false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+        Field::new("value", DataType::Int64, false),
+    ]));
+
+    // Each partition covers 60 minutes. The split is aligned to the 60-second
+    // `date_bin` used by the test query, so time bins do not straddle files.
+    let hour_split = metrics_ts(60, 0);
+    let output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![col("timestamp").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                Some(hour_split),
+                None,
+            )])],
+        )
+        .expect("metrics range partitioning should be valid"),
+    );
+
+    // Within each 60-minute file, rows are sorted by (key, timestamp).
+    let partitions = vec![
+        vec![
+            ("k1", "z1", "h1", "p1", "a", metrics_ts(0, 10), 1),
+            ("k1", "z1", "h1", "p1", "a", metrics_ts(0, 40), 2),
+            ("k1", "z1", "h1", "p1", "b", metrics_ts(1, 10), 99),
+            ("k2", "z1", "h1", "p1", "a", metrics_ts(30, 0), 3),
+            ("k2", "z1", "h1", "p1", "a", metrics_ts(30, 30), 4),
+        ],
+        vec![
+            ("k1", "z1", "h1", "p1", "a", metrics_ts(60, 10), 10),
+            ("k1", "z1", "h1", "p1", "a", metrics_ts(60, 40), 20),
+            ("k2", "z1", "h1", "p1", "a", metrics_ts(90, 0), 30),
+            ("k2", "z1", "h1", "p1", "a", metrics_ts(105, 0), 5),
+        ],
+    ];
+
+    let table_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test_files/scratch_range_partitioning/metrics_range_sorted");
+    register_metrics_listing_table(
+        ctx,
+        "metrics_range_sorted",
+        &table_dir,
+        Arc::clone(&schema),
+        partitions,
+        output_partitioning,
+        vec![vec![
+            col("key").sort(true, true),
+            col("timestamp").sort(true, true),
+        ]],
+    );
+}
+
+fn register_metrics_listing_table(
+    ctx: &SessionContext,
+    name: &str,
+    table_dir: impl AsRef<Path>,
+    schema: SchemaRef,
+    partitions: Vec<Vec<MetricsRow>>,
+    output_partitioning: Partitioning,
+    file_sort_order: Vec<Vec<SortExpr>>,
+) {
+    let table_dir = table_dir.as_ref();
+    if table_dir.exists() {
+        remove_dir_all(table_dir).expect("test table dir should be removable");
+    }
+    create_dir_all(table_dir).expect("test table dir should be created");
+    for (idx, rows) in partitions.into_iter().enumerate() {
+        let batch = metrics_batch(Arc::clone(&schema), &rows);
+        let file = File::create(table_dir.join(format!("part-{idx}.parquet")))
+            .expect("test table parquet partition should be created");
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None)
+            .expect("test table parquet writer should be created");
+        writer
+            .write(&batch)
+            .expect("test table parquet partition should be written");
+        writer
+            .close()
+            .expect("test table parquet writer should close");
+    }
+
+    let table_path = format!(
+        "{}/",
+        table_dir
+            .to_str()
+            .expect("test table path should be valid utf8")
+    );
+    let table_url =
+        ListingTableUrl::parse(&table_path).expect("test table url should parse");
+    let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+        .with_output_partitioning(Some(output_partitioning))
+        .with_file_sort_order(file_sort_order);
+    let config = ListingTableConfig::new(table_url)
+        .with_listing_options(options)
+        .with_schema(schema);
+    let table =
+        ListingTable::try_new(config).expect("test listing table should be valid");
+
+    ctx.register_table(name, Arc::new(table))
+        .expect("test listing table registration should succeed");
+}
+
+fn metrics_batch(schema: SchemaRef, rows: &[MetricsRow]) -> RecordBatch {
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.0)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.1)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.2)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.3)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.4)))
+                as ArrayRef,
+            Arc::new(TimestampNanosecondArray::from_iter_values(
+                rows.iter().map(|row| row.5),
+            )) as ArrayRef,
+            Arc::new(Int64Array::from_iter_values(rows.iter().map(|row| row.6)))
+                as ArrayRef,
+        ],
+    )
+    .expect("metrics batch should be valid")
 }

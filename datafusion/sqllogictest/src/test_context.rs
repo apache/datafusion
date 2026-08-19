@@ -54,7 +54,9 @@ use datafusion::{
 use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
-use range_partitioning::register_range_partitioned_table;
+use range_partitioning::{
+    register_metrics_range_sorted_table, register_range_partitioned_table,
+};
 
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
@@ -178,6 +180,10 @@ impl TestContext {
             "range_partitioning.slt" => {
                 info!("Registering range partitioned table");
                 register_range_partitioned_table(test_ctx.session_ctx());
+            }
+            "range_sorted_time_bin_agg.slt" => {
+                info!("Registering range-sorted metrics table");
+                register_metrics_range_sorted_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
