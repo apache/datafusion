@@ -551,9 +551,9 @@ impl RepartitionExecState {
                     tx,
                     rx,
                     reservation,
-                    spill_readers,
-                    spill_writers,
                     shared_coalescer,
+                    spill_writers,
+                    spill_readers,
                 },
             );
         }

@@ -5283,9 +5283,10 @@ fn assert_field_not_found(mut err: DataFusionError, name: &str) {
         DataFusionError::SchemaError(_, _) => {
             let msg = format!("{err}");
             let expected = format!("Schema error: No field named {name}.");
-            if !msg.starts_with(&expected) {
-                panic!("error [{msg}] did not start with [{expected}]");
-            }
+            assert!(
+                msg.starts_with(&expected),
+                "error [{msg}] did not start with [{expected}]"
+            )
         }
         _ => panic!("assert_field_not_found wrong error type"),
     }
