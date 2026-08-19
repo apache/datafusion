@@ -136,7 +136,7 @@ fn print_docs(
         let names = get_names_and_aliases(&providers);
 
         // write out the list of function names and aliases
-        for name in names.iter() {
+        for name in &names {
             let _ = writeln!(docs, "- [{name}](#{name})");
         }
 

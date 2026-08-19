@@ -569,7 +569,7 @@ fn merge_consecutive_projections_one_level(
 
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
-    for expr in expr.iter() {
+    for expr in &expr {
         expr.add_column_ref_counts(&mut column_referral_map);
     }
 

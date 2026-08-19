@@ -550,7 +550,7 @@ mod tests {
             ),
         ];
 
-        for (source, _tz_opt, expected) in cases.iter() {
+        for (source, _tz_opt, expected) in &cases {
             let input = source
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))

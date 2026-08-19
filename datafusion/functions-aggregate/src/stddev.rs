@@ -337,7 +337,7 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
 
     fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
         let (mut variances, nulls) = self.variance.variance(emit_to);
-        for v in variances.iter_mut() {
+        for v in &mut variances {
             *v = v.sqrt();
         }
         Ok(Arc::new(Float64Array::new(variances.into(), Some(nulls))))

@@ -193,7 +193,7 @@ fn hash_null_with_hasher<S: BuildHasher>(
 
     let null_hash = hash_builder.hash_one(1);
     if multi_col {
-        for hash in hashes_buffer.iter_mut() {
+        for hash in &mut hashes_buffer {
             *hash = combine_hashes(null_hash, *hash);
         }
     } else {

@@ -438,7 +438,7 @@ mod sp_repartition_fuzz_tests {
         // use a random number generator to pick a random sized output
         let mut rng = StdRng::seed_from_u64(random_seed);
         let mut input123: Vec<(i64, i64, i64)> = vec![(0, 0, 0); len];
-        for v in input123.iter_mut() {
+        for v in &mut input123 {
             *v = (
                 rng.random_range(0..n_distinct) as i64,
                 rng.random_range(0..n_distinct) as i64,

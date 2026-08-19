@@ -1723,7 +1723,7 @@ impl SessionStateBuilder {
         }
 
         if let Some(aggregate_functions) = aggregate_functions {
-            for udaf in aggregate_functions.into_iter() {
+            for udaf in aggregate_functions {
                 let existing_udf = state.register_udaf(udaf);
                 if let Ok(Some(existing_udf)) = existing_udf {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
@@ -1732,7 +1732,7 @@ impl SessionStateBuilder {
         }
 
         if let Some(window_functions) = window_functions {
-            for udwf in window_functions.into_iter() {
+            for udwf in window_functions {
                 let existing_udf = state.register_udwf(udwf);
                 if let Ok(Some(existing_udf)) = existing_udf {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());

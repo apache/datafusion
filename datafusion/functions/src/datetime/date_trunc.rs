@@ -979,7 +979,7 @@ mod tests {
             ),
         ];
 
-        for (original, granularity, expected) in cases.iter() {
+        for (original, granularity, expected) in &cases {
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
             let granularity_enum = DateTruncGranularity::from_str(granularity).unwrap();
@@ -1129,7 +1129,7 @@ mod tests {
             ),
         ];
 
-        for (original, tz_opt, expected) in cases.iter() {
+        for (original, tz_opt, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -1317,7 +1317,7 @@ mod tests {
             ),
         ];
 
-        for (original, tz_opt, expected) in cases.iter() {
+        for (original, tz_opt, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -1483,7 +1483,7 @@ mod tests {
             ),
         ];
 
-        for (original, tz_opt, granularity, expected) in cases.iter() {
+        for (original, tz_opt, granularity, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))

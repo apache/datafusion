@@ -432,14 +432,14 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut rng = StdRng::seed_from_u64(random_seed);
     let mut input123: Vec<(i64, i64, i64)> = vec![(0, 0, 0); len];
     let mut input4: Vec<i64> = vec![0; len];
-    for v in input123.iter_mut() {
+    for v in &mut input123 {
         *v = (
             rng.random_range(0..n_distinct) as i64,
             rng.random_range(0..n_distinct) as i64,
             rng.random_range(0..n_distinct) as i64,
         )
     }
-    for v in input4.iter_mut() {
+    for v in &mut input4 {
         *v = rng.random_range(0..n_distinct) as i64;
     }
     input123.sort_unstable();

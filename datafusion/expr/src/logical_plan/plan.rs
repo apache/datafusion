@@ -428,7 +428,7 @@ impl LogicalPlan {
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.apply_expressions(|e| {
-            for e in find_out_reference_exprs(e).into_iter() {
+            for e in find_out_reference_exprs(e) {
                 if !exprs.contains(&e) {
                     exprs.push(e)
                 }

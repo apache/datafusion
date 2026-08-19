@@ -949,11 +949,11 @@ impl JoinFuzzTestCase {
 
                 if join_tests.contains(&NljHj) && nlj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    for s in hj_formatted_sorted.iter() {
+                    for s in &hj_formatted_sorted {
                         println!("{s}");
                     }
                     println!("=============== NestedLoopJoinExec ==================");
-                    for s in nlj_formatted_sorted.iter() {
+                    for s in &nlj_formatted_sorted {
                         println!("{s}");
                     }
                     Self::save_partitioned_batches_as_parquet(
@@ -970,11 +970,11 @@ impl JoinFuzzTestCase {
 
                 if join_tests.contains(&HjSmj) && smj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    for s in hj_formatted_sorted.iter() {
+                    for s in &hj_formatted_sorted {
                         println!("{s}");
                     }
                     println!("=============== SortMergeJoinExec ==================");
-                    for s in smj_formatted_sorted.iter() {
+                    for s in &smj_formatted_sorted {
                         println!("{s}");
                     }
 
@@ -1280,7 +1280,7 @@ fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<Record
     let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
     let mut input3: Vec<i32> = vec![0; len];
     let mut input4: Vec<i32> = vec![0; len];
-    for v in input12.iter_mut() {
+    for v in &mut input12 {
         *v = (rng.random_range(0..100), rng.random_range(0..100));
     }
     rng.fill(&mut input3[..]);

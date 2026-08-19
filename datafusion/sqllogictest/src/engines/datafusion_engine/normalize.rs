@@ -136,7 +136,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 /// DataSourceExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
-    for s in row.iter_mut() {
+    for s in &mut row {
         let workspace_root: &str = WORKSPACE_ROOT.as_ref();
         if s.contains(workspace_root) {
             *s = s.replace(workspace_root, "WORKSPACE_ROOT");

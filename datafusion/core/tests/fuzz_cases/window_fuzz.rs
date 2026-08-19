@@ -769,7 +769,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut input123: Vec<(i32, i32, i32)> = vec![(0, 0, 0); len];
     let mut input4: Vec<i32> = vec![0; len];
     let mut input5: Vec<String> = vec!["".to_string(); len];
-    for v in input123.iter_mut() {
+    for v in &mut input123 {
         *v = (
             rng.random_range(0..n_distinct) as i32,
             rng.random_range(0..n_distinct) as i32,
@@ -778,7 +778,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     }
     input123.sort_unstable();
     rng.fill(&mut input4[..]);
-    for v in input5.iter_mut() {
+    for v in &mut input5 {
         *v = generate_random_string(&mut rng, 1);
     }
     input5.sort();

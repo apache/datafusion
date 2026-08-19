@@ -1153,7 +1153,7 @@ mod tests {
             ),
         ];
 
-        for (original, tz_opt, origin, expected) in cases.iter() {
+        for (original, tz_opt, origin, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -1241,7 +1241,7 @@ mod tests {
             ),
         ];
 
-        for ((stride, source, origin), expected) in cases.iter() {
+        for ((stride, source, origin), expected) in &cases {
             let stride = stride.unwrap();
             let stride1 = stride.num_nanoseconds().unwrap();
             let source1 = string_to_timestamp_nanos(source).unwrap();
@@ -1270,7 +1270,7 @@ mod tests {
             ),
         ];
 
-        for ((stride, source), expected) in cases.iter() {
+        for ((stride, source), expected) in &cases {
             let stride = stride.unwrap();
             let stride1 = stride.num_nanoseconds().unwrap();
             let source1 = string_to_timestamp_nanos(source).unwrap();

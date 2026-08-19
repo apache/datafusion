@@ -214,12 +214,12 @@ fn hash_null<S: HashState>(
     multi_col: bool,
 ) {
     if multi_col {
-        for hash in hashes_buffer.iter_mut() {
+        for hash in &mut hashes_buffer {
             // stable hash for null value
             *hash = combine_hashes(random_state.hash_one(1), *hash);
         }
     } else {
-        for hash in hashes_buffer.iter_mut() {
+        for hash in &mut hashes_buffer {
             *hash = random_state.hash_one(1);
         }
     }

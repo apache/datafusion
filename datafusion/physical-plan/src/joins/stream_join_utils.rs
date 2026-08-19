@@ -235,7 +235,7 @@ impl PruningJoinHashMap {
             .collect::<Vec<_>>();
 
         // Remove the keys from the map.
-        for hash_value in removable_keys.into_iter() {
+        for hash_value in removable_keys {
             self.map
                 .find_entry(hash_value, |(hash, _)| hash_value == *hash)
                 .unwrap()

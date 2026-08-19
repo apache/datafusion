@@ -124,7 +124,7 @@ impl Documentation {
         let st_arg_token = " expression to operate on. Can be a constant, column, or function, and any combination of operators.";
         // Standard Arguments
         if let Some(args) = self.arguments.clone() {
-            for (name, value) in args.iter() {
+            for (name, value) in &args {
                 if value.contains(st_arg_token) {
                     if name.starts_with("The ") {
                         result.push_str(
@@ -142,7 +142,7 @@ impl Documentation {
 
         // Arguments
         if let Some(args) = self.arguments.clone() {
-            for (name, value) in args.iter() {
+            for (name, value) in &args {
                 if !value.contains(st_arg_token) {
                     result.push_str(format!("\n    argument(\n        name = \"{name}\",\n        description = \"{value}\"\n    ),").as_ref());
                 }
@@ -150,7 +150,7 @@ impl Documentation {
         }
 
         if let Some(alt_syntax) = self.alternative_syntax.clone() {
-            for syntax in alt_syntax.iter() {
+            for syntax in &alt_syntax {
                 result.push_str(
                     format!("\n    alternative_syntax = \"{syntax}\",").as_ref(),
                 );
@@ -159,7 +159,7 @@ impl Documentation {
 
         // Related UDFs
         if let Some(related_udf) = self.related_udfs.clone() {
-            for udf in related_udf.iter() {
+            for udf in &related_udf {
                 result.push_str(format!("\n    related_udf(name = \"{udf}\"),").as_ref());
             }
         }

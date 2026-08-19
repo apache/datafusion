@@ -2053,7 +2053,7 @@ fn create_cube_physical_expr(
     for null_count in 1..=num_of_exprs {
         for null_idx in (0..num_of_exprs).combinations(null_count) {
             let mut next_group: Vec<bool> = vec![false; num_of_exprs];
-            for i in null_idx.into_iter() {
+            for i in null_idx {
                 next_group[i] = true;
             }
             groups.push(next_group);
