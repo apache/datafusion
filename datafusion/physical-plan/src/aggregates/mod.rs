@@ -176,9 +176,7 @@ use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 
-use arrow::array::{
-    ArrayRef, BooleanArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
-};
+use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
@@ -2999,24 +2997,6 @@ pub fn evaluate_many(
 ) -> Result<Vec<Vec<ArrayRef>>> {
     expr.iter()
         .map(|expr| evaluate_expressions_to_arrays(expr, batch))
-        .collect()
-}
-
-fn evaluate_expressions_with_selection(
-    exprs: &[Arc<dyn PhysicalExpr>],
-    batch: &RecordBatch,
-    selection: Option<&BooleanArray>,
-) -> Result<Vec<ArrayRef>> {
-    exprs
-        .iter()
-        .map(|expr| {
-            selection
-                .map_or_else(
-                    || expr.evaluate(batch),
-                    |s| expr.evaluate_selection(batch, s),
-                )
-                .and_then(|value| value.into_array(batch.num_rows()))
-        })
         .collect()
 }
 

@@ -34,7 +34,7 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
-    evaluate_expressions_with_selection, evaluate_group_by,
+    evaluate_group_by,
 };
 
 /// Marker for raw rows -> partial state aggregation.
@@ -562,8 +562,18 @@ impl HashAggregateAccumulator {
             })
             .transpose()?;
         let selection = filter.as_ref().map(|filter| filter.as_boolean());
-        let arguments =
-            evaluate_expressions_with_selection(&self.arguments, batch, selection)?;
+        let arguments = self
+            .arguments
+            .iter()
+            .map(|expr| {
+                selection
+                    .map_or_else(
+                        || expr.evaluate(batch),
+                        |selection| expr.evaluate_selection(batch, selection),
+                    )
+                    .and_then(|value| value.into_array(batch.num_rows()))
+            })
+            .collect::<Result<_>>()?;
 
         Ok(EvaluatedAccumulatorArgs { arguments, filter })
     }
