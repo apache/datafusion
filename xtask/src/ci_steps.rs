@@ -46,7 +46,7 @@ struct StepInfo {
 static CI_STEPS: &[StepInfo] = &[
     StepInfo {
         command: "check",
-        help_usage: "check <workspace|package> [default|no-default|feature]",
+        help_usage: "check <workspace|package> [default|no-default|feature] [--explain]",
         help_examples: &["check workspace", "check datafusion default"],
         help_description: "Check workspace or package compilation",
         error_message: "Cargo check step failed",
@@ -54,7 +54,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait>",
+        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -64,14 +64,14 @@ static CI_STEPS: &[StepInfo] = &[
 
 pub(crate) fn help() -> String {
     let mut help = format!(
-        "DataFusion CI commands\n\nUsage:\n  {CI_COMMAND} <step-name> [args]\n\nExamples:\n",
+        "DataFusion CI commands\n\nUsage:\n  {CI_COMMAND} <step-name> [args] [--explain]\n\nExamples:\n",
     );
     for step in CI_STEPS {
         if let Some(example) = step.help_examples.first() {
             help.push_str(&format!("  {CI_COMMAND} {example}\n"));
         }
     }
-    help.push_str(&format!("  {CI_COMMAND} explain test workspace\n"));
+    help.push_str(&format!("  {CI_COMMAND} test workspace --explain\n"));
 
     let command_width = CI_STEPS
         .iter()
@@ -102,7 +102,7 @@ fn step_help(step: &StepInfo) -> String {
     }
     if let Some(example) = step.help_examples.first() {
         help.push_str(&format!(
-            "\nUse 'explain' to show the full command:\n  {CI_COMMAND} explain {example}\n"
+            "\nUse '--explain' to show the full command:\n  {CI_COMMAND} {example} --explain\n"
         ));
     }
     help
@@ -164,14 +164,12 @@ impl StepContext {
     }
 
     /// Parses a CI step into an action and its complete command description.
-    /// Keeping execution out of this method guarantees `explain` and execution
-    /// use exactly the same program, arguments, environment, and directory.
     fn ci_step(
         &self,
         args: &[String],
     ) -> Result<(StepAction, &'static StepInfo, CiCommand)> {
-        let (action, args) = match args.split_first() {
-            Some((arg, args)) if arg == "explain" => (StepAction::Explain, args),
+        let (action, args) = match args.split_last() {
+            Some((arg, args)) if arg == "--explain" => (StepAction::Explain, args),
             _ => (StepAction::Execute, args),
         };
         let Some((step, args)) = args.split_first() else {
@@ -393,7 +391,7 @@ impl StepError {
     }
 }
 
-/// A complete process description shared by explanation and execution.
+/// Command shared by invocation and `--explain`
 struct CiCommand {
     command: Command,
 }
@@ -571,7 +569,7 @@ mod tests {
             .ci_step(&args(&["check", "datafusion", "default"]))
             .unwrap();
         let (explain_action, _, explain_command) = context
-            .ci_step(&args(&["explain", "check", "datafusion", "default"]))
+            .ci_step(&args(&["check", "datafusion", "default", "--explain"]))
             .unwrap();
 
         assert_eq!(execute_action, StepAction::Execute);
@@ -579,6 +577,19 @@ mod tests {
         assert_eq!(
             execute_command.full_command(),
             explain_command.full_command()
+        );
+    }
+
+    #[test]
+    fn explain_flag_must_be_last() {
+        let error = context()
+            .ci_step(&args(&["test", "--explain", "workspace"]))
+            .err()
+            .unwrap();
+
+        assert_eq!(
+            error,
+            "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait> [--explain]"
         );
     }
 
@@ -768,8 +779,10 @@ cargo test \
 
         let context = context();
         for Cmd { command, expected } in commands {
-            let explain_args = std::iter::once("explain")
-                .chain(command.iter().copied())
+            let explain_args = command
+                .iter()
+                .copied()
+                .chain(std::iter::once("--explain"))
                 .collect::<Vec<_>>();
             let (action, _, actual) = context.ci_step(&args(&explain_args)).unwrap();
 

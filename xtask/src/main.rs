@@ -48,7 +48,7 @@
 //! ## CI steps
 //!
 //! A CI step is one command used by DataFusion's CI that can also be run
-//! locally. `explain` prints the complete shell command without executing it.
+//! locally. `--explain` prints the complete shell command without executing it.
 //!
 //! Use `cargo xtask ci step help` to list the available steps and
 //! `cargo xtask ci step <step-name> help` for step-specific arguments.
@@ -76,7 +76,7 @@
 //! Print that step's shell command without running it:
 //!
 //! ```sh
-//! cargo xtask ci step explain test cli
+//! cargo xtask ci step test cli --explain
 //! ```
 
 mod ci_steps;
