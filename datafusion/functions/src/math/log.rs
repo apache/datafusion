@@ -345,7 +345,9 @@ impl ScalarUDFImpl for LogFunc {
     /// Simplify the `log` function by the relevant rules:
     /// 1. Log(a, 1) ===> 0
     /// 2. Log(a, Power(a, b)) ===> b
+    ///    (only when `Power(a, b)` is known to be a valid log argument)
     /// 3. Log(a, a) ===> 1
+    ///    (only when `a` is known to be a valid log argument)
     fn simplify(
         &self,
         mut args: Vec<Expr>,
@@ -406,13 +408,18 @@ impl ScalarUDFImpl for LogFunc {
                 if is_pow(&func)
                     && args.len() == 2
                     && base == args[0]
-                    && !base_nullable =>
+                    && !base_nullable
+                    && is_known_positive_power_result(&args[0], &args[1]) =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
             }
             number => {
-                if number == base && !base_nullable {
+                // `log(a, a) => 1` is only valid when `a` is known to be a
+                // strictly positive finite value. Zero/negative literals and
+                // non-constant expressions must not be rewritten so the
+                // domain-error check still runs (e.g. `log(0, 0)`).
+                if number == base && !base_nullable && is_known_valid_log_value(&number) {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                         &number_datatype,
                     )?)))
@@ -436,6 +443,37 @@ impl ScalarUDFImpl for LogFunc {
 /// Returns true if the function is `PowerFunc`
 fn is_pow(func: &ScalarUDF) -> bool {
     func.inner().is::<PowerFunc>()
+}
+
+/// Cast a literal expression to `f64`, if possible.
+fn literal_as_f64(expr: &Expr) -> Option<f64> {
+    let Expr::Literal(value, _) = expr else {
+        return None;
+    };
+    match value.cast_to(&DataType::Float64) {
+        Ok(ScalarValue::Float64(Some(v))) => Some(v),
+        _ => None,
+    }
+}
+
+/// True when `expr` is a literal known to be a valid log argument: finite
+/// and strictly greater than zero. Non-literals, zero, negatives, NaN, and
+/// infinities are not statically safe and must not be rewritten away.
+fn is_known_valid_log_value(expr: &Expr) -> bool {
+    matches!(literal_as_f64(expr), Some(v) if v.is_finite() && v > 0.0)
+}
+
+/// True when `power(base, exponent)` is known to evaluate to a strictly
+/// positive finite value, so `log(base, power(base, exponent))` will not
+/// hit the log-of-zero domain error (or produce 0 via underflow).
+fn is_known_positive_power_result(base: &Expr, exponent: &Expr) -> bool {
+    match (literal_as_f64(base), literal_as_f64(exponent)) {
+        (Some(b), Some(e)) if b.is_finite() && b > 0.0 && e.is_finite() => {
+            let p = b.powf(e);
+            p.is_finite() && p > 0.0
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -1373,5 +1411,29 @@ mod tests {
             vec![DataType::Float64, DataType::Float64],
         )
         .expect("zero base should not error in this change");
+    }
+
+    #[test]
+    fn test_log_zero_every_physical_type() {
+        let data_types = [
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal128(38, 0),
+            DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0),
+        ];
+
+        for data_type in data_types {
+            let zero = ScalarValue::new_zero(&data_type)
+                .unwrap_or_else(|e| panic!("zero for {data_type}: {e}"));
+            let err =
+                invoke_log(vec![ColumnarValue::Scalar(zero)], vec![data_type.clone()])
+                    .expect_err(&format!(
+                        "log(0) as {data_type} should be a domain error"
+                    ));
+            assert_log_of_zero(err);
+        }
     }
 }

@@ -155,10 +155,11 @@ Most math functions in DataFusion follow Rust / IEEE 754 semantics for
 corner cases. For example `log(-1)` returns `NaN`. Some domain errors
 match PostgreSQL instead and fail the query:
 
-* `log(0)` / `log(0.0::float8)` — cannot take logarithm of zero
-* `sqrt` of a negative number
-* `power(0, negative)`
-* `factorial` of a negative number
+- `log(0)` / `log(0.0::float8)` — cannot take logarithm of zero
+- `sqrt` of a negative number
+- `power(0, negative)`
+- `factorial` of a negative number
+
 :::
 
 ## Conditional Expressions
