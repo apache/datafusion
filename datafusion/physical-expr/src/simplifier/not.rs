@@ -69,7 +69,7 @@ pub fn simplify_not_expr(
         if let ScalarValue::Boolean(Some(val)) = literal.value() {
             return Ok(Transformed::yes(lit(ScalarValue::Boolean(Some(!val)))));
         }
-        if let ScalarValue::Boolean(None) = literal.value() {
+        if matches!(literal.value(), ScalarValue::Boolean(None)) {
             return Ok(Transformed::yes(lit(ScalarValue::Boolean(None))));
         }
     }
