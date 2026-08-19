@@ -39,7 +39,7 @@ SELECT to_binary('abc'::string, 'utf8'::string);
 ----
 616263
 
-# a multi-byte character round-trips as its utf-8 bytes
+# multi-byte character test
 query ?
 SELECT to_binary('é'::string, 'utf-8'::string);
 ----
