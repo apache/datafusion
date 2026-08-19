@@ -123,9 +123,11 @@ unexpectedly.
 
 Please be aware that all identifiers are effectively made lower-case in SQL, so if your csv file has capital letters (ex: `Name`) you must put your column name in double quotes or the examples won't work.
 
+This behavior can be disabled by setting the `datafusion.sql_parser.enable_ident_normalization` config to `false`. See [Configuration Settings](configs.md) for details.
+
 To illustrate this behavior, consider the [`capitalized_example.csv`](../../../datafusion/core/tests/data/capitalized_example.csv) file:
 
-## Run a SQL query against data stored in a CSV (example 2)
+- Using the SQL API:
 
 ```rust
 use datafusion::prelude::*;
@@ -145,7 +147,7 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-## Use the DataFrame API to process data stored in a CSV (example 2)
+- Using the DataFrame API:
 
 ```rust
 use datafusion::prelude::*;
@@ -170,7 +172,7 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-## Output from both examples
+Output from both examples:
 
 ```text
 +---+--------+
