@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fs::{create_dir_all, remove_dir_all, write};
+use std::fs::{File, create_dir_all, remove_dir_all};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,11 +25,12 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::common::{ScalarValue, SplitPoint};
-use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::logical_expr::{Partitioning, RangePartitioning, col};
+use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::{
     Partitioning as PhysicalPartitioning, PhysicalSortExpr,
     RangePartitioning as PhysicalRangePartitioning, expressions::col as physical_col,
@@ -45,6 +46,30 @@ use datafusion::prelude::SessionContext;
 /// Registers a simple range-partitioned listing table for testing before
 /// declaring such tables is supported via SQL.
 pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
+    const RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(1, 1, 10), (5, 2, 50)],
+        &[(10, 1, 100), (15, 2, 150)],
+        &[(20, 1, 200), (25, 2, 250)],
+        &[(30, 1, 300), (35, 2, 350)],
+    ];
+    const SHIFTED_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(1, 1, 10), (5, 2, 50), (10, 1, 100)],
+        &[(15, 2, 150)],
+        &[(20, 1, 200), (25, 2, 250)],
+        &[(30, 1, 300), (35, 2, 350)],
+    ];
+    const NARROW_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 3] = [
+        &[(1, 1, 10), (5, 2, 50)],
+        &[(10, 1, 100), (15, 2, 150)],
+        &[(20, 1, 200), (25, 2, 250), (30, 1, 300), (35, 2, 350)],
+    ];
+    const SPARSE_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(5, 2, 50), (8, 3, 80)],
+        &[(10, 1, 100)],
+        &[(20, 1, 200)],
+        &[(30, 1, 300), (40, 4, 400)],
+    ];
+
     let schema = Arc::new(Schema::new(vec![
         Field::new("range_key", DataType::Int32, false),
         Field::new("non_range_key", DataType::Int32, false),
@@ -65,18 +90,13 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
     let range_table_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("test_files/scratch_range_partitioning/range_partitioned");
 
-    register_csv_listing_table(
+    register_parquet_listing_table(
         ctx,
         "range_partitioned",
         &range_table_dir,
         Arc::clone(&schema),
-        [
-            "1,1,10\n5,2,50\n",
-            "10,1,100\n15,2,150\n",
-            "20,1,200\n25,2,250\n",
-            "30,1,300\n35,2,350\n",
-        ],
-        Some(output_partitioning),
+        RANGE_PARTITIONS,
+        output_partitioning,
     );
 
     register_unbounded_range_stream_table(
@@ -84,24 +104,14 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         "unbounded_range_like",
         Arc::clone(&schema),
         [10, 20, 30],
-        [
-            vec![(1, 1, 10), (5, 2, 50)],
-            vec![(10, 1, 100), (15, 2, 150)],
-            vec![(20, 1, 200), (25, 2, 250)],
-            vec![(30, 1, 300), (35, 2, 350)],
-        ],
+        RANGE_PARTITIONS.map(|rows| rows.to_vec()),
     );
     register_unbounded_range_stream_table(
         ctx,
         "unbounded_range_like_shifted",
         Arc::clone(&schema),
         [15, 20, 30],
-        [
-            vec![(1, 1, 10), (5, 2, 50), (10, 1, 100)],
-            vec![(15, 2, 150)],
-            vec![(20, 1, 200), (25, 2, 250)],
-            vec![(30, 1, 300), (35, 2, 350)],
-        ],
+        SHIFTED_RANGE_PARTITIONS.map(|rows| rows.to_vec()),
     );
 
     let shifted_output_partitioning = Partitioning::Range(
@@ -116,19 +126,14 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         .expect("range partitioning should be valid"),
     );
 
-    register_csv_listing_table(
+    register_parquet_listing_table(
         ctx,
         "range_partitioned_shifted",
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_shifted"),
         Arc::clone(&schema),
-        [
-            "1,1,10\n5,2,50\n10,1,100\n",
-            "15,2,150\n",
-            "20,1,200\n25,2,250\n",
-            "30,1,300\n35,2,350\n",
-        ],
-        Some(shifted_output_partitioning),
+        SHIFTED_RANGE_PARTITIONS,
+        shifted_output_partitioning,
     );
 
     // Same rows as `range_partitioned` but split into only three range
@@ -145,18 +150,14 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         .expect("range partitioning should be valid"),
     );
 
-    register_csv_listing_table(
+    register_parquet_listing_table(
         ctx,
         "range_partitioned_narrow",
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_narrow"),
         Arc::clone(&schema),
-        [
-            "1,1,10\n5,2,50\n",
-            "10,1,100\n15,2,150\n",
-            "20,1,200\n25,2,250\n30,1,300\n35,2,350\n",
-        ],
-        Some(narrow_output_partitioning),
+        NARROW_RANGE_PARTITIONS,
+        narrow_output_partitioning,
     );
 
     let sparse_output_partitioning = Partitioning::Range(
@@ -171,29 +172,24 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         .expect("range partitioning should be valid"),
     );
 
-    register_csv_listing_table(
+    register_parquet_listing_table(
         ctx,
         "range_partitioned_sparse",
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_sparse"),
-        schema,
-        [
-            "5,2,50\n8,3,80\n",
-            "10,1,100\n",
-            "20,1,200\n",
-            "30,1,300\n40,4,400\n",
-        ],
-        Some(sparse_output_partitioning),
+        Arc::clone(&schema),
+        SPARSE_RANGE_PARTITIONS,
+        sparse_output_partitioning,
     );
 }
 
-fn register_csv_listing_table(
+fn register_parquet_listing_table(
     ctx: &SessionContext,
     name: &str,
     table_dir: impl AsRef<Path>,
-    schema: Arc<Schema>,
-    partitions: impl IntoIterator<Item = &'static str>,
-    output_partitioning: Option<Partitioning>,
+    schema: SchemaRef,
+    partitions: impl IntoIterator<Item = &'static [(i32, i32, i32)]>,
+    output_partitioning: Partitioning,
 ) {
     let table_dir = table_dir.as_ref();
     if table_dir.exists() {
@@ -201,8 +197,17 @@ fn register_csv_listing_table(
     }
     create_dir_all(table_dir).expect("test table dir should be created");
     for (idx, rows) in partitions.into_iter().enumerate() {
-        write(table_dir.join(format!("part-{idx}.csv")), rows)
-            .expect("test table csv partition should be written");
+        let batch = range_batch(Arc::clone(&schema), rows);
+        let file = File::create(table_dir.join(format!("part-{idx}.parquet")))
+            .expect("test table parquet partition should be created");
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None)
+            .expect("test table parquet writer should be created");
+        writer
+            .write(&batch)
+            .expect("test table parquet partition should be written");
+        writer
+            .close()
+            .expect("test table parquet writer should close");
     }
 
     let table_path = format!(
@@ -213,9 +218,8 @@ fn register_csv_listing_table(
     );
     let table_url =
         ListingTableUrl::parse(&table_path).expect("test table url should parse");
-    let options =
-        ListingOptions::new(Arc::new(CsvFormat::default().with_has_header(false)))
-            .with_output_partitioning(output_partitioning);
+    let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+        .with_output_partitioning(Some(output_partitioning));
     let config = ListingTableConfig::new(table_url)
         .with_listing_options(options)
         .with_schema(schema);
@@ -269,20 +273,22 @@ fn range_stream_partition(
     schema: SchemaRef,
     rows: &[(i32, i32, i32)],
 ) -> Arc<dyn PartitionStream> {
-    let range_key: Vec<i32> = rows.iter().map(|(range_key, _, _)| *range_key).collect();
-    let non_range_key: Vec<i32> = rows
-        .iter()
-        .map(|(_, non_range_key, _)| *non_range_key)
-        .collect();
-    let value: Vec<i32> = rows.iter().map(|(_, _, value)| *value).collect();
-    let batch = RecordBatch::try_new(
+    Arc::new(TestPartitionStream::new_with_batches(vec![range_batch(
+        schema, rows,
+    )]))
+}
+
+fn range_batch(schema: SchemaRef, rows: &[(i32, i32, i32)]) -> RecordBatch {
+    RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(Int32Array::from(range_key)) as ArrayRef,
-            Arc::new(Int32Array::from(non_range_key)) as ArrayRef,
-            Arc::new(Int32Array::from(value)) as ArrayRef,
+            Arc::new(Int32Array::from_iter_values(rows.iter().map(|row| row.0)))
+                as ArrayRef,
+            Arc::new(Int32Array::from_iter_values(rows.iter().map(|row| row.1)))
+                as ArrayRef,
+            Arc::new(Int32Array::from_iter_values(rows.iter().map(|row| row.2)))
+                as ArrayRef,
         ],
     )
-    .expect("range stream batch should be valid");
-    Arc::new(TestPartitionStream::new_with_batches(vec![batch]))
+    .expect("range batch should be valid")
 }

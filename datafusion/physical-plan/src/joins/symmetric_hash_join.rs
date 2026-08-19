@@ -31,7 +31,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use crate::check_if_same_properties;
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::stream_join_utils::{
@@ -50,6 +49,7 @@ use crate::projection::{
     JoinData, ProjectionExec, try_pushdown_through_join_with_column_indices,
 };
 use crate::stream::EmptyRecordBatchStream;
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     InputDistributionRequirements, PlanProperties, RecordBatchStream,
@@ -66,6 +66,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -452,36 +453,66 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let join_keys = self.on.iter().flat_map(|(left, right)| [left, right]);
+        let filter = self.filter.iter().map(|filter| filter.expression());
+        crate::apply_expression_roots(join_keys.chain(filter), f)
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                let left = children.swap_remove(0);
+                let right = children.swap_remove(0);
+                Ok(Arc::new(Self {
+                    left,
+                    right,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    ..Self::clone(&*self)
+                }))
+            }
+            ChildrenPropertiesMode::Recompute => {
+                Ok(Arc::new(SymmetricHashJoinExec::try_new(
+                    Arc::clone(&children[0]),
+                    Arc::clone(&children[1]),
+                    self.on.clone(),
+                    self.filter.clone(),
+                    &self.join_type,
+                    self.null_equality,
+                    self.left_sort_exprs.clone(),
+                    self.right_sort_exprs.clone(),
+                    self.mode,
+                )?))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(SymmetricHashJoinExec::try_new(
-            Arc::clone(&children[0]),
-            Arc::clone(&children[1]),
-            self.on.clone(),
-            self.filter.clone(),
-            &self.join_type,
-            self.null_equality,
-            self.left_sort_exprs.clone(),
-            self.right_sort_exprs.clone(),
-            self.mode,
-        )?))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-        Ok(Arc::new(Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -721,20 +752,16 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             })
             .transpose()?;
         let expr_ctx = ctx.expr_ctx();
-        let encode_sort_exprs =
-            |exprs: Option<&LexOrdering>| -> Result<Vec<protobuf::PhysicalSortExprNode>> {
-                exprs.map_or_else(
-                    || Ok(vec![]),
-                    |exprs| {
-                        datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto(
-                            exprs.iter(),
-                            &expr_ctx,
-                        )
-                    },
-                )
-            };
-        let left_sort_exprs = encode_sort_exprs(left_sort_exprs.as_ref())?;
-        let right_sort_exprs = encode_sort_exprs(right_sort_exprs.as_ref())?;
+        let left_sort_exprs =
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto(
+                left_sort_exprs.as_ref(),
+                &expr_ctx,
+            )?;
+        let right_sort_exprs =
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto(
+                right_sort_exprs.as_ref(),
+                &expr_ctx,
+            )?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -904,19 +931,16 @@ impl SymmetricHashJoinExec {
                 ))
             })
             .transpose()?;
-        let decode_sort_exprs = |sort_exprs: &[protobuf::PhysicalSortExprNode],
-                                 schema: &Schema|
-         -> Result<Option<LexOrdering>> {
-            let sort_exprs =
-                datafusion_physical_expr_common::sort_expr::sort_exprs_try_from_proto(
-                    sort_exprs,
-                    &ctx.expr_ctx(schema),
-                )?;
-            Ok(LexOrdering::new(sort_exprs))
-        };
-        let left_sort_exprs = decode_sort_exprs(left_sort_exprs, left_schema.as_ref())?;
+        let left_sort_exprs =
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto(
+                left_sort_exprs,
+                &ctx.expr_ctx(left_schema.as_ref()),
+            )?;
         let right_sort_exprs =
-            decode_sort_exprs(right_sort_exprs, right_schema.as_ref())?;
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto(
+                right_sort_exprs,
+                &ctx.expr_ctx(right_schema.as_ref()),
+            )?;
 
         Self::try_new(
             left,

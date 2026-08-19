@@ -33,10 +33,10 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
-    check_if_same_properties,
+    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr,
+    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
+    Statistics, WindowExpr, validate_child_count,
 };
 
 use arrow::array::ArrayRef;
@@ -45,6 +45,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
@@ -214,6 +215,21 @@ impl ExecutionPlan for WindowAggExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let expressions = self.window_expr.iter().flat_map(|window_expr| {
+            let expressions = window_expr.all_expressions();
+            expressions
+                .args
+                .into_iter()
+                .chain(expressions.partition_by_exprs)
+                .chain(expressions.order_by_exprs)
+        });
+        crate::apply_expression_roots(expressions, f)
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
     }
@@ -246,27 +262,44 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(WindowAggExec::try_new(
-            self.window_expr.clone(),
-            children.swap_remove(0),
-            true,
-        )?))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(WindowAggExec::try_new(
+                self.window_expr.clone(),
+                children.swap_remove(0),
+                true,
+            )?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(

@@ -615,3 +615,24 @@ impl Decoder for JsonDecoder {
         false
     }
 }
+
+/// Encode a [`JsonFormatFactory`]'s options as their protobuf form.
+///
+/// The reverse direction is `From<&protobuf::JsonOptions> for JsonOptions` in
+/// `datafusion-proto-models`: `JsonOptions` is a `datafusion-common` type, so
+/// that half cannot live here.
+#[cfg(feature = "proto")]
+impl From<&JsonFormatFactory> for datafusion_proto_models::protobuf::JsonOptions {
+    fn from(factory: &JsonFormatFactory) -> Self {
+        if let Some(options) = &factory.options {
+            datafusion_proto_models::protobuf::JsonOptions {
+                compression: options.compression as i32,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
+                compression_level: options.compression_level,
+                newline_delimited: Some(options.newline_delimited),
+            }
+        } else {
+            datafusion_proto_models::protobuf::JsonOptions::default()
+        }
+    }
+}

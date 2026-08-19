@@ -3309,7 +3309,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3371,7 +3372,8 @@ impl ScalarValue {
         let values = if values.len() == 0 {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values).unwrap()
+            let arr = Self::iter_to_array(values).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3414,7 +3416,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(SingleRowListArrayBuilder::new(values).build_large_list_array())
     }
@@ -10324,22 +10327,19 @@ mod tests {
         const SECS_IN_ONE_DAY: i32 = 86_400;
         const MICROSECS_IN_ONE_DAY: i64 = 86_400_000_000;
         for i in 0..vector_size {
+            let days = rng.random_range(0..5000);
             if i % 4 == 0 {
-                let days = rng.random_range(0..5000);
                 // to not break second precision
                 let millis = rng.random_range(0..SECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_dt(days, millis));
             } else if i % 4 == 1 {
-                let days = rng.random_range(0..5000);
                 let millisec = rng.random_range(0..(MILLISECS_IN_ONE_DAY as i32));
                 intervals.push(ScalarValue::new_interval_dt(days, millisec));
             } else if i % 4 == 2 {
-                let days = rng.random_range(0..5000);
                 // to not break microsec precision
                 let nanosec = rng.random_range(0..MICROSECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             } else {
-                let days = rng.random_range(0..5000);
                 let nanosec = rng.random_range(0..NANOSECS_IN_ONE_DAY);
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             }
@@ -11543,5 +11543,68 @@ mod tests {
         run_tests::<Decimal64Type>();
         run_tests::<Decimal128Type>();
         run_tests::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_new_list_nested_nullability_mismatch_issue_24022() {
+        // requested element type: Struct(n: Int32 nullable=true)
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+
+        // inferred from concrete values: Struct(n: Int32 nullable=false)
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let value = ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])));
+
+        let expected_struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("n", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+
+        // Test new_list
+        let list = ScalarValue::new_list(
+            std::slice::from_ref(&value),
+            &requested_element_type,
+            true,
+        );
+        assert_eq!(
+            list.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(
+                requested_element_type.clone(),
+                true
+            )))
+        );
+        assert_eq!(&list.value(0), &expected_array);
+
+        // Test new_list_from_iter
+        let list_from_iter = ScalarValue::new_list_from_iter(
+            std::iter::once(value.clone()),
+            &requested_element_type,
+            true,
+        );
+        assert_eq!(
+            list_from_iter.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(
+                requested_element_type.clone(),
+                true
+            )))
+        );
+        assert_eq!(&list_from_iter.value(0), &expected_array);
+
+        // Test new_large_list
+        let large_list = ScalarValue::new_large_list(&[value], &requested_element_type);
+        assert_eq!(
+            large_list.data_type(),
+            &DataType::LargeList(Arc::new(Field::new(
+                "item",
+                requested_element_type.clone(),
+                true
+            )))
+        );
+        assert_eq!(&large_list.value(0), &expected_array);
     }
 }

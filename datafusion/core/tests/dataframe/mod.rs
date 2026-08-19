@@ -21,9 +21,10 @@ mod describe;
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
-    FixedSizeListBuilder, Float32Array, Float64Array, Int8Array, Int32Array,
-    Int32Builder, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
-    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, record_batch,
+    FixedSizeListBuilder, Float16Array, Float32Array, Float64Array, Int8Array,
+    Int16Array, Int32Array, Int32Builder, Int64Array, LargeListArray, ListArray,
+    ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt8Array,
+    UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray, record_batch,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
@@ -3302,6 +3303,10 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The `{testdata}` placeholder is substituted with `str::replace`"
+)]
 async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     repartition_sorts: bool,
 ) -> Result<String> {
@@ -6941,24 +6946,80 @@ async fn test_insert_into_casting_support() -> Result<()> {
 
 #[tokio::test]
 async fn test_dataframe_from_columns() -> Result<()> {
-    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    let b: ArrayRef = Arc::new(BooleanArray::from(vec![true, true, false]));
-    let c: ArrayRef = Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
-    let df = DataFrame::from_columns(vec![("a", a), ("b", b), ("c", c)])?;
+    let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+    let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
+    let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
+    let i32s: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0, 1]));
+    let i64s: ArrayRef = Arc::new(Int64Array::from(vec![-1, 0, 1]));
 
-    assert_eq!(df.schema().fields().len(), 3);
+    let u8s: ArrayRef = Arc::new(UInt8Array::from(vec![0, 1, 2]));
+    let u16s: ArrayRef = Arc::new(UInt16Array::from(vec![0, 1, 2]));
+    let u32s: ArrayRef = Arc::new(UInt32Array::from(vec![0, 1, 2]));
+    let u64s: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1, 2]));
+
+    let f16s: ArrayRef = Arc::new(Float16Array::from(vec![
+        half::f16::from_f64(1.0),
+        half::f16::from_f64(2.0),
+        half::f16::from_f64(3.0),
+    ]));
+    let f32s: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]));
+    let f64s: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+
+    let strings: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+
+    let df = DataFrame::from_columns(vec![
+        ("bool", bools),
+        ("i8", i8s),
+        ("i16", i16s),
+        ("i32", i32s),
+        ("i64", i64s),
+        ("u8", u8s),
+        ("u16", u16s),
+        ("u32", u32s),
+        ("u64", u64s),
+        ("f16", f16s),
+        ("f32", f32s),
+        ("f64", f64s),
+        ("str", strings),
+    ])?;
+
+    assert_eq!(df.schema().fields().len(), 13);
     assert_eq!(df.clone().count().await?, 3);
 
-    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    let expected_types = [
+        ("bool", DataType::Boolean),
+        ("i8", DataType::Int8),
+        ("i16", DataType::Int16),
+        ("i32", DataType::Int32),
+        ("i64", DataType::Int64),
+        ("u8", DataType::UInt8),
+        ("u16", DataType::UInt16),
+        ("u32", DataType::UInt32),
+        ("u64", DataType::UInt64),
+        ("f16", DataType::Float16),
+        ("f32", DataType::Float32),
+        ("f64", DataType::Float64),
+        ("str", DataType::Utf8),
+    ];
+
+    let schema = df.schema();
+
+    for (name, data_type) in expected_types {
+        assert_eq!(schema.field_with_name(None, name)?.data_type(), &data_type);
+    }
+
+    let rows = df.sort(vec![col("i32").sort(true, true)])?;
+
     assert_batches_eq!(
         &[
-            "+---+-------+-----+",
-            "| a | b     | c   |",
-            "+---+-------+-----+",
-            "| 1 | true  | foo |",
-            "| 2 | true  | bar |",
-            "| 3 | false |     |",
-            "+---+-------+-----+",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+            "| false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
+            "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
         ],
         &rows.collect().await?
     );
@@ -6968,25 +7029,86 @@ async fn test_dataframe_from_columns() -> Result<()> {
 
 #[tokio::test]
 async fn test_dataframe_macro() -> Result<()> {
+    let bools = [true, false, true];
+    let i8s = [-1_i8, 0, 1];
+    let i16s = [-1_i16, 0, 1];
+    let i32s = [-1_i32, 0, 1];
+    let i64s = [-1_i64, 0, 1];
+
+    let u8s = [0_u8, 1, 2];
+    let u16s = [0_u16, 1, 2];
+    let u32s = [0_u32, 1, 2];
+    let u64s = [0_u64, 1, 2];
+
+    let f16s = [
+        half::f16::from_f64(1.0),
+        half::f16::from_f64(2.0),
+        half::f16::from_f64(3.0),
+    ];
+    let f32s = [1.0_f32, 2.0, 3.0];
+    let f64s = [1.0_f64, 2.0, 3.0];
+
+    let strings = ["foo", "bar", "baz"];
+
     let df = dataframe!(
-        "a" => [1, 2, 3],
-        "b" => [true, true, false],
-        "c" => [Some("foo"), Some("bar"), None]
+        // Vec<T>
+        "bool" => bools.to_vec(),
+        "i8" => i8s.to_vec(),
+        "i16" => i16s.to_vec(),
+        "i32" => i32s.to_vec(),
+
+        // Vec<Option<T>>
+        "i64" => vec![Some(i64s[0]), None, Some(i64s[2])],
+        "u8" => vec![Some(u8s[0]), None, Some(u8s[2])],
+        "u16" => vec![Some(u16s[0]), None, Some(u16s[2])],
+
+        // &[T]
+        "u32" => &u32s,
+        "u64" => &u64s,
+        "f16" => &f16s,
+
+        // &[Option<T>]
+        "f32" => &[Some(f32s[0]), None, Some(f32s[2])],
+        "f64" => &[Some(f64s[0]), None, Some(f64s[2])],
+        "str" => &[Some(strings[0]), None, Some(strings[2])],
     )?;
 
-    assert_eq!(df.schema().fields().len(), 3);
+    assert_eq!(df.schema().fields().len(), 13);
     assert_eq!(df.clone().count().await?, 3);
 
-    let rows = df.sort(vec![col("a").sort(true, true)])?;
+    let expected_types = [
+        ("bool", DataType::Boolean),
+        ("i8", DataType::Int8),
+        ("i16", DataType::Int16),
+        ("i32", DataType::Int32),
+        ("i64", DataType::Int64),
+        ("u8", DataType::UInt8),
+        ("u16", DataType::UInt16),
+        ("u32", DataType::UInt32),
+        ("u64", DataType::UInt64),
+        ("f16", DataType::Float16),
+        ("f32", DataType::Float32),
+        ("f64", DataType::Float64),
+        ("str", DataType::Utf8),
+    ];
+
+    let schema = df.schema();
+
+    for (name, data_type) in expected_types {
+        assert_eq!(schema.field_with_name(None, name)?.data_type(), &data_type);
+    }
+
+    let rows = df.sort(vec![col("i32").sort(true, true)])?;
+
     assert_batches_eq!(
         &[
-            "+---+-------+-----+",
-            "| a | b     | c   |",
-            "+---+-------+-----+",
-            "| 1 | true  | foo |",
-            "| 2 | true  | bar |",
-            "| 3 | false |     |",
-            "+---+-------+-----+",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+            "| false | 0  | 0   | 0   |     |    |     | 1   | 1   | 2   |     |     |     |",
+            "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 | baz |",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
         ],
         &rows.collect().await?
     );
@@ -7075,7 +7197,8 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSinkExec: sink=CsvSink(file_groups=[])
         SortExec: expr=[column1@0 DESC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[1]
-      DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[CAST(column1@0 AS UInt64) as count]
+        DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
     Ok(())

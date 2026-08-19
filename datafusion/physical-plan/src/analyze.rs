@@ -27,16 +27,21 @@ use super::{
 use crate::display::DisplayableExecutionPlan;
 use crate::execution_plan::EvaluationType;
 use crate::metrics::{MetricCategory, MetricType};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions,
+};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::instant::Instant;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -219,9 +224,17 @@ impl ExecutionPlan for AnalyzeExec {
         ])
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(
             AnalyzeExec::builder(
@@ -235,6 +248,16 @@ impl ExecutionPlan for AnalyzeExec {
             .with_format(self.format.clone())
             .build(),
         ))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -284,7 +307,7 @@ impl ExecutionPlan for AnalyzeExec {
             }
             drop(input_stream);
 
-            let duration = Instant::now() - start;
+            let duration = start.elapsed();
             create_output_batch(
                 verbose,
                 show_statistics,
