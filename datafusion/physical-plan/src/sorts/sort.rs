@@ -1800,6 +1800,28 @@ mod proto_tests {
         assert_eq!(node.fetch, 0);
     }
 
+    /// The other end of the range does *not* survive: `fetch` goes onto the
+    /// wire as `usize as i64`, so on a 64-bit target `usize::MAX` wraps to
+    /// `-1` — the very value that means "absent" — and reads back as an
+    /// unlimited sort. That is pre-existing behavior of the `i64` wire field
+    /// rather than something this tier introduces; pinning it keeps any change
+    /// to the encoding a deliberate one instead of a silent fix.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_to_proto_wraps_usize_max_fetch_into_the_absent_encoding() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&sort_fixture(Some(usize::MAX)), &encoder);
+
+        assert_eq!(node.fetch, -1);
+
+        // ... and so the limit is gone by the time the node is read back.
+        let decoder = StubPlanDecoder::ok();
+        assert_eq!(
+            decode(decodable_node(node.fetch, false), &decoder).fetch(),
+            None
+        );
+    }
+
     #[test]
     fn try_to_proto_encodes_preserve_partitioning() {
         let encoder = StubPlanEncoder::ok();
@@ -1955,6 +1977,25 @@ mod proto_tests {
 
         let err = SortExec::try_from_proto(&sort_node(node), &ctx).unwrap_err();
         assert!(err.to_string().contains("SortExec requires an ordering"));
+    }
+
+    /// `dynamic_filter` is plan-owned state, not just another expression: the
+    /// node has to come back as a `DynamicFilterPhysicalExpr`, and one holding
+    /// anything else is rejected rather than quietly dropped. This is the
+    /// decode-side counterpart of the encode test above.
+    #[test]
+    fn try_from_proto_rejects_a_dynamic_filter_of_the_wrong_type() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(3, false);
+        node.dynamic_filter = Some(column_node("a", 0));
+
+        let err = SortExec::try_from_proto(&sort_node(node), &ctx).unwrap_err();
+        assert!(err.to_string().contains(
+            "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+        ));
+        // The sort key and the dynamic filter both reached the codec.
+        assert_eq!(decoder.expr_calls(), 2);
     }
 
     #[test]

@@ -653,6 +653,22 @@ mod proto_tests {
         assert_eq!(encode(&spm_fixture(Some(0)), &encoder).fetch, 0);
     }
 
+    /// ... and `usize::MAX` does not survive it at all: `fetch` goes onto the
+    /// wire as `usize as i64`, so on a 64-bit target it wraps to `-1`, the
+    /// "absent" value, and reads back as an unlimited merge. Same pre-existing
+    /// `i64` wire behavior as `SortExec`, pinned here for the same reason.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_to_proto_wraps_usize_max_fetch_into_the_absent_encoding() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&spm_fixture(Some(usize::MAX)), &encoder);
+
+        assert_eq!(node.fetch, -1);
+
+        let decoder = StubPlanDecoder::ok();
+        assert_eq!(decode(decodable_node(node.fetch), &decoder).fetch(), None);
+    }
+
     #[test]
     fn try_to_proto_inverts_descending_into_asc() {
         let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
