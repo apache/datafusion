@@ -741,12 +741,13 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
-        ColumnUnnestList, EmptyRelation, LogicalPlan, col, lit, unnest,
+        ColumnUnnestList, EmptyRelation, Expr, LogicalPlan, col, lit, unnest,
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
     use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+    use datafusion_expr::expr::Alias;
     use indexmap::IndexMap;
 
     fn column_unnests_eq(
@@ -851,10 +852,14 @@ mod tests {
 
         assert_eq!(
             transformed_exprs,
-            vec![
-                (col("__unnest_placeholder(3d_col,depth=1)").alias("UNNEST(3d_col)"))
-                    .alias("2d_col")
-            ]
+            vec![Expr::Alias(Alias {
+                expr: Box::new(
+                    col("__unnest_placeholder(3d_col,depth=1)").alias("UNNEST(3d_col)")
+                ),
+                relation: None,
+                name: "2d_col".to_owned(),
+                metadata: None,
+            })]
         );
         column_unnests_eq(
             vec![
