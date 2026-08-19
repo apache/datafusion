@@ -35,6 +35,7 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::{FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
@@ -43,11 +44,14 @@ use datafusion_common::{JoinSide, JoinType, NullEquality, Statistics, internal_e
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::joins::utils::{
     ColumnIndex, JoinFilter, max_distinct_count,
 };
-use datafusion_physical_plan::joins::{HashJoinExec, HashJoinExecBuilder, PartitionMode};
+use datafusion_physical_plan::joins::{
+    HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec,
+};
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::projection::{ProjectionExec, all_alias_free_columns};
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
@@ -212,6 +216,8 @@ struct JoinGraph {
     original_nodes: Vec<RelSet>,
     /// The relations that are reducers rather than ordinary inputs.
     reducers: RelSet,
+    /// Which join operator the subtree used, and which the rebuild emits.
+    kind: Option<JoinKind>,
 }
 
 impl JoinGraph {
@@ -228,6 +234,10 @@ impl JoinGraph {
             Role::Reducer(reducer) => Some(reducer),
             Role::Output => None,
         }
+    }
+
+    fn kind(&self) -> JoinKind {
+        self.kind.unwrap_or(JoinKind::Hash)
     }
 
     fn null_equality(&self) -> NullEquality {
@@ -460,6 +470,56 @@ fn solve_dp(model: &CostModel) -> Option<Solution> {
     })
 }
 
+/// The join operators the rule can flatten and rebuild.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum JoinKind {
+    Hash,
+    /// Emits every column, having no built-in projection; the subtree gets one
+    /// projection on top instead.
+    SortMerge,
+}
+
+/// One join, seen the same way whichever operator implements it.
+struct JoinView<'a> {
+    kind: JoinKind,
+    role: JoinRole,
+    left: &'a Arc<dyn ExecutionPlan>,
+    right: &'a Arc<dyn ExecutionPlan>,
+    on: &'a [(PhysicalExprRef, PhysicalExprRef)],
+    filter: Option<&'a JoinFilter>,
+    null_equality: NullEquality,
+    projection: Option<&'a [usize]>,
+}
+
+fn join_view(plan: &Arc<dyn ExecutionPlan>) -> Option<JoinView<'_>> {
+    if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+        if join.null_aware || join.fetch().is_some() {
+            return None;
+        }
+        return Some(JoinView {
+            kind: JoinKind::Hash,
+            role: join_role(join.join_type(), join.filter().is_some(), join.on())?,
+            left: join.left(),
+            right: join.right(),
+            on: join.on(),
+            filter: join.filter(),
+            null_equality: join.null_equality,
+            projection: join.projection.as_deref(),
+        });
+    }
+    let join = plan.downcast_ref::<SortMergeJoinExec>()?;
+    Some(JoinView {
+        kind: JoinKind::SortMerge,
+        role: join_role(&join.join_type(), join.filter().is_some(), join.on())?,
+        left: join.left(),
+        right: join.right(),
+        on: join.on(),
+        filter: join.filter().as_ref(),
+        null_equality: join.null_equality(),
+        projection: None,
+    })
+}
+
 /// How a join takes part in enumeration, if at all.
 #[derive(Clone, Copy, Debug)]
 enum JoinRole {
@@ -474,11 +534,15 @@ enum JoinRole {
 /// Classifies a join. Outer and mark joins are excluded (not filters on their
 /// inputs, or they add a column), as are `null_aware` anti joins, joins with a
 /// limit, and semi joins whose filter is part of their existential test.
-fn join_role(join: &HashJoinExec) -> Option<JoinRole> {
-    if join.null_aware || join.fetch().is_some() || join.on().is_empty() {
+fn join_role(
+    join_type: &JoinType,
+    has_filter: bool,
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
+) -> Option<JoinRole> {
+    if on.is_empty() {
         return None;
     }
-    let role = match join.join_type() {
+    let role = match join_type {
         JoinType::Inner => JoinRole::Inner,
         JoinType::LeftSemi => JoinRole::Reducing {
             anti: false,
@@ -498,7 +562,7 @@ fn join_role(join: &HashJoinExec) -> Option<JoinRole> {
         },
         _ => return None,
     };
-    if join.filter().is_some() && !matches!(role, JoinRole::Inner) {
+    if has_filter && !matches!(role, JoinRole::Inner) {
         return None;
     }
     Some(role)
@@ -534,12 +598,10 @@ fn extract(
     // Start at a join, or at the column pruning projection usually sitting above
     // one: rooting there lets its column list become the top join's projection
     // instead of stranding a `ProjectionExec` above a wider join.
-    let is_root = match plan.downcast_ref::<HashJoinExec>() {
-        Some(join) => join_role(join).is_some(),
-        None => plan
+    let is_root = join_view(plan).is_some()
+        || plan
             .downcast_ref::<ProjectionExec>()
-            .is_some_and(|projection| all_alias_free_columns(projection.expr())),
-    };
+            .is_some_and(|projection| all_alias_free_columns(projection.expr()));
     if !is_root {
         return Ok(None);
     }
@@ -562,6 +624,7 @@ impl<'a, 's> Extractor<'a, 's> {
                 null_equality: None,
                 original_nodes: vec![],
                 reducers: 0,
+                kind: None,
             },
             stats,
         }
@@ -592,18 +655,19 @@ impl<'a, 's> Extractor<'a, 's> {
         &mut self,
         plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<Option<(Vec<ColRef>, RelSet)>> {
-        if let Some(join) = plan.downcast_ref::<HashJoinExec>()
-            && let Some(role) = join_role(join)
+        if let Some(view) = join_view(plan)
             && self
                 .graph
                 .null_equality
-                .is_none_or(|null_equality| null_equality == join.null_equality)
+                .is_none_or(|null_equality| null_equality == view.null_equality)
+            && self.graph.kind.is_none_or(|kind| kind == view.kind)
         {
-            self.graph.null_equality = Some(join.null_equality);
-            let visited = match role {
-                JoinRole::Inner => self.visit_inner(join)?,
+            self.graph.null_equality = Some(view.null_equality);
+            self.graph.kind = Some(view.kind);
+            let visited = match view.role {
+                JoinRole::Inner => self.visit_inner(&view)?,
                 JoinRole::Reducing { anti, output } => {
-                    self.visit_reducing(join, anti, output)?
+                    self.visit_reducing(&view, anti, output)?
                 }
             };
             let Some((columns, mask)) = visited else {
@@ -612,7 +676,7 @@ impl<'a, 's> Extractor<'a, 's> {
 
             self.graph.original_nodes.push(mask);
             // For a semi or anti join the projection selects from the output side alone.
-            let columns = match &join.projection {
+            let columns = match view.projection {
                 Some(projection) => projection.iter().map(|idx| columns[*idx]).collect(),
                 None => columns,
             };
@@ -651,18 +715,15 @@ impl<'a, 's> Extractor<'a, 's> {
 
     /// Flattens an inner join: both sides join the graph, predicates become edges
     /// and filters.
-    fn visit_inner(
-        &mut self,
-        join: &HashJoinExec,
-    ) -> Result<Option<(Vec<ColRef>, RelSet)>> {
-        let Some((left, left_mask)) = self.visit(join.left())? else {
+    fn visit_inner(&mut self, view: &JoinView) -> Result<Option<(Vec<ColRef>, RelSet)>> {
+        let Some((left, left_mask)) = self.visit(view.left)? else {
             return Ok(None);
         };
-        let Some((right, right_mask)) = self.visit(join.right())? else {
+        let Some((right, right_mask)) = self.visit(view.right)? else {
             return Ok(None);
         };
 
-        for (left_key, right_key) in join.on() {
+        for (left_key, right_key) in view.on {
             let (Some(left_key), Some(right_key)) =
                 (as_column(left_key), as_column(right_key))
             else {
@@ -684,7 +745,7 @@ impl<'a, 's> Extractor<'a, 's> {
             }
         }
 
-        if let Some(filter) = join.filter() {
+        if let Some(filter) = view.filter {
             let columns = filter
                 .column_indices()
                 .iter()
@@ -714,13 +775,13 @@ impl<'a, 's> Extractor<'a, 's> {
     /// side becomes a reducer.
     fn visit_reducing(
         &mut self,
-        join: &HashJoinExec,
+        view: &JoinView,
         anti: bool,
         output: JoinSide,
     ) -> Result<Option<(Vec<ColRef>, RelSet)>> {
         let (output_plan, reducer_plan) = match output {
-            JoinSide::Left => (join.left(), join.right()),
-            JoinSide::Right => (join.right(), join.left()),
+            JoinSide::Left => (view.left, view.right),
+            JoinSide::Right => (view.right, view.left),
             JoinSide::None => return internal_err!("semi join with no output side"),
         };
 
@@ -729,9 +790,9 @@ impl<'a, 's> Extractor<'a, 's> {
         };
 
         // Keys resolve against the output side, so they precede the reducer relation.
-        let mut keys = Vec::with_capacity(join.on().len());
+        let mut keys = Vec::with_capacity(view.on.len());
         let mut required = 0;
-        for (left_key, right_key) in join.on() {
+        for (left_key, right_key) in view.on {
             let (output_key, reducer_key) = match output {
                 JoinSide::Left => (left_key, right_key),
                 _ => (right_key, left_key),
@@ -843,6 +904,55 @@ impl Rebuilder<'_> {
         }
     }
 
+    /// Builds one join of the kind the subtree used.
+    fn build_join(
+        &self,
+        left: Built,
+        right: Built,
+        on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+        join_type: JoinType,
+        filter: Option<JoinFilter>,
+        required: &[ColRef],
+    ) -> Result<(Arc<dyn ExecutionPlan>, Vec<ColRef>)> {
+        // A semi or anti join emits one side, and a reducer's own columns are never
+        // emitted, so its `Built` carries none.
+        let natural = match join_type {
+            JoinType::RightSemi | JoinType::RightAnti => right.columns.clone(),
+            JoinType::LeftSemi | JoinType::LeftAnti => left.columns.clone(),
+            _ => {
+                let mut natural = left.columns.clone();
+                natural.extend(right.columns.clone());
+                natural
+            }
+        };
+        let keys = on.len();
+        match self.graph.kind() {
+            JoinKind::Hash => {
+                let join = HashJoinExecBuilder::new(left.plan, right.plan, on, join_type)
+                    .with_filter(filter)
+                    .with_null_equality(self.graph.null_equality())
+                    // Build side and partition mode are picked by the
+                    // statistical subrule after.
+                    .with_partition_mode(PartitionMode::Auto)
+                    .with_projection(projection_for(required, &natural)?)
+                    .build()?;
+                Ok((Arc::new(join), required.to_vec()))
+            }
+            JoinKind::SortMerge => {
+                let join = SortMergeJoinExec::try_new(
+                    left.plan,
+                    right.plan,
+                    on,
+                    filter,
+                    join_type,
+                    vec![SortOptions::default(); keys],
+                    self.graph.null_equality(),
+                )?;
+                Ok((Arc::new(join), natural))
+            }
+        }
+    }
+
     fn inner(
         &self,
         required: &[ColRef],
@@ -906,18 +1016,20 @@ impl Rebuilder<'_> {
             .collect::<Result<Vec<_>>>()?;
         let filter = rebuild_filters(&filters, &left_columns, &right_columns)?;
 
-        let mut joined = left_columns;
-        joined.extend(right_columns);
-        let projection = projection_for(required, &joined)?;
-
-        let join = HashJoinExecBuilder::new(left_plan, right_plan, on, JoinType::Inner)
-            .with_filter(filter)
-            .with_null_equality(self.graph.null_equality())
-            // Build side and partition mode are picked by the statistical subrule after.
-            .with_partition_mode(PartitionMode::Auto)
-            .with_projection(projection)
-            .build()?;
-        Ok((Arc::new(join), required.to_vec()))
+        self.build_join(
+            Built {
+                plan: left_plan,
+                columns: left_columns,
+            },
+            Built {
+                plan: right_plan,
+                columns: right_columns,
+            },
+            on,
+            JoinType::Inner,
+            filter,
+            required,
+        )
     }
 
     fn reducing(
@@ -961,20 +1073,26 @@ impl Rebuilder<'_> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // A semi or anti join emits only its output side.
-        let projection = projection_for(required, &filtered_columns)?;
         let join_type = if info.anti {
             JoinType::RightAnti
         } else {
             JoinType::RightSemi
         };
 
-        let join = HashJoinExecBuilder::new(reducer_plan, filtered_plan, on, join_type)
-            .with_null_equality(self.graph.null_equality())
-            .with_partition_mode(PartitionMode::Auto)
-            .with_projection(projection)
-            .build()?;
-        Ok((Arc::new(join), required.to_vec()))
+        self.build_join(
+            Built {
+                plan: reducer_plan,
+                columns: vec![],
+            },
+            Built {
+                plan: filtered_plan,
+                columns: filtered_columns,
+            },
+            on,
+            join_type,
+            None,
+            required,
+        )
     }
 }
 
@@ -1000,6 +1118,12 @@ fn projection_for(required: &[ColRef], emitted: &[ColRef]) -> Result<Option<Vec<
     let identity = projection.len() == emitted.len()
         && projection.iter().enumerate().all(|(idx, col)| idx == *col);
     Ok((!identity).then_some(projection))
+}
+
+/// One built input and the columns it emits.
+struct Built {
+    plan: Arc<dyn ExecutionPlan>,
+    columns: Vec<ColRef>,
 }
 
 /// Rebuilds the non-equi filters applied at one join as one conjunction. A
@@ -1045,10 +1169,25 @@ fn rebuild_filters(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Intermediate columns go left side first: a hash join reads them positionally,
+    // but a sort merge join rebuilds the batch as all left then all right columns,
+    // so interleaved sides would evaluate against the wrong columns.
+    let mut order: Vec<usize> = (0..column_indices.len()).collect();
+    order.sort_by_key(|i| column_indices[*i].side == JoinSide::Right);
+    let mut moved = vec![0; order.len()];
+    for (to, from) in order.iter().enumerate() {
+        moved[*from] = to;
+    }
+
     Ok(Some(JoinFilter::new(
-        expression,
-        column_indices,
-        Arc::new(Schema::new(fields)),
+        remap_columns(expression, &moved)?,
+        order.iter().map(|i| column_indices[*i].clone()).collect(),
+        Arc::new(Schema::new(
+            order
+                .iter()
+                .map(|i| Arc::clone(&fields[*i]))
+                .collect::<Vec<_>>(),
+        )),
     )))
 }
 
@@ -1056,12 +1195,29 @@ fn shift_columns(expression: PhysicalExprRef, offset: usize) -> Result<PhysicalE
     if offset == 0 {
         return Ok(expression);
     }
+    rewrite_columns(expression, &|index| index + offset)
+}
+
+fn remap_columns(
+    expression: PhysicalExprRef,
+    moved: &[usize],
+) -> Result<PhysicalExprRef> {
+    if moved.iter().enumerate().all(|(from, to)| from == *to) {
+        return Ok(expression);
+    }
+    rewrite_columns(expression, &|index| moved[index])
+}
+
+fn rewrite_columns(
+    expression: PhysicalExprRef,
+    index: &dyn Fn(usize) -> usize,
+) -> Result<PhysicalExprRef> {
     expression
         .transform(|expr| {
             Ok(match expr.downcast_ref::<Column>() {
                 Some(column) => Transformed::yes(Arc::new(Column::new(
                     column.name(),
-                    column.index() + offset,
+                    index(column.index()),
                 )) as _),
                 None => Transformed::no(expr),
             })
@@ -1188,6 +1344,25 @@ fn reorder(
         solution: &solution,
         relations: &relations,
     };
-    let (plan, _) = rebuilder.node(graph.all(), &graph.output)?;
-    Ok(Some(plan))
+    let (plan, columns) = rebuilder.node(graph.all(), &graph.output)?;
+    if columns == graph.output {
+        return Ok(Some(plan));
+    }
+    // Only a sort merge subtree reaches here, having no projection of its own.
+    let schema = plan.schema();
+    let exprs = graph
+        .output
+        .iter()
+        .map(|col| {
+            let Some(index) = position(&columns, *col) else {
+                return internal_err!("join enumeration lost column {col:?}");
+            };
+            let name = schema.field(index).name();
+            Ok(ProjectionExpr {
+                expr: Arc::new(Column::new(name, index)),
+                alias: name.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(Arc::new(ProjectionExec::try_new(exprs, plan)?)))
 }

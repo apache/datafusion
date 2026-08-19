@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -35,7 +36,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::join_enumeration::JoinEnumeration;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 use insta::assert_snapshot;
 
@@ -95,6 +96,41 @@ fn join(
     on: &[(&str, &str)],
 ) -> Result<Arc<dyn ExecutionPlan>> {
     join_of_type(left, right, on, JoinType::Inner, None)
+}
+
+/// The same shape as [`late_reducer_plan`], joined by sort merge instead of hash.
+fn sort_merge_late_reducer_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let joined = sort_merge_join(fact, other, &[("f_id", "o_id")])?;
+    sort_merge_join(joined, types, &[("f_type", "t_type")])
+}
+
+fn sort_merge_join(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: &[(&str, &str)],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let keys = on
+        .iter()
+        .map(|(left_key, right_key)| {
+            Ok((
+                Arc::new(Column::new_with_schema(left_key, &left.schema())?) as _,
+                Arc::new(Column::new_with_schema(right_key, &right.schema())?) as _,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(SortMergeJoinExec::try_new(
+        left,
+        right,
+        keys,
+        None,
+        JoinType::Inner,
+        vec![SortOptions::default(); on.len()],
+        NullEquality::NullEqualsNothing,
+    )?))
 }
 
 fn join_of_type(
@@ -263,9 +299,13 @@ fn keeps_an_already_optimal_order() -> Result<()> {
 }
 
 /// A session over four in-memory tables shaped like a small star schema.
-fn star_schema_context(join_enumeration: bool) -> Result<SessionContext> {
+fn star_schema_context(
+    join_enumeration: bool,
+    prefer_hash_join: bool,
+) -> Result<SessionContext> {
     let mut config = SessionConfig::new();
     config.options_mut().optimizer.join_enumeration = join_enumeration;
+    config.options_mut().optimizer.prefer_hash_join = prefer_hash_join;
     let ctx = SessionContext::new_with_config(config);
 
     let ints = |name: &str, values: Vec<i32>| -> Result<RecordBatch> {
@@ -315,8 +355,15 @@ const STAR_QUERIES: [&str; 4] = [
 
 #[tokio::test]
 async fn reordering_returns_the_same_rows() -> Result<()> {
-    let enumerated = star_schema_context(true)?;
-    let baseline = star_schema_context(false)?;
+    for prefer_hash_join in [true, false] {
+        reordering_returns_the_same_rows_with(prefer_hash_join).await?;
+    }
+    Ok(())
+}
+
+async fn reordering_returns_the_same_rows_with(prefer_hash_join: bool) -> Result<()> {
+    let enumerated = star_schema_context(true, prefer_hash_join)?;
+    let baseline = star_schema_context(false, prefer_hash_join)?;
     let mut reordered_any = false;
     for query in STAR_QUERIES {
         let enumerated_plan = enumerated.sql(query).await?.create_physical_plan().await?;
@@ -416,10 +463,28 @@ fn moves_a_non_equi_filter_with_its_join() -> Result<()> {
     // Re-attached to the join that now brings its two columns together.
     assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@3, t_type@2]
-      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], filter=f_type@0 > t_type@1, projection=[f_id@1, f_type@2, t_type@0]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], filter=f_type@1 > t_type@0, projection=[f_id@1, f_type@2, t_type@0]
         StatisticsExec: col_count=1, row_count=Inexact(10)
         StatisticsExec: col_count=2, row_count=Inexact(1000000)
       StatisticsExec: col_count=1, row_count=Inexact(1000000)
     ");
+    Ok(())
+}
+
+#[test]
+fn reorders_sort_merge_joins() -> Result<()> {
+    // A sort merge join carries no projection, so the columns the subtree used to
+    // emit are restored by one projection above it.
+    assert_snapshot!(
+        formatted(&optimize(sort_merge_late_reducer_plan()?, &ConfigOptions::new())?),
+        @r"
+    ProjectionExec: expr=[f_id@1 as f_id, f_type@2 as f_type, o_id@3 as o_id, t_type@0 as t_type]
+      SortMergeJoinExec: join_type=Inner, on=[(f_id@1, o_id@0)]
+        SortMergeJoinExec: join_type=Inner, on=[(t_type@0, f_type@1)]
+          StatisticsExec: col_count=1, row_count=Inexact(10)
+          StatisticsExec: col_count=2, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    "
+    );
     Ok(())
 }
