@@ -2327,9 +2327,19 @@ mod tests {
             "constraints"
         );
         assert_eq!(actual_props.schema(), expected_props.schema(), "schema");
+        // `Partitioning` has no `PartialEq`, so compare the partition count and
+        // the explicit `Display` form. Derived `Debug` would change with any
+        // field addition, making this brittle for no gain.
+        let actual_partitioning = actual.properties().output_partitioning();
+        let expected_partitioning = expected.properties().output_partitioning();
         assert_eq!(
-            format!("{:?}", actual.properties().output_partitioning()),
-            format!("{:?}", expected.properties().output_partitioning()),
+            actual_partitioning.partition_count(),
+            expected_partitioning.partition_count(),
+            "partition count"
+        );
+        assert_eq!(
+            actual_partitioning.to_string(),
+            expected_partitioning.to_string(),
             "partitioning"
         );
     }

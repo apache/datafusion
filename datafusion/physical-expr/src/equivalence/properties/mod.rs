@@ -1565,6 +1565,7 @@ mod tests {
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::col;
 
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
 
     /// Renames `a`, `b`, `c` and `d` so the projection is non-trivial while
@@ -1654,10 +1655,26 @@ mod tests {
             EquivalenceGroup::default(),
         );
 
-        assert_ne!(
-            with_real_group.eq_group(),
-            with_empty_group.eq_group(),
-            "the supplied group was not used"
+        // Asserting on `eq_group()` would be vacuous, since the argument is
+        // stored there verbatim. Assert on behaviour instead.
+        //
+        // `projected_orderings` resolves `[a ASC]` to `[c1 ASC]` on its own, so
+        // asking about `c1` proves nothing. Asking about `a1` does: the stored
+        // ordering names `c1`, and concluding that `a1` is ordered too requires
+        // the supplied group to say `a1 = c1`.
+        let asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let on_a1 = [PhysicalSortExpr::new(col("a1", &output_schema)?, asc)];
+
+        assert!(
+            with_real_group.ordering_satisfy(on_a1.clone())?,
+            "the supplied group was not used to answer ordering questions"
+        );
+        assert!(
+            !with_empty_group.ordering_satisfy(on_a1)?,
+            "an empty group still reported a1 as ordered, so the argument is ignored"
         );
 
         Ok(())

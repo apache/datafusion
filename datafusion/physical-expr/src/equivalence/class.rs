@@ -310,10 +310,23 @@ pub struct EquivalenceGroup {
 }
 
 impl PartialEq for EquivalenceGroup {
-    /// Compares the equivalence classes. `map` is an index into `classes`, so it
-    /// carries no information the classes themselves do not already have.
+    /// Compares the equivalence classes as a set.
+    ///
+    /// `classes` is a `Vec`, but its order carries no meaning: `remove_class_at_idx`
+    /// uses `swap_remove`, so two groups describing exactly the same equalities can
+    /// hold their classes in different orders depending on how they were built. A
+    /// positional comparison would call those unequal, so this compares them as the
+    /// sets they are. The classes are distinct by construction, so equal lengths
+    /// plus containment in one direction is set equality.
+    ///
+    /// `map` is an index into `classes` and carries no information the classes do
+    /// not already have, so it takes no part in the comparison.
     fn eq(&self, other: &Self) -> bool {
-        self.classes == other.classes
+        self.classes.len() == other.classes.len()
+            && self
+                .classes
+                .iter()
+                .all(|class| other.classes.contains(class))
     }
 }
 
@@ -1268,7 +1281,24 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
         ]))
+    }
+
+    #[test]
+    fn test_equivalence_group_eq_ignores_class_order() -> Result<()> {
+        // `classes` is a `Vec` and `remove_class_at_idx` uses `swap_remove`, so
+        // the order two groups hold their classes in depends on how they were
+        // built. Groups describing the same equalities must still compare equal,
+        // otherwise callers using this as a semantic check get false negatives.
+        let schema = abc_schema();
+        let ab_then_cd = group_of(&schema, &[("a", "b"), ("c", "d")])?;
+        let cd_then_ab = group_of(&schema, &[("c", "d"), ("a", "b")])?;
+
+        assert_eq!(ab_then_cd.len(), 2, "expected two disjoint classes");
+        assert_eq!(ab_then_cd, cd_then_ab);
+
+        Ok(())
     }
 
     #[test]
