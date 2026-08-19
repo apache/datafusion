@@ -167,14 +167,14 @@ select
   coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0),
   arrow_typeof(coalesce(arrow_cast(2, 'Decimal128(7, 2)'), 0))
 ----
-2 Decimal128(22, 2)
+2.00 Decimal128(22, 2)
 
 query RT
 select
   coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0),
   arrow_typeof(coalesce(arrow_cast(2, 'Decimal256(7, 2)'), 0));
 ----
-2 Decimal256(22, 2)
+2.00 Decimal256(22, 2)
 
 # coalesce string
 query TT
