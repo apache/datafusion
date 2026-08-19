@@ -428,6 +428,7 @@ fn check_async_udf(body: &Arc<dyn PhysicalExpr>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::PhysicalExpr;
     use crate::expressions::{Column, LambdaVariable, NoOp, lambda::lambda};
     use arrow::{
         array::RecordBatch,
@@ -533,7 +534,7 @@ mod tests {
         // indices the inner LambdaExpr::new would produce: sorted referenced
         // indices, so the names alone matter here — what matters for
         // shadow tracking is the names, not the indices.
-        let inner_body: Arc<dyn crate::PhysicalExpr> =
+        let inner_body: Arc<dyn PhysicalExpr> =
             Arc::new(crate::expressions::BinaryExpr::new(
                 Arc::new(crate::expressions::BinaryExpr::new(
                     Arc::new(LambdaVariable::new(1, Arc::clone(&outer_k_field))),
@@ -552,7 +553,7 @@ mod tests {
         // regular column reference so the walk has something non-trivial
         // to descend through. The outer body references the inner lambda
         // via `inner_lambda`.
-        let outer_body: Arc<dyn crate::PhysicalExpr> =
+        let outer_body: Arc<dyn PhysicalExpr> =
             Arc::new(crate::expressions::BinaryExpr::new(
                 Arc::new(Column::new("col", 0)),
                 datafusion_expr::Operator::Plus,
@@ -568,6 +569,94 @@ mod tests {
             &[1],
             "only outer's `v` (index 1) should be reported as used; `k` (index 0) is \
              shadowed inside the nested lambda"
+        );
+    }
+
+    /// Reconstructs nested lambdas through [`ProjectLambdaBody`] and asserts
+    /// the `captures ++ used_params` index layout at both levels.
+    ///
+    /// `(k, v) -> col + (k, v2) -> k + v2 + v` covers:
+    /// 1. an outer captured column (`col` at a non-zero planner index),
+    /// 2. an outer parameter captured by the inner lambda (`v`),
+    /// 3. an inner parameter that shadows an outer name (`k`).
+    ///
+    /// The inner body is built with stale combined-schema indexes so each
+    /// `LambdaExpr::new` has to rebase, matching a projection rewrite that
+    /// changes the input schema width.
+    #[test]
+    fn test_nested_lambda_project_lambda_body_rebasing() {
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+        let v2_field = Arc::new(Field::new("v2", DataType::Int32, true));
+
+        // Planner combined schema: a@0, b@1, col@2, outer k@3, outer v@4,
+        // inner k@5, inner v2@6. Inner body: k + v2 + v.
+        let inner_body: Arc<dyn PhysicalExpr> =
+            Arc::new(crate::expressions::BinaryExpr::new(
+                Arc::new(crate::expressions::BinaryExpr::new(
+                    Arc::new(LambdaVariable::new(5, Arc::clone(&k_field))),
+                    datafusion_expr::Operator::Plus,
+                    Arc::new(LambdaVariable::new(6, Arc::clone(&v2_field))),
+                )),
+                datafusion_expr::Operator::Plus,
+                Arc::new(LambdaVariable::new(4, Arc::clone(&v_field))),
+            ));
+        let inner_lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v2".to_string()], inner_body)
+                .unwrap();
+
+        // Inner reconstruction: capture outer `v`@4, then own params `k`, `v2`.
+        assert_eq!(inner_lambda.projection(), &[4]);
+        assert_eq!(inner_lambda.used_param_indices(), &[0, 1]);
+        assert_eq!(
+            inner_lambda.projected_body().as_ref().to_string(),
+            "k@1 + v2@2 + v@0",
+            "inner projected body should be captures(v) ++ params(k, v2)"
+        );
+
+        let outer_body: Arc<dyn PhysicalExpr> =
+            Arc::new(crate::expressions::BinaryExpr::new(
+                Arc::new(Column::new("col", 2)),
+                datafusion_expr::Operator::Plus,
+                Arc::new(inner_lambda),
+            ));
+        let outer_lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], outer_body)
+                .unwrap();
+
+        // Outer reconstruction: capture `col`@2, then used param `v` (`k` is
+        // shadowed by the inner lambda, so it is not a used outer param).
+        assert_eq!(outer_lambda.projection(), &[2]);
+        assert_eq!(outer_lambda.used_param_indices(), &[1]);
+        assert_eq!(
+            outer_lambda.projected_body().as_ref().to_string(),
+            "col@0 + (k, v2) -> k@5 + v2@6 + v@1",
+            "outer projected body should rebase col@2 -> col@0 and rewrite the \
+             nested capture of `v` onto the outer captures++params slot"
+        );
+
+        let reconstructed_inner = outer_lambda
+            .projected_body()
+            .children()
+            .into_iter()
+            .find_map(|c| c.downcast_ref::<LambdaExpr>())
+            .expect("outer projected body should still wrap the nested lambda");
+
+        // Inner reconstruction after the outer rewrite: capture the remapped
+        // outer `v`@1, then own params. Shadowed inner `k` stays an inner param.
+        assert_eq!(reconstructed_inner.projection(), &[1]);
+        assert_eq!(reconstructed_inner.used_param_indices(), &[0, 1]);
+        assert_eq!(
+            reconstructed_inner.projected_body().as_ref().to_string(),
+            "k@1 + v2@2 + v@0",
+            "inner projected body should rebase the outer-remapped `v`@1 back \
+             onto capture slot 0, with shadowed `k` and `v2` as own params"
+        );
+        assert_eq!(
+            reconstructed_inner.body().as_ref().to_string(),
+            "k@5 + v2@6 + v@1",
+            "inner original body should keep shadowed `k`/`v2` planner indexes \
+             and the outer-rebased capture of `v`"
         );
     }
 
