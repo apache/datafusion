@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     ArrowNumericType, ArrowPrimitiveType, BooleanArray, ListArray, PrimitiveArray,
-    PrimitiveBuilder, downcast_integer,
+    PrimitiveBuilder,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -240,21 +240,22 @@ impl AggregateUDFImpl for PercentileCont {
                 }
             };
         }
-        macro_rules! integer_helper {
-            ($t:ty, $dt:expr) => {
-                helper!($t, IntegerInterpolator, $dt)
-            };
-        }
-
-        downcast_integer! {
-            input_dt => (integer_helper, input_dt),
+        match input_dt {
             DataType::Float16 => helper!(Float16Type, FloatInterpolator, input_dt),
             DataType::Float32 => helper!(Float32Type, FloatInterpolator, input_dt),
             DataType::Float64 => helper!(Float64Type, FloatInterpolator, input_dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, DecimalInterpolator, input_dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, DecimalInterpolator, input_dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, DecimalInterpolator, input_dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, DecimalInterpolator, input_dt),
+            DataType::Decimal32(_, _) => {
+                helper!(Decimal32Type, DecimalInterpolator, input_dt)
+            }
+            DataType::Decimal64(_, _) => {
+                helper!(Decimal64Type, DecimalInterpolator, input_dt)
+            }
+            DataType::Decimal128(_, _) => {
+                helper!(Decimal128Type, DecimalInterpolator, input_dt)
+            }
+            DataType::Decimal256(_, _) => {
+                helper!(Decimal256Type, DecimalInterpolator, input_dt)
+            }
             dt => internal_err!("Unsupported datatype for {} with {}", args.name, dt),
         }
     }
@@ -280,21 +281,22 @@ impl AggregateUDFImpl for PercentileCont {
                 )))
             };
         }
-        macro_rules! integer_helper {
-            ($t:ty, $dt:expr) => {
-                helper!($t, IntegerInterpolator, $dt)
-            };
-        }
-
-        downcast_integer! {
-            input_dt => (integer_helper, input_dt),
+        match input_dt {
             DataType::Float16 => helper!(Float16Type, FloatInterpolator, input_dt),
             DataType::Float32 => helper!(Float32Type, FloatInterpolator, input_dt),
             DataType::Float64 => helper!(Float64Type, FloatInterpolator, input_dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, DecimalInterpolator, input_dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, DecimalInterpolator, input_dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, DecimalInterpolator, input_dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, DecimalInterpolator, input_dt),
+            DataType::Decimal32(_, _) => {
+                helper!(Decimal32Type, DecimalInterpolator, input_dt)
+            }
+            DataType::Decimal64(_, _) => {
+                helper!(Decimal64Type, DecimalInterpolator, input_dt)
+            }
+            DataType::Decimal128(_, _) => {
+                helper!(Decimal128Type, DecimalInterpolator, input_dt)
+            }
+            DataType::Decimal256(_, _) => {
+                helper!(Decimal256Type, DecimalInterpolator, input_dt)
+            }
             dt => internal_err!("Unsupported datatype for {} with {}", args.name, dt),
         }
     }
@@ -926,43 +928,6 @@ where
 }
 
 #[derive(Debug)]
-struct IntegerInterpolator;
-
-/// Precision multiplier for integer linear interpolation.
-///
-/// The arithmetic is performed in `i128` so that it cannot overflow for the
-/// widest supported integer: `(upper - lower)` is at most `u64::MAX` and
-/// multiplying that by the precision stays well inside `i128`.
-const INTEGER_INTERPOLATION_PRECISION: i128 = 1_000_000;
-
-impl<T> PercentileInterpolator<T> for IntegerInterpolator
-where
-    T: ArrowNumericType,
-    T::Native: AsPrimitive<i128>,
-    i128: AsPrimitive<T::Native>,
-{
-    fn interpolate(
-        lower: T::Native,
-        upper: T::Native,
-        fraction: f64,
-    ) -> Result<T::Native> {
-        debug_assert!((0.0..=1.0).contains(&fraction));
-
-        let lower_i: i128 = lower.as_();
-        let upper_i: i128 = upper.as_();
-        debug_assert!(lower_i <= upper_i);
-
-        // `lower + (upper - lower) * fraction`, rounding down.
-        let num = (fraction * INTEGER_INTERPOLATION_PRECISION as f64) as i128;
-        let interpolated =
-            lower_i + (upper_i - lower_i) * num / INTEGER_INTERPOLATION_PRECISION;
-
-        // The result lies between `lower` and `upper`, so it fits in `T::Native`.
-        Ok(interpolated.as_())
-    }
-}
-
-#[derive(Debug)]
 struct DecimalInterpolator;
 
 /// Precision multiplier for decimal linear interpolation calculations.
@@ -1111,9 +1076,7 @@ fn calculate_percentile<T: ArrowPrimitiveType, I: PercentileInterpolator<T>>(
 mod tests {
     use super::*;
     use arrow::array::Float64Array;
-    use arrow::datatypes::{
-        Decimal64Type, Float16Type, Float64Type, Int64Type, UInt32Type,
-    };
+    use arrow::datatypes::{Decimal64Type, Float16Type, Float64Type};
     use half::f16;
 
     #[test]
@@ -1244,33 +1207,5 @@ mod tests {
             result, 30000i64,
             "100th percentile should be maximum value 300.00"
         );
-    }
-
-    #[test]
-    fn percentile_cont_integer() {
-        // Cannot be tested with SLT since the integer coercion to float,
-        // but can affect dataframe use (e.g. `test_oom`)
-        let mut values = vec![1u32, 2, 3, 4];
-        let result =
-            calculate_percentile::<UInt32Type, IntegerInterpolator>(&mut values, 0.5)
-                .expect("non-empty input")
-                .expect("non-empty result");
-        assert_eq!(result, 2);
-
-        // Interpolation rounds down rather than towards zero
-        let mut values = vec![-4i64, -3, -2, -1];
-        let result =
-            calculate_percentile::<Int64Type, IntegerInterpolator>(&mut values, 0.5)
-                .expect("non-empty input")
-                .expect("non-empty result");
-        assert_eq!(result, -3);
-
-        // No overflows
-        let mut values = vec![i64::MIN, i64::MAX];
-        let result =
-            calculate_percentile::<Int64Type, IntegerInterpolator>(&mut values, 0.5)
-                .expect("non-empty input")
-                .expect("non-empty result");
-        assert_eq!(result, -1);
     }
 }
