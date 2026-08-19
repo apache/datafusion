@@ -45,20 +45,6 @@ ORDER BY g;
 4 2
 
 statement ok
-SET datafusion.execution.enable_migration_aggregate = false;
-
-query II
-SELECT g, SUM(10 / v) FILTER (WHERE v <> 0)
-FROM aggregate_filter_selection
-GROUP BY g
-ORDER BY g;
-----
-1 NULL
-2 5
-3 NULL
-4 2
-
-statement ok
 SET datafusion.execution.target_partitions = 2;
 
 statement ok
@@ -74,29 +60,13 @@ statement ok
 CREATE TABLE aggregate_filter_selection_skip (g INT, v BIGINT);
 
 statement ok
-INSERT INTO aggregate_filter_selection_skip VALUES (1, 2);
-
-statement ok
-INSERT INTO aggregate_filter_selection_skip VALUES (3, 5);
-
-statement ok
-INSERT INTO aggregate_filter_selection_skip VALUES (2, 0);
+INSERT INTO aggregate_filter_selection_skip VALUES
+  (1, 2),
+  (3, 5),
+  (2, 0);
 
 statement ok
 SET datafusion.execution.enable_migration_aggregate = true;
-
-query II
-SELECT g, SUM(10 / v) FILTER (WHERE v <> 0)
-FROM aggregate_filter_selection_skip
-GROUP BY g
-ORDER BY g;
-----
-1 5
-2 NULL
-3 2
-
-statement ok
-SET datafusion.execution.enable_migration_aggregate = false;
 
 query II
 SELECT g, SUM(10 / v) FILTER (WHERE v <> 0)

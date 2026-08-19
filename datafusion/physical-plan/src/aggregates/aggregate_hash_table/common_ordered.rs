@@ -21,7 +21,6 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::AsArray;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -42,8 +41,8 @@ use crate::aggregates::{
 };
 
 use super::common::{
-    AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAccumulatorArgs,
-    EvaluatedAggregateBatch, MaterializeAccumulatorFn,
+    AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
+    MaterializeAccumulatorFn,
 };
 
 #[derive(Clone)]
@@ -246,26 +245,15 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let grouping_set_args = evaluate_group_by(&self.buffer.group_by, batch)?;
         drop(timer);
 
-        let filters = self
-            .buffer
-            .accumulators
-            .iter()
-            .map(|acc| acc.evaluate_filter(batch))
-            .collect::<Result<Vec<_>>>()?;
-
         let timer = self.group_by_metrics.aggregate_arguments_time.timer();
         let accumulator_args = self
             .buffer
             .accumulators
             .iter()
-            .zip(filters)
             .enumerate()
-            .map(|(idx, (acc, filter))| {
-                let selection = filter.as_ref().map(|filter| filter.as_boolean());
-                let arguments = self
-                    .aggregate_argument_metrics
-                    .time(idx, || acc.evaluate_acc_args(batch, selection))?;
-                Ok(EvaluatedAccumulatorArgs { arguments, filter })
+            .map(|(idx, acc)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_acc_args(batch))
             })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
