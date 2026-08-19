@@ -26,6 +26,7 @@
 
 //! DataFusion sqllogictest driver
 
+mod config_matrix;
 mod engines;
 mod test_file;
 
@@ -46,6 +47,10 @@ mod filters;
 mod test_context;
 mod util;
 
+pub use config_matrix::{
+    ConfigMatrix, ConfigMatrixCombination, describe_combination,
+    iter_matrix_combinations, parse_config_matrix_from_file,
+};
 pub use filters::*;
 pub use test_context::TestContext;
 pub use test_file::TestFile;

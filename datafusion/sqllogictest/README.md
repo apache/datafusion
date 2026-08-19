@@ -184,6 +184,50 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 ```
 
+## Cookbook: Sweeping config with `configMatrix`
+
+Run the same `.slt` file once per combination of DataFusion config values. Each directive is a comment of the form:
+
+```text
+# configMatrix: <key>=<v1>,<v2>[,...]
+```
+
+Rules:
+
+- Repeat the directive to nest keys — every combination in the cartesian product is executed.
+- Values are trimmed of surrounding whitespace and deduplicated (first occurrence wins). Repeating the same key across directives merges the value lists.
+- Unknown keys and invalid values fail fast with a message naming the file, key, and value.
+- Test failures include `[configMatrix: k=v, ...]` in the "N errors in file …" banner so the offending combination is visible on the first line.
+
+Nested example — 2 units × 2 timezones = 4 runs:
+
+```text
+# configMatrix: datafusion.execution.parquet.coerce_int96=ms,us
+# configMatrix: datafusion.execution.parquet.coerce_int96_tz=UTC,America/New_York
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+# `<slt:ignore>` masks the parts that legitimately vary per combination.
+query TTT
+describe int96_from_spark
+----
+a Timestamp<slt:ignore> YES
+
+query I
+select count(*) from int96_from_spark
+----
+6
+```
+
+Failure output shape:
+
+```text
+External error: 1 errors in file .../parquet_int96_matrix.slt [configMatrix: datafusion.execution.parquet.coerce_int96=ms, datafusion.execution.parquet.coerce_int96_tz=UTC]
+```
+
 # Reference
 
 ## Running tests: Validation Mode
