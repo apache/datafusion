@@ -1789,34 +1789,8 @@ impl ConversionSpecifier {
                 }
             }
         }
-        // Take care of padding
-        let NumericParam::Literal(width) = self.width else {
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-            return Ok(());
-        };
-        if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num.push(' ');
-            }
-            writer.push_str(&full_num);
-        } else if self.zero_pad && value.is_finite() {
-            while prefix.len() + number.len() + suffix.len() < width as usize {
-                prefix.push('0');
-            }
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-        } else {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num = " ".to_owned() + &full_num;
-            }
-            writer.push_str(&full_num);
-        };
 
+        self.write_numeric_parts(writer, prefix, &number, &suffix, value.is_finite());
         Ok(())
     }
 
@@ -2076,35 +2050,7 @@ impl ConversionSpecifier {
             }
         };
 
-        // Handle padding
-        let NumericParam::Literal(width) = self.width else {
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-            return Ok(());
-        };
-
-        if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num.push(' ');
-            }
-            writer.push_str(&full_num);
-        } else if self.zero_pad {
-            while prefix.len() + number.len() + suffix.len() < width as usize {
-                prefix.push('0');
-            }
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-        } else {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num = " ".to_owned() + &full_num;
-            }
-            writer.push_str(&full_num);
-        }
-
+        self.write_numeric_parts(writer, prefix, &number, &suffix, true);
         Ok(())
     }
 
@@ -2266,6 +2212,44 @@ impl ConversionSpecifier {
             TimeFormat::DUpper => Ok(dt.format("%m/%d/%y").to_string()),
             TimeFormat::FUpper => Ok(dt.format("%Y-%m-%d").to_string()),
             TimeFormat::CLower => Ok(dt.format("%a %b %d %H:%M:%S UTC %Y").to_string()),
+        }
+    }
+
+    fn write_numeric_parts(
+        &self,
+        writer: &mut String,
+        mut prefix: String,
+        number: &str,
+        suffix: &str,
+        zero_pad_allowed: bool,
+    ) {
+        // Handle padding
+        let NumericParam::Literal(width) = self.width else {
+            writer.push_str(&prefix);
+            writer.push_str(number);
+            writer.push_str(suffix);
+            return;
+        };
+
+        if self.left_adj {
+            let mut full_num = prefix + number + suffix;
+            while full_num.len() < width as usize {
+                full_num.push(' ');
+            }
+            writer.push_str(&full_num);
+        } else if self.zero_pad && zero_pad_allowed {
+            while prefix.len() + number.len() + suffix.len() < width as usize {
+                prefix.push('0');
+            }
+            writer.push_str(&prefix);
+            writer.push_str(number);
+            writer.push_str(suffix);
+        } else {
+            let mut full_num = prefix + number + suffix;
+            while full_num.len() < width as usize {
+                full_num = " ".to_owned() + &full_num;
+            }
+            writer.push_str(&full_num);
         }
     }
 }
@@ -2936,6 +2920,54 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
             ],
             Ok(Some("     (1,234.50)")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_ignore_zero_padding_for_float_nan() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%010.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NAN))),
+            ],
+            Ok(Some("       NaN")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_ignore_zero_padding_for_float_inf() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%010.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::INFINITY))),
+            ],
+            Ok(Some("  Infinity")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_parentheses_zero_padding_decimal() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(0,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 2, 2)),
+            ],
+            Ok(Some("(000001,234.50)")),
             &str,
             Utf8,
             StringArray

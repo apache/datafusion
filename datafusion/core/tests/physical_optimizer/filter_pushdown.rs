@@ -18,7 +18,7 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::record_batch,
+    array::{RecordBatch, record_batch},
     datatypes::{DataType, Field, Schema, SchemaRef},
     util::pretty::pretty_format_batches,
 };
@@ -55,7 +55,8 @@ use datafusion_physical_expr::{
     utils::conjunction,
 };
 use datafusion_physical_expr::{
-    Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
+    Partitioning, RangePartitioning, ScalarFunctionExpr, SplitPoint,
+    aggregate::AggregateExprBuilder,
 };
 use datafusion_physical_optimizer::{
     PhysicalOptimizerRule, filter_pushdown::FilterPushdown,
@@ -187,9 +188,6 @@ fn test_pushdown_into_scan_with_config_options() {
 // distinction this test exercises is not reachable via SQL.
 #[tokio::test]
 async fn test_static_filter_pushdown_through_hash_join() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Create build side with limited values
     let build_batches = vec![
         record_batch!(
@@ -945,15 +943,73 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
     );
 }
 
+fn hashjoin_pushdown_scans() -> (
+    SchemaRef,
+    Arc<dyn ExecutionPlan>,
+    SchemaRef,
+    Arc<dyn ExecutionPlan>,
+) {
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["aa", "ab"]),
+                ("b", Utf8, ["ba", "bb"]),
+                ("c", Float64, [1.0, 2.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+                ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+                ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    (build_side_schema, build_scan, probe_side_schema, probe_scan)
+}
+
+async fn optimize_and_collect_pushdown_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    config: ConfigOptions,
+) -> (Arc<dyn ExecutionPlan>, Vec<RecordBatch>) {
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let session_ctx =
+        SessionContext::new_with_config(SessionConfig::from(config).with_batch_size(10));
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let task_ctx = session_ctx.state().task_ctx();
+    let batches = collect(Arc::clone(&plan), task_ctx).await.unwrap();
+    (plan, batches)
+}
+
 // Not portable to sqllogictest: this test pins `PartitionMode::Partitioned`
 // by hand-wiring `RepartitionExec(Hash, 12)` on both join sides. A SQL
 // INNER JOIN over small parquet inputs plans as `CollectLeft`, so the
 // per-partition CASE filter this test exercises is not reachable via SQL.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Rough sketch of the MRE we're trying to recreate:
     // COPY (select i as k from generate_series(1, 10000000) as t(i))
     // TO 'test_files/scratch/push_down_filter/t1.parquet'
@@ -994,43 +1050,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // |               |                                                            |
     // +---------------+------------------------------------------------------------+
 
-    // Create build side with limited values
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -1128,20 +1149,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Now check what our filter looks like
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1198,6 +1206,204 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     );
 }
 
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
+    // Rough sketch of the Range-partitioned MRE we're trying to recreate. The
+    // test hand-wires identical Range repartitioning:
+    //
+    // EXPLAIN
+    // SELECT *
+    // FROM build
+    // JOIN probe
+    //   ON build.a = probe.a AND build.b = probe.b;
+    //
+    // +---------------+------------------------------------------------------------+
+    // | plan_type     | plan                                                       |
+    // +---------------+------------------------------------------------------------+
+    // | physical_plan | ┌───────────────────────────┐                              |
+    // |               | │        HashJoinExec       │                              |
+    // |               | │    --------------------   ├──────────────┐               |
+    // |               | │ on: (a = a), (b = b)      │              │               |
+    // |               | └─────────────┬─────────────┘              │               |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │      RepartitionExec      ││      RepartitionExec      │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │ partition_count(in->out): ││ partition_count(in->out): │ |
+    // |               | │           1 -> 2          ││           1 -> 2          │ |
+    // |               | │                           ││                           │ |
+    // |               | │    partitioning_scheme:   ││    partitioning_scheme:   │ |
+    // |               | │ Range([a ASC, b ASC], 2)  ││ Range([a ASC, b ASC], 2)  │ |
+    // |               | │      split: (aa, bb)      ││      split: (aa, bb)      │ |
+    // |               | └─────────────┬─────────────┘└─────────────┬─────────────┘ |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │ DataSourceExec (build)    ││ DataSourceExec (probe)    │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │ rows: (aa,ba), (ab,bb)    ││ rows: (aa,ba) ... (ad,bd) │ |
+    // |               | │                           ││ predicate: DynamicFilter  │ |
+    // |               | │                           ││ range CASE -> filter_0/1  │ |
+    // |               | └───────────────────────────┘└───────────────────────────┘ |
+    // |               |                                                            |
+    // +---------------+------------------------------------------------------------+
+
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
+
+    let split_points = vec![SplitPoint::new(vec![
+        ScalarValue::Utf8(Some("aa".to_string())),
+        ScalarValue::Utf8(Some("bb".to_string())),
+    ])];
+
+    // Build side: DataSource -> RepartitionExec (Range)
+    let build_range_ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new(
+            col("a", &build_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+        PhysicalSortExpr::new(
+            col("b", &build_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+    ])
+    .unwrap();
+    let build_repartition = Arc::new(
+        RepartitionExec::try_new(
+            build_scan,
+            Partitioning::Range(
+                RangePartitioning::try_new(build_range_ordering, split_points.clone())
+                    .unwrap(),
+            ),
+        )
+        .unwrap(),
+    );
+
+    // Probe side: DataSource -> RepartitionExec (Range)
+    let probe_range_ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new(
+            col("a", &probe_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+        PhysicalSortExpr::new(
+            col("b", &probe_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+    ])
+    .unwrap();
+    let probe_repartition = Arc::new(
+        RepartitionExec::try_new(
+            Arc::clone(&probe_scan),
+            Partitioning::Range(
+                RangePartitioning::try_new(probe_range_ordering, split_points).unwrap(),
+            ),
+        )
+        .unwrap(),
+    );
+
+    // Create HashJoinExec with partitioned inputs
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_repartition,
+            probe_repartition,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    // Top-level CoalescePartitionsExec
+    let cp = Arc::new(CoalescePartitionsExec::new(hash_join)) as Arc<dyn ExecutionPlan>;
+    // Add a sort for deterministic output
+    let plan = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &probe_side_schema).unwrap(),
+            SortOptions::new(true, false), // descending, nulls_first
+        )])
+        .unwrap(),
+        cp,
+    )) as Arc<dyn ExecutionPlan>;
+
+    // expect the predicate to be pushed down into the probe side DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   CoalescePartitionsExec
+        -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+        -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   CoalescePartitionsExec
+          -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+          -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    // Actually apply the optimization to the plan and execute to see the filter in action
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.optimizer.preserve_file_partitions = 1;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
+
+    // Now check what our filter looks like
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+    -   CoalescePartitionsExec
+    -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) END ]
+    "
+    );
+
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+
+    // The probe side had 4 rows, but after applying the dynamic filter only 2 rows should remain.
+    // The number of output rows from the probe side scan should stay consistent across executions.
+    // Issue: https://github.com/apache/datafusion/issues/17451
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
+
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    +----+----+-----+----+----+-----+
+    ",
+    );
+}
+
 // Not portable to sqllogictest: this test specifically pins a
 // `RepartitionExec(Hash, 12)` between `HashJoinExec(CollectLeft)` and the
 // probe-side scan to verify the dynamic filter link survives that boundary
@@ -1206,45 +1412,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
 // (push_down_filter_parquet.slt::test_hashjoin_dynamic_filter_pushdown).
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -1326,20 +1495,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Now check what our filter looks like
     insta::assert_snapshot!(
@@ -1378,9 +1534,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
 
 #[test]
 fn test_hashjoin_parent_filter_pushdown_same_column_names() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("build_val", DataType::Utf8, false),
@@ -1447,9 +1600,6 @@ fn test_hashjoin_parent_filter_pushdown_same_column_names() {
 
 #[test]
 fn test_hashjoin_parent_filter_pushdown_mark_join() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let left_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("val", DataType::Utf8, false),
@@ -1517,9 +1667,6 @@ fn test_hashjoin_parent_filter_pushdown_mark_join() {
 /// only rely on the output side to preserve their semantics.
 #[test]
 fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let left_schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Utf8, false),
         Field::new("v", DataType::Utf8, false),
@@ -2088,7 +2235,7 @@ fn test_pushdown_grouping_sets_filter_on_common_column() {
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[(a@0 as a, b@1 as b), (NULL as a, b@1 as b)], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          - AggregateExec: mode=Final, gby=[(a@0 as a, b@1 as b), (NULL as a, b@1 as b)], aggr=[cnt]
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
@@ -2374,7 +2521,7 @@ fn test_pushdown_through_aggregate_grouping_sets_with_reordered_input() {
         -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          - AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt]
           -   ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
@@ -2475,9 +2622,6 @@ fn test_pushdown_with_computed_grouping_key() {
 // on a hand-wired plan, which does trigger the `false` path.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Test scenario where all build-side partitions are empty
     // This validates the code path that sets the filter to `false` when no rows can match
 
@@ -2610,46 +2754,8 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
 // PartitionMode::Partitioned, which SQL never picks for small parquet inputs.
 #[tokio::test]
 async fn test_hashjoin_hash_table_pushdown_partitioned() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
-    // Create build side with limited values
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -2719,24 +2825,11 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     )) as Arc<dyn ExecutionPlan>;
 
     // Apply the optimization with config setting that forces HashTable strategy
-    let session_config = SessionConfig::default()
-        .with_batch_size(10)
-        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
-        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, session_config.options())
-        .unwrap();
-    let session_ctx = SessionContext::new_with_config(session_config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let mut config = ConfigOptions::default();
+    config.optimizer.hash_join_inlist_pushdown_max_size = 1;
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Verify that hash_lookup is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
@@ -2776,45 +2869,8 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
 // IN (SET) invariant is captured in the slt port.
 #[tokio::test]
 async fn test_hashjoin_hash_table_pushdown_collect_left() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -2870,24 +2926,11 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     )) as Arc<dyn ExecutionPlan>;
 
     // Apply the optimization with config setting that forces HashTable strategy
-    let session_config = SessionConfig::default()
-        .with_batch_size(10)
-        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
-        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, session_config.options())
-        .unwrap();
-    let session_ctx = SessionContext::new_with_config(session_config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let mut config = ConfigOptions::default();
+    config.optimizer.hash_join_inlist_pushdown_max_size = 1;
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Verify that hash_lookup is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
@@ -3620,7 +3663,6 @@ fn test_filter_pushdown_through_sort_with_projection() {
 #[test]
 fn post_phase_is_idempotent_on_hash_join() {
     use crate::physical_optimizer::test_utils::{hash_join_exec, parquet_exec, schema};
-    use datafusion_common::JoinType;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
     use datafusion_physical_plan::get_plan_string;

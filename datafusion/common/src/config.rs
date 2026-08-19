@@ -663,6 +663,91 @@ impl Display for ConfigNonZeroUsize {
     }
 }
 
+/// A `usize` configuration value that rejects 0 and 1 when set from strings.
+///
+/// Use this for options whose consumer divides the value in half to size an
+/// internal buffer (e.g. a bounded channel capacity): values below 2 would
+/// round down to a zero-capacity buffer and panic. Invalid values return a
+/// configuration error through [`ConfigField`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigMinTwoUsize(usize);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use [`ConfigMinTwoUsize::try_new`].
+const fn min_two_usize_default(value: usize) -> ConfigMinTwoUsize {
+    if value >= 2 {
+        ConfigMinTwoUsize(value)
+    } else {
+        panic!("value must be at least 2")
+    }
+}
+
+impl ConfigMinTwoUsize {
+    /// Creates a [`ConfigMinTwoUsize`], returning a configuration error if
+    /// `value` is less than 2.
+    pub fn try_new(value: usize) -> Result<Self> {
+        if value >= 2 {
+            Ok(Self(value))
+        } else {
+            _config_err!("value must be at least 2")
+        }
+    }
+
+    /// Returns the wrapped `usize`.
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl From<ConfigMinTwoUsize> for usize {
+    fn from(value: ConfigMinTwoUsize) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigMinTwoUsize {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_new(default_config_transform(s)?)
+    }
+}
+
+impl ConfigField for ConfigMinTwoUsize {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field max_buffered_batches_per_output_file is a scalar ConfigMinTwoUsize and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigMinTwoUsize::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field max_buffered_batches_per_output_file is a scalar ConfigMinTwoUsize and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigMinTwoUsize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -878,8 +963,16 @@ config_namespace! {
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
-        /// memory consumption
-        pub max_buffered_batches_per_output_file: usize, default = 2
+        /// memory consumption.
+        ///
+        /// This budget is split evenly between two independent points in the
+        /// write pipeline (see the demuxer diagram in #7791): how many files
+        /// can be in flight from the demuxer to a writer task, and how many
+        /// RecordBatches are buffered for a single file's writer. Must be at
+        /// least 2 so each half gets at least 1 unit of buffering - 0 or 1
+        /// would leave one side with a zero-capacity channel and panic at
+        /// write time.
+        pub max_buffered_batches_per_output_file: ConfigMinTwoUsize, default = min_two_usize_default(2)
 
         /// Should sub directories be ignored when scanning directories for data
         /// files. Defaults to true (ignores subdirectories), consistent with

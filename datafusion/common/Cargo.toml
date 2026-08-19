@@ -66,6 +66,10 @@ name = "stats_merge"
 
 [[bench]]
 harness = false
+name = "record_batch_memory"
+
+[[bench]]
+harness = false
 name = "split_vec"
 
 [dependencies]

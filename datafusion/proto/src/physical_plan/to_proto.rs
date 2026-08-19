@@ -20,16 +20,8 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
-use datafusion_common::{
-    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
-};
+use datafusion_common::{Result, internal_datafusion_err, internal_err, not_impl_err};
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::{FileRange, PartitionedFile};
-use datafusion_datasource_csv::file_format::CsvSink;
-use datafusion_datasource_json::file_format::JsonSink;
-#[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
@@ -43,7 +35,6 @@ use super::{
     ConverterPlanEncoder, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
     PhysicalProtoConverterExtension, encode_human_display_alias,
 };
-use crate::convert::TryFromProto;
 use crate::protobuf::{
     self, PhysicalSortExprNode, physical_aggregate_expr_node, physical_window_expr_node,
 };
@@ -82,6 +73,7 @@ pub fn serialize_physical_aggr_expr(
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),
                 human_display,
+                is_reversed: aggr_expr.is_reversed(),
             },
         )),
     })
@@ -172,7 +164,7 @@ pub fn serialize_physical_window_expr(
         codec,
         proto_converter,
     )?;
-    let window_frame = protobuf::WindowFrame::try_from_proto(window_frame.as_ref())
+    let window_frame = protobuf::WindowFrame::try_from(window_frame.as_ref())
         .map_err(|e| internal_datafusion_err!("{e}"))?;
 
     Ok(protobuf::PhysicalWindowExprNode {
@@ -365,43 +357,6 @@ pub fn serialize_partitioning(
     )
 }
 
-/// Thin shim over `TryFrom<&PartitionedFile>`, which owns the wire logic.
-impl TryFromProto<&PartitionedFile> for protobuf::PartitionedFile {
-    type Error = DataFusionError;
-
-    fn try_from_proto(pf: &PartitionedFile) -> Result<Self> {
-        pf.try_into()
-    }
-}
-
-/// Thin shim over `TryFrom<&FileRange>`, which owns the wire logic.
-impl TryFromProto<&FileRange> for protobuf::FileRange {
-    type Error = DataFusionError;
-
-    fn try_from_proto(value: &FileRange) -> Result<Self> {
-        value.try_into()
-    }
-}
-
-/// Thin shim over `TryFrom<&PartitionedFile>`, which owns the wire logic.
-///
-/// The slice form cannot be a `TryFrom` impl: the orphan rule only accepts a
-/// type this crate owns, and `&[PartitionedFile]` is not one (`&FileGroup` is,
-/// hence the impl next to the type). Callers inside DataFusion go through
-/// `FileGroup`; this stays for downstream users of the published signature.
-impl TryFromProto<&[PartitionedFile]> for protobuf::FileGroup {
-    type Error = DataFusionError;
-
-    fn try_from_proto(gr: &[PartitionedFile]) -> Result<Self, Self::Error> {
-        Ok(protobuf::FileGroup {
-            files: gr
-                .iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>>>()?,
-        })
-    }
-}
-
 pub fn serialize_file_scan_config(
     conf: &FileScanConfig,
     codec: &dyn PhysicalExtensionCodec,
@@ -443,37 +398,4 @@ pub fn serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
     }
     writer.finish()?;
     Ok(buf)
-}
-
-impl TryFromProto<&JsonSink> for protobuf::JsonSink {
-    type Error = DataFusionError;
-
-    fn try_from_proto(value: &JsonSink) -> Result<Self, Self::Error> {
-        Self::try_from(value)
-    }
-}
-
-impl TryFromProto<&CsvSink> for protobuf::CsvSink {
-    type Error = DataFusionError;
-
-    fn try_from_proto(value: &CsvSink) -> Result<Self, Self::Error> {
-        Self::try_from(value)
-    }
-}
-
-#[cfg(feature = "parquet")]
-impl TryFromProto<&ParquetSink> for protobuf::ParquetSink {
-    type Error = DataFusionError;
-
-    fn try_from_proto(value: &ParquetSink) -> Result<Self, Self::Error> {
-        Self::try_from(value)
-    }
-}
-
-impl TryFromProto<&FileSinkConfig> for protobuf::FileSinkConfig {
-    type Error = DataFusionError;
-
-    fn try_from_proto(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
-        conf.try_into()
-    }
 }

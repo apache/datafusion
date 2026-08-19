@@ -80,9 +80,9 @@ use std::thread::available_parallelism;
 ///
 /// assert_eq!(projected_schema, expected_schema);
 /// ```
-pub fn project_schema(
+pub fn project_schema<T: AsRef<[usize]> + ?Sized>(
     schema: &SchemaRef,
-    projection: Option<&impl AsRef<[usize]>>,
+    projection: Option<&T>,
 ) -> Result<SchemaRef> {
     let schema = match projection {
         Some(columns) => Arc::new(schema.project(columns.as_ref())?),
@@ -1067,7 +1067,7 @@ pub mod datafusion_strsim {
             let mut distance_b = i;
 
             for (j, b_elem) in b.into_iter().enumerate() {
-                let cost = if a_elem == b_elem { 0usize } else { 1usize };
+                let cost = usize::from(a_elem != b_elem);
                 let distance_a = distance_b + cost;
                 distance_b = cache[j];
                 result = min(result + 1, min(distance_a, distance_b + 1));

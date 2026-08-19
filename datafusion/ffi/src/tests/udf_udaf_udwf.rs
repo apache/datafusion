@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
@@ -103,6 +104,13 @@ impl ScalarUDFImpl for TimeZoneUDF {
     ) -> datafusion_common::Result<ColumnarValue> {
         let tz = args.config_options.execution.time_zone.clone();
         Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
+    }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        config.execution.time_zone.as_ref()?;
+        Some(ScalarUDF::from(Self {
+            signature: self.signature.clone(),
+        }))
     }
 }
 
