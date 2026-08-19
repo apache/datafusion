@@ -1445,6 +1445,144 @@ impl<'de> serde::Deserialize<'de> for AnalyzedLogicalPlanType {
         deserializer.deserialize_struct("datafusion.AnalyzedLogicalPlanType", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ArrayMapMembership {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.offset != 0 {
+            len += 1;
+        }
+        if self.num_slots != 0 {
+            len += 1;
+        }
+        if !self.presence.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ArrayMapMembership", len)?;
+        if self.offset != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("offset", ToString::to_string(&self.offset).as_str())?;
+        }
+        if self.num_slots != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("numSlots", ToString::to_string(&self.num_slots).as_str())?;
+        }
+        if !self.presence.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("presence", pbjson::private::base64::encode(&self.presence).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ArrayMapMembership {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "offset",
+            "num_slots",
+            "numSlots",
+            "presence",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Offset,
+            NumSlots,
+            Presence,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "offset" => Ok(GeneratedField::Offset),
+                            "numSlots" | "num_slots" => Ok(GeneratedField::NumSlots),
+                            "presence" => Ok(GeneratedField::Presence),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ArrayMapMembership;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ArrayMapMembership")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ArrayMapMembership, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut offset__ = None;
+                let mut num_slots__ = None;
+                let mut presence__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Offset => {
+                            if offset__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("offset"));
+                            }
+                            offset__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NumSlots => {
+                            if num_slots__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("numSlots"));
+                            }
+                            num_slots__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Presence => {
+                            if presence__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("presence"));
+                            }
+                            presence__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ArrayMapMembership {
+                    offset: offset__.unwrap_or_default(),
+                    num_slots: num_slots__.unwrap_or_default(),
+                    presence: presence__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ArrayMapMembership", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ArrowIpcFormat {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -9390,6 +9528,101 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             }
         }
         deserializer.deserialize_struct("datafusion.HashJoinExecNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for HashMapMembership {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.build_hashes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.HashMapMembership", len)?;
+        if !self.build_hashes.is_empty() {
+            struct_ser.serialize_field("buildHashes", &self.build_hashes.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HashMapMembership {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "build_hashes",
+            "buildHashes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            BuildHashes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "buildHashes" | "build_hashes" => Ok(GeneratedField::BuildHashes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HashMapMembership;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.HashMapMembership")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HashMapMembership, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut build_hashes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::BuildHashes => {
+                            if build_hashes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("buildHashes"));
+                            }
+                            build_hashes__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(HashMapMembership {
+                    build_hashes: build_hashes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.HashMapMembership", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for HashRepartition {
@@ -18585,6 +18818,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::SqlSimilarToPattern(v) => {
                     struct_ser.serialize_field("sqlSimilarToPattern", v)?;
                 }
+                physical_expr_node::ExprType::HashTableLookupExpr(v) => {
+                    struct_ser.serialize_field("hashTableLookupExpr", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -18644,6 +18880,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "rangeExpr",
             "sql_similar_to_pattern",
             "sqlSimilarToPattern",
+            "hash_table_lookup_expr",
+            "hashTableLookupExpr",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18675,6 +18913,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             LambdaVariable,
             RangeExpr,
             SqlSimilarToPattern,
+            HashTableLookupExpr,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18723,6 +18962,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "lambdaVariable" | "lambda_variable" => Ok(GeneratedField::LambdaVariable),
                             "rangeExpr" | "range_expr" => Ok(GeneratedField::RangeExpr),
                             "sqlSimilarToPattern" | "sql_similar_to_pattern" => Ok(GeneratedField::SqlSimilarToPattern),
+                            "hashTableLookupExpr" | "hash_table_lookup_expr" => Ok(GeneratedField::HashTableLookupExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18934,6 +19174,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("sqlSimilarToPattern"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::SqlSimilarToPattern)
+;
+                        }
+                        GeneratedField::HashTableLookupExpr => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hashTableLookupExpr"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::HashTableLookupExpr)
 ;
                         }
                     }
@@ -19413,6 +19660,173 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashRepartition {
             }
         }
         deserializer.deserialize_struct("datafusion.PhysicalHashRepartition", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PhysicalHashTableLookupExprNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.on_columns.is_empty() {
+            len += 1;
+        }
+        if self.seed0 != 0 {
+            len += 1;
+        }
+        if !self.description.is_empty() {
+            len += 1;
+        }
+        if self.map.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalHashTableLookupExprNode", len)?;
+        if !self.on_columns.is_empty() {
+            struct_ser.serialize_field("onColumns", &self.on_columns)?;
+        }
+        if self.seed0 != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("seed0", ToString::to_string(&self.seed0).as_str())?;
+        }
+        if !self.description.is_empty() {
+            struct_ser.serialize_field("description", &self.description)?;
+        }
+        if let Some(v) = self.map.as_ref() {
+            match v {
+                physical_hash_table_lookup_expr_node::Map::HashMapMembership(v) => {
+                    struct_ser.serialize_field("hashMapMembership", v)?;
+                }
+                physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(v) => {
+                    struct_ser.serialize_field("arrayMapMembership", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PhysicalHashTableLookupExprNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "on_columns",
+            "onColumns",
+            "seed0",
+            "description",
+            "hash_map_membership",
+            "hashMapMembership",
+            "array_map_membership",
+            "arrayMapMembership",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            OnColumns,
+            Seed0,
+            Description,
+            HashMapMembership,
+            ArrayMapMembership,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "onColumns" | "on_columns" => Ok(GeneratedField::OnColumns),
+                            "seed0" => Ok(GeneratedField::Seed0),
+                            "description" => Ok(GeneratedField::Description),
+                            "hashMapMembership" | "hash_map_membership" => Ok(GeneratedField::HashMapMembership),
+                            "arrayMapMembership" | "array_map_membership" => Ok(GeneratedField::ArrayMapMembership),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PhysicalHashTableLookupExprNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PhysicalHashTableLookupExprNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PhysicalHashTableLookupExprNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut on_columns__ = None;
+                let mut seed0__ = None;
+                let mut description__ = None;
+                let mut map__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::OnColumns => {
+                            if on_columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("onColumns"));
+                            }
+                            on_columns__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Seed0 => {
+                            if seed0__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("seed0"));
+                            }
+                            seed0__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Description => {
+                            if description__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("description"));
+                            }
+                            description__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::HashMapMembership => {
+                            if map__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hashMapMembership"));
+                            }
+                            map__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_hash_table_lookup_expr_node::Map::HashMapMembership)
+;
+                        }
+                        GeneratedField::ArrayMapMembership => {
+                            if map__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("arrayMapMembership"));
+                            }
+                            map__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_hash_table_lookup_expr_node::Map::ArrayMapMembership)
+;
+                        }
+                    }
+                }
+                Ok(PhysicalHashTableLookupExprNode {
+                    on_columns: on_columns__.unwrap_or_default(),
+                    seed0: seed0__.unwrap_or_default(),
+                    description: description__.unwrap_or_default(),
+                    map: map__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PhysicalHashTableLookupExprNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for PhysicalHigherOrderUdfNode {

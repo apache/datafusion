@@ -23,7 +23,6 @@ use arrow::datatypes::Fields;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 use datafusion::logical_expr::Operator;
-use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, PhysicalSortExpr, SqlSimilarToPattern, binary, col, like, lit,
@@ -31,18 +30,15 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RangeExpr;
-use datafusion::physical_plan::{
-    ExecutionPlan, PhysicalExpr, RangePartitioning, SplitPoint,
-};
+use datafusion::physical_plan::{PhysicalExpr, RangePartitioning, SplitPoint};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::Result;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
+    DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
     PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
-use datafusion_proto::protobuf::PhysicalPlanNode;
 use std::sync::Arc;
 use std::vec;
 
@@ -95,23 +91,28 @@ fn roundtrip_like() -> Result<()> {
     roundtrip_test(plan)
 }
 
-/// Test that HashTableLookupExpr serializes to lit(true)
+/// Test that HashTableLookupExpr roundtrips through a full plan.
 ///
-/// HashTableLookupExpr contains a runtime hash table that cannot be serialized.
-/// The serialization code replaces it with lit(true) which is safe because
-/// it's a performance optimization filter, not a correctness requirement.
+/// The build-side map is serialized as a membership-only encoding (distinct
+/// hashes for hash maps, a presence bitmap for array maps) and reconstructed
+/// on deserialization as a map that supports only membership checks.
 #[test]
-fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
-    use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
+fn roundtrip_hash_table_lookup_expr() -> Result<()> {
+    use datafusion::physical_plan::joins::join_hash_map::{
+        JoinHashMapType, JoinHashMapU32,
+    };
     use datafusion::physical_plan::joins::{HashTableLookupExpr, Map};
 
     // Create a simple schema and input plan
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
-    let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
     let on_columns = vec![col("col", &schema)?];
+    // Populate the map so the roundtrip carries a real membership payload
+    let build_hashes: Vec<u64> = vec![100, 200, 300];
+    let mut join_map = JoinHashMapU32::with_capacity(build_hashes.len());
+    join_map.update_from_iter(Box::new(build_hashes.iter().enumerate()), 0);
+    let hash_map = Arc::new(Map::HashMap(Box::new(join_map)));
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
         datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
@@ -121,28 +122,33 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
 
     // Create a filter with the lookup expression
     let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
+    roundtrip_test(filter)
+}
 
-    // Serialize
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
+/// Roundtrip a plan whose HashTableLookupExpr carries the ArrayMap
+/// membership encoding (dense integer keys within a bounded range).
+#[test]
+fn roundtrip_hash_table_lookup_expr_array_map() -> Result<()> {
+    use datafusion::arrow::array::{ArrayRef, Int64Array};
+    use datafusion::physical_plan::joins::{ArrayMap, HashTableLookupExpr, Map};
 
-    let proto: PhysicalPlanNode =
-        PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
-            .expect("serialization should succeed");
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    let input = Arc::new(EmptyExec::new(schema.clone()));
 
-    // Deserialize
-    let result: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), &codec)
-        .expect("deserialization should succeed");
+    // Keys {10, 12, 15} over the range [10, 15], with a duplicate key
+    let build_keys: ArrayRef = Arc::new(Int64Array::from(vec![10i64, 12, 10, 15]));
+    let array_map = ArrayMap::try_new(&build_keys, 10, 15)?;
 
-    // The deserialized plan should have lit(true) instead of HashTableLookupExpr
-    // Verify the filter predicate is a Literal(true)
-    let result_filter = result.downcast_ref::<FilterExec>().unwrap();
-    let predicate = result_filter.predicate();
-    let literal = predicate.downcast_ref::<Literal>().unwrap();
-    assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
+    let on_columns = vec![col("col", &schema)?];
+    let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
+        Arc::new(Map::ArrayMap(array_map)),
+        "test_lookup".to_string(),
+    ));
 
-    Ok(())
+    let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
+    roundtrip_test(filter)
 }
 
 #[test]
