@@ -50,7 +50,8 @@ use datafusion_physical_plan::joins::utils::{
     ColumnIndex, JoinFilter, max_distinct_count,
 };
 use datafusion_physical_plan::joins::{
-    HashJoinExec, HashJoinExecBuilder, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
+    SortMergeJoinExec,
 };
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::projection::{ProjectionExec, all_alias_free_columns};
@@ -262,8 +263,11 @@ struct CostModel<'a> {
     /// Aggregated selectivity per connected relation pair, as
     /// `(rel_a, rel_b, selectivity)` with `rel_a < rel_b`.
     pair_selectivity: Vec<(usize, usize, f64)>,
-    /// Neighbours of each relation. Reducers neighbour nothing: they are applied.
+    /// Neighbours of each relation, over equi-join keys and non-equi filters alike.
+    /// Reducers neighbour nothing: they are applied.
     adjacency: Vec<RelSet>,
+    /// The relations of each connected component of `adjacency`.
+    components: Vec<RelSet>,
     /// Fraction of its filtered side each reducer keeps; `1.0` for non-reducers.
     reducer_selectivity: Vec<f64>,
     /// Selectivity of each non-equi filter, with the relations it needs.
@@ -322,10 +326,38 @@ impl<'a> CostModel<'a> {
             .map(|filter| (filter.required, default_selectivity))
             .collect();
 
+        // A filter links what it references, so a pair joined only by one counts as
+        // connected and its cuts prune like any other.
+        for filter in &graph.filters {
+            for rel in iter_rels(filter.required) {
+                adjacency[rel] |= filter.required & !bit(rel);
+            }
+        }
+
+        let mut components: Vec<RelSet> = vec![];
+        let mut seen: RelSet = 0;
+        for rel in 0..graph.relations.len() {
+            if seen & bit(rel) != 0 {
+                continue;
+            }
+            let mut component = bit(rel);
+            loop {
+                let grown = iter_rels(component)
+                    .fold(component, |mask, rel| mask | adjacency[rel]);
+                if grown == component {
+                    break;
+                }
+                component = grown;
+            }
+            seen |= component;
+            components.push(component);
+        }
+
         Self {
             graph,
             pair_selectivity,
             adjacency,
+            components,
             reducer_selectivity,
             filter_selectivity,
         }
@@ -371,12 +403,18 @@ impl<'a> CostModel<'a> {
                     .then_some(Combine::Reducer { reducer });
             }
         }
-        // Otherwise an inner join: both sides contribute columns and a predicate must
-        // connect them. Cross products are never introduced.
+        // Otherwise both sides must contribute columns, and the operator follows from
+        // the predicates crossing the cut. An unconnected cut is a cross product,
+        // allowed only between whole components: any cut through one is connected, and
+        // a disconnected graph has no other way to be built.
         if left & !reducers == 0 || right & !reducers == 0 {
             return None;
         }
-        self.connected(left, right).then_some(Combine::Inner)
+        let separates_components = self
+            .components
+            .iter()
+            .all(|component| component & left == 0 || component & right == 0);
+        (self.connected(left, right) || separates_components).then_some(Combine::Inner)
     }
 
     /// `C_out`: the sum of the internal nodes' cardinalities. Leaves are excluded as
@@ -480,42 +518,76 @@ enum JoinKind {
 }
 
 /// One join, seen the same way whichever operator implements it.
+///
+/// `kind` and `null_equality` are `None` for operators without equi-join keys,
+/// which express no preference the rebuild must honour.
 struct JoinView<'a> {
-    kind: JoinKind,
+    kind: Option<JoinKind>,
     role: JoinRole,
     left: &'a Arc<dyn ExecutionPlan>,
     right: &'a Arc<dyn ExecutionPlan>,
     on: &'a [(PhysicalExprRef, PhysicalExprRef)],
     filter: Option<&'a JoinFilter>,
-    null_equality: NullEquality,
+    null_equality: Option<NullEquality>,
     projection: Option<&'a [usize]>,
 }
 
 fn join_view(plan: &Arc<dyn ExecutionPlan>) -> Option<JoinView<'_>> {
     if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
-        if join.null_aware || join.fetch().is_some() {
+        if join.null_aware || join.fetch().is_some() || join.on().is_empty() {
             return None;
         }
         return Some(JoinView {
-            kind: JoinKind::Hash,
-            role: join_role(join.join_type(), join.filter().is_some(), join.on())?,
+            kind: Some(JoinKind::Hash),
+            role: join_role(join.join_type(), join.filter().is_some())?,
             left: join.left(),
             right: join.right(),
             on: join.on(),
             filter: join.filter(),
-            null_equality: join.null_equality,
+            null_equality: Some(join.null_equality),
             projection: join.projection.as_deref(),
         });
     }
-    let join = plan.downcast_ref::<SortMergeJoinExec>()?;
+    if let Some(join) = plan.downcast_ref::<SortMergeJoinExec>() {
+        if join.on().is_empty() {
+            return None;
+        }
+        return Some(JoinView {
+            kind: Some(JoinKind::SortMerge),
+            role: join_role(&join.join_type(), join.filter().is_some())?,
+            left: join.left(),
+            right: join.right(),
+            on: join.on(),
+            filter: join.filter().as_ref(),
+            null_equality: Some(join.null_equality()),
+            projection: None,
+        });
+    }
+    if let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() {
+        // A semi or anti variant has no keys to model as a reducer.
+        if *join.join_type() != JoinType::Inner {
+            return None;
+        }
+        return Some(JoinView {
+            kind: None,
+            role: JoinRole::Inner,
+            left: join.left(),
+            right: join.right(),
+            on: &[],
+            filter: join.filter(),
+            null_equality: None,
+            projection: join.projection().as_deref(),
+        });
+    }
+    let join = plan.downcast_ref::<CrossJoinExec>()?;
     Some(JoinView {
-        kind: JoinKind::SortMerge,
-        role: join_role(&join.join_type(), join.filter().is_some(), join.on())?,
+        kind: None,
+        role: JoinRole::Inner,
         left: join.left(),
         right: join.right(),
-        on: join.on(),
-        filter: join.filter().as_ref(),
-        null_equality: join.null_equality(),
+        on: &[],
+        filter: None,
+        null_equality: None,
         projection: None,
     })
 }
@@ -534,14 +606,7 @@ enum JoinRole {
 /// Classifies a join. Outer and mark joins are excluded (not filters on their
 /// inputs, or they add a column), as are `null_aware` anti joins, joins with a
 /// limit, and semi joins whose filter is part of their existential test.
-fn join_role(
-    join_type: &JoinType,
-    has_filter: bool,
-    on: &[(PhysicalExprRef, PhysicalExprRef)],
-) -> Option<JoinRole> {
-    if on.is_empty() {
-        return None;
-    }
+fn join_role(join_type: &JoinType, has_filter: bool) -> Option<JoinRole> {
     let role = match join_type {
         JoinType::Inner => JoinRole::Inner,
         JoinType::LeftSemi => JoinRole::Reducing {
@@ -566,6 +631,14 @@ fn join_role(
         return None;
     }
     Some(role)
+}
+
+/// Whether a graph-wide choice and one join's are compatible.
+fn agree<T: PartialEq>(graph: Option<T>, join: Option<T>) -> bool {
+    match (graph, join) {
+        (Some(graph), Some(join)) => graph == join,
+        _ => true,
+    }
 }
 
 fn as_column(expr: &PhysicalExprRef) -> Option<usize> {
@@ -656,14 +729,11 @@ impl<'a, 's> Extractor<'a, 's> {
         plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<Option<(Vec<ColRef>, RelSet)>> {
         if let Some(view) = join_view(plan)
-            && self
-                .graph
-                .null_equality
-                .is_none_or(|null_equality| null_equality == view.null_equality)
-            && self.graph.kind.is_none_or(|kind| kind == view.kind)
+            && agree(self.graph.null_equality, view.null_equality)
+            && agree(self.graph.kind, view.kind)
         {
-            self.graph.null_equality = Some(view.null_equality);
-            self.graph.kind = Some(view.kind);
+            self.graph.null_equality = self.graph.null_equality.or(view.null_equality);
+            self.graph.kind = self.graph.kind.or(view.kind);
             let visited = match view.role {
                 JoinRole::Inner => self.visit_inner(&view)?,
                 JoinRole::Reducing { anti, output } => {
@@ -926,6 +996,32 @@ impl Rebuilder<'_> {
             }
         };
         let keys = on.len();
+        if keys == 0 {
+            // No keys: a filter still restricts the pair, which is a nested loop join;
+            // without one it is a cross product.
+            let projection = projection_for(required, &natural)?;
+            return match filter {
+                Some(filter) => {
+                    let join = NestedLoopJoinExec::try_new(
+                        left.plan,
+                        right.plan,
+                        Some(filter),
+                        &join_type,
+                        projection.clone(),
+                    )?;
+                    // `projection_for` is `None` only for the identity.
+                    let emitted = match projection {
+                        Some(_) => required.to_vec(),
+                        None => natural,
+                    };
+                    Ok((Arc::new(join), emitted))
+                }
+                // A cross join has no projection of its own.
+                None => {
+                    Ok((Arc::new(CrossJoinExec::new(left.plan, right.plan)), natural))
+                }
+            };
+        }
         match self.graph.kind() {
             JoinKind::Hash => {
                 let join = HashJoinExecBuilder::new(left.plan, right.plan, on, join_type)
@@ -969,10 +1065,6 @@ impl Rebuilder<'_> {
                 keys.push((right, left));
             }
         }
-        if keys.is_empty() {
-            return internal_err!("join enumeration produced a cross product");
-        }
-
         // Filters land at their lowest common ancestor: covered here, by neither input.
         let mask = left_mask | right_mask;
         let filters: Vec<&Filter> = self

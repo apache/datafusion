@@ -36,7 +36,9 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::join_enumeration::JoinEnumeration;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
+use datafusion_physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+};
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 use insta::assert_snapshot;
 
@@ -486,5 +488,56 @@ fn reorders_sort_merge_joins() -> Result<()> {
         StatisticsExec: col_count=1, row_count=Inexact(1000000)
     "
     );
+    Ok(())
+}
+
+#[test]
+fn reorders_around_a_cross_join() -> Result<()> {
+    // Only `types` has a predicate, so `other` can only join by cross product,
+    // which belongs on the small pair rather than under the reducing join.
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(10, &[("o_id", 10)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let crossed: Arc<dyn ExecutionPlan> = Arc::new(CrossJoinExec::new(fact, other));
+    let plan = join(crossed, types, &[("f_type", "t_type")])?;
+
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@1, f_type@1)], projection=[f_id@2, f_type@3, o_id@0, t_type@1]
+      CrossJoinExec
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+      StatisticsExec: col_count=2, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+#[test]
+fn reorders_a_nested_loop_join() -> Result<()> {
+    // The equi join inflates its inputs a hundredfold, so the non-equi predicate is
+    // cheaper applied first, even at the default selectivity a filter gets.
+    let a = scan(1_000, &[("a_k", 10), ("a_t", 1_000)]);
+    let b = scan(1_000, &[("b_k", 10)]);
+    let t = scan(10, &[("t_t", 10)]);
+
+    let joined = join(a, b, &[("a_k", "b_k")])?;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
+        joined,
+        t,
+        Some(greater_than_filter(("a_t", 1), ("t_t", 0))?),
+        &JoinType::Inner,
+        None,
+    )?);
+
+    // Enumeration alone: `JoinSelection` swaps nested loop inputs itself, which
+    // would otherwise look like the reordering under test.
+    let enumerated = JoinEnumeration::new().optimize(plan, &ConfigOptions::new())?;
+    assert_snapshot!(formatted(&enumerated), @r"
+    HashJoinExec: mode=Auto, join_type=Inner, on=[(b_k@0, a_k@0)], projection=[a_k@1, a_t@2, b_k@0, t_t@3]
+      StatisticsExec: col_count=1, row_count=Inexact(1000)
+      NestedLoopJoinExec: join_type=Inner, filter=a_t@1 > t_t@0, projection=[a_k@1, a_t@2, t_t@0]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        StatisticsExec: col_count=2, row_count=Inexact(1000)
+    ");
     Ok(())
 }
