@@ -2106,6 +2106,14 @@ SELECT format_string('[%+,12d]', 1234567::BIGINT);
 ----
 [  +1,234,567]
 
+## Minimum signed integer formats without overflowing its magnitude
+query TT
+SELECT
+  format_string('%d', (-9223372036854775808)::BIGINT),
+  format_string('%(,d', (-9223372036854775808)::BIGINT);
+----
+-9223372036854775808 (9,223,372,036,854,775,808)
+
 ## Signed integer array input uses the same final assembly
 query T rowsort
 SELECT format_string('[%(08d]', value)
