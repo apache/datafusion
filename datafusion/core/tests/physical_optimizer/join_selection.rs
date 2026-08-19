@@ -75,6 +75,16 @@ fn get_thresholds() -> (usize, usize) {
     )
 }
 
+/// The byte size [`small_statistics`] derives from the configured threshold.
+fn small_byte_size() -> usize {
+    get_thresholds().1 / 128
+}
+
+/// The byte size [`big_statistics`] derives from the configured threshold.
+fn big_byte_size() -> usize {
+    get_thresholds().1 * 2
+}
+
 /// Return statistics for small table
 fn small_statistics() -> Statistics {
     let (threshold_num_rows, threshold_byte_size) = get_thresholds();
@@ -258,14 +268,14 @@ async fn test_join_with_swap() {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -382,14 +392,14 @@ async fn test_left_join_no_swap() {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -431,14 +441,14 @@ async fn test_join_with_swap_semi() {
                 .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(8192)
+            Precision::Inexact(small_byte_size())
         );
         assert_eq!(
             StatisticsContext::new()
                 .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(2097152)
+            Precision::Inexact(big_byte_size())
         );
         assert_eq!(original_schema, swapped_join.schema());
     }
@@ -482,14 +492,14 @@ async fn test_join_with_swap_mark() {
                 .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(8192)
+            Precision::Inexact(small_byte_size())
         );
         assert_eq!(
             StatisticsContext::new()
                 .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
                 .unwrap()
                 .total_byte_size,
-            Precision::Inexact(2097152)
+            Precision::Inexact(big_byte_size())
         );
         assert_eq!(original_schema, swapped_join.schema());
     }
@@ -608,14 +618,14 @@ async fn test_join_no_swap() {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -681,14 +691,14 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 
@@ -752,14 +762,14 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
             .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(8192)
+        Precision::Inexact(small_byte_size())
     );
     assert_eq!(
         StatisticsContext::new()
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
-        Precision::Inexact(2097152)
+        Precision::Inexact(big_byte_size())
     );
 }
 

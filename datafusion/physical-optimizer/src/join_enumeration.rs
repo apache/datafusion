@@ -180,6 +180,8 @@ struct Relation {
     plan: Arc<dyn ExecutionPlan>,
     /// Estimated row count, clamped to at least 1.
     rows: f64,
+    /// Estimated bytes per row, when the input reports a size.
+    width: Option<f64>,
     /// Per-column distinct value estimate, clamped to `[1, rows]`.
     ndv: Vec<f64>,
     role: Role,
@@ -213,8 +215,9 @@ struct JoinGraph {
     /// Null handling shared by the subtree's joins. A join that differs becomes a
     /// relation instead.
     null_equality: Option<NullEquality>,
-    /// The original tree's internal nodes, for scoring it against the alternatives.
-    original_nodes: Vec<RelSet>,
+    /// The original tree's internal nodes as `(node, one child)`, children first, so
+    /// the planner's shape can be scored under the same formula as the alternatives.
+    original_nodes: Vec<(RelSet, RelSet)>,
     /// The relations that are reducers rather than ordinary inputs.
     reducers: RelSet,
     /// Which join operator the subtree used, and which the rebuild emits.
@@ -272,7 +275,18 @@ struct CostModel<'a> {
     reducer_selectivity: Vec<f64>,
     /// Selectivity of each non-equi filter, with the relations it needs.
     filter_selectivity: Vec<(RelSet, f64)>,
+    /// The key class of each edge, as a bit position. Joins on the same class can
+    /// reuse each other's hash partitioning.
+    edge_class: Vec<u32>,
+    /// The size a build side must stay under for `JoinSelection` to broadcast it.
+    broadcast_bytes: f64,
+    /// The row count it must stay under when no byte estimate is available.
+    broadcast_rows: f64,
 }
+
+/// A hash partitioning, as the set of key classes it is partitioned on. Zero means
+/// not hash partitioned, which is where every scan starts.
+type PartSet = u32;
 
 impl<'a> CostModel<'a> {
     fn new(graph: &'a JoinGraph, config: &ConfigOptions) -> Self {
@@ -358,6 +372,10 @@ impl<'a> CostModel<'a> {
             pair_selectivity,
             adjacency,
             components,
+            edge_class: key_classes(&graph.edges),
+            broadcast_bytes: config.optimizer.hash_join_single_partition_threshold as f64,
+            broadcast_rows: config.optimizer.hash_join_single_partition_threshold_rows
+                as f64,
             reducer_selectivity,
             filter_selectivity,
         }
@@ -419,33 +437,181 @@ impl<'a> CostModel<'a> {
 
     /// `C_out`: the sum of the internal nodes' cardinalities. Leaves are excluded as
     /// every candidate reads the same relations.
-    fn tree_cost(&self, nodes: &[RelSet]) -> f64 {
-        nodes
-            .iter()
-            .filter(|mask| mask.count_ones() > 1)
-            .map(|mask| self.cardinality(*mask))
-            .sum()
+    /// The key classes joining `left` to `right`, which is what a partitioned join
+    /// would hash both sides on.
+    fn crossing_classes(&self, left: RelSet, right: RelSet) -> PartSet {
+        let mut classes = 0;
+        for (index, edge) in self.graph.edges.iter().enumerate() {
+            let (a, b) = (bit(edge.left.rel), bit(edge.right.rel));
+            if (left & a != 0 && right & b != 0) || (left & b != 0 && right & a != 0) {
+                classes |= 1 << self.edge_class[index];
+            }
+        }
+        classes
+    }
+
+    /// Whether `JoinSelection` will broadcast this side rather than partition it. It
+    /// compares bytes when an estimate exists and rows otherwise, so this mirrors it.
+    fn broadcasts(&self, side: RelSet) -> bool {
+        let mut width = 0.0;
+        for rel in iter_rels(side) {
+            if self.graph.reducer(rel).is_some() {
+                continue;
+            }
+            match self.graph.relations[rel].width {
+                Some(bytes) => width += bytes,
+                None => return self.cardinality(side) < self.broadcast_rows,
+            }
+        }
+        self.cardinality(side) * width < self.broadcast_bytes
+    }
+
+    /// Cost of one join and the partitioning it leaves behind, for each way of
+    /// exchanging its inputs. Collecting a side moves that side; partitioning moves
+    /// whichever sides are not already hashed on the join key -- which is how a shape
+    /// that repartitions the largest relation twice becomes visibly worse than one
+    /// that repartitions it once.
+    fn exchanges(
+        &self,
+        left: RelSet,
+        right: RelSet,
+        left_part: PartSet,
+        right_part: PartSet,
+        collect_only: Option<RelSet>,
+    ) -> Vec<(f64, PartSet, RelSet, PartitionMode)> {
+        let classes = self.crossing_classes(left, right);
+        let mut options = vec![];
+        for (build, probe_part) in [(left, right_part), (right, left_part)] {
+            if collect_only.is_some_and(|only| only != build) {
+                continue;
+            }
+            // With no key there is nothing to hash on, so a side must be collected
+            // whatever its size.
+            if classes == 0 || self.broadcasts(build) {
+                let cost = self.cardinality(build);
+                options.push((cost, probe_part, build, PartitionMode::CollectLeft));
+            }
+        }
+        if classes != 0 {
+            let mut moved = 0.0;
+            if left_part != classes {
+                moved += self.cardinality(left);
+            }
+            if right_part != classes {
+                moved += self.cardinality(right);
+            }
+            let build = collect_only.unwrap_or_else(|| {
+                if self.cardinality(left) <= self.cardinality(right) {
+                    left
+                } else {
+                    right
+                }
+            });
+            options.push((moved, classes, build, PartitionMode::Partitioned));
+        }
+        options
+    }
+
+    /// Cost of the shape the planner produced, scored the way the search scores its
+    /// own candidates, including the exchanges each of its joins would need.
+    fn tree_cost(&self, nodes: &[(RelSet, RelSet)]) -> f64 {
+        let mut parts: HashMap<RelSet, PartSet> = HashMap::new();
+        let mut total = 0.0;
+        for (mask, child) in nodes {
+            if mask.count_ones() < 2 {
+                continue;
+            }
+            let other = mask ^ child;
+            let (child_part, other_part) = (
+                parts.get(child).copied().unwrap_or(0),
+                parts.get(&other).copied().unwrap_or(0),
+            );
+            let collect_only = self.reducer_side(*child, other);
+            let best = self
+                .exchanges(*child, other, child_part, other_part, collect_only)
+                .into_iter()
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            let (exchange, part) =
+                best.map_or((0.0, 0), |(cost, part, _, _)| (cost, part));
+            total += self.cardinality(*mask) + exchange;
+            parts.insert(*mask, part);
+        }
+        total
+    }
+
+    /// The side that must build, when one of them is a reducer.
+    fn reducer_side(&self, left: RelSet, right: RelSet) -> Option<RelSet> {
+        match self.combine(left, right) {
+            Some(Combine::Reducer { reducer }) => Some(bit(reducer)),
+            _ => None,
+        }
     }
 }
 
+/// Groups equi-join predicates that share a column into key classes, so two joins
+/// hashing on the same class can reuse one partitioning. Returns each edge's class as
+/// a bit position; classes beyond the bitmask's width collapse into the last, which
+/// costs only precision.
+fn key_classes(edges: &[Edge]) -> Vec<u32> {
+    let mut ids: Vec<usize> = (0..edges.len()).collect();
+    let shares = |a: &Edge, b: &Edge| {
+        [a.left, a.right]
+            .iter()
+            .any(|col| *col == b.left || *col == b.right)
+    };
+    loop {
+        let mut merged = false;
+        for i in 0..edges.len() {
+            for j in (i + 1)..edges.len() {
+                if ids[i] != ids[j] && shares(&edges[i], &edges[j]) {
+                    let (keep, drop) = (ids[i].min(ids[j]), ids[i].max(ids[j]));
+                    ids.iter_mut()
+                        .filter(|id| **id == drop)
+                        .for_each(|id| *id = keep);
+                    merged = true;
+                }
+            }
+        }
+        if !merged {
+            break;
+        }
+    }
+    let mut compact = ids.clone();
+    compact.sort_unstable();
+    compact.dedup();
+    ids.iter()
+        .map(|id| {
+            let position = compact.iter().position(|c| c == id).unwrap_or(0);
+            position.min(PartSet::BITS as usize - 1) as u32
+        })
+        .collect()
+}
+
+/// The winning join tree: per internal node, which input goes on the left and how the
+/// join exchanges its data.
 struct Solution {
-    splits: HashMap<RelSet, RelSet>,
+    nodes: HashMap<RelSet, (RelSet, PartitionMode)>,
     cost: f64,
 }
 
-/// Exhaustive dynamic programming over connected relation subsets, costing each
-/// once by trying every split, so bushy shapes are considered too. `O(3^n)`.
+/// Exhaustive dynamic programming over connected relation subsets, each paired with
+/// the partitioning its plan leaves behind.
+///
+/// Carrying the partitioning is what lets a later join reuse an earlier one's hash
+/// exchange instead of paying for another, so the search can tell a shape that
+/// repartitions the largest relation once from one that does it twice. Costing order
+/// alone cannot see that difference, since the exchange belongs to the mode.
 fn solve_dp(model: &CostModel) -> Option<Solution> {
     let n = model.graph.relations.len();
     let full: RelSet = model.graph.all();
-    let size = 1usize << n;
 
-    // `INFINITY` marks a subset that cannot be built: disconnected, or holding a
-    // reducer whose columns it does not cover.
-    let mut cost = vec![f64::INFINITY; size];
-    let mut split = vec![0 as RelSet; size];
+    // Per subset, the cheapest plan for each partitioning it can be left in, and the
+    // choice that got there. A scan arrives hash partitioned on nothing.
+    let mut best: Vec<HashMap<PartSet, f64>> = vec![HashMap::new(); 1usize << n];
+    let mut choice: Vec<HashMap<PartSet, (RelSet, RelSet, PartitionMode)>> =
+        vec![HashMap::new(); 1usize << n];
     for rel in 0..n {
-        cost[bit(rel) as usize] = 0.0;
+        best[bit(rel) as usize].insert(0, 0.0);
     }
 
     for mask in 1..=full {
@@ -456,56 +622,63 @@ fn solve_dp(model: &CostModel) -> Option<Solution> {
         // Subsets containing the lowest set bit, so each pair of halves is seen once.
         let lowest = mask & mask.wrapping_neg();
         let mut left = mask;
-        let mut best = f64::INFINITY;
-        let mut best_left = 0;
         while left != 0 {
             left = (left - 1) & mask;
             if left & lowest == 0 {
                 continue;
             }
             let right = mask ^ left;
-            if right == 0 {
+            if right == 0 || model.combine(left, right).is_none() {
                 continue;
             }
-            let (left_cost, right_cost) = (cost[left as usize], cost[right as usize]);
-            if !left_cost.is_finite()
-                || !right_cost.is_finite()
-                || model.combine(left, right).is_none()
-            {
-                continue;
+            let collect_only = model.reducer_side(left, right);
+            for (left_part, left_cost) in best[left as usize].clone() {
+                for (right_part, right_cost) in best[right as usize].clone() {
+                    let below = left_cost + right_cost + cardinality;
+                    for (exchange, part, build, mode) in
+                        model.exchanges(left, right, left_part, right_part, collect_only)
+                    {
+                        let candidate = below + exchange;
+                        let entry = best[mask as usize].entry(part).or_insert(f64::MAX);
+                        if candidate < *entry {
+                            *entry = candidate;
+                            choice[mask as usize].insert(part, (left, build, mode));
+                        }
+                    }
+                }
             }
-            let candidate = left_cost + right_cost + cardinality;
-            if candidate < best {
-                best = candidate;
-                best_left = left;
-            }
-        }
-        if best.is_finite() {
-            cost[mask as usize] = best;
-            split[mask as usize] = best_left;
         }
     }
 
-    if !cost[full as usize].is_finite() {
-        return None;
-    }
+    let (&winning_part, &cost) = best[full as usize]
+        .iter()
+        .min_by(|a, b| a.1.total_cmp(b.1))?;
 
-    let mut splits = HashMap::new();
-    let mut stack = vec![full];
-    while let Some(mask) = stack.pop() {
+    // Walk the winning tree, keeping the left input and mode of each node it uses.
+    let mut nodes = HashMap::new();
+    let mut stack = vec![(full, winning_part)];
+    while let Some((mask, part)) = stack.pop() {
         if mask.count_ones() < 2 {
             continue;
         }
-        let left = split[mask as usize];
-        splits.insert(mask, left);
-        stack.push(left);
-        stack.push(mask ^ left);
+        let Some(&(split, build, mode)) = choice[mask as usize].get(&part) else {
+            continue;
+        };
+        let other = mask ^ split;
+        // The side that builds goes on the left, which is the side `CollectLeft`
+        // gathers and the side a semi or anti join probes from.
+        nodes.insert(mask, (build, mode));
+        for child in [split, other] {
+            let child_part = best[child as usize]
+                .iter()
+                .min_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(part, _)| *part)
+                .unwrap_or(0);
+            stack.push((child, child_part));
+        }
     }
 
-    Some(Solution {
-        splits,
-        cost: cost[full as usize],
-    })
+    Some(Solution { nodes, cost })
 }
 
 /// The join operators the rule can flatten and rebuild.
@@ -744,7 +917,6 @@ impl<'a, 's> Extractor<'a, 's> {
                 return Ok(None);
             };
 
-            self.graph.original_nodes.push(mask);
             // For a semi or anti join the projection selects from the output side alone.
             let columns = match view.projection {
                 Some(projection) => projection.iter().map(|idx| columns[*idx]).collect(),
@@ -838,6 +1010,9 @@ impl<'a, 's> Extractor<'a, 's> {
 
         let mut columns = left;
         columns.extend(right);
+        self.graph
+            .original_nodes
+            .push((left_mask | right_mask, left_mask));
         Ok(Some((columns, left_mask | right_mask)))
     }
 
@@ -885,6 +1060,7 @@ impl<'a, 's> Extractor<'a, 's> {
         let Some(rel) = self.push_relation(reducer_plan, role)? else {
             return Ok(None);
         };
+        self.graph.original_nodes.push((mask | bit(rel), bit(rel)));
         Ok(Some((columns, mask | bit(rel))))
     }
 
@@ -923,6 +1099,10 @@ impl<'a, 's> Extractor<'a, 's> {
         self.graph.relations.push(Relation {
             plan: Arc::clone(plan),
             rows,
+            width: statistics
+                .total_byte_size
+                .get_value()
+                .map(|bytes| *bytes as f64 / rows),
             ndv,
             role,
         });
@@ -954,23 +1134,19 @@ impl Rebuilder<'_> {
             return Ok((plan, columns));
         }
 
-        let Some(split) = self.solution.splits.get(&mask).copied() else {
+        let Some(&(left, mode)) = self.solution.nodes.get(&mask) else {
             return internal_err!("join enumeration produced no split for {mask:b}");
         };
-        let other = mask ^ split;
-        match self.model.combine(split, other) {
+        let right = mask ^ left;
+        match self.model.combine(left, right) {
             None => internal_err!("join enumeration produced an invalid join"),
-            Some(Combine::Reducer { reducer }) => self.reducing(mask, required, reducer),
-            Some(Combine::Inner) => {
-                // Cheaper side on the left; `JoinSelection`'s swap may still revise it.
-                let (left, right) =
-                    if self.model.cardinality(split) <= self.model.cardinality(other) {
-                        (split, other)
-                    } else {
-                        (other, split)
-                    };
-                self.inner(required, left, right)
+            Some(Combine::Reducer { reducer }) => {
+                self.reducing(mask, required, reducer, mode)
             }
+            // The search put the building side on the left and chose the mode along
+            // with the order, so both are emitted as decided rather than left to
+            // `JoinSelection` to pick again.
+            Some(Combine::Inner) => self.inner(required, left, right, mode),
         }
     }
 
@@ -979,11 +1155,15 @@ impl Rebuilder<'_> {
         &self,
         left: Built,
         right: Built,
-        on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
-        join_type: JoinType,
-        filter: Option<JoinFilter>,
+        spec: JoinSpec,
         required: &[ColRef],
     ) -> Result<(Arc<dyn ExecutionPlan>, Vec<ColRef>)> {
+        let JoinSpec {
+            on,
+            join_type,
+            filter,
+            mode,
+        } = spec;
         // A semi or anti join emits one side, and a reducer's own columns are never
         // emitted, so its `Built` carries none.
         let natural = match join_type {
@@ -1027,9 +1207,7 @@ impl Rebuilder<'_> {
                 let join = HashJoinExecBuilder::new(left.plan, right.plan, on, join_type)
                     .with_filter(filter)
                     .with_null_equality(self.graph.null_equality())
-                    // Build side and partition mode are picked by the
-                    // statistical subrule after.
-                    .with_partition_mode(PartitionMode::Auto)
+                    .with_partition_mode(mode)
                     .with_projection(projection_for(required, &natural)?)
                     .build()?;
                 Ok((Arc::new(join), required.to_vec()))
@@ -1054,6 +1232,7 @@ impl Rebuilder<'_> {
         required: &[ColRef],
         left_mask: RelSet,
         right_mask: RelSet,
+        mode: PartitionMode,
     ) -> Result<(Arc<dyn ExecutionPlan>, Vec<ColRef>)> {
         // Each edge crosses exactly one cut, at the lowest node holding both endpoints.
         let mut keys: Vec<(ColRef, ColRef)> = vec![];
@@ -1117,9 +1296,12 @@ impl Rebuilder<'_> {
                 plan: right_plan,
                 columns: right_columns,
             },
-            on,
-            JoinType::Inner,
-            filter,
+            JoinSpec {
+                on,
+                join_type: JoinType::Inner,
+                filter,
+                mode,
+            },
             required,
         )
     }
@@ -1129,6 +1311,7 @@ impl Rebuilder<'_> {
         mask: RelSet,
         required: &[ColRef],
         reducer: usize,
+        mode: PartitionMode,
     ) -> Result<(Arc<dyn ExecutionPlan>, Vec<ColRef>)> {
         let Some(info) = self.graph.reducer(reducer) else {
             return internal_err!("relation {reducer} is not a reducer");
@@ -1180,9 +1363,12 @@ impl Rebuilder<'_> {
                 plan: filtered_plan,
                 columns: filtered_columns,
             },
-            on,
-            join_type,
-            None,
+            JoinSpec {
+                on,
+                join_type,
+                filter: None,
+                mode,
+            },
             required,
         )
     }
@@ -1216,6 +1402,14 @@ fn projection_for(required: &[ColRef], emitted: &[ColRef]) -> Result<Option<Vec<
 struct Built {
     plan: Arc<dyn ExecutionPlan>,
     columns: Vec<ColRef>,
+}
+
+/// One join as the search decided it, including the mode it was costed with.
+struct JoinSpec {
+    on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+    join_type: JoinType,
+    filter: Option<JoinFilter>,
+    mode: PartitionMode,
 }
 
 /// Rebuilds the non-equi filters applied at one join as one conjunction. A

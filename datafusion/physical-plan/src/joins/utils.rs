@@ -466,12 +466,40 @@ pub(crate) fn estimate_join_statistics(
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
+    // Width of one output row, from the sides this join emits. Without it a join
+    // reports no size, and `hash_join_single_partition_threshold` -- a byte threshold
+    // -- falls back to counting rows, blind to how wide they are.
+    let width = |stats: &Statistics| match (
+        stats.total_byte_size.get_value(),
+        stats.num_rows.get_value(),
+    ) {
+        (Some(bytes), Some(rows)) if *rows > 0 => Some(*bytes as f64 / *rows as f64),
+        _ => None,
+    };
+    let output_width = match join_type {
+        JoinType::LeftSemi | JoinType::LeftAnti => width(&left_stats),
+        JoinType::RightSemi | JoinType::RightAnti => width(&right_stats),
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+            width(&left_stats)
+                .zip(width(&right_stats))
+                .map(|(l, r)| l + r)
+        }
+        // A mark join emits one side plus a boolean.
+        JoinType::LeftMark => width(&left_stats).map(|w| w + 1.0),
+        JoinType::RightMark => width(&right_stats).map(|w| w + 1.0),
+    };
+
     let join_stats =
         estimate_join_cardinality(join_type, left_stats, right_stats, on, null_equality);
     let (num_rows, total_byte_size, column_statistics) = match join_stats {
         Some(stats) => (
             Precision::Inexact(stats.num_rows),
-            stats.total_byte_size,
+            match output_width {
+                Some(width) => {
+                    Precision::Inexact((stats.num_rows as f64 * width) as usize)
+                }
+                None => stats.total_byte_size,
+            },
             stats.column_statistics,
         ),
         None => (

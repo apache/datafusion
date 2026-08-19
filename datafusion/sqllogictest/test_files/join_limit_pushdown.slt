@@ -220,11 +220,11 @@ logical_plan
 05)------TableScan: t2 projection=[x]
 06)----TableScan: t3 projection=[p]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(x@0, a@0)], projection=[a@2, x@0, p@1], fetch=2
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(p@0, x@0)], projection=[x@1, p@0]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, x@0)], projection=[a@0, x@1, p@2], fetch=2
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(p@0, x@0)], projection=[x@1, p@0]
 04)----DataSourceExec: partitions=1, partition_sizes=[1]
-05)--DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 SELECT t1.a, t2.x, t3.p 

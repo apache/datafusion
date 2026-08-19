@@ -35,7 +35,12 @@ use datafusion_common::{JoinSide, JoinType, internal_err};
 use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_plan::Distribution;
 use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{
+    ChildrenPropertiesMode, ReplaceChildrenOptions,
+};
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
@@ -172,10 +177,13 @@ impl PhysicalOptimizerRule for JoinSelection {
         let new_plan = plan
             .transform_up(|p| apply_subrules(p, &subrules, config))
             .data()?;
-        new_plan
+        let new_plan = new_plan
             .transform_up(|plan| {
                 statistical_join_selection_subrule(plan, config, registry)
             })
+            .data()?;
+        new_plan
+            .transform_down(|plan| keep_partitioning_needed_above(plan, registry))
             .data()
     }
 
@@ -186,6 +194,159 @@ impl PhysicalOptimizerRule for JoinSelection {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// How far above a join a hash requirement is still attributed to it, enough to reach
+/// through the partial aggregate that a group-by is planned as.
+const PARTITIONING_LOOKAHEAD: usize = 3;
+
+/// Restores a partitioned join that an operator above needs the partitioning of.
+///
+/// Collecting the build side saves the join its exchanges but discards its hash
+/// partitioning, which then has to be rebuilt above: TPC-H q13's group-by falls back to
+/// a shuffle and a two-phase aggregation and loses 20%, more than collecting saved.
+fn keep_partitioning_needed_above(
+    plan: Arc<dyn ExecutionPlan>,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let mut children: Vec<_> = plan.children().into_iter().map(Arc::clone).collect();
+    let mut changed = false;
+    let requirements = plan.input_distribution_requirements();
+    for (idx, required) in requirements.per_child_distributions().enumerate() {
+        #[expect(
+            deprecated,
+            reason = "HashPartitioned is still planned during the KeyPartitioned migration"
+        )]
+        let required_exprs = match required {
+            Distribution::KeyPartitioned(exprs)
+            | Distribution::HashPartitioned(exprs) => exprs,
+            _ => continue,
+        };
+        if let Some(rewritten) =
+            repartition_collected_join(&children[idx], required_exprs, registry)?
+        {
+            children[idx] = rewritten;
+            changed = true;
+        }
+    }
+    if changed {
+        Ok(Transformed::yes(plan.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?))
+    } else {
+        Ok(Transformed::no(plan))
+    }
+}
+
+/// Rebuilds the collected join under `plan` as partitioned when its keys are what
+/// `required_exprs` asks for, looking through the operators that pass a partitioning up.
+fn repartition_collected_join(
+    plan: &Arc<dyn ExecutionPlan>,
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    registry: Option<&StatisticsRegistry>,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let Some(required) = column_names(required_exprs) else {
+        return Ok(None);
+    };
+    let mut node = Arc::clone(plan);
+    for depth in 0..PARTITIONING_LOOKAHEAD {
+        if let Some(join) = node.downcast_ref::<HashJoinExec>() {
+            if *join.partition_mode() != PartitionMode::CollectLeft
+                || join.on().is_empty()
+            {
+                return Ok(None);
+            }
+            // The join's output partitioning is not hash partitioned yet, since its
+            // inputs are still single partitions, so compare against the keys it would
+            // be partitioned on. Naming a column of the other side is possible and only
+            // costs the collect this would have done.
+            let keys: Vec<_> =
+                join.on().iter().map(|(left, _)| Arc::clone(left)).collect();
+            if column_names(&keys).is_none_or(|keys| keys != required) {
+                return Ok(None);
+            }
+            if !worth_partitioning(join, registry)? {
+                return Ok(None);
+            }
+            let partitioned: Arc<dyn ExecutionPlan> = Arc::new(
+                join.builder()
+                    .with_partition_mode(PartitionMode::Partitioned)
+                    .build()?,
+            );
+            return Ok(Some(rebuild_above(plan, &node, partitioned, depth)?));
+        }
+        // Only a single-input operator asking for nothing itself passes a partitioning
+        // up unchanged.
+        let children = node.children();
+        let [child] = children.as_slice() else {
+            return Ok(None);
+        };
+        if !matches!(
+            node.input_distribution_requirements().child_distribution(0),
+            Some(Distribution::UnspecifiedDistribution)
+        ) {
+            return Ok(None);
+        }
+        let child = Arc::clone(child);
+        drop(children);
+        node = child;
+    }
+    Ok(None)
+}
+
+/// Whether partitioning the join moves no more rows than collecting it does.
+///
+/// Both plans move the build side, one to partition it and the other to collect it.
+/// Partitioning then moves the probe side, where collecting instead leaves the shuffle
+/// to the operator above and moves the join's output. Partitioning also aggregates in
+/// one pass rather than two, which settles the tie.
+fn worth_partitioning(
+    join: &HashJoinExec,
+    registry: Option<&StatisticsRegistry>,
+) -> Result<bool> {
+    let rows = |plan: &dyn ExecutionPlan| -> Result<Option<usize>> {
+        Ok(get_stats(plan, registry)?.num_rows.get_value().copied())
+    };
+    let (Some(probe), Some(output)) = (rows(join.right().as_ref())?, rows(join)?) else {
+        return Ok(false);
+    };
+    Ok(output >= probe)
+}
+
+/// The names the expressions partition on, or `None` if any is not a column.
+fn column_names(exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<&str>> {
+    exprs
+        .iter()
+        .map(|expr| expr.downcast_ref::<Column>().map(Column::name))
+        .collect()
+}
+
+/// Puts `replacement` back under the `depth` single-input operators above it.
+fn rebuild_above(
+    top: &Arc<dyn ExecutionPlan>,
+    old: &Arc<dyn ExecutionPlan>,
+    replacement: Arc<dyn ExecutionPlan>,
+    depth: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if depth == 0 {
+        return Ok(replacement);
+    }
+    let mut rebuilt = replacement;
+    let mut chain = vec![];
+    let mut node = Arc::clone(top);
+    while !Arc::ptr_eq(&node, old) {
+        chain.push(Arc::clone(&node));
+        let child = Arc::clone(node.children()[0]);
+        node = child;
+    }
+    for parent in chain.into_iter().rev() {
+        rebuilt = parent.replace_children(
+            vec![rebuilt],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+    }
+    Ok(rebuilt)
 }
 
 /// Tries to create a [`HashJoinExec`] in [`PartitionMode::CollectLeft`] when possible.

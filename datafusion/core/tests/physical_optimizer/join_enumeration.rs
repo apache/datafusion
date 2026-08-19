@@ -533,7 +533,7 @@ fn reorders_a_nested_loop_join() -> Result<()> {
     // would otherwise look like the reordering under test.
     let enumerated = JoinEnumeration::new().optimize(plan, &ConfigOptions::new())?;
     assert_snapshot!(formatted(&enumerated), @r"
-    HashJoinExec: mode=Auto, join_type=Inner, on=[(b_k@0, a_k@0)], projection=[a_k@1, a_t@2, b_k@0, t_t@3]
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b_k@0, a_k@0)], projection=[a_k@1, a_t@2, b_k@0, t_t@3]
       StatisticsExec: col_count=1, row_count=Inexact(1000)
       NestedLoopJoinExec: join_type=Inner, filter=a_t@1 > t_t@0, projection=[a_k@1, a_t@2, t_t@0]
         StatisticsExec: col_count=1, row_count=Inexact(10)
