@@ -170,9 +170,7 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
         }
     }
 
-    if !stack.is_empty() {
-        panic!("unbalanced tags");
-    }
+    assert!(stack.is_empty(), "unbalanced tags");
 
     spans
 }

@@ -34,12 +34,11 @@ use std::sync::Arc;
 fn main() -> Result<()> {
     let args: Vec<String> = args().collect();
 
-    if args.len() != 2 {
-        panic!(
-            "Usage: {} type (one of 'aggregate', 'scalar', 'window')",
-            args[0]
-        );
-    }
+    assert!(
+        args.len() == 2,
+        "Usage: {} type (one of 'aggregate', 'scalar', 'window')",
+        args[0]
+    );
 
     let function_type = args[1].trim().to_lowercase();
     let docs = match function_type.as_str() {
