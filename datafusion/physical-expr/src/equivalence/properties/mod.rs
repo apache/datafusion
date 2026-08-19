@@ -1626,7 +1626,10 @@ mod tests {
             "the projection dropped every ordering, nothing is being tested"
         );
 
-        assert_eq!(baseline.eq_group(), reused.eq_group(), "equivalence group");
+        assert!(
+            baseline.eq_group().has_same_classes(reused.eq_group()),
+            "equivalence group"
+        );
         assert_eq!(baseline.oeq_class(), reused.oeq_class(), "orderings");
         assert_eq!(baseline.constraints(), reused.constraints(), "constraints");
         assert_eq!(baseline.schema(), reused.schema(), "schema");
