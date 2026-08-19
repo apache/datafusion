@@ -2626,6 +2626,7 @@ SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null) ORDER 
 
 # The null-aware anti join must be planned as a CollectLeft HashJoinExec even with
 # prefer_hash_join = false: SortMergeJoinExec is not null-aware and must not be used.
+# This test has no usable size statistics, so JoinSelection keeps LeftAnti.
 query TT
 EXPLAIN SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
 ----
