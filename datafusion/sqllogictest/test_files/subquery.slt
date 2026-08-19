@@ -2626,6 +2626,7 @@ SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null) ORDER 
 
 # The null-aware anti join must be planned as a CollectLeft HashJoinExec even with
 # prefer_hash_join = false: SortMergeJoinExec is not null-aware and must not be used.
+# This test has no usable size statistics, so JoinSelection keeps LeftAnti.
 query TT
 EXPLAIN SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
 ----
@@ -2657,3 +2658,30 @@ DROP TABLE nia_right_no_null;
 
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
+
+# Regression test for #24139: CTE inside a correlated scalar subquery causing a schema error
+statement ok
+CREATE TABLE metrics (host VARCHAR, bytes_sent DOUBLE, ts BIGINT) AS VALUES
+    ('a', 100.0, 1),
+    ('b', 200.0, 2),
+    ('a', 300.0, 3),
+    ('b', 400.0, 4);
+
+query TR
+SELECT m.host, m.bytes_sent
+FROM metrics m
+WHERE m.bytes_sent > (
+    WITH avg_per_host AS (
+        SELECT avg(bytes_sent) AS avg_bytes
+        FROM metrics
+        WHERE host = m.host
+    )
+    SELECT avg_bytes FROM avg_per_host
+)
+ORDER BY m.host;
+----
+a 300
+b 400
+
+statement ok
+DROP TABLE metrics;

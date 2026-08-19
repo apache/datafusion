@@ -583,10 +583,10 @@ impl ListingTable {
         Box::pin(self.scan_with_args_inner(state, args))
     }
 
-    async fn scan_with_args_inner<'a>(
+    async fn scan_with_args_inner(
         &self,
         state: &dyn Session,
-        args: ScanArgs<'a>,
+        args: ScanArgs<'_>,
     ) -> datafusion_common::Result<ScanResult> {
         let projection = args.projection().map(|p| p.to_vec());
         let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();

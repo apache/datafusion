@@ -652,9 +652,7 @@ mod tests {
         // A panic while polling the input must surface as a stream error, not a
         // silent end-of-stream that drops the rest of the partition's output.
         let input = futures::stream::iter([1, 2, 3, 4]).map(|v| {
-            if v == 3 {
-                panic!("boom on 3");
-            }
+            assert!(v != 3, "boom on 3");
             Ok(v)
         });
         let (_, res) = memory_pool_and_reservation();

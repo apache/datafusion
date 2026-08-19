@@ -1914,7 +1914,7 @@ impl LogicalPlan {
                         produce_one_row,
                         schema: _,
                     }) => {
-                        let rows = if *produce_one_row { 1 } else { 0 };
+                        let rows = i32::from(*produce_one_row);
                         write!(f, "EmptyRelation: rows={rows}")
                     }
                     LogicalPlan::RecursiveQuery(RecursiveQuery {

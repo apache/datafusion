@@ -135,6 +135,7 @@ Here are some active projects using DataFusion:
 - [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
 - [Spice.ai] Building blocks for data-driven AI applications
+- [Streamling](https://www.streamling.dev/) Data streaming runtime focused on performance, consistency, and extensibility
 - [Supermetal](https://supermetal.io/) is a change data capture (CDC) platform that synchronizes data between databases, data warehouses, and lakehouses
 - [Synnada] Streaming-first framework for data products
 - [VegaFusion] Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar

@@ -2191,9 +2191,7 @@ mod tests {
             Statistics {
                 num_rows: Precision::Inexact(1000),
                 total_byte_size: Precision::Inexact(4000),
-                column_statistics: vec![ColumnStatistics {
-                    ..Default::default()
-                }],
+                column_statistics: vec![ColumnStatistics::default()],
             },
             schema,
         ));
@@ -2363,15 +2361,9 @@ mod tests {
                         max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
                 ],
             },
             schema,
