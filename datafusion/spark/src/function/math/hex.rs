@@ -18,20 +18,22 @@
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayAccessor, ArrayRef, StringArray, StringBuilder};
-use arrow::buffer::{Buffer, OffsetBuffer};
-use arrow::datatypes::DataType;
-use arrow::{
-    array::{as_dictionary_array, as_largestring_array, as_string_array},
-    datatypes::Int32Type,
+use arrow::array::{
+    Array, ArrayAccessor, ArrayRef, Int64Array, StringViewArray, as_dictionary_array,
+    as_largestring_array, as_string_array, make_view,
 };
+use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
+use arrow::datatypes::{DataType, Int32Type};
+use datafusion_common::cast::as_binary_view_array;
 use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::types::{NativeType, logical_int64, logical_string};
-use datafusion_common::utils::hex::{HexCase, ToHex, encode_bytes_into};
+use datafusion_common::utils::hex::{
+    HexCase, ToHex, encode_bytes, encode_bytes_into, encode_bytes_to_slice,
+};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    DataFusionError,
+    DataFusionError, ScalarValue,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
     exec_datafusion_err, exec_err,
 };
@@ -39,6 +41,7 @@ use datafusion_expr::{
     Coercion, ColumnarValue, EncodingPreservation, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
+
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkHex {
@@ -93,9 +96,9 @@ impl ScalarUDFImpl for SparkHex {
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         Ok(match &arg_types[0] {
             DataType::Dictionary(key_type, _) => {
-                DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8))
+                DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8View))
             }
-            _ => DataType::Utf8,
+            _ => DataType::Utf8View,
         })
     }
 
@@ -111,25 +114,90 @@ impl ScalarUDFImpl for SparkHex {
     }
 }
 
+/// Arrow `StringView` inlines values of at most this many bytes. Hex of at most
+/// 6 input bytes (or 12 hex digits for integers) takes this path and never
+/// touches the data buffer.
+const HEX_INLINE_LEN: usize = 12;
+
+/// Append a `StringView` for `bytes` encoded as hex.
+///
+/// Short encodings (`<= 12` bytes) are inlined in the view. Longer encodings
+/// are written once into `data` and referenced by offset.
 #[inline]
-fn append_hex_bytes(
-    values: &mut Vec<u8>,
+fn push_hex_bytes_view(
+    views: &mut Vec<u128>,
+    data: &mut Vec<u8>,
     bytes: &[u8],
     case: HexCase,
-) -> Result<i32, DataFusionError> {
-    let additional = bytes
+) -> Result<(), DataFusionError> {
+    let hex_len = bytes
         .len()
         .checked_mul(2)
         .ok_or_else(|| exec_datafusion_err!("hex output size overflow"))?;
-    values.try_reserve(additional).map_err(|e| {
-        exec_datafusion_err!("failed to reserve {additional} bytes for hex output: {e}")
+
+    if hex_len <= HEX_INLINE_LEN {
+        let mut tmp = [0u8; HEX_INLINE_LEN];
+        encode_bytes_to_slice(bytes, case, &mut tmp[..hex_len])?;
+        views.push(make_view(&tmp[..hex_len], 0, 0));
+        return Ok(());
+    }
+
+    let offset = data.len();
+    let offset_u32 = u32::try_from(offset)
+        .map_err(|_| exec_datafusion_err!("hex output exceeds u32 offset range"))?;
+    data.try_reserve(hex_len).map_err(|e| {
+        exec_datafusion_err!("failed to reserve {hex_len} bytes for hex output: {e}")
     })?;
-    encode_bytes_into(bytes, case, values);
-    i32::try_from(values.len())
-        .map_err(|_| exec_datafusion_err!("hex output exceeds i32 offset range"))
+    encode_bytes_into(bytes, case, data);
+    views.push(make_view(&data[offset..], 0, offset_u32));
+    Ok(())
 }
 
-/// Generic hex encoding for byte array types
+#[inline]
+fn push_hex_int_view(
+    views: &mut Vec<u128>,
+    data: &mut Vec<u8>,
+    num: i64,
+    hex_buffer: &mut [u8; 16],
+) -> Result<(), DataFusionError> {
+    let hex = num.write_hex(HexCase::Upper, hex_buffer);
+    if hex.len() <= HEX_INLINE_LEN {
+        views.push(make_view(hex, 0, 0));
+        return Ok(());
+    }
+
+    let offset = data.len();
+    let offset_u32 = u32::try_from(offset)
+        .map_err(|_| exec_datafusion_err!("hex output exceeds u32 offset range"))?;
+    data.extend_from_slice(hex);
+    views.push(make_view(hex, 0, offset_u32));
+    Ok(())
+}
+
+fn finish_hex_string_view(
+    views: Vec<u128>,
+    data: Vec<u8>,
+    nulls: Option<NullBuffer>,
+) -> ArrayRef {
+    let buffers = if data.is_empty() {
+        vec![]
+    } else {
+        vec![Buffer::from_vec(data)]
+    };
+    // SAFETY: every view is produced by `make_view` from ASCII hex digits
+    // (valid UTF-8). Inlined views copy those digits into the view itself;
+    // out-of-line views have a prefix/length that matches the slice written
+    // into `buffers[0]` at the recorded offset.
+    unsafe {
+        Arc::new(StringViewArray::new_unchecked(
+            ScalarBuffer::from(views),
+            buffers,
+            nulls,
+        ))
+    }
+}
+
+/// Generic hex encoding for byte array types. Returns a `Utf8View` array.
 fn hex_encode_bytes<'a, A, T>(
     array: &A,
     lowercase: bool,
@@ -146,69 +214,94 @@ where
     let len = array.len();
     let nulls = array.nulls().cloned();
 
-    // Write hex digits directly into one growing value buffer, tracking offsets
-    // ourselves. Each input byte becomes exactly two output bytes, so there is
-    // no per-row `String`/`StringBuilder` copy — the hex digits are written once
-    // into the final buffer.
-    let mut values: Vec<u8> = Vec::with_capacity(len * 64);
-    let mut offsets: Vec<i32> = Vec::with_capacity(len + 1);
-    offsets.push(0);
+    let mut views = Vec::with_capacity(len);
+    // Only encodings longer than the inline limit land here.
+    let mut data = Vec::new();
 
     if let Some(ref nulls) = nulls {
         for i in 0..len {
             if nulls.is_valid(i) {
                 // SAFETY: `i` is in bounds and the validity buffer marks it valid.
                 let bytes = unsafe { array.value_unchecked(i) }.as_ref();
-                offsets.push(append_hex_bytes(&mut values, bytes, case)?);
+                push_hex_bytes_view(&mut views, &mut data, bytes, case)?;
             } else {
-                offsets.push(i32::try_from(values.len()).map_err(|_| {
-                    exec_datafusion_err!("hex output exceeds i32 offset range")
-                })?);
+                views.push(make_view(b"", 0, 0));
             }
         }
     } else {
         for i in 0..len {
             // SAFETY: `i` is in bounds and no null buffer means every value is valid.
             let bytes = unsafe { array.value_unchecked(i) }.as_ref();
-            offsets.push(append_hex_bytes(&mut values, bytes, case)?);
+            push_hex_bytes_view(&mut views, &mut data, bytes, case)?;
         }
     }
 
-    // SAFETY: the value buffer contains only ASCII hex digits (valid UTF-8) and
-    // the offsets are monotonically increasing and end at `values.len()`, so the
-    // array invariants hold. This mirrors the previous `from_utf8_unchecked`
-    // path and avoids a redundant UTF-8 validation pass over the whole buffer.
-    let array = unsafe {
-        StringArray::new_unchecked(
-            OffsetBuffer::new(offsets.into()),
-            Buffer::from_vec(values),
-            nulls,
-        )
-    };
-    Ok(Arc::new(array))
+    Ok(finish_hex_string_view(views, data, nulls))
 }
 
-/// Generic hex encoding for int64 type
-fn hex_encode_int64(
-    iter: impl Iterator<Item = Option<i64>>,
-    len: usize,
-) -> Result<ArrayRef, DataFusionError> {
-    let mut builder = StringBuilder::with_capacity(len, len * 16);
+/// Hex encoding for int64. Returns a `Utf8View` array and reuses the input
+/// null buffer so nulls stay a pointer clone rather than a per-row rebuild.
+fn hex_encode_int64(array: &Int64Array) -> Result<ArrayRef, DataFusionError> {
+    let len = array.len();
+    let nulls = array.nulls().cloned();
+    let mut views = Vec::with_capacity(len);
+    let mut data = Vec::new();
+    let mut hex_buffer = [0u8; 16];
 
-    for v in iter {
-        if let Some(num) = v {
-            let mut temp = [0u8; 16];
-            let slice = num.write_hex(HexCase::Upper, &mut temp);
-            // SAFETY: slice contains only ASCII hex digests, which are valid UTF-8
-            unsafe {
-                builder.append_value(from_utf8_unchecked(slice));
+    if let Some(ref nulls) = nulls {
+        for (i, &num) in array.values().iter().enumerate() {
+            if nulls.is_valid(i) {
+                push_hex_int_view(&mut views, &mut data, num, &mut hex_buffer)?;
+            } else {
+                views.push(make_view(b"", 0, 0));
             }
-        } else {
-            builder.append_null();
+        }
+    } else {
+        for &num in array.values() {
+            push_hex_int_view(&mut views, &mut data, num, &mut hex_buffer)?;
         }
     }
 
-    Ok(Arc::new(builder.finish()))
+    Ok(finish_hex_string_view(views, data, nulls))
+}
+
+fn hex_scalar(
+    scalar: &ScalarValue,
+    lowercase: bool,
+) -> Result<ColumnarValue, DataFusionError> {
+    if scalar.is_null() {
+        return Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)));
+    }
+
+    let case = if lowercase {
+        HexCase::Lower
+    } else {
+        HexCase::Upper
+    };
+
+    let encoded = match scalar {
+        ScalarValue::Int64(Some(n)) => {
+            let mut buf = [0u8; 16];
+            let hex = n.write_hex(HexCase::Upper, &mut buf);
+            // SAFETY: `write_hex` emits only ASCII hex digits.
+            unsafe { from_utf8_unchecked(hex).to_string() }
+        }
+        ScalarValue::Utf8(Some(s))
+        | ScalarValue::LargeUtf8(Some(s))
+        | ScalarValue::Utf8View(Some(s)) => encode_bytes(s.as_bytes(), case),
+        ScalarValue::Binary(Some(b))
+        | ScalarValue::LargeBinary(Some(b))
+        | ScalarValue::BinaryView(Some(b))
+        | ScalarValue::FixedSizeBinary(_, Some(b)) => encode_bytes(b, case),
+        other => {
+            return exec_err!(
+                "hex got an unexpected argument type: {}",
+                other.data_type()
+            );
+        }
+    };
+
+    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(encoded))))
 }
 
 /// Spark-compatible `hex` function
@@ -225,19 +318,14 @@ pub fn compute_hex(
     args: &[ColumnarValue],
     lowercase: bool,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let input = match take_function_args("hex", args)? {
-        [ColumnarValue::Scalar(value)] => ColumnarValue::Array(value.to_array()?),
-        [ColumnarValue::Array(arr)] => ColumnarValue::Array(Arc::clone(arr)),
-    };
+    let [input] = take_function_args("hex", args)?;
 
-    match &input {
+    match input {
+        ColumnarValue::Scalar(scalar) => hex_scalar(scalar, lowercase),
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Int64 => {
                 let array = as_int64_array(array)?;
-                Ok(ColumnarValue::Array(hex_encode_int64(
-                    array.iter(),
-                    array.len(),
-                )?))
+                Ok(ColumnarValue::Array(hex_encode_int64(array)?))
             }
             DataType::Utf8 => {
                 let array = as_string_array(array);
@@ -253,6 +341,10 @@ pub fn compute_hex(
             }
             DataType::Binary => {
                 let array = as_binary_array(array)?;
+                Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
+            }
+            DataType::BinaryView => {
+                let array = as_binary_view_array(array)?;
                 Ok(ColumnarValue::Array(hex_encode_bytes(&array, lowercase)?))
             }
             DataType::LargeBinary => {
@@ -277,7 +369,7 @@ pub fn compute_hex(
                 let encoded_values = match dict_values.data_type() {
                     DataType::Int64 => {
                         let arr = as_int64_array(dict_values)?;
-                        hex_encode_int64(arr.iter(), arr.len())?
+                        hex_encode_int64(arr)?
                     }
                     DataType::Utf8 => {
                         let arr = as_string_array(dict_values);
@@ -293,6 +385,10 @@ pub fn compute_hex(
                     }
                     DataType::Binary => {
                         let arr = as_binary_array(dict_values)?;
+                        hex_encode_bytes(&arr, lowercase)?
+                    }
+                    DataType::BinaryView => {
+                        let arr = as_binary_view_array(dict_values)?;
                         hex_encode_bytes(&arr, lowercase)?
                     }
                     DataType::LargeBinary => {
@@ -316,7 +412,6 @@ pub fn compute_hex(
             }
             _ => exec_err!("hex got an unexpected argument type: {}", array.data_type()),
         },
-        _ => exec_err!("native hex does not support scalar values at this time"),
     }
 }
 
@@ -325,17 +420,25 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+        Array, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryBuilder,
+        Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray,
     };
     use arrow::{
         array::{
             BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder,
-            as_string_array,
         },
         datatypes::{Int32Type, Int64Type},
     };
-    use datafusion_common::cast::as_dictionary_array;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::cast::{as_dictionary_array, as_string_view_array};
     use datafusion_expr::ColumnarValue;
+
+    fn utf8view_dict(
+        keys: Int32Array,
+        values: Vec<Option<&str>>,
+    ) -> DictionaryArray<Int32Type> {
+        DictionaryArray::new(keys, Arc::new(StringViewArray::from(values)))
+    }
 
     #[test]
     fn test_dictionary_hex_utf8() {
@@ -346,12 +449,10 @@ mod test {
         input_builder.append_value("rust");
         let input = input_builder.finish();
 
-        let mut expected_builder = StringDictionaryBuilder::<Int32Type>::new();
-        expected_builder.append_value("6869");
-        expected_builder.append_value("627965");
-        expected_builder.append_null();
-        expected_builder.append_value("72757374");
-        let expected = expected_builder.finish();
+        let expected = utf8view_dict(
+            input.keys().clone(),
+            vec![Some("6869"), Some("627965"), Some("72757374")],
+        );
 
         let columnar_value = ColumnarValue::Array(Arc::new(input));
         let result = super::spark_hex(&[columnar_value]).unwrap();
@@ -375,12 +476,8 @@ mod test {
         input_builder.append_value(3);
         let input = input_builder.finish();
 
-        let mut expected_builder = StringDictionaryBuilder::<Int32Type>::new();
-        expected_builder.append_value("1");
-        expected_builder.append_value("2");
-        expected_builder.append_null();
-        expected_builder.append_value("3");
-        let expected = expected_builder.finish();
+        let expected =
+            utf8view_dict(input.keys().clone(), vec![Some("1"), Some("2"), Some("3")]);
 
         let columnar_value = ColumnarValue::Array(Arc::new(input));
         let result = super::spark_hex(&[columnar_value]).unwrap();
@@ -404,12 +501,10 @@ mod test {
         input_builder.append_value("3");
         let input = input_builder.finish();
 
-        let mut expected_builder = StringDictionaryBuilder::<Int32Type>::new();
-        expected_builder.append_value("31");
-        expected_builder.append_value("6A");
-        expected_builder.append_null();
-        expected_builder.append_value("33");
-        let expected = expected_builder.finish();
+        let expected = utf8view_dict(
+            input.keys().clone(),
+            vec![Some("31"), Some("6A"), Some("33")],
+        );
 
         let columnar_value = ColumnarValue::Array(Arc::new(input));
         let result = super::spark_hex(&[columnar_value]).unwrap();
@@ -439,13 +534,15 @@ mod test {
             (-1, "FFFFFFFFFFFFFFFF"),
         ];
 
-        let arr =
-            super::hex_encode_int64(cases.iter().map(|(n, _)| Some(*n)), cases.len())
-                .unwrap();
-        let arr = as_string_array(&arr);
+        let input =
+            Int64Array::from(cases.iter().map(|(n, _)| Some(*n)).collect::<Vec<_>>());
+        let arr = super::hex_encode_int64(&input).unwrap();
+        let arr = as_string_view_array(&arr).unwrap();
         for (i, (num, expected)) in cases.iter().enumerate() {
             assert_eq!(*expected, arr.value(i), "hex({num})");
         }
+        // Values with more than 12 hex digits go out-of-line; the rest are inlined.
+        assert!(!arr.data_buffers().is_empty());
     }
 
     #[test]
@@ -457,11 +554,17 @@ mod test {
         let input = StringArray::from(vec![Some("hi"), Some("bye"), None, Some("rust")]);
         let input_ref = &input;
         let result = super::hex_encode_bytes(&input_ref, true).unwrap();
-        let result = as_string_array(&result);
+        let result = as_string_view_array(&result).unwrap();
 
-        let expected =
-            StringArray::from(vec![Some("6869"), Some("627965"), None, Some("72757374")]);
+        let expected = StringViewArray::from(vec![
+            Some("6869"),
+            Some("627965"),
+            None,
+            Some("72757374"),
+        ]);
         assert_eq!(result, &expected);
+        // 2–8 hex digits all fit in the StringView inline prefix.
+        assert!(result.data_buffers().is_empty());
     }
 
     #[test]
@@ -477,13 +580,15 @@ mod test {
             ColumnarValue::Array(array) => array,
             _ => panic!("Expected array"),
         };
-        let strings = as_string_array(&array);
+        let strings = as_string_view_array(&array).unwrap();
         let mut expected = String::with_capacity(512);
         for byte in 0u8..=255 {
             use std::fmt::Write;
             write!(expected, "{byte:02X}").unwrap();
         }
         assert_eq!(strings.value(0), expected);
+        // 512 hex digits cannot be inlined.
+        assert!(!strings.data_buffers().is_empty());
     }
 
     #[test]
@@ -499,13 +604,15 @@ mod test {
             ColumnarValue::Array(array) => array,
             _ => panic!("Expected array"),
         };
-        let strings = as_string_array(&array);
+        let strings = as_string_view_array(&array).unwrap();
 
         assert_eq!(strings.nulls(), None);
         assert_eq!(
             strings,
-            &StringArray::from(vec!["", "007F80FF", "44617461467573696F6E"])
+            &StringViewArray::from(vec!["", "007F80FF", "44617461467573696F6E"])
         );
+        // "" and "007F80FF" inline; "44617461467573696F6E" (20 bytes) does not.
+        assert!(!strings.data_buffers().is_empty());
     }
 
     #[test]
@@ -525,15 +632,17 @@ mod test {
             ColumnarValue::Array(array) => array,
             _ => panic!("Expected array"),
         };
-        let strings = as_string_array(&array);
+        let strings = as_string_view_array(&array).unwrap();
         let output_nulls = strings.nulls().unwrap();
 
         assert_eq!(output_nulls, &input_nulls);
         assert!(output_nulls.inner().ptr_eq(input_nulls.inner()));
         assert_eq!(
             strings,
-            &StringArray::from(vec![None, Some("00FF"), Some("686578"), None])
+            &StringViewArray::from(vec![None, Some("00FF"), Some("686578"), None])
         );
+        // All non-null encodings here are ≤ 12 bytes, so nothing is buffered.
+        assert!(strings.data_buffers().is_empty());
     }
 
     #[test]
@@ -547,8 +656,8 @@ mod test {
             _ => panic!("Expected array"),
         };
 
-        let string_array = as_string_array(&result);
-        let expected_array = StringArray::from(vec![
+        let string_array = as_string_view_array(&result).unwrap();
+        let expected_array = StringViewArray::from(vec![
             Some("1".to_string()),
             Some("2".to_string()),
             None,
@@ -556,6 +665,7 @@ mod test {
         ]);
 
         assert_eq!(string_array, &expected_array);
+        assert!(string_array.data_buffers().is_empty());
     }
 
     #[test]
@@ -576,8 +686,7 @@ mod test {
         let result = as_dictionary_array(&result).unwrap();
 
         let keys = Int32Array::from(vec![Some(0), None, Some(1)]);
-        let vals = StringArray::from(vec![Some("20"), None]);
-        let expected = DictionaryArray::new(keys, Arc::new(vals));
+        let expected = utf8view_dict(keys, vec![Some("20"), None]);
 
         assert_eq!(&expected, result);
     }
@@ -597,9 +706,214 @@ mod test {
         let result = as_dictionary_array(&result).unwrap();
 
         let keys = Int32Array::from(vec![Some(0), None, Some(1)]);
-        let vals = StringArray::from(vec![Some("6869"), None]);
-        let expected = DictionaryArray::new(keys, Arc::new(vals));
+        let expected = utf8view_dict(keys, vec![Some("6869"), None]);
 
         assert_eq!(&expected, result);
+    }
+
+    #[test]
+    fn test_spark_hex_scalar() {
+        let result = super::spark_hex(&[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            "Spark SQL".to_string(),
+        )))])
+        .unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
+                assert_eq!(s, "537061726B2053514C");
+            }
+            other => panic!("expected Utf8View scalar, got {other:?}"),
+        }
+
+        let result =
+            super::spark_hex(&[ColumnarValue::Scalar(ScalarValue::Int64(Some(1234)))])
+                .unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
+                assert_eq!(s, "4D2");
+            }
+            other => panic!("expected Utf8View scalar, got {other:?}"),
+        }
+
+        let result =
+            super::spark_hex(&[ColumnarValue::Scalar(ScalarValue::Utf8(None))]).unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {}
+            other => panic!("expected null Utf8View scalar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_return_type_is_utf8view() {
+        let hex = super::SparkHex::new();
+        use arrow::datatypes::DataType;
+        use datafusion_expr::ScalarUDFImpl;
+
+        for input in [
+            DataType::Int64,
+            DataType::Utf8,
+            DataType::Utf8View,
+            DataType::LargeUtf8,
+            DataType::Binary,
+            DataType::BinaryView,
+            DataType::LargeBinary,
+            DataType::FixedSizeBinary(2),
+        ] {
+            assert_eq!(
+                hex.return_type(std::slice::from_ref(&input)).unwrap(),
+                DataType::Utf8View,
+                "hex({input})"
+            );
+        }
+        assert_eq!(
+            hex.return_type(&[DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Binary),
+            )])
+            .unwrap(),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8View),)
+        );
+    }
+
+    #[test]
+    fn test_int64_reuses_input_nulls() {
+        let input = Int64Array::from(vec![Some(1), None, Some(-1), None]);
+        let input_nulls = input.nulls().unwrap().clone();
+        let result = super::hex_encode_int64(&input).unwrap();
+        let strings = as_string_view_array(&result).unwrap();
+        let output_nulls = strings.nulls().unwrap();
+
+        assert_eq!(output_nulls, &input_nulls);
+        assert!(output_nulls.inner().ptr_eq(input_nulls.inner()));
+        assert_eq!(
+            strings,
+            &StringViewArray::from(vec![Some("1"), None, Some("FFFFFFFFFFFFFFFF"), None])
+        );
+        // -1 is 16 hex digits, so it is stored out-of-line.
+        assert!(!strings.data_buffers().is_empty());
+    }
+
+    #[test]
+    fn test_hex_int64_inline_boundary() {
+        // 12 hex digits is the StringView inline limit; 13 digits go out-of-line.
+        let inline_max = 0x0000_FFFF_FFFF_FFFFi64;
+        let outline_min = 0x0001_0000_0000_0000i64;
+
+        let inline_only = Int64Array::from(vec![0, 1, inline_max]);
+        let inline_arr = super::hex_encode_int64(&inline_only).unwrap();
+        let inline_arr = as_string_view_array(&inline_arr).unwrap();
+        assert_eq!(
+            inline_arr,
+            &StringViewArray::from(vec!["0", "1", "FFFFFFFFFFFF"])
+        );
+        assert!(inline_arr.data_buffers().is_empty());
+
+        let mixed = Int64Array::from(vec![inline_max, outline_min]);
+        let mixed_arr = super::hex_encode_int64(&mixed).unwrap();
+        let mixed_arr = as_string_view_array(&mixed_arr).unwrap();
+        assert_eq!(
+            mixed_arr,
+            &StringViewArray::from(vec!["FFFFFFFFFFFF", "1000000000000"])
+        );
+        assert!(!mixed_arr.data_buffers().is_empty());
+    }
+
+    #[test]
+    fn test_spark_hex_utf8view_and_large_utf8() {
+        let view = StringViewArray::from(vec![Some("hi"), None, Some("foobar")]);
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(view))]).unwrap();
+        let array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let strings = as_string_view_array(&array).unwrap();
+        assert_eq!(
+            strings,
+            &StringViewArray::from(vec![Some("6869"), None, Some("666F6F626172")])
+        );
+        assert!(strings.data_buffers().is_empty());
+
+        let large = LargeStringArray::from(vec![Some("hi"), None, Some("foobarb")]);
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(large))]).unwrap();
+        let array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let strings = as_string_view_array(&array).unwrap();
+        assert_eq!(
+            strings,
+            &StringViewArray::from(vec![Some("6869"), None, Some("666F6F62617262")])
+        );
+        // "foobarb" is 14 hex digits, so it is stored out-of-line.
+        assert!(!strings.data_buffers().is_empty());
+    }
+
+    #[test]
+    fn test_spark_hex_binary_view_and_fixed_size() {
+        let view = BinaryViewArray::from(vec![
+            Some(b"hi".as_slice()),
+            None,
+            Some(b"\x00\xff".as_slice()),
+        ]);
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(view))]).unwrap();
+        let array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let strings = as_string_view_array(&array).unwrap();
+        assert_eq!(
+            strings,
+            &StringViewArray::from(vec![Some("6869"), None, Some("00FF")])
+        );
+
+        let mut fixed_builder = FixedSizeBinaryBuilder::new(2);
+        fixed_builder.append_value(b"ab").unwrap();
+        fixed_builder.append_null();
+        fixed_builder.append_value(b"cd").unwrap();
+        let fixed = fixed_builder.finish();
+        let result = super::spark_hex(&[ColumnarValue::Array(Arc::new(fixed))]).unwrap();
+        let array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+        let strings = as_string_view_array(&array).unwrap();
+        assert_eq!(
+            strings,
+            &StringViewArray::from(vec![Some("6162"), None, Some("6364")])
+        );
+    }
+
+    #[test]
+    fn test_spark_hex_scalar_binary_types() {
+        let result = super::spark_hex(&[ColumnarValue::Scalar(ScalarValue::Binary(
+            Some(b"SQL".to_vec()),
+        ))])
+        .unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
+                assert_eq!(s, "53514C");
+            }
+            other => panic!("expected Utf8View scalar, got {other:?}"),
+        }
+
+        let result = super::spark_hex(&[ColumnarValue::Scalar(ScalarValue::BinaryView(
+            Some(b"SQL".to_vec()),
+        ))])
+        .unwrap();
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
+                assert_eq!(s, "53514C");
+            }
+            other => panic!("expected Utf8View scalar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_spark_hex_unexpected_type() {
+        let input = ColumnarValue::Array(Arc::new(Int32Array::from(vec![1, 2, 3])));
+        let err = super::spark_hex(&[input]).unwrap_err();
+        assert!(
+            err.to_string().contains("unexpected argument type"),
+            "unexpected error: {err}"
+        );
     }
 }

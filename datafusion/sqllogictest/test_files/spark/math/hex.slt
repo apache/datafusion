@@ -82,4 +82,70 @@ NULL
 query T
 SELECT arrow_typeof(hex(dict_col)) FROM t_dict_binary LIMIT 1;
 ----
-Dictionary(Int32, Utf8)
+Dictionary(Int32, Utf8View)
+
+query T
+SELECT arrow_typeof(hex(1234::INT));
+----
+Utf8View
+
+query T
+SELECT arrow_typeof(hex('Spark SQL'));
+----
+Utf8View
+
+# 6-byte input → 12 hex digits, the StringView inline limit
+query T
+SELECT hex('foobar');
+----
+666F6F626172
+
+# 7-byte input → 14 hex digits, stored out-of-line
+query T
+SELECT hex('foobarb');
+----
+666F6F62617262
+
+query T
+SELECT hex(a) FROM VALUES
+  (''),
+  ('a'),
+  ('foobar'),
+  ('foobarbazqux'),
+  (NULL)
+  AS t(a);
+----
+(empty)
+61
+666F6F626172
+666F6F62617262617A717578
+NULL
+
+query T
+SELECT hex(arrow_cast('hi', 'BinaryView'));
+----
+6869
+
+query T
+SELECT hex(arrow_cast('hi', 'FixedSizeBinary(2)'));
+----
+6869
+
+query T
+SELECT arrow_typeof(hex(arrow_cast('hi', 'BinaryView')));
+----
+Utf8View
+
+# 12 hex digits (inline) and 13 hex digits (out-of-line) for integers
+query T
+SELECT hex(a) FROM VALUES
+  (0::BIGINT),
+  (281474976710655::BIGINT),
+  (281474976710656::BIGINT),
+  (NULL)
+  AS t(a);
+----
+0
+FFFFFFFFFFFF
+1000000000000
+NULL
