@@ -452,7 +452,13 @@ impl<'a> CostModel<'a> {
 
     /// Whether `JoinSelection` will broadcast this side rather than partition it. It
     /// compares bytes when an estimate exists and rows otherwise, so this mirrors it.
+    ///
+    /// A sort merge join has no mode that collects one side, so it never broadcasts and
+    /// costing an order as if it could would pick orders it cannot carry out.
     fn broadcasts(&self, side: RelSet) -> bool {
+        if self.graph.kind() == JoinKind::SortMerge {
+            return false;
+        }
         let mut width = 0.0;
         for rel in iter_rels(side) {
             if self.graph.reducer(rel).is_some() {
@@ -480,6 +486,15 @@ impl<'a> CostModel<'a> {
         collect_only: Option<RelSet>,
     ) -> Vec<(f64, PartSet, RelSet, PartitionMode)> {
         let classes = self.crossing_classes(left, right);
+        // Without a key every pair has to be examined, and the output cardinality the
+        // rest of the cost is built from does not say that: a filter estimated to keep
+        // few rows still compares all of them. TPC-DS q85 read as cheap and ran 122x
+        // slower once a join became one.
+        let pairs = if classes == 0 {
+            self.cardinality(left) * self.cardinality(right)
+        } else {
+            0.0
+        };
         let mut options = vec![];
         for (build, probe_part) in [(left, right_part), (right, left_part)] {
             if collect_only.is_some_and(|only| only != build) {
@@ -488,7 +503,7 @@ impl<'a> CostModel<'a> {
             // With no key there is nothing to hash on, so a side must be collected
             // whatever its size.
             if classes == 0 || self.broadcasts(build) {
-                let cost = self.cardinality(build);
+                let cost = pairs + self.cardinality(build);
                 options.push((cost, probe_part, build, PartitionMode::CollectLeft));
             }
         }
