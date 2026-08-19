@@ -104,3 +104,13 @@ updates:
     schedule:
       interval: "weekly"
     labels: [auto-dependencies]
+    groups:
+      # all dependency bumps are grouped into a single PR
+      all-uv-deps:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
