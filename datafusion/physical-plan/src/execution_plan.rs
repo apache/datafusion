@@ -159,6 +159,50 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &Arc<PlanProperties>;
 
+    /// Expressions whose tuple values are contiguous within each output
+    /// partition, even when they are not globally sorted.
+    ///
+    /// The returned expressions are the components of one composite key, not
+    /// independent keys or alternative guarantees. For every output partition
+    /// and every key tuple (including tuples containing null), all rows with
+    /// that tuple must occur in at most one contiguous range. For example,
+    /// `(a, 2), (a, 2), (b, 1), (a, 0)` satisfies this property, while
+    /// `(a, 2), (b, 1), (a, 2)` does not.
+    ///
+    /// This property is intended for data sources that concatenate logical
+    /// source partitions. A source can establish it when:
+    ///
+    /// 1. rows within each logical partition are grouped by these expressions
+    ///    (for example, lexicographically sorted), and
+    /// 2. no tuple value occurs in more than one logical partition.
+    ///
+    /// For example, a source that concatenates files sorted by `(key, time)`
+    /// may declare `(key, date_bin(time))` only after verifying that the file
+    /// boundaries do not split a `date_bin` value. Declaring `(key, time)` does
+    /// not automatically establish the property for `(key, date_bin(time))`.
+    ///
+    /// This is not an output-distribution guarantee: the same tuple may occur
+    /// in different output partitions. It cannot by itself satisfy a
+    /// [`Distribution`] requirement.
+    ///
+    /// [`ProjectionExec`] propagates the property only when every expression can
+    /// be projected. Row-transparent execution wrappers such as
+    /// [`crate::coop::CooperativeExec`] also preserve it. Other operators,
+    /// including aggregates, use the default empty value, so the guarantee is
+    /// limited to a data source, optional projections and wrappers, and the
+    /// first consumer.
+    ///
+    /// # Correctness
+    ///
+    /// This is a correctness contract. An invalid declaration may cause a
+    /// streaming aggregate to emit a group before all of its rows are seen.
+    /// Implementations should set this property with
+    /// [`PlanProperties::with_group_contiguous_exprs`] rather than override this
+    /// method, so child-property caching remains correct.
+    fn group_contiguous_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
+        self.properties().group_contiguous_exprs()
+    }
+
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
     ///
@@ -1496,6 +1540,8 @@ pub struct PlanProperties {
     pub scheduling_type: SchedulingType,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
+    /// See [`ExecutionPlan::group_contiguous_exprs`]
+    group_contiguous_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 impl PlanProperties {
@@ -1516,6 +1562,7 @@ impl PlanProperties {
             evaluation_type: EvaluationType::Lazy,
             scheduling_type: SchedulingType::NonCooperative,
             output_ordering,
+            group_contiguous_exprs: vec![],
         }
     }
 
@@ -1567,6 +1614,18 @@ impl PlanProperties {
         self
     }
 
+    /// Overwrite the group-contiguous composite key.
+    ///
+    /// See [`ExecutionPlan::group_contiguous_exprs`] for the correctness
+    /// contract.
+    pub fn with_group_contiguous_exprs(
+        mut self,
+        group_contiguous_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        self.group_contiguous_exprs = group_contiguous_exprs;
+        self
+    }
+
     /// Set constraints having mut reference.
     pub fn set_constraints(&mut self, constraints: Constraints) {
         self.eq_properties.set_constraints(constraints);
@@ -1588,6 +1647,11 @@ impl PlanProperties {
 
     pub fn output_ordering(&self) -> Option<&LexOrdering> {
         self.output_ordering.as_ref()
+    }
+
+    /// Components of the group-contiguous composite key, if any.
+    pub fn group_contiguous_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.group_contiguous_exprs
     }
 
     /// Get schema of the node.
@@ -1981,9 +2045,9 @@ pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executi
     .data()
 }
 
-/// Check if the `plan` children has the same properties as passed `children`.
-/// In this case plan can avoid self properties re-computation when its children
-/// replace is requested.
+/// Check if the `plan` children have the same properties as `children`. In this
+/// case the plan can avoid recomputing its own properties when child replacement
+/// is requested.
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
 pub fn has_same_children_properties(
     plan: &dyn ExecutionPlan,

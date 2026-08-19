@@ -208,12 +208,24 @@ impl ProjectionExec {
         // Construct a map from the input expressions to the output expression of the Projection
         let projection_mapping =
             projector.projection().projection_mapping(&input.schema())?;
+        // Group contiguity describes one composite key. Projecting only
+        // part of that key could incorrectly strengthen the guarantee, so
+        // preserve it only when every expression can be mapped.
+        let group_contiguous_exprs = input
+            .equivalence_properties()
+            .project_expressions(
+                input.group_contiguous_exprs().iter(),
+                &projection_mapping,
+            )
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_default();
         let cache = Self::compute_properties(
             &input,
             &projection_mapping,
             Arc::clone(projector.output_schema()),
             reuse_from,
-        )?;
+        )?
+        .with_group_contiguous_exprs(group_contiguous_exprs);
         Ok(Self {
             projector,
             input,
@@ -1498,6 +1510,7 @@ mod tests {
     use crate::filter_pushdown::PushedDown;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
+    use crate::test::TestMemoryExec;
     use crate::test::exec::StatisticsExec;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1508,6 +1521,65 @@ mod tests {
     use datafusion_physical_expr::expressions::{
         BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, lit,
     };
+
+    #[test]
+    fn group_contiguous_projection_is_all_or_nothing() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("time", DataType::Int32, false),
+        ]));
+        let time_bin = binary(
+            col("time", &schema)?,
+            Operator::Divide,
+            lit(ScalarValue::Int32(Some(10))),
+            &schema,
+        )?;
+        let plain_source = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?;
+        let source = plain_source.clone().try_with_group_contiguous_keys(vec![
+            col("key", &schema)?,
+            Arc::clone(&time_bin),
+        ])?;
+
+        let projection = ProjectionExec::try_new(
+            [
+                ProjectionExpr::new(col("key", &schema)?, "key"),
+                ProjectionExpr::new(time_bin, "time_bin"),
+            ],
+            Arc::new(source.clone()),
+        )?;
+        let projected_schema = projection.schema();
+        let expected = [
+            col("key", &projected_schema)?,
+            col("time_bin", &projected_schema)?,
+        ];
+        assert_eq!(projection.group_contiguous_exprs().len(), expected.len());
+        assert!(
+            projection
+                .group_contiguous_exprs()
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.eq(&expected))
+        );
+
+        // Projecting only one component must not turn contiguity of the
+        // `(key, time_bin)` tuple into the stronger (and generally false)
+        // claim that `key` alone is contiguous.
+        let partial_projection = ProjectionExec::try_new(
+            [ProjectionExpr::new(col("key", &schema)?, "key")],
+            Arc::new(source.clone()),
+        )?;
+        assert!(partial_projection.group_contiguous_exprs().is_empty());
+
+        // Child replacement must notice this metadata and recompute the
+        // projection's cached properties.
+        assert!(!Arc::ptr_eq(source.properties(), plain_source.properties()));
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(projection);
+        let replaced =
+            replace_children_if_necessary(projection, vec![Arc::new(plain_source)])?;
+        assert!(replaced.group_contiguous_exprs().is_empty());
+
+        Ok(())
+    }
 
     #[test]
     fn test_try_new_with_schema_metadata_only_replaces_metadata() -> Result<()> {

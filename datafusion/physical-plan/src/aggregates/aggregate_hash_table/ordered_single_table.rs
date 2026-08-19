@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate table for single aggregation when raw input is ordered.
+//! Aggregate table for single aggregation with incrementally completed groups.
 //!
 //! See comments in [`super::ordered_partial_table`] for details.
 
@@ -59,7 +59,7 @@ impl OrderedAggregateTable<SingleMarker> {
             output_schema,
             state_schema,
             batch_size,
-            &agg.input_order_mode,
+            &agg.group_completion_mode,
             &agg.mode,
             agg.filter_expr.iter().cloned().collect(),
             metrics,

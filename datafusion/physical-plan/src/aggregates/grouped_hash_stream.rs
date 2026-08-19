@@ -504,7 +504,7 @@ impl GroupedHashAggregateStream {
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
-        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
+        let group_ordering = GroupOrdering::try_new_for_mode(&agg.group_completion_mode)?;
         let oom_mode = match (agg.mode, &group_ordering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
             (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
@@ -516,10 +516,10 @@ impl GroupedHashAggregateStream {
             {
                 OutOfMemoryMode::Spill
             }
-            // For `GroupOrdering::Full`, the incoming stream is already sorted. This ensures the
-            // number of incomplete groups can be kept small at all times. If we still hit
-            // an out-of-memory condition, spilling to disk would not be beneficial since the same
-            // situation is likely to reoccur when reading back the spilled data.
+            // For `GroupOrdering::Full`, each group key is contiguous. This keeps the
+            // number of incomplete groups small even if successive keys are not sorted.
+            // If we still hit an out-of-memory condition, spilling to disk would not be
+            // beneficial since the same situation is likely to recur during replay.
             // Therefore, we fall back to simply reporting the error immediately.
             // This mode will also be used if the `DiskManager` is not configured to allow spilling
             // to disk.
