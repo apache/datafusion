@@ -919,6 +919,22 @@ NULL is NOT DISTINCT FROM 1 as d,
 ----
 false true true false true false false true
 
+# `IS [NOT] DISTINCT FROM` binds more tightly than `AND` / `OR` / `NOT`, so the
+# operators after it must not be absorbed into its right operand.
+# https://github.com/apache/datafusion/issues/23692
+#
+# `c` and `d` are chosen so that a wrong grouping gives a different answer:
+# `NOT ((1 IS NOT DISTINCT FROM 2) AND false)` would be true, and
+# `(1 IS NOT DISTINCT FROM 2) AND (true OR (3 IS NOT DISTINCT FROM 3))` false.
+query BBBB
+select
+1 IS NOT DISTINCT FROM 1 AND true as a,
+1 IS NOT DISTINCT FROM 2 OR true as b,
+NOT 1 IS NOT DISTINCT FROM 2 AND false as c,
+1 IS NOT DISTINCT FROM 2 AND true OR 3 IS NOT DISTINCT FROM 3 as d
+----
+true true false true
+
 # select distinct from utf8
 query BBBB
 select
