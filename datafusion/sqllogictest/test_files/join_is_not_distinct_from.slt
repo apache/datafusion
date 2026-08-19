@@ -321,6 +321,106 @@ JOIN t4 ON (t3.id = t4.id) AND (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.va
 2 2 NULL NULL 200 200
 3 3 30 30 NULL NULL
 
+# Multiple `IS NOT DISTINCT FROM` conditions without parentheses.
+# `IS [NOT] DISTINCT FROM` binds more tightly than `AND`, so the right operand of
+# the first condition must not swallow the rest of the ON clause.
+# https://github.com/apache/datafusion/issues/23692
+query IIIIII rowsort
+SELECT t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
+FROM t3
+JOIN t4 ON t3.val1 IS NOT DISTINCT FROM t4.val1 AND t3.val2 IS NOT DISTINCT FROM t4.val2
+----
+1 1 10 10 100 100
+2 2 NULL NULL 200 200
+3 3 30 30 NULL NULL
+
+# The unparenthesized form plans exactly like the parenthesized one
+query TT
+EXPLAIN SELECT t3.id AS t3_id, t4.id AS t4_id
+FROM t3
+JOIN t4 ON t3.val1 IS NOT DISTINCT FROM t4.val1 AND t3.val2 IS NOT DISTINCT FROM t4.val2
+----
+logical_plan
+01)Projection: t3.id AS t3_id, t4.id AS t4_id
+02)--Inner Join: t3.val1 = t4.val1, t3.val2 = t4.val2
+03)----TableScan: t3 projection=[id, val1, val2]
+04)----TableScan: t4 projection=[id, val1, val2]
+physical_plan
+01)ProjectionExec: expr=[id@0 as t3_id, id@1 as t4_id]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val1@1, val1@1), (val2@2, val2@2)], projection=[id@0, id@3], NullsEqual: true
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# LEFT ANTI JOIN, as reported in the issue
+query III rowsort
+SELECT t3.id, t3.val1, t3.val2
+FROM t3
+LEFT ANTI JOIN t4 ON t3.val1 IS NOT DISTINCT FROM t4.val1 AND t3.val2 IS NOT DISTINCT FROM t4.val2
+----
+
+# Three conditions
+query III rowsort
+SELECT t3.id, t3.val1, t3.val2
+FROM t3
+JOIN t4 ON t3.id IS NOT DISTINCT FROM t4.id
+  AND t3.val1 IS NOT DISTINCT FROM t4.val1
+  AND t3.val2 IS NOT DISTINCT FROM t4.val2
+----
+1 10 100
+2 NULL 200
+3 30 NULL
+
+# `IS DISTINCT FROM` is affected the same way
+query IIII rowsort
+SELECT t3.id, t4.id, t3.val1, t4.val1
+FROM t3
+JOIN t4 ON t3.id IS NOT DISTINCT FROM t4.id AND t3.val1 IS DISTINCT FROM t4.val2
+----
+1 1 10 10
+2 2 NULL NULL
+3 3 30 30
+
+# `AND` binds more tightly than `OR`
+query III rowsort
+SELECT t3.id, t3.val1, t3.val2
+FROM t3
+WHERE t3.val1 IS NOT DISTINCT FROM 10 AND t3.val2 IS NOT DISTINCT FROM 100
+   OR t3.val2 IS NOT DISTINCT FROM NULL
+----
+1 10 100
+3 30 NULL
+
+query TT
+EXPLAIN SELECT t3.id
+FROM t3
+WHERE t3.val1 IS NOT DISTINCT FROM 10 AND t3.val2 IS NOT DISTINCT FROM 100
+   OR t3.val2 IS NOT DISTINCT FROM NULL
+----
+logical_plan
+01)Projection: t3.id
+02)--Filter: t3.val1 IS NOT DISTINCT FROM Int32(10) AND t3.val2 IS NOT DISTINCT FROM Int32(100) OR t3.val2 IS NOT DISTINCT FROM Int32(NULL)
+03)----TableScan: t3 projection=[id, val1, val2]
+physical_plan
+01)FilterExec: val1@1 IS NOT DISTINCT FROM 10 AND val2@2 IS NOT DISTINCT FROM 100 OR val2@2 IS NOT DISTINCT FROM NULL, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `NOT` binds more tightly than `AND`, so it only negates the first condition
+query III rowsort
+SELECT t3.id, t3.val1, t3.val2
+FROM t3
+WHERE NOT t3.val1 IS NOT DISTINCT FROM 10 AND t3.val2 IS NOT DISTINCT FROM 200
+----
+2 NULL 200
+
+# Explicit parentheses keep their grouping
+query III rowsort
+SELECT t3.id, t3.val1, t3.val2
+FROM t3
+WHERE t3.val1 IS NOT DISTINCT FROM 10
+  AND (t3.val2 IS NOT DISTINCT FROM 999 OR t3.val2 IS NOT DISTINCT FROM 100)
+----
+1 10 100
+
 statement ok
 drop table t0;
 

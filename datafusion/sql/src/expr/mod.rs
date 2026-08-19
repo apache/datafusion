@@ -25,7 +25,7 @@ use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
     ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, Spanned, StructField,
-    Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    Subscript, TrimWhereField, TypedString, UnaryOperator, Value, ValueWithSpan,
 };
 use sqlparser::ast::{Query, Visit, Visitor};
 
@@ -66,6 +66,157 @@ fn null_value_span(expr: &SQLExpr) -> Option<Option<Span>> {
         Some(Span::try_from_sqlparser_span(*span))
     } else {
         None
+    }
+}
+
+/// Returns `true` if `op` binds less tightly than `IS [NOT] DISTINCT FROM`.
+fn is_and_or(op: &BinaryOperator) -> bool {
+    matches!(op, BinaryOperator::And | BinaryOperator::Or)
+}
+
+/// Builds an `IS [NOT] DISTINCT FROM` SQL AST node.
+fn distinct_from_expr(left: SQLExpr, right: SQLExpr, negated: bool) -> SQLExpr {
+    let (left, right) = (Box::new(left), Box::new(right));
+    if negated {
+        SQLExpr::IsNotDistinctFrom(left, right)
+    } else {
+        SQLExpr::IsDistinctFrom(left, right)
+    }
+}
+
+/// Builds a binary SQL AST node.
+fn binary_op(left: SQLExpr, op: BinaryOperator, right: SQLExpr) -> SQLExpr {
+    SQLExpr::BinaryOp {
+        left: Box::new(left),
+        op,
+        right: Box::new(right),
+    }
+}
+
+/// Returns `true` if `expr` contains an `IS [NOT] DISTINCT FROM` whose right
+/// operand swallowed a following `AND` / `OR`.
+///
+/// See [`fix_distinct_from_precedence`].
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn has_greedy_distinct_from(expr: &SQLExpr) -> bool {
+    match expr {
+        SQLExpr::BinaryOp { left, op, right } if is_and_or(op) => {
+            has_greedy_distinct_from(left) || has_greedy_distinct_from(right)
+        }
+        SQLExpr::IsDistinctFrom(_, right) | SQLExpr::IsNotDistinctFrom(_, right) => {
+            matches!(right.as_ref(), SQLExpr::BinaryOp { op, .. } if is_and_or(op))
+                || has_greedy_distinct_from(right)
+        }
+        SQLExpr::UnaryOp {
+            op: UnaryOperator::Not,
+            expr,
+        } => has_greedy_distinct_from(expr),
+        _ => false,
+    }
+}
+
+/// Restores the expected operator precedence around `IS [NOT] DISTINCT FROM`.
+///
+/// `sqlparser` parses the right operand of `IS [NOT] DISTINCT FROM` as a
+/// complete expression instead of stopping at the first operator that binds
+/// less tightly than `IS`, so a following `AND` / `OR` gets swallowed into the
+/// right operand. For example
+///
+/// ```sql
+/// a IS NOT DISTINCT FROM b AND c IS NOT DISTINCT FROM d
+/// ```
+///
+/// is parsed as
+///
+/// ```sql
+/// a IS NOT DISTINCT FROM (b AND (c IS NOT DISTINCT FROM d))
+/// ```
+///
+/// which contradicts PostgreSQL, where `AND` binds less tightly than `IS`, and
+/// fails to plan because `AND` requires boolean arguments.
+///
+/// This function flattens the `AND` / `OR` spine of `expr`, re-attaching every
+/// `IS [NOT] DISTINCT FROM` (and every `NOT`, which binds more tightly as well)
+/// to just the first operand of its right hand side, and rebuilds the expression
+/// with `AND` binding more tightly than `OR`, yielding
+///
+/// ```sql
+/// (a IS NOT DISTINCT FROM b) AND (c IS NOT DISTINCT FROM d)
+/// ```
+///
+/// The result never contains an `IS [NOT] DISTINCT FROM` whose right operand is
+/// an `AND` / `OR`, so applying this function to its own output is a no-op.
+///
+/// Operands are not descended into; a parenthesised sub-expression is fixed when
+/// the planner recurses into it.
+fn fix_distinct_from_precedence(expr: SQLExpr) -> SQLExpr {
+    let (first, rest) = flatten_and_or(expr);
+    rebuild_and_or(first, rest)
+}
+
+/// Flattens the `AND` / `OR` spine of `expr` into its first operand followed by
+/// the remaining `(operator, operand)` pairs in source order, moving whatever an
+/// `IS [NOT] DISTINCT FROM` greedily absorbed back onto the spine.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn flatten_and_or(expr: SQLExpr) -> (SQLExpr, Vec<(BinaryOperator, SQLExpr)>) {
+    match expr {
+        SQLExpr::BinaryOp { left, op, right } if is_and_or(&op) => {
+            let (first, mut rest) = flatten_and_or(*left);
+            let (right_first, right_rest) = flatten_and_or(*right);
+            rest.push((op, right_first));
+            rest.extend(right_rest);
+            (first, rest)
+        }
+        // Only the first operand of the right hand side belongs to the
+        // comparison, the rest stays on the spine.
+        SQLExpr::IsDistinctFrom(left, right) => {
+            let (right_first, rest) = flatten_and_or(*right);
+            (distinct_from_expr(*left, right_first, false), rest)
+        }
+        SQLExpr::IsNotDistinctFrom(left, right) => {
+            let (right_first, rest) = flatten_and_or(*right);
+            (distinct_from_expr(*left, right_first, true), rest)
+        }
+        // `NOT` binds more tightly than `AND` / `OR` too, so it only negates the
+        // first operand of its operand's spine.
+        SQLExpr::UnaryOp {
+            op: op @ UnaryOperator::Not,
+            expr,
+        } => {
+            let (first, rest) = flatten_and_or(*expr);
+            (
+                SQLExpr::UnaryOp {
+                    op,
+                    expr: Box::new(first),
+                },
+                rest,
+            )
+        }
+        other => (other, vec![]),
+    }
+}
+
+/// Rebuilds the flattened spine produced by [`flatten_and_or`] with `AND`
+/// binding more tightly than `OR`, both left associative.
+fn rebuild_and_or(first: SQLExpr, rest: Vec<(BinaryOperator, SQLExpr)>) -> SQLExpr {
+    // `AND` binds more tightly, so fold consecutive `AND`s into a group and
+    // combine the completed groups with `OR` as they are closed.
+    let mut and_group = first;
+    let mut or_expr: Option<SQLExpr> = None;
+    for (op, right) in rest {
+        if matches!(op, BinaryOperator::Or) {
+            let completed = std::mem::replace(&mut and_group, right);
+            or_expr = Some(match or_expr.take() {
+                Some(previous) => binary_op(previous, op, completed),
+                None => completed,
+            });
+        } else {
+            and_group = binary_op(and_group, op, right);
+        }
+    }
+    match or_expr {
+        Some(previous) => binary_op(previous, BinaryOperator::Or, and_group),
+        None => and_group,
     }
 }
 
@@ -156,6 +307,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        // Work around the greedy parsing of `IS [NOT] DISTINCT FROM`'s right
+        // operand, see `fix_distinct_from_precedence`
+        let sql = if has_greedy_distinct_from(&sql) {
+            fix_distinct_from_precedence(sql)
+        } else {
+            sql
+        };
+
         enum StackEntry {
             SQLExpr(Box<SQLExpr>),
             Operator(BinaryOperator),

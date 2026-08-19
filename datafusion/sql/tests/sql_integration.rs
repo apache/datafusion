@@ -4207,6 +4207,147 @@ fn join_on_complex_condition() {
 }
 
 #[test]
+fn join_on_multiple_is_not_distinct_from_conditions() {
+    // `IS [NOT] DISTINCT FROM` binds more tightly than `AND`, so the right hand
+    // side of each operator must not swallow the following `AND`.
+    // See https://github.com/apache/datafusion/issues/23692
+    let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id IS NOT DISTINCT FROM customer_id AND person.age IS NOT DISTINCT FROM orders.qty";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id, orders.order_id
+      Inner Join:  Filter: person.id IS NOT DISTINCT FROM orders.customer_id AND person.age IS NOT DISTINCT FROM orders.qty
+        TableScan: person
+        TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn join_on_multiple_is_distinct_from_conditions() {
+    let sql = "SELECT id, order_id \
+            FROM person \
+            JOIN orders ON id IS DISTINCT FROM customer_id AND person.age IS DISTINCT FROM orders.qty";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id, orders.order_id
+      Inner Join:  Filter: person.id IS DISTINCT FROM orders.customer_id AND person.age IS DISTINCT FROM orders.qty
+        TableScan: person
+        TableScan: orders
+    "
+    );
+}
+
+#[test]
+fn where_is_not_distinct_from_with_and() {
+    let sql = "SELECT id FROM person WHERE id IS NOT DISTINCT FROM 1 AND age > 30";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.id IS NOT DISTINCT FROM Int64(1) AND person.age > Int64(30)
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn where_is_not_distinct_from_with_or() {
+    let sql = "SELECT id FROM person WHERE id IS NOT DISTINCT FROM 1 OR age > 30";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.id IS NOT DISTINCT FROM Int64(1) OR person.age > Int64(30)
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn where_is_not_distinct_from_chained_conditions() {
+    let sql = "SELECT id FROM person \
+        WHERE id IS NOT DISTINCT FROM 1 AND age IS NOT DISTINCT FROM 2 OR salary IS NOT DISTINCT FROM 3";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.id IS NOT DISTINCT FROM Int64(1) AND person.age IS NOT DISTINCT FROM Int64(2) OR person.salary IS NOT DISTINCT FROM Int64(3)
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn where_is_not_distinct_from_mixed_with_other_predicates() {
+    // `OR` must be lifted above the enclosing `AND`
+    let sql = "SELECT id FROM person \
+        WHERE age > 30 AND id IS NOT DISTINCT FROM 1 OR salary IS NOT DISTINCT FROM 2";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.age > Int64(30) AND person.id IS NOT DISTINCT FROM Int64(1) OR person.salary IS NOT DISTINCT FROM Int64(2)
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn where_is_not_distinct_from_parenthesized_is_unchanged() {
+    let sql = "SELECT id FROM person \
+        WHERE (id IS NOT DISTINCT FROM 1) AND (age IS NOT DISTINCT FROM 2)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.id IS NOT DISTINCT FROM Int64(1) AND person.age IS NOT DISTINCT FROM Int64(2)
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn where_is_not_distinct_from_explicit_grouping_is_preserved() {
+    // Parentheses still win over the implicit precedence
+    let sql = "SELECT id FROM person \
+        WHERE id IS NOT DISTINCT FROM 1 AND (age IS NOT DISTINCT FROM 2 OR salary IS NOT DISTINCT FROM 3)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: person.id IS NOT DISTINCT FROM Int64(1) AND (person.age IS NOT DISTINCT FROM Int64(2) OR person.salary IS NOT DISTINCT FROM Int64(3))
+        TableScan: person
+    "
+    );
+}
+
+#[test]
+fn is_not_distinct_from_binds_tighter_than_and_in_projection() {
+    // The right hand side keeps operators that bind more tightly than `IS`
+    let sql = "SELECT id IS NOT DISTINCT FROM age + 1 AND first_name IS NOT DISTINCT FROM last_name FROM person";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id IS NOT DISTINCT FROM person.age + Int64(1) AND person.first_name IS NOT DISTINCT FROM person.last_name
+      TableScan: person
+    "
+    );
+}
+
+#[test]
 fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";
