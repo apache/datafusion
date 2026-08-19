@@ -69,6 +69,39 @@ mod tests {
     }
 
     #[test]
+    fn test_ffi_execution_plan_byte_metrics_cross_library() -> Result<(), DataFusionError>
+    {
+        let module = get_module()?;
+        let plan = (module.create_exec_with_byte_metrics)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+
+        // metrics() crosses the FFI boundary for real here: `plan` is a
+        // ForeignExecutionPlan backed by a separately loaded copy of this
+        // same cdylib, so this call marshals a MetricsSet containing
+        // MetricValue::BytesCount/BytesGauge through FFI_MetricsSet across
+        // that boundary - not just the in-process From conversions covered
+        // by physical_expr::metrics's roundtrip tests.
+        let metrics = plan.metrics().expect("plan should report metrics");
+        let rendered: Vec<String> = metrics.iter().map(|m| m.to_string()).collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "bytes_scanned{partition=0}=1536.0 B"),
+            "BytesCount should survive the FFI round trip byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "stream_memory_usage{partition=0}=2.0 KB"),
+            "BytesGauge should survive the FFI round trip byte-formatted, got: {rendered:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ffi_execution_plan_expressions_cross_library() -> Result<(), DataFusionError>
     {
         let module = get_module()?;

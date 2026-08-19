@@ -796,6 +796,13 @@ mod tests {
             MetricBuilder::new(&metrics).bytes_gauge("stream_memory_usage", 0);
         stream_memory_usage.add(three_gib);
 
+        // ParquetSink uses the global (non-partitioned) builder for
+        // `bytes_written`, distinct from `bytes_scanned`'s partitioned
+        // `bytes_counter` above - cover that path too.
+        let bytes_written =
+            MetricBuilder::new(&metrics).global_bytes_counter("bytes_written");
+        bytes_written.add(three_gib);
+
         // A generic (non-byte) Count/Gauge tagged Bytes must NOT be
         // reinterpreted based on category - only the dedicated
         // BytesCount/BytesGauge variants get byte formatting. This is the
@@ -823,6 +830,10 @@ mod tests {
                 .iter()
                 .any(|s| s == "stream_memory_usage{partition=0}=3.0 GB"),
             "stream_memory_usage should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|s| s == "bytes_written=3.0 GB"),
+            "bytes_written (global_bytes_counter, no partition) should be byte-formatted, got: {rendered:?}"
         );
         assert!(
             rendered

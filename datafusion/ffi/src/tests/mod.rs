@@ -120,6 +120,8 @@ pub struct ForeignLibraryModule {
 
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_exec_with_byte_metrics: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub create_table_with_statistics:
         extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 
@@ -229,6 +231,35 @@ pub fn make_test_statistics() -> Statistics {
 pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     let schema = create_test_schema();
     let plan = Arc::new(EmptyExec::new(schema).with_statistics(make_test_statistics()));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+/// Registers real [`MetricValue::BytesCount`] and [`MetricValue::BytesGauge`]
+/// metrics (via the same [`MetricBuilder::bytes_counter`] and
+/// [`MetricBuilder::bytes_gauge`] constructors production code uses for
+/// `bytes_scanned`/`stream_memory_usage`) on the returned plan, so the
+/// consumer-side integration test can exercise these variants through a real
+/// cross-library `metrics()` FFI call rather than only the in-process
+/// `FFI_MetricValue` conversion tests in `physical_expr::metrics`.
+///
+/// [`MetricValue::BytesCount`]: datafusion_physical_expr_common::metrics::MetricValue::BytesCount
+/// [`MetricValue::BytesGauge`]: datafusion_physical_expr_common::metrics::MetricValue::BytesGauge
+pub(crate) extern "C" fn create_exec_with_byte_metrics() -> FFI_ExecutionPlan {
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, MetricBuilder,
+    };
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    let metrics_set = ExecutionPlanMetricsSet::new();
+    MetricBuilder::new(&metrics_set)
+        .bytes_counter("bytes_scanned", 0)
+        .add(1536);
+    MetricBuilder::new(&metrics_set)
+        .bytes_gauge("stream_memory_usage", 0)
+        .add(2048);
+
+    let plan = Arc::new(EmptyExec::new(schema).with_metrics(metrics_set.clone_inner()));
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -362,6 +393,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_exec_with_expressions,
         create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
+        create_exec_with_byte_metrics,
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
