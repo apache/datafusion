@@ -160,9 +160,9 @@ mod tests {
     // when it becomes possible to construct union scalars in SQL, this should go to sqllogictests
     #[test]
     fn union_scalar() {
-        let fields = [(0, Arc::new(Field::new("a", DataType::UInt32, false)))]
-            .into_iter()
-            .collect();
+        let fields =
+            std::iter::once((0, Arc::new(Field::new("a", DataType::UInt32, false))))
+                .collect();
 
         let scalar = ScalarValue::Union(
             Some((0, Box::new(ScalarValue::UInt32(Some(0))))),

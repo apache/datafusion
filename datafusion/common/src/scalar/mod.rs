@@ -10327,22 +10327,19 @@ mod tests {
         const SECS_IN_ONE_DAY: i32 = 86_400;
         const MICROSECS_IN_ONE_DAY: i64 = 86_400_000_000;
         for i in 0..vector_size {
+            let days = rng.random_range(0..5000);
             if i % 4 == 0 {
-                let days = rng.random_range(0..5000);
                 // to not break second precision
                 let millis = rng.random_range(0..SECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_dt(days, millis));
             } else if i % 4 == 1 {
-                let days = rng.random_range(0..5000);
                 let millisec = rng.random_range(0..(MILLISECS_IN_ONE_DAY as i32));
                 intervals.push(ScalarValue::new_interval_dt(days, millisec));
             } else if i % 4 == 2 {
-                let days = rng.random_range(0..5000);
                 // to not break microsec precision
                 let nanosec = rng.random_range(0..MICROSECS_IN_ONE_DAY) * 1000;
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             } else {
-                let days = rng.random_range(0..5000);
                 let nanosec = rng.random_range(0..NANOSECS_IN_ONE_DAY);
                 intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
             }
