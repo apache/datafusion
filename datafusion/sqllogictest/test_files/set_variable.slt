@@ -788,6 +788,7 @@ DataFusion error: Error setting config datafusion.optimizer.default_filter_selec
 caused by
 Invalid or Unsupported Configuration: value must be between 0 and 100, got 200
 
+
 statement ok
 SET datafusion.optimizer.default_filter_selectivity = 100
 
