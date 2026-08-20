@@ -210,12 +210,16 @@ pub fn cast_column(
             cast_list_view_column::<i64>(source_col, target_inner, cast_options)
         }
         (DataType::Map(_, _), DataType::Map(target_entries, target_sorted)) => {
-            cast_map_column(
-                source_col.as_map(),
-                target_entries,
-                *target_sorted,
-                cast_options,
-            )
+            if requires_nested_struct_cast(source_col.data_type(), target_type) {
+                cast_map_column(
+                    source_col.as_map(),
+                    target_entries,
+                    *target_sorted,
+                    cast_options,
+                )
+            } else {
+                Ok(cast_with_options(source_col, target_type, cast_options)?)
+            }
         }
         (
             DataType::Dictionary(source_key_type, _),
@@ -742,10 +746,11 @@ fn validate_map_entries_field(entries: &Field) -> Result<(&FieldRef, &FieldRef)>
 /// matched by name. Values use the standard Struct evolution rules: nullable
 /// target fields may be added and extra source fields are omitted.
 ///
-/// Unsorted Struct keys may add nullable fields and use only injective primitive
-/// widening casts, but may not remove source fields. Sorted Maps require an
-/// unchanged key type. Map entries and keys must remain non-nullable. Source
-/// and target sorted flags must match.
+/// For Maps using specialized nested Struct adaptation, unsorted Struct keys may
+/// add nullable fields and use only injective primitive widening casts, but may
+/// not remove source fields. Sorted Maps require an unchanged key type. Map
+/// entries and keys must remain non-nullable. Source and target sorted flags
+/// must match. Maps without semantic Struct children use Arrow's normal cast.
 pub fn validate_data_type_compatibility(
     field_name: &str,
     source_type: &DataType,
@@ -768,13 +773,22 @@ pub fn validate_data_type_compatibility(
             validate_field_compatibility(s, t)?;
         }
         (DataType::Map(s, source_sorted), DataType::Map(t, target_sorted)) => {
-            validate_map_compatibility(
-                s,
-                *source_sorted,
-                t,
-                *target_sorted,
-                Some(field_name),
-            )?;
+            if requires_nested_struct_cast(source_type, target_type) {
+                validate_map_compatibility(
+                    s,
+                    *source_sorted,
+                    t,
+                    *target_sorted,
+                    Some(field_name),
+                )?;
+            } else if !can_cast_types(source_type, target_type) {
+                return _plan_err!(
+                    "Cannot cast struct field '{}' from type {} to type {}",
+                    field_name,
+                    source_type,
+                    target_type
+                );
+            }
         }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
@@ -809,11 +823,9 @@ pub fn validate_data_type_compatibility(
 /// container type (List, LargeList, equal-width FixedSizeList, ListView,
 /// LargeListView, Map, Dictionary) wrapping types that recursively contain structs.
 ///
-/// Maps are always Struct-backed: their entries field is a Struct containing key
-/// and value children. Therefore a compatible Map-to-Map adaptation can return
-/// true even when the user-visible key and value types are primitive. This
-/// deliberately routes Map adaptation through the specialized Map casting path
-/// so key/value semantics, sorted flags, and entry compaction are enforced.
+/// Map entries are technically Struct-backed, but that implementation detail does
+/// not require name-based adaptation. A Map uses the specialized path only when
+/// its semantic key or value child recursively contains a Struct.
 ///
 /// Use this predicate at both planning time (to decide whether to apply nested
 /// compatibility validation) and execution time (to decide whether to route
@@ -836,14 +848,39 @@ pub fn requires_nested_struct_cast(
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
             requires_nested_struct_cast(s.data_type(), t.data_type())
         }
-        (DataType::Map(s, _), DataType::Map(t, _)) => {
-            requires_nested_struct_cast(s.data_type(), t.data_type())
+        (DataType::Map(source_entries, _), DataType::Map(target_entries, _)) => {
+            map_entries_require_nested_struct_cast(source_entries, target_entries)
         }
         (DataType::Dictionary(_, s_val), DataType::Dictionary(_, t_val)) => {
             requires_nested_struct_cast(s_val, t_val)
         }
         _ => false,
     }
+}
+
+/// Returns whether corresponding semantic Map children require nested Struct casting.
+///
+/// Invalid Map entry layouts return `false`; normal Map validation/casting reports
+/// those layouts through its usual error path.
+fn map_entries_require_nested_struct_cast(
+    source_entries: &FieldRef,
+    target_entries: &FieldRef,
+) -> bool {
+    let (Struct(source_fields), Struct(target_fields)) =
+        (source_entries.data_type(), target_entries.data_type())
+    else {
+        return false;
+    };
+
+    source_fields.len() == 2
+        && target_fields.len() == 2
+        && (requires_nested_struct_cast(
+            source_fields[0].data_type(),
+            target_fields[0].data_type(),
+        ) || requires_nested_struct_cast(
+            source_fields[1].data_type(),
+            target_fields[1].data_type(),
+        ))
 }
 
 /// Check if two field lists have at least one common field by name.
@@ -870,8 +907,8 @@ mod tests {
     use arrow::{
         array::{
             BinaryArray, FixedSizeListArray, Int32Array, Int32Builder, Int64Array,
-            ListArray, ListViewArray, MapArray, MapBuilder, NullArray, StringArray,
-            StringBuilder, UInt32Array,
+            Int64Builder, ListArray, ListViewArray, MapArray, MapBuilder, NullArray,
+            StringArray, StringBuilder, UInt32Array,
         },
         buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
@@ -1740,6 +1777,34 @@ mod tests {
             error,
             "Found unmasked nulls for non-nullable StructArray field \"values\""
         );
+    }
+
+    #[test]
+    fn test_cast_primitive_map_uses_arrow_cast() {
+        let mut builder = MapBuilder::new(None, Int64Builder::new(), Int64Builder::new());
+        builder.keys().append_value(1);
+        builder.values().append_value(10);
+        builder.append(true).unwrap();
+
+        let source_col: ArrayRef = Arc::new(builder.finish());
+        let target_type = map_type(DataType::Int32, DataType::Int32);
+
+        assert!(!requires_nested_struct_cast(
+            source_col.data_type(),
+            &target_type
+        ));
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        assert_eq!(result.data_type(), &target_type);
     }
 
     #[test]
@@ -2701,8 +2766,12 @@ mod tests {
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(s2.clone())),
         ));
         assert!(requires_nested_struct_cast(
-            &map_type(DataType::Int32, DataType::Utf8),
-            &map_type(DataType::Float64, DataType::Utf8),
+            &map_type(s1.clone(), DataType::Utf8),
+            &map_type(s2.clone(), DataType::Utf8),
+        ));
+        assert!(requires_nested_struct_cast(
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, s1.clone()),),
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, s2.clone())),
         ));
         assert!(requires_nested_struct_cast(
             &DataType::ListView(arc_field("item", s1.clone())),
@@ -2721,6 +2790,14 @@ mod tests {
         assert!(!requires_nested_struct_cast(
             &DataType::List(arc_field("item", DataType::Int32)),
             &DataType::List(arc_field("item", DataType::Int64)),
+        ));
+        assert!(!requires_nested_struct_cast(
+            &map_type(DataType::Int64, DataType::Int64),
+            &map_type(DataType::Int32, DataType::Int32),
+        ));
+        assert!(!requires_nested_struct_cast(
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, DataType::Int64),),
+            &map_type(DataType::Utf8, map_type(DataType::Utf8, DataType::Int32),),
         ));
         assert!(!requires_nested_struct_cast(
             &DataType::FixedSizeList(arc_field("item", DataType::Int32), 2),
