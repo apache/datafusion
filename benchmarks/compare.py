@@ -30,7 +30,7 @@ try:
     from rich.console import Console
     from rich.table import Table
 except ImportError:
-    print("Couldn't import modules -- run `./bench.sh venv` first")
+    print("Couldn't import modules -- run with uv (`uv run compare.py`)")
     raise
 
 
