@@ -283,7 +283,7 @@ physical_plan
 54)│    --------------------   │
 55)│         bytes: 480        │
 56)│       format: memory      │
-57)│          rows: 1          │
+57)│          rows: 10         │
 58)└───────────────────────────┘
 
 statement ok
