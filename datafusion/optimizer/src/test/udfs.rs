@@ -19,7 +19,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, Expr, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, TypeSignature,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, lit,
 };
 
 /// A configurable test UDF for optimizer tests.
@@ -44,7 +44,7 @@ impl PlacementTestUDF {
             // The actual types don't matter since this UDF is not intended for execution.
             signature: Signature::new(
                 TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
-                datafusion_expr::Volatility::Immutable,
+                Volatility::Immutable,
             ),
             placement: ExpressionPlacement::MoveTowardsLeafNodes,
             id: 0,
@@ -95,4 +95,67 @@ pub fn leaf_udf_expr(arg: Expr) -> Expr {
         PlacementTestUDF::new().with_placement(ExpressionPlacement::MoveTowardsLeafNodes),
     );
     udf.call(vec![arg])
+}
+
+/// A `get_field`-like test UDF for modeling struct-field access (`f(c)['a']`),
+/// so tests need not depend on `datafusion-functions` (which this crate avoids —
+/// see its `Cargo.toml`).
+///
+/// Placement mirrors `GetFieldFunc`: `MoveTowardsLeafNodes` when the base is
+/// pushable and the keys are literals, else `KeepInPlace`. That flip drives the
+/// issue #23655 pushdown interaction: the access is `KeepInPlace` until
+/// `CommonSubexprEliminate` hoists the UDF into a column, then becomes pushable.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct GetFieldLikeUDF {
+    signature: Signature,
+}
+
+impl Default for GetFieldLikeUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GetFieldLikeUDF {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::new(TypeSignature::Any(2), Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for GetFieldLikeUDF {
+    fn name(&self) -> &str {
+        "get_field_like"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt32)
+    }
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("GetFieldLikeUDF: not intended for execution")
+    }
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        // Mirror `GetFieldFunc`: cheap to push down only when the base is a
+        // column (or already pushable) and every field key is a literal.
+        match args.first() {
+            Some(
+                ExpressionPlacement::Column | ExpressionPlacement::MoveTowardsLeafNodes,
+            ) if args[1..]
+                .iter()
+                .all(|p| matches!(p, ExpressionPlacement::Literal)) =>
+            {
+                ExpressionPlacement::MoveTowardsLeafNodes
+            }
+            _ => ExpressionPlacement::KeepInPlace,
+        }
+    }
+}
+
+/// Create a `get_field_like(base, key)` expression that models `base[key]`.
+pub fn get_field_like(base: Expr, key: &str) -> Expr {
+    let udf = ScalarUDF::new_from_impl(GetFieldLikeUDF::new());
+    udf.call(vec![base, lit(key)])
 }
