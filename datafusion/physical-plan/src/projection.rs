@@ -67,6 +67,31 @@ pub use datafusion_physical_expr::projection::{
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
+/// Counts how often [`ProjectionExec::replace_children`] reused a cached
+/// equivalence group instead of reprojecting it.
+///
+/// Thread local rather than a global counter: the test binary runs tests in
+/// parallel, and a shared count would let one test observe another's hits.
+#[cfg(test)]
+mod eq_group_reuse_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static HITS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record_hit() {
+        HITS.with(|h| h.set(h.get() + 1));
+    }
+
+    /// Runs `f` and reports how many reuses happened while it did.
+    pub(super) fn count<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let before = HITS.with(Cell::get);
+        let value = f();
+        (value, HITS.with(Cell::get) - before)
+    }
+}
+
 /// [`ExecutionPlan`] for a projection
 ///
 /// Computes a set of scalar value expressions for each input row, producing one
@@ -415,6 +440,8 @@ impl ExecutionPlan for ProjectionExec {
                     .eq_group()
                     .has_same_classes(children[0].equivalence_properties().eq_group())
                 {
+                    #[cfg(test)]
+                    eq_group_reuse_probe::record_hit();
                     let eq_group = self.cache.equivalence_properties().eq_group().clone();
                     return ProjectionExec::try_from_projector_reusing_eq_group(
                         self.projector.clone(),
@@ -2422,10 +2449,18 @@ mod tests {
         let sorted: Arc<dyn ExecutionPlan> =
             Arc::new(SortExec::new(ordering, Arc::clone(&child)));
 
-        let replaced = Arc::clone(&projection).replace_children(
-            vec![Arc::clone(&sorted)],
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )?;
+        let (replaced, reuses) = eq_group_reuse_probe::count(|| {
+            Arc::clone(&projection).replace_children(
+                vec![Arc::clone(&sorted)],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        });
+        let replaced = replaced?;
+        assert_eq!(
+            reuses, 1,
+            "expected the fast path to be taken exactly once; deleting it would \
+             otherwise leave this test passing"
+        );
 
         // Guard against vacuity: the group must be worth reusing, and the sort
         // must genuinely have added an ordering the original did not have.
@@ -2502,10 +2537,14 @@ mod tests {
             "nullability moved the equivalence group, so the fast path is no longer under test"
         );
 
-        let replaced = Arc::clone(&projection).replace_children(
-            vec![Arc::clone(&tightened_child)],
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )?;
+        let (replaced, reuses) = eq_group_reuse_probe::count(|| {
+            Arc::clone(&projection).replace_children(
+                vec![Arc::clone(&tightened_child)],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        });
+        let replaced = replaced?;
+        assert_eq!(reuses, 1, "expected the fast path to be taken");
         let recomputed = ProjectionExec::try_from_projector(
             projection.projector.clone(),
             tightened_child,
@@ -2526,10 +2565,17 @@ mod tests {
         // This child equates a different pair, so the cached group is stale and
         // reusing it would be unsound: the guard has to fall through.
         let other = filtered_source("a", "c")?;
-        let replaced = Arc::clone(&projection).replace_children(
-            vec![Arc::clone(&other)],
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )?;
+        let (replaced, reuses) = eq_group_reuse_probe::count(|| {
+            Arc::clone(&projection).replace_children(
+                vec![Arc::clone(&other)],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        });
+        let replaced = replaced?;
+        assert_eq!(
+            reuses, 0,
+            "the guard let a stale equivalence group through the fast path"
+        );
 
         assert!(
             !replaced

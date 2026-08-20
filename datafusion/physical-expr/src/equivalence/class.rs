@@ -322,9 +322,9 @@ impl EquivalenceGroup {
     ///
     /// The comparison is positional because it runs on a hot path:
     /// `ProjectionExec` consults it every time a rule replaces its child. Set
-    /// semantics would mean scanning the other group per class, and the quadratic
-    /// blowup costs far more than the recomputation it is trying to avoid --
-    /// measured at 8x for 32 classes and 15x for 64.
+    /// semantics would mean scanning the other group once per class, and that
+    /// quadratic term costs more than the recomputation the caller is trying to
+    /// skip, by a margin that widens with the number of classes.
     ///
     /// Only the false direction is reachable: a group can be reported different
     /// when it is not, never the same when it is not. Callers using this to skip

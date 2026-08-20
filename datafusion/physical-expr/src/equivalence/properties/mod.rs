@@ -1169,7 +1169,10 @@ impl EquivalenceProperties {
     /// `output_schema`.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
-        self.project_with_eq_group(mapping, output_schema, eq_group)
+        // Built here, so it satisfies the precondition by construction; going
+        // through the checked entry point would reproject it under
+        // `debug_assertions` for nothing.
+        self.project_with_eq_group_unchecked(mapping, output_schema, eq_group)
     }
 
     /// Same as [`Self::project`], but takes an already-projected equivalence
@@ -1180,7 +1183,34 @@ impl EquivalenceProperties {
     /// projection can hand back the previous result rather than recomputing an
     /// identical one. Orderings are still derived here: they are precisely what
     /// changes when a sort is introduced below this node.
+    ///
+    /// # Preconditions
+    ///
+    /// `eq_group` must equal `self.eq_group.project(mapping)`. Anything else
+    /// yields equivalence properties that disagree with the projection, which
+    /// later rules will then reason from. The precondition cannot be enforced
+    /// cheaply -- checking it means performing the very projection the caller is
+    /// avoiding -- so it is asserted in debug builds only and left to the caller
+    /// in release.
     pub fn project_with_eq_group(
+        &self,
+        mapping: &ProjectionMapping,
+        output_schema: SchemaRef,
+        eq_group: EquivalenceGroup,
+    ) -> Self {
+        debug_assert!(
+            eq_group.has_same_classes(&self.eq_group.project(mapping)),
+            "project_with_eq_group was handed a group that is not the projection \
+             of this one: got {:?}, expected {:?}",
+            eq_group,
+            self.eq_group.project(mapping)
+        );
+        self.project_with_eq_group_unchecked(mapping, output_schema, eq_group)
+    }
+
+    /// [`Self::project_with_eq_group`] without the precondition check, for
+    /// callers that produced `eq_group` themselves.
+    fn project_with_eq_group_unchecked(
         &self,
         mapping: &ProjectionMapping,
         output_schema: SchemaRef,
@@ -1565,7 +1595,6 @@ mod tests {
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::col;
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
 
     /// Renames `a`, `b`, `c` and `d` so the projection is non-trivial while
@@ -1638,48 +1667,22 @@ mod tests {
     }
 
     #[test]
-    fn test_project_with_eq_group_derives_orderings_from_the_caller_group() -> Result<()>
-    {
-        // `project_with_eq_group` must not silently ignore the group it is
-        // handed: orderings are normalized against it, so passing an empty
-        // group has to produce a different result than passing the real one.
-        let (schema, eq_properties) = create_test_params()?;
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "not the projection of this one")]
+    fn test_project_with_eq_group_rejects_a_group_it_did_not_produce() {
+        // The precondition cannot be enforced cheaply in release -- checking it
+        // means performing the projection the caller is skipping -- so it is a
+        // debug assertion. This pins that the assertion is actually wired up,
+        // since a caller passing an unrelated group would otherwise get
+        // equivalence properties that silently disagree with the projection.
+        let (schema, eq_properties) = create_test_params().expect("test params");
         let output_schema = renamed_schema();
-        let mapping = renaming_mapping(&schema, &output_schema)?;
+        let mapping = renaming_mapping(&schema, &output_schema).expect("mapping");
 
-        let with_real_group = eq_properties.project_with_eq_group(
+        eq_properties.project_with_eq_group(
             &mapping,
-            Arc::clone(&output_schema),
-            eq_properties.eq_group().project(&mapping),
-        );
-        let with_empty_group = eq_properties.project_with_eq_group(
-            &mapping,
-            Arc::clone(&output_schema),
+            output_schema,
             EquivalenceGroup::default(),
         );
-
-        // Asserting on `eq_group()` would be vacuous, since the argument is
-        // stored there verbatim. Assert on behaviour instead.
-        //
-        // `projected_orderings` resolves `[a ASC]` to `[c1 ASC]` on its own, so
-        // asking about `c1` proves nothing. Asking about `a1` does: the stored
-        // ordering names `c1`, and concluding that `a1` is ordered too requires
-        // the supplied group to say `a1 = c1`.
-        let asc = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let on_a1 = [PhysicalSortExpr::new(col("a1", &output_schema)?, asc)];
-
-        assert!(
-            with_real_group.ordering_satisfy(on_a1.clone())?,
-            "the supplied group was not used to answer ordering questions"
-        );
-        assert!(
-            !with_empty_group.ordering_satisfy(on_a1)?,
-            "an empty group still reported a1 as ordered, so the argument is ignored"
-        );
-
-        Ok(())
     }
 }
