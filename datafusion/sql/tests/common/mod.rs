@@ -168,8 +168,7 @@ impl ContextProvider for MockContextProvider {
             ])),
             "person_with_uuid_extension" => Ok(Schema::new(vec![
                 Field::new("id", DataType::FixedSizeBinary(16), false).with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
+                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
                 ),
                 Field::new("first_name", DataType::Utf8, false),
                 Field::new("last_name", DataType::Utf8, false),
@@ -382,8 +381,7 @@ impl TypePlanner for CustomTypePlanner {
         match sql_type {
             sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
                 Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
+                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
                 ),
             ))),
             sqlparser::ast::DataType::Datetime(precision) => {

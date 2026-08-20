@@ -18,7 +18,6 @@
 use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
 use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::util::test_util::seedable_rng;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
@@ -28,7 +27,13 @@ use itertools::Itertools;
 use rand::distr::Alphanumeric;
 use rand::distr::uniform::SampleUniform;
 use rand::rngs::StdRng;
-use rand::{Rng, RngCore};
+use rand::{Rng, RngCore, SeedableRng};
+
+/// Returns a fixed-seed RNG using this crate's `rand` version (arrow's
+/// `test_util::seedable_rng` returns its own `rand` version's `StdRng`)
+fn seedable_rng() -> StdRng {
+    StdRng::seed_from_u64(42)
+}
 use std::fmt::{Display, Formatter};
 use std::hint::black_box;
 use std::ops::Range;

@@ -53,7 +53,7 @@ use crate::{
 
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use datafusion_common::metadata::check_metadata_with_storage_equal;
@@ -3269,8 +3269,7 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> =
-            (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
+        type FieldData<'a> = (&'a DataType, bool, Vec<&'a Metadata>, usize);
         let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
@@ -5658,7 +5657,7 @@ mod tests {
         let schema_with_metadata = || {
             DFSchema::from_unqualified_fields(
                 vec![Field::new("count", DataType::Int64, false)].into(),
-                [("key".to_string(), "value".to_string())].into(),
+                Metadata::new().with("key", "value"),
             )
             .unwrap()
         };

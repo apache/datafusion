@@ -25,7 +25,7 @@ use arrow::array::{
 };
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
 use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
@@ -1645,10 +1645,8 @@ async fn test_metadata_based_udf() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
-                .collect(),
-        ),
+        Field::new("with_metadata", DataType::UInt64, true)
+            .with_metadata(Metadata::new().with("modify_values", "double_output")),
     ]));
     let batch = RecordBatch::try_new(
         schema,
