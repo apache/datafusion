@@ -571,9 +571,9 @@ impl FileScanConfigBuilder {
 }
 
 /// Records that a key column holds one distinct value per row, which no file format
-/// stores. Single-column keys only, and inexact since constraints are not verified.
+/// stores. Single-column keys only: a composite key says nothing about its columns.
 fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistics) {
-    let num_rows = statistics.num_rows.to_inexact();
+    let num_rows = statistics.num_rows;
     for constraint in constraints.iter() {
         let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
         let [index] = indices[..] else {
@@ -585,10 +585,12 @@ fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistic
         if column.distinct_count != Precision::Absent {
             continue;
         }
-        // A unique column may repeat NULL, which is not a distinct value.
-        let nulls = match column.null_count {
-            Precision::Absent => Precision::Inexact(0),
-            nulls => nulls,
+        // A NULL is not a distinct value. A primary key has none; a unique column may
+        // repeat them, so an unknown count leaves the result inexact.
+        let nulls = match (constraint, column.null_count) {
+            (Constraint::PrimaryKey(_), Precision::Absent) => Precision::Exact(0),
+            (_, Precision::Absent) => Precision::Inexact(0),
+            (_, nulls) => nulls,
         };
         column.distinct_count = num_rows.sub(&nulls);
     }
@@ -2200,21 +2202,37 @@ mod tests {
             .statistics()
         };
 
-        // Unverified constraints, so the count is inexact.
+        // A primary key cannot be null, so the count is as exact as the row count.
         let primary_key = stats(vec![Constraint::PrimaryKey(vec![0])]);
         assert_eq!(
             primary_key.column_statistics[0].distinct_count,
-            Precision::Inexact(100)
+            Precision::Exact(100)
         );
         assert_eq!(
             primary_key.column_statistics[1].distinct_count,
             Precision::Absent
         );
 
+        // The nulls a unique column may repeat are known here, so this is exact too.
         let unique = stats(vec![Constraint::Unique(vec![2])]);
         assert_eq!(
             unique.column_statistics[2].distinct_count,
-            Precision::Inexact(90)
+            Precision::Exact(90)
+        );
+
+        // With an unknown null count it is not.
+        let mut unknown_nulls = statistics.clone();
+        unknown_nulls.column_statistics[2].null_count = Precision::Absent;
+        let unique = config_with_constraints(
+            table_schema.clone(),
+            unknown_nulls,
+            vec![Constraint::Unique(vec![2])],
+            None,
+        )
+        .statistics();
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Inexact(100)
         );
 
         // A composite key leaves its columns alone: only the combination is unique.
@@ -2250,7 +2268,7 @@ mod tests {
         let projected = config.partition_statistics(None).unwrap();
         assert_eq!(
             projected.column_statistics[0].distinct_count,
-            Precision::Inexact(100)
+            Precision::Exact(100)
         );
     }
 
