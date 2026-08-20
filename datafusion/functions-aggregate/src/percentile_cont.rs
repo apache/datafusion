@@ -66,6 +66,21 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
 
+/// Precision multiplier for linear interpolation calculations.
+///
+/// This value of 1,000,000 was chosen to balance precision with overflow safety:
+/// - Provides 6 decimal places of precision for the fractional component
+/// - Small enough to avoid overflow when multiplied with typical numeric values
+/// - Sufficient precision for most statistical applications
+///
+/// The interpolation formula: `lower + (upper - lower) * fraction`
+/// is computed as: `lower + ((upper - lower) * (fraction * PRECISION)) / PRECISION`
+/// to avoid floating-point operations on integer types while maintaining precision.
+///
+/// The interpolation arithmetic for floats is performed in f64 and then cast back to the
+/// native type to avoid overflowing Float16 intermediates.
+const INTERPOLATION_PRECISION: usize = 1_000_000;
+
 create_func!(PercentileCont, percentile_cont_udaf);
 
 /// Computes the exact percentile continuous of a set of numbers
@@ -905,21 +920,8 @@ trait PercentileInterpolator<T: ArrowNumericType>: Debug + Sync + Send {
 #[derive(Debug)]
 struct FloatInterpolator;
 
-/// Precision multiplier for floating-point linear interpolation calculations.
-///
-/// This value of 1,000,000 was chosen to balance precision with overflow safety:
-/// - Provides 6 decimal places of precision for the fractional component
-/// - Small enough to avoid overflow when multiplied with typical numeric values
-/// - Sufficient precision for most statistical applications
-///
-/// The interpolation formula: `lower + (upper - lower) * fraction`
-/// is computed as: `lower + ((upper - lower) * (fraction * PRECISION)) / PRECISION`
-/// to avoid floating-point operations on integer types while maintaining precision.
-///
 /// The interpolation arithmetic for floats is performed in f64 and then cast back to the
 /// native type to avoid overflowing Float16 intermediates.
-const FLOAT_INTERPOLATION_PRECISION: f64 = 1_000_000.0;
-
 impl<T> PercentileInterpolator<T> for FloatInterpolator
 where
     T: ArrowNumericType,
@@ -937,8 +939,8 @@ where
         // 2. fraction is between 0 and 1; quantizing it provides stable, predictable results
         // 3. The result is guaranteed to be between lower_value and upper_value (modulo cast rounding)
         // 4. Arithmetic is performed in f64 and cast back to avoid overflowing Float16 intermediates
-        let scaled = (fraction * FLOAT_INTERPOLATION_PRECISION) as usize;
-        let weight = scaled as f64 / FLOAT_INTERPOLATION_PRECISION;
+        let scaled = (fraction * (INTERPOLATION_PRECISION as f64)) as usize;
+        let weight = scaled as f64 / (INTERPOLATION_PRECISION as f64);
 
         let lower_f: f64 = lower.as_();
         let upper_f: f64 = upper.as_();
@@ -953,10 +955,10 @@ struct DecimalInterpolator;
 /// Precision multiplier for decimal linear interpolation calculations.
 fn deduce_interpolation_precision<T: DecimalType>() -> usize {
     if T::BYTE_LENGTH == 4 {
-        // Decimal32
+        // Avoid overflow in `scale_by_num` with 32-bit Decimal32
         10_000
     } else {
-        1_000_000
+        INTERPOLATION_PRECISION
     }
 }
 
