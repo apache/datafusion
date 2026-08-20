@@ -494,8 +494,11 @@ impl GroupedHashAggregateStream {
         let agg_fn_names = aggregate_exprs
             .iter()
             .map(|expr| {
-                format_human_display(expr.human_display(), expr.human_display_alias())
-                    .map(|display| display.into_owned())
+                expr.human_display()
+                    .map(|display| {
+                        format_human_display(display, expr.human_display_alias())
+                            .into_owned()
+                    })
                     .unwrap_or_else(|| expr.name().to_string())
             })
             .collect::<Vec<_>>()

@@ -1068,6 +1068,7 @@ fn coerce_frame_bound(
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
+        || col_type.is_binary()
         || col_type.is_null()
         || matches!(
             col_type,
@@ -1102,7 +1103,20 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                extract_window_frame_target_type(&col_type)?
+                let target_type = extract_window_frame_target_type(&col_type)?;
+                // A finite offset bound (e.g. `5 PRECEDING`) is computed as
+                // `current_value ± offset`, so it is only meaningful for target
+                // types that support arithmetic. Strings, binaries, booleans
+                // and lists are orderable -- which is all a free range frame
+                // needs -- but have no such arithmetic.
+                let supports_offset_arithmetic =
+                    target_type.is_numeric() || is_interval(&target_type);
+                if !supports_offset_arithmetic && !window_frame.free_range() {
+                    return plan_err!(
+                        "RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type {target_type}"
+                    );
+                }
+                target_type
             } else {
                 return internal_err!("ORDER BY column cannot be empty");
             }
@@ -2660,6 +2674,10 @@ mod test {
         )
     }
 
+    #[expect(
+        clippy::unnecessary_box_returns,
+        reason = "`Case` stores boxed expressions, so returning the box reuses the allocation"
+    )]
     fn cast_if_not_same_type(
         expr: Box<Expr>,
         data_type: &DataType,
