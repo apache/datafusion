@@ -97,8 +97,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         "range_partitioned",
         &range_table_dir,
         Arc::clone(&schema),
-        RANGE_PARTITIONS,
+        range_batches(&schema, RANGE_PARTITIONS),
         output_partitioning,
+        None,
     );
 
     register_unbounded_range_stream_table(
@@ -134,8 +135,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_shifted"),
         Arc::clone(&schema),
-        SHIFTED_RANGE_PARTITIONS,
+        range_batches(&schema, SHIFTED_RANGE_PARTITIONS),
         shifted_output_partitioning,
+        None,
     );
 
     // Same rows as `range_partitioned` but split into only three range
@@ -158,8 +160,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_narrow"),
         Arc::clone(&schema),
-        NARROW_RANGE_PARTITIONS,
+        range_batches(&schema, NARROW_RANGE_PARTITIONS),
         narrow_output_partitioning,
+        None,
     );
 
     let sparse_output_partitioning = Partitioning::Range(
@@ -180,8 +183,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_sparse"),
         Arc::clone(&schema),
-        SPARSE_RANGE_PARTITIONS,
+        range_batches(&schema, SPARSE_RANGE_PARTITIONS),
         sparse_output_partitioning,
+        None,
     );
 }
 
@@ -190,16 +194,16 @@ fn register_parquet_listing_table(
     name: &str,
     table_dir: impl AsRef<Path>,
     schema: SchemaRef,
-    partitions: impl IntoIterator<Item = &'static [(i32, i32, i32)]>,
+    batches: Vec<RecordBatch>,
     output_partitioning: Partitioning,
+    file_sort_order: Option<Vec<Vec<SortExpr>>>,
 ) {
     let table_dir = table_dir.as_ref();
     if table_dir.exists() {
         remove_dir_all(table_dir).expect("test table dir should be removable");
     }
     create_dir_all(table_dir).expect("test table dir should be created");
-    for (idx, rows) in partitions.into_iter().enumerate() {
-        let batch = range_batch(Arc::clone(&schema), rows);
+    for (idx, batch) in batches.into_iter().enumerate() {
         let file = File::create(table_dir.join(format!("part-{idx}.parquet")))
             .expect("test table parquet partition should be created");
         let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None)
@@ -220,8 +224,11 @@ fn register_parquet_listing_table(
     );
     let table_url =
         ListingTableUrl::parse(&table_path).expect("test table url should parse");
-    let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    let mut options = ListingOptions::new(Arc::new(ParquetFormat::default()))
         .with_output_partitioning(Some(output_partitioning));
+    if let Some(file_sort_order) = file_sort_order {
+        options = options.with_file_sort_order(file_sort_order);
+    }
     let config = ListingTableConfig::new(table_url)
         .with_listing_options(options)
         .with_schema(schema);
@@ -278,6 +285,16 @@ fn range_stream_partition(
     Arc::new(TestPartitionStream::new_with_batches(vec![range_batch(
         schema, rows,
     )]))
+}
+
+fn range_batches(
+    schema: &SchemaRef,
+    partitions: impl IntoIterator<Item = &'static [(i32, i32, i32)]>,
+) -> Vec<RecordBatch> {
+    partitions
+        .into_iter()
+        .map(|rows| range_batch(Arc::clone(schema), rows))
+        .collect()
 }
 
 fn range_batch(schema: SchemaRef, rows: &[(i32, i32, i32)]) -> RecordBatch {
@@ -360,7 +377,7 @@ pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
     );
 
     // Within each 60-minute file, rows are sorted by (key, timestamp).
-    let partitions = vec![
+    let partitions = [
         vec![
             ("k1", "x", "y", "z", "a", time_bin_ts(0, 10), 1),
             ("k1", "x", "y", "z", "a", time_bin_ts(0, 40), 2),
@@ -378,67 +395,22 @@ pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
 
     let table_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("test_files/scratch_range_partitioning/range_sorted_time_bin");
-    register_time_bin_listing_table(
+    let batches = partitions
+        .iter()
+        .map(|rows| time_bin_batch(Arc::clone(&schema), rows))
+        .collect();
+    register_parquet_listing_table(
         ctx,
         "range_sorted_time_bin",
         &table_dir,
         Arc::clone(&schema),
-        partitions,
+        batches,
         output_partitioning,
-        vec![vec![
+        Some(vec![vec![
             col("key").sort(true, true),
             col("timestamp").sort(true, true),
-        ]],
+        ]]),
     );
-}
-
-fn register_time_bin_listing_table(
-    ctx: &SessionContext,
-    name: &str,
-    table_dir: impl AsRef<Path>,
-    schema: SchemaRef,
-    partitions: Vec<Vec<TimeBinRow>>,
-    output_partitioning: Partitioning,
-    file_sort_order: Vec<Vec<SortExpr>>,
-) {
-    let table_dir = table_dir.as_ref();
-    if table_dir.exists() {
-        remove_dir_all(table_dir).expect("test table dir should be removable");
-    }
-    create_dir_all(table_dir).expect("test table dir should be created");
-    for (idx, rows) in partitions.into_iter().enumerate() {
-        let batch = time_bin_batch(Arc::clone(&schema), &rows);
-        let file = File::create(table_dir.join(format!("part-{idx}.parquet")))
-            .expect("test table parquet partition should be created");
-        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None)
-            .expect("test table parquet writer should be created");
-        writer
-            .write(&batch)
-            .expect("test table parquet partition should be written");
-        writer
-            .close()
-            .expect("test table parquet writer should close");
-    }
-
-    let table_path = format!(
-        "{}/",
-        table_dir
-            .to_str()
-            .expect("test table path should be valid utf8")
-    );
-    let table_url =
-        ListingTableUrl::parse(&table_path).expect("test table url should parse");
-    let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-        .with_output_partitioning(Some(output_partitioning))
-        .with_file_sort_order(file_sort_order);
-    let config = ListingTableConfig::new(table_url)
-        .with_listing_options(options)
-        .with_schema(schema);
-    let table =
-        ListingTable::try_new(config).expect("test listing table should be valid");
-
-    ctx.register_table(name, Arc::new(table))
-        .expect("test listing table registration should succeed");
 }
 
 fn time_bin_batch(schema: SchemaRef, rows: &[TimeBinRow]) -> RecordBatch {
