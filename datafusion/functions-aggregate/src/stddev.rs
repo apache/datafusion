@@ -53,7 +53,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT stddev(column_name) FROM table_name;
 +----------------------+
-| stddev(column_name)   |
+| stddev(column_name)  |
 +----------------------+
 | 12.34                |
 +----------------------+
@@ -157,7 +157,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT stddev_pop(column_name) FROM table_name;
 +--------------------------+
-| stddev_pop(column_name)   |
+| stddev_pop(column_name)  |
 +--------------------------+
 | 10.56                    |
 +--------------------------+
@@ -352,11 +352,6 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         self.variance.convert_to_state(values, opt_filter)
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.variance.size()
     }

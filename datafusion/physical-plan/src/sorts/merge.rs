@@ -32,9 +32,9 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::async_try_stream;
+use datafusion_common::{DataFusionError, Result, assert_or_internal_err, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::{TryEmitter, async_try_stream};
 use futures::Stream;
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
@@ -89,29 +89,6 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
-    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
-    ///
-    /// This option controls the tie-breaker strategy and attempts to avoid the
-    /// issue of unbalanced polling between partitions
-    ///
-    /// If `true`, when multiple partitions have the same value, the partition
-    /// that has the fewest poll counts is selected. This strategy ensures that
-    /// multiple partitions with the same value are chosen equally, distributing
-    /// the polling load in a round-robin fashion. This approach balances the
-    /// workload more effectively across partitions and avoids excessive buffer
-    /// growth.
-    ///
-    /// if `false`, partitions with smaller indices are consistently chosen as
-    /// the winners, which can lead to an uneven distribution of polling and potentially
-    /// causing upstream operator buffers for the other partitions to grow
-    /// excessively, as they continued receiving data without consuming it.
-    ///
-    /// For example, an upstream operator like `RepartitionExec` execution would
-    /// keep sending data to certain partitions, but those partitions wouldn't
-    /// consume the data if they weren't selected as winners. This resulted in
-    /// inefficient buffer usage.
-    enable_round_robin_tie_breaker: bool,
-
     /// Flag indicating whether we are in the mode of round-robin
     /// tie breaker for the loser tree winners.
     round_robin_tie_breaker_mode: bool,
@@ -126,8 +103,10 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Current reset count
     current_reset_epoch: usize,
 
-    /// Stores the previous value of each partitions for tracking the poll counts on the same value.
-    prev_cursors: Vec<Option<Cursor<C>>>,
+    /// Stores an owned copy of the last row of each partition's most
+    /// recently exhausted cursor, for tracking the poll counts on the same
+    /// value across a batch boundary.
+    prev_cursors: Option<Vec<Option<C::SingleRowValue>>>,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -146,6 +125,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         reservation: MemoryReservation,
         enable_round_robin_tie_breaker: bool,
     ) -> Self {
+        assert_ne!(batch_size, 0, "batch size cannot be 0");
+        assert_ne!(fetch, Some(0), "fetch must not be Some(0)");
+
         let stream_count = streams.partitions();
 
         Self {
@@ -153,7 +135,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             streams,
             metrics,
             cursors: (0..stream_count).map(|_| None).collect(),
-            prev_cursors: (0..stream_count).map(|_| None).collect(),
+            prev_cursors: if enable_round_robin_tie_breaker {
+                Some((0..stream_count).map(|_| None).collect())
+            } else {
+                None
+            },
             round_robin_tie_breaker_mode: false,
             num_of_polled_with_same_value: vec![0; stream_count],
             current_reset_epoch: 0,
@@ -162,7 +148,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
-            enable_round_robin_tie_breaker,
         }
     }
 
@@ -173,7 +158,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let schema_clone = Arc::clone(self.in_progress.schema());
 
         let cloned_metrics = self.metrics.clone();
-
         let stream = Box::pin(RecordBatchStreamAdapter::new(
             schema_clone,
             self.create_stream(),
@@ -212,77 +196,120 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         result
     }
 
+    async fn flush_in_progress(
+        &mut self,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        if self.in_progress.is_empty() {
+            return Ok(());
+        }
+
+        let elapsed_compute = self.metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+
+        // When `build_record_batch()` hits an i32 offset overflow (e.g.
+        // combined string offsets exceed 2 GB), it emits a partial batch
+        // and keeps the remaining rows in `self.in_progress.indices`.
+        // Drain those leftover rows before terminating the stream,
+        // otherwise they would be silently dropped.
+        // Repeated overflows are fine — each poll emits another partial
+        // batch until `in_progress` is fully drained.
+        while let Some(batch) = self.emit_in_progress_batch()? {
+            drop(timer);
+            emitter.emit(batch).await;
+            timer = elapsed_compute.timer();
+        }
+
+        Ok(())
+    }
+
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
-            // This vector contains the indices of the partitions that have not started emitting yet.
-            let mut uninitiated_partitions =
-                (0..self.streams.partitions()).collect::<Vec<_>>();
+            // 1. Make sure we have data from each stream so we can initialize the loser tree
+            {
+                // This vector contains the indices of the partitions that have not started emitting yet.
+                let mut uninitiated_partitions =
+                    (0..self.streams.partitions()).collect::<Vec<_>>();
 
-            poll_fn(|cx| self.initialize_all_partitions(&mut uninitiated_partitions, cx))
+                poll_fn(|cx| {
+                    self.initialize_all_partitions(&mut uninitiated_partitions, cx)
+                })
                 .await?;
 
-            assert_eq!(uninitiated_partitions.len(), 0);
+                assert_eq!(uninitiated_partitions.len(), 0);
+            }
 
-            // If there are no more uninitiated partitions, set up the loser tree and continue
-            // to the next phase.
-
-            // Claim the memory for the uninitiated partitions
-            drop(uninitiated_partitions);
-            self.init_loser_tree();
-
-            // NB timer records time taken on drop, so there are no
-            // calls to `timer.done()` below.
             let elapsed_compute = self.metrics.elapsed_compute().clone();
             let mut timer = elapsed_compute.timer();
 
-            loop {
-                let stream_idx = self.loser_tree[0];
-                if !self.advance_cursors(stream_idx) {
-                    break;
-                }
-                self.in_progress.push_row(stream_idx);
+            // 2. Init loser tree
+            self.init_loser_tree();
 
-                // stop sorting if fetch has been reached
+            // 3. loop until all streams have been exhausted
+            while !self.is_exhausted() {
+                // 3.1. add loser_tree[0] (minimum) stream to pending record batch
+                let winner_stream = self.loser_tree[0];
+                self.in_progress.push_row(winner_stream);
+
+                // 3.2. If the new row reached the limit
                 if self.fetch_reached() {
                     break;
                 }
 
-                if self.in_progress.len() >= self.batch_size
-                    && let Some(batch) = self.emit_in_progress_batch()?
-                {
+                // 3.3. if there is enough to emit for a full record batch
+                if self.in_progress.len() >= self.batch_size {
+                    // 3.3.1 build pending record batch and reset builder
+                    let Some(batch) = self.emit_in_progress_batch()? else {
+                        return internal_err!("must have batch in progress to emit");
+                    };
+
+                    // 3.3.2 emit pending record batch
                     drop(timer);
                     emitter.emit(batch).await;
                     timer = elapsed_compute.timer();
                 }
 
-                let winner = self.loser_tree[0];
-                // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
-                // plumbing) unless the winner's cursor is exhausted and needs a
-                // fresh batch — it is live for almost every row.
-                if self.cursors[winner].is_none() {
-                    drop(timer);
-                    poll_fn(|cx| self.maybe_poll_stream(cx, winner)).await?;
-                    timer = elapsed_compute.timer();
+                // 3.4. advance cursor for the winner stream
+                {
+                    let should_poll_next_batch_for_stream =
+                        self.advance_cursors(winner_stream);
+
+                    // Fast path: skip the `maybe_poll_stream` call (and its `Poll`
+                    // plumbing) unless the winner's cursor is exhausted and needs a
+                    // fresh batch — it is live for almost every row.
+                    if should_poll_next_batch_for_stream {
+                        assert_or_internal_err!(
+                            self.cursors[winner_stream].is_none(),
+                            "cursor should be exhausted"
+                        );
+
+                        drop(timer);
+                        poll_fn(|cx| self.maybe_poll_stream(cx, winner_stream)).await?;
+                        timer = elapsed_compute.timer();
+                    }
                 }
 
-                // Adjusting the loser tree if necessary
+                // 3.5. Adjusting the loser tree if necessary
                 self.update_loser_tree();
             }
 
-            drop(timer);
+            // 4. Flush any remaining rows in `self.in_progress`
+            self.flush_in_progress(emitter).await?;
 
-            // When `build_record_batch()` hits an i32 offset overflow (e.g.
-            // combined string offsets exceed 2 GB), it emits a partial batch
-            // and keeps the remaining rows in `self.in_progress.indices`.
-            // Drain those leftover rows before terminating the stream,
-            // otherwise they would be silently dropped.
-            // Repeated overflows are fine — each poll emits another partial
-            // batch until `in_progress` is fully drained.
-            while let Some(batch) = self.emit_in_progress_batch()? {
-                emitter.emit(batch).await;
-            }
             Ok(())
         })
+    }
+
+    /// Returns `true` once every input stream is exhausted.
+    ///
+    /// Should only be called for valid adjusted tree, i.e. the initial tree or after [`Self::update_loser_tree`] call
+    fn is_exhausted(&self) -> bool {
+        let winner = self.loser_tree[0];
+
+        // Checking only the tree root suffices for valid tree
+        // since the winner of the tree cannot be an exhausted stream for a valid tree
+        // as what value is winning over the non exhausted stream?
+        self.cursors[winner].is_none()
     }
 
     /// Initialize all partitions, return `Poll::Pending` if any partition returns `Poll::Pending`
@@ -351,13 +378,44 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         if let Some(c) = cursor.as_mut() {
             // Compare with the last row in the previous batch
-            let prev_cursor = &self.prev_cursors[partition_idx];
+            let prev_cursor = self
+                .prev_cursors
+                .as_ref()
+                .map(|v| &v[partition_idx])
+                .expect(
+                    "prev_cursor should be set when round robin tie breaker is enabled",
+                );
             if c.is_eq_to_prev_one(prev_cursor.as_ref()) {
                 self.num_of_polled_with_same_value[partition_idx] += 1;
             } else {
                 self.num_of_polled_with_same_value[partition_idx] = 0;
             }
         }
+    }
+
+    /// Whether round-robin selection of tied winners of loser tree is enabled.
+    ///
+    /// This option controls the tie-breaker strategy and attempts to avoid the
+    /// issue of unbalanced polling between partitions
+    ///
+    /// If `true`, when multiple partitions have the same value, the partition
+    /// that has the fewest poll counts is selected. This strategy ensures that
+    /// multiple partitions with the same value are chosen equally, distributing
+    /// the polling load in a round-robin fashion. This approach balances the
+    /// workload more effectively across partitions and avoids excessive buffer
+    /// growth.
+    ///
+    /// if `false`, partitions with smaller indices are consistently chosen as
+    /// the winners, which can lead to an uneven distribution of polling and potentially
+    /// causing upstream operator buffers for the other partitions to grow
+    /// excessively, as they continued receiving data without consuming it.
+    ///
+    /// For example, an upstream operator like `RepartitionExec` execution would
+    /// keep sending data to certain partitions, but those partitions wouldn't
+    /// consume the data if they weren't selected as winners. This resulted in
+    /// inefficient buffer usage.
+    fn round_robin_tie_breaker_enabled(&self) -> bool {
+        self.prev_cursors.is_some()
     }
 
     fn fetch_reached(&mut self) -> bool {
@@ -369,18 +427,23 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// Advances the actual cursor. If it reaches its end, update the
     /// previous cursor with it.
     ///
-    /// If the given partition is not exhausted, the function returns `true`.
+    /// If the given partition batch is exhausted, return `true` to signal a poll is needed
     fn advance_cursors(&mut self, stream_idx: usize) -> bool {
         if let Some(cursor) = &mut self.cursors[stream_idx] {
             let _ = cursor.advance();
-            if cursor.is_finished() {
+            let finished = cursor.is_finished();
+            if finished {
                 // Take the current cursor, leaving `None` in its place
-                self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
+                let taken = self.cursors[stream_idx].take();
+                if let Some(prev_cursors) = &mut self.prev_cursors {
+                    prev_cursors[stream_idx] = taken.map(|c| c.last_value());
+                }
             }
-            true
-        } else {
-            false
+            return finished;
         }
+
+        // the entire stream is exhausted, so return true (poll won't help here anyway)
+        true
     }
 
     /// Returns `true` if the cursor at index `a` is greater than at index `b`.
@@ -436,7 +499,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// it takes as input the next item at (S0) and the loser of (S3, S4).
     #[inline]
     fn lt_leaf_node_index(&self, cursor_index: usize) -> usize {
-        (self.cursors.len() + cursor_index) / 2
+        usize::midpoint(self.cursors.len(), cursor_index)
     }
 
     /// Find the parent node index for the given node index
@@ -541,7 +604,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if cmp_node == 1 {
             let challenger = self.loser_tree[1];
             // If round-robin tie-breaker is enabled and we're at the final comparison (cmp_node == 1)
-            if self.enable_round_robin_tie_breaker {
+            if self.round_robin_tie_breaker_enabled() {
                 match (&self.cursors[winner], &self.cursors[challenger]) {
                     (Some(ac), Some(bc)) => match ac.cmp(bc) {
                         std::cmp::Ordering::Equal => {
@@ -614,6 +677,8 @@ mod tests {
     struct DummyValues;
 
     impl CursorValues for DummyValues {
+        type SingleRowValue = ();
+
         fn len(&self) -> usize {
             0
         }
@@ -627,6 +692,18 @@ mod tests {
         }
 
         fn compare(_l: &Self, _l_idx: usize, _r: &Self, _r_idx: usize) -> Ordering {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn get_value(&self, _idx: usize) -> Self::SingleRowValue {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn eq_to_single_row_value(
+            _l: &Self,
+            _l_idx: usize,
+            _r: &Self::SingleRowValue,
+        ) -> bool {
             unreachable!("done-path test should not compare cursors")
         }
     }

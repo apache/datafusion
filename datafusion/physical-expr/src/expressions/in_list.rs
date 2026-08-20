@@ -37,12 +37,13 @@ use datafusion_common::{
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
+mod branchless_filter;
 mod primitive_filter;
 mod result;
 mod static_filter;
 mod strategy;
 
-use static_filter::StaticFilter;
+use static_filter::StaticFilterRef;
 use strategy::instantiate_static_filter;
 
 /// InList
@@ -50,7 +51,7 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
-    static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+    static_filter: Option<StaticFilterRef>,
 }
 
 impl Debug for InListExpr {
@@ -147,7 +148,7 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
-        static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+        static_filter: Option<StaticFilterRef>,
     ) -> Self {
         Self {
             expr,
@@ -221,8 +222,8 @@ impl InListExpr {
     /// Create a new InList expression, using a static filter when possible.
     ///
     /// This validates data types and attempts to create a static filter for constant
-    /// list expressions. Uses specialized StaticFilter implementations for better
-    /// performance (e.g., Int32StaticFilter for Int32).
+    /// list expressions. Uses specialized branchless, bitmap, or hash-set filters
+    /// when the list's physical representation supports them.
     ///
     /// Returns an error if data types don't match. If the list contains non-constant
     /// expressions, falls back to dynamic evaluation at runtime.
@@ -2591,7 +2592,7 @@ mod tests {
         // Create IN list with Int32 literals: (100, 200, 300)
         let list = vec![lit(100i32), lit(200i32), lit(300i32)];
 
-        // Create InListExpr via in_list() - this uses Int32StaticFilter for Int32 lists
+        // Create InListExpr via in_list(), which selects a primitive static filter.
         let expr = in_list(col_a, list, &false, &schema)?;
 
         // Create dictionary-encoded batch with values [100, 200, 500]
@@ -2900,10 +2901,9 @@ mod tests {
 
     #[test]
     fn test_in_list_esoteric_types() -> Result<()> {
-        // Test esoteric/less common types to validate the transform and mapping flow.
-        // These types are reinterpreted to base primitive types (e.g., Timestamp -> UInt64,
-        // Interval -> Decimal128, Float16 -> UInt16). We just need to verify basic
-        // functionality works - no need for comprehensive null handling tests.
+        // Test less common types covered by IN-list evaluation. Some of these
+        // use specialized filters, and others fall back to the generic path;
+        // this keeps the end-to-end behavior covered either way.
 
         // Helper: simple IN test that expects [Some(true), Some(false)]
         let test_type = |data_type: DataType,
@@ -2926,7 +2926,7 @@ mod tests {
             Ok(())
         };
 
-        // Timestamp types (all units map to Int64 -> UInt64)
+        // Timestamp types
         test_type(
             DataType::Timestamp(TimeUnit::Second, None),
             Arc::new(TimestampSecondArray::from(vec![Some(1000), Some(2000)])),
@@ -2960,7 +2960,7 @@ mod tests {
             ],
         )?;
 
-        // Time32 and Time64 (map to Int32 -> UInt32 and Int64 -> UInt64 respectively)
+        // Time32 and Time64
         test_type(
             DataType::Time32(TimeUnit::Second),
             Arc::new(Time32SecondArray::from(vec![Some(3600), Some(7200)])),
@@ -3006,7 +3006,7 @@ mod tests {
             ],
         )?;
 
-        // Duration types (map to Int64 -> UInt64)
+        // Duration types
         test_type(
             DataType::Duration(TimeUnit::Second),
             Arc::new(DurationSecondArray::from(vec![Some(86400), Some(172800)])),
@@ -3052,7 +3052,7 @@ mod tests {
             ],
         )?;
 
-        // Interval types (map to 16-byte Decimal128Type)
+        // Interval types
         test_type(
             DataType::Interval(IntervalUnit::YearMonth),
             Arc::new(IntervalYearMonthArray::from(vec![Some(12), Some(24)])),
@@ -3114,8 +3114,7 @@ mod tests {
             ],
         )?;
 
-        // Decimal256 (maps to Decimal128Type for 16-byte width)
-        // Need to use with_precision_and_scale() to set the metadata
+        // Decimal256. Need to use with_precision_and_scale() to set the metadata.
         let precision = 38;
         let scale = 10;
         test_type(

@@ -20,12 +20,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
-    StatisticsContext,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions, StatisticsArgs, StatisticsContext,
 };
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -33,6 +34,7 @@ use tokio::runtime::Handle;
 
 use crate::config::FFI_ConfigOptions;
 use crate::execution::FFI_TaskContext;
+use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_expr::metrics::FFI_MetricsSet;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
@@ -49,6 +51,14 @@ pub struct FFI_ExecutionPlan {
 
     /// Return a vector of children plans
     pub children: unsafe extern "C" fn(plan: &Self) -> SVec<FFI_ExecutionPlan>,
+
+    /// Return the physical expression roots owned by this plan node.
+    pub apply_expressions:
+        unsafe extern "C" fn(plan: &Self) -> FFI_Result<SVec<FFI_PhysicalExpr>>,
+
+    /// Return the dynamic expressions produced by this plan node.
+    pub dynamic_expressions_produced:
+        unsafe extern "C" fn(plan: &Self) -> SVec<FFI_PhysicalExpr>,
 
     pub with_new_children:
         unsafe extern "C" fn(plan: &Self, children: SVec<Self>) -> FFI_Result<Self>,
@@ -90,6 +100,9 @@ pub struct FFI_ExecutionPlan {
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
+
+    /// Return the major DataFusion version number of this provider.
+    pub version: unsafe extern "C" fn() -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignExecutionPlan`] should never attempt to access this data.
@@ -138,6 +151,27 @@ unsafe extern "C" fn children_fn_wrapper(
         .collect()
 }
 
+unsafe extern "C" fn apply_expressions_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> FFI_Result<SVec<FFI_PhysicalExpr>> {
+    let mut expressions = SVec::new();
+    let result = plan.inner().apply_expressions(&mut |expr| {
+        expressions.push(FFI_PhysicalExpr::from(Arc::clone(expr)));
+        Ok(TreeNodeRecursion::Continue)
+    });
+    sresult!(result.map(|_| expressions))
+}
+
+unsafe extern "C" fn dynamic_expressions_produced_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<FFI_PhysicalExpr> {
+    plan.inner()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .map(FFI_PhysicalExpr::from)
+        .collect()
+}
+
 unsafe extern "C" fn with_new_children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     children: SVec<FFI_ExecutionPlan>,
@@ -151,7 +185,10 @@ unsafe extern "C" fn with_new_children_fn_wrapper(
         .collect();
 
     let children = sresult_return!(children);
-    let new_plan = sresult_return!(inner_plan.with_new_children(children));
+    let new_plan = sresult_return!(inner_plan.replace_children(
+        children,
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute)
+    ));
 
     FFI_Result::Ok(FFI_ExecutionPlan::new(new_plan, runtime))
 }
@@ -268,7 +305,7 @@ fn pass_runtime_to_children(
             // If the parent is foreign and the child is local to this library, then when
             // we called `children()` above we will get something other than a
             // `ForeignExecutionPlan`. In this case wrap the plan in a `ForeignExecutionPlan`
-            // because when we call `with_new_children` below it will extract the
+            // because when we call `replace_children` below it will extract the
             // FFI plan that does contain the runtime.
             if plan_is_foreign && !child.is::<ForeignExecutionPlan>() {
                 updated_children = true;
@@ -281,7 +318,12 @@ fn pass_runtime_to_children(
         })
         .collect::<Result<Vec<_>>>()?;
     if updated_children {
-        Arc::clone(plan).with_new_children(children).map(Some)
+        Arc::clone(plan)
+            .replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+            .map(Some)
     } else {
         Ok(None)
     }
@@ -306,6 +348,8 @@ impl FFI_ExecutionPlan {
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
+            apply_expressions: apply_expressions_fn_wrapper,
+            dynamic_expressions_produced: dynamic_expressions_produced_fn_wrapper,
             with_new_children: with_new_children_fn_wrapper,
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
@@ -314,6 +358,7 @@ impl FFI_ExecutionPlan {
             partition_statistics: partition_statistics_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            version: crate::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
         }
@@ -416,9 +461,10 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self.children.iter().collect()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let children = children
             .into_iter()
@@ -428,6 +474,16 @@ impl ExecutionPlan for ForeignExecutionPlan {
             unsafe { df_result!((self.plan.with_new_children)(&self.plan, children))? };
 
         (&new_plan).try_into()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -440,6 +496,33 @@ impl ExecutionPlan for ForeignExecutionPlan {
             df_result!((self.plan.execute)(&self.plan, partition, context))
                 .map(|stream| Pin::new(Box::new(stream)) as SendableRecordBatchStream)
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let expressions =
+            df_result!(unsafe { (self.plan.apply_expressions)(&self.plan) })?;
+        datafusion_physical_plan::apply_expression_roots(
+            expressions.iter().map(|expression| {
+                let expression: Arc<dyn datafusion_physical_plan::PhysicalExpr> =
+                    expression.into();
+                expression
+            }),
+            f,
+        )
+    }
+
+    fn dynamic_expressions_produced(
+        &self,
+    ) -> Vec<Arc<dyn datafusion_physical_plan::PhysicalExpr>> {
+        unsafe { (self.plan.dynamic_expressions_produced)(&self.plan) }
+            .iter()
+            .map(<Arc<dyn datafusion_physical_plan::PhysicalExpr>>::from)
+            .collect()
     }
 
     fn repartitioned(
@@ -474,8 +557,9 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(any(test, feature = "integration-tests"))]
 pub mod tests {
-    use datafusion_physical_plan::Partitioning;
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::{Partitioning, PhysicalExpr};
 
     use super::*;
 
@@ -483,6 +567,8 @@ pub mod tests {
     pub struct EmptyExec {
         props: Arc<PlanProperties>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        expressions: Vec<Arc<dyn PhysicalExpr>>,
+        dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
         metrics: Option<MetricsSet>,
         statistics: Option<Statistics>,
     }
@@ -497,6 +583,8 @@ pub mod tests {
                     Boundedness::Bounded,
                 )),
                 children: Vec::default(),
+                expressions: Vec::default(),
+                dynamic_expressions: Vec::default(),
                 metrics: None,
                 statistics: None,
             }
@@ -509,6 +597,22 @@ pub mod tests {
 
         pub fn with_statistics(mut self, statistics: Statistics) -> Self {
             self.statistics = Some(statistics);
+            self
+        }
+
+        pub fn with_expressions(
+            mut self,
+            expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.expressions = expressions;
+            self
+        }
+
+        pub fn with_dynamic_expressions(
+            mut self,
+            dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.dynamic_expressions = dynamic_expressions;
             self
         }
     }
@@ -536,16 +640,29 @@ pub mod tests {
             self.children.iter().collect()
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(EmptyExec {
                 props: Arc::clone(&self.props),
                 children,
+                expressions: self.expressions.clone(),
+                dynamic_expressions: self.dynamic_expressions.clone(),
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
             }))
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -554,6 +671,10 @@ pub mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+
+        fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+            self.dynamic_expressions.iter().map(Arc::clone).collect()
         }
 
         fn metrics(&self) -> Option<MetricsSet> {
@@ -569,6 +690,17 @@ pub mod tests {
                 Statistics::new_unknown(self.props.eq_properties.schema())
             })))
         }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            datafusion_physical_plan::apply_expression_roots(&self.expressions, f)
+        }
+    }
+
+    pub(crate) fn create_dynamic_filter() -> Arc<DynamicFilterPhysicalExpr> {
+        Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)))
     }
 
     #[test]
@@ -601,6 +733,61 @@ pub mod tests {
     }
 
     #[test]
+    fn test_ffi_execution_plan_apply_expressions() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+        let dynamic_filter = create_dynamic_filter();
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let original_plan =
+            Arc::new(EmptyExec::new(schema).with_expressions(vec![expression]));
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(original_plan, None);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+
+        let mut retained = None;
+        foreign_plan.apply_expressions(&mut |expr| {
+            retained = Some(Arc::clone(expr));
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        drop(foreign_plan);
+
+        assert_eq!(
+            retained.and_then(|expr| expr.expression_id()),
+            Some(expected_id)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_dynamic_expressions_produced() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+        let dynamic_filter = create_dynamic_filter();
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let original_plan =
+            Arc::new(EmptyExec::new(schema).with_dynamic_expressions(vec![expression]));
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(original_plan, None);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+        foreign_plan.check_invariants(
+            datafusion_physical_plan::execution_plan::InvariantLevel::Always,
+        )?;
+
+        let produced = foreign_plan.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        assert_eq!(produced[0].expression_id(), Some(expected_id));
+        drop(foreign_plan);
+        assert_eq!(produced[0].expression_id(), Some(expected_id));
+        Ok(())
+    }
+
+    #[test]
     fn test_ffi_execution_plan_children() -> Result<()> {
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Float32, false),
@@ -620,7 +807,10 @@ pub mod tests {
         assert_eq!(parent_foreign.children().len(), 0);
         assert_eq!(child_foreign.children().len(), 0);
 
-        let parent_foreign = parent_foreign.with_new_children(vec![child_foreign])?;
+        let parent_foreign = parent_foreign.replace_children(
+            vec![child_foreign],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         assert_eq!(parent_foreign.children().len(), 1);
 
         // Version 2: Adding child to the local plan
@@ -630,7 +820,10 @@ pub mod tests {
         let child_foreign = <Arc<dyn ExecutionPlan>>::try_from(&child_local)?;
 
         let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let parent_plan = parent_plan.with_new_children(vec![child_foreign])?;
+        let parent_plan = parent_plan.replace_children(
+            vec![child_foreign],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let mut parent_local = FFI_ExecutionPlan::new(parent_plan, None);
         parent_local.library_marker_id = crate::mock_foreign_marker_id;
         let parent_foreign = <Arc<dyn ExecutionPlan>>::try_from(&parent_local)?;

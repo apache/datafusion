@@ -330,8 +330,8 @@ impl<'a> ArrayWrapper<'a> {
 /// Primitive and string element types take a per-type fast path; nested (and any
 /// other) element types fall back to the per-row `eq` kernel, which allocates a
 /// `BooleanArray` per row.
-fn array_has_dispatch_for_array<'a>(
-    haystack: ArrayWrapper<'a>,
+fn array_has_dispatch_for_array(
+    haystack: ArrayWrapper<'_>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
@@ -994,22 +994,22 @@ fn array_has_any_with_scalar_general(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns true if all elements of sub-array exist in array.",
-    syntax_example = "array_has_all(array, sub-array)",
+    description = "Returns true if all elements of sub_array exist in array.",
+    syntax_example = "array_has_all(array, sub_array)",
     sql_example = r#"```sql
 > select array_has_all([1, 2, 3, 4], [2, 3]);
-+--------------------------------------------+
++---------------------------------------------+
 | array_has_all(List([1,2,3,4]), List([2,3])) |
-+--------------------------------------------+
-| true                                       |
-+--------------------------------------------+
++---------------------------------------------+
+| true                                        |
++---------------------------------------------+
 ```"#,
     argument(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
     argument(
-        name = "sub-array",
+        name = "sub_array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]

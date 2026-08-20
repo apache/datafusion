@@ -37,6 +37,8 @@
 //! | Narrow integer cases | Int16, Float16 | larger value domain | 4, 64, 256 |
 //! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 64, 256 |
 //! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 32, 128 |
+//! | 128-bit interval cases | IntervalMonthDayNano | small lists | 4 |
+//! | Decimal128 cases | Decimal128 | larger lists | 5, 64 |
 //! | Utf8 short-string cases | Utf8 | 8-byte strings | 4, 64, 256 |
 //! | Utf8 long-string cases | Utf8 | 24-byte strings | 4, 64, 256 |
 //! | Utf8View short-string cases | Utf8View | 8-byte strings | 4, 16, 64, 256 |
@@ -45,8 +47,9 @@
 //! | Shared-prefix string cases | Utf8, Utf8View | same prefix, different suffix | 16, 32, 64 |
 //! | Fixed-size binary cases | FixedSizeBinary(16) | fixed-width binary values | 4, 64, 256, 10000 |
 
+use arrow::array::types::IntervalMonthDayNano;
 use arrow::array::*;
-use arrow::datatypes::{Field, Int32Type, Schema};
+use arrow::datatypes::{Field, Int32Type, IntervalMonthDayNanoType, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -461,6 +464,23 @@ fn bench_primitive(c: &mut Criterion) {
         }
     }
 
+    // Decimal128: benchmark the first hash-set list size (5) and a larger list (64).
+    for list_size in [5, 64] {
+        for match_pct in MATCH_RATES {
+            bench_numeric::<i128, Decimal128Array>(
+                c,
+                "primitive",
+                &format!("decimal128/large_list/list={list_size}/match={match_pct}%"),
+                &NumericBenchConfig::new(
+                    list_size,
+                    match_pct as f64 / 100.0,
+                    |rng| i128::from(rng.random::<i64>()),
+                    |v| ScalarValue::Decimal128(Some(v), 38, 10),
+                ),
+            );
+        }
+    }
+
     // NOT IN benchmark: test negated path
     bench_numeric::<i32, Int32Array>(
         c,
@@ -525,6 +545,28 @@ fn bench_timestamp_ns(c: &mut Criterion) {
                 ),
             );
         }
+    }
+}
+
+fn bench_interval_month_day_nano(c: &mut Criterion) {
+    for match_pct in MATCH_RATES {
+        bench_numeric::<IntervalMonthDayNano, IntervalMonthDayNanoArray>(
+            c,
+            "interval_month_day_nano",
+            &format!("small_list/list=4/match={match_pct}%"),
+            &NumericBenchConfig::new(
+                4,
+                match_pct as f64 / 100.0,
+                |rng| {
+                    IntervalMonthDayNanoType::make_value(
+                        rng.random_range(-120..=120),
+                        rng.random_range(-31..=31),
+                        rng.random_range(-1_000_000_000..=1_000_000_000),
+                    )
+                },
+                |v| ScalarValue::IntervalMonthDayNano(Some(v)),
+            ),
+        );
     }
 }
 
@@ -1049,7 +1091,7 @@ fn bench_fixed_size_binary(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
+    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_interval_month_day_nano, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
 }
 
 criterion_main!(benches);

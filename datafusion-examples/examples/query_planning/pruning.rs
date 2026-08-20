@@ -28,7 +28,9 @@ use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::create_physical_expr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::{
+    PruningPredicate, PruningPredicateBuilder,
+};
 use datafusion::prelude::*;
 
 /// This example shows how to use  DataFusion's `PruningPredicate` to prove
@@ -44,7 +46,7 @@ use datafusion::prelude::*;
 /// one might do as part of a higher level storage engine. See
 /// `parquet_index.rs` for an example that uses pruning in the context of an
 /// individual query.
-pub async fn pruning() -> Result<()> {
+pub fn pruning() -> Result<()> {
     // In this example, we'll use the PruningPredicate to determine if
     // the expression `x = 5 AND y = 10` can never be true based on statistics
 
@@ -202,7 +204,10 @@ fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate 
         &PhysicalPlanningContext::default(),
     )
     .unwrap();
-    PruningPredicate::try_new(physical_expr, Arc::clone(schema)).unwrap()
+    PruningPredicateBuilder::new()
+        .with_file_schema(Arc::clone(schema))
+        .try_build(physical_expr)
+        .unwrap()
 }
 
 fn i32_array<'a>(values: impl Iterator<Item = &'a Option<i32>>) -> ArrayRef {

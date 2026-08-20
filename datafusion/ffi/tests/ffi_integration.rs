@@ -27,6 +27,7 @@ mod tests {
     use arrow::datatypes::Schema;
     use datafusion::catalog::{TableProvider, TableProviderFactory};
     use datafusion::error::Result;
+    use datafusion::prelude::{col, lit};
     use datafusion_common::TableReference;
     use datafusion_common::ToDFSchema;
     use datafusion_expr::CreateExternalTable;
@@ -58,6 +59,15 @@ mod tests {
         assert!(results.contains(&create_record_batch(6, 1)));
         assert!(results.contains(&create_record_batch(7, 5)));
 
+        if !synchronous {
+            assert!(
+                ctx.state()
+                    .catalog_list()
+                    .catalog("ffi_registered")
+                    .is_some()
+            );
+        }
+
         Ok(())
     }
 
@@ -82,6 +92,47 @@ mod tests {
         let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
 
         assert_eq!(foreign.statistics().as_ref(), Some(&expected));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ffi_table_provider_dml_cross_library() -> Result<()> {
+        let module = get_module()?;
+        let (ctx, codec) = super::utils::ctx_and_codec();
+
+        let ffi_provider = (module.create_table_with_statistics)(codec);
+        let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
+        let state = ctx.state();
+
+        let delete_plan = foreign
+            .delete_from(
+                &state,
+                vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))],
+            )
+            .await?;
+        assert_eq!(delete_plan.schema().field(0).name(), "count");
+        let delete_all_plan = foreign.delete_from(&state, vec![]).await?;
+        assert_eq!(delete_all_plan.schema().field(0).name(), "count");
+
+        let update_assignments = vec![
+            ("b".to_string(), lit(42_f64)),
+            ("a".to_string(), lit(7_i32)),
+        ];
+        let update_plan = foreign
+            .update(
+                &state,
+                update_assignments.clone(),
+                vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
+            )
+            .await?;
+        assert_eq!(update_plan.schema().field(0).name(), "count");
+
+        let update_all_plan = foreign.update(&state, update_assignments, vec![]).await?;
+        assert_eq!(update_all_plan.schema().field(0).name(), "count");
+
+        let truncate_plan = foreign.truncate(&state).await?;
+        assert_eq!(truncate_plan.schema().field(0).name(), "count");
 
         Ok(())
     }
