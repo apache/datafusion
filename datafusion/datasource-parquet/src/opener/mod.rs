@@ -1516,23 +1516,22 @@ impl RowGroupsPrunedParquetOpen {
             prepared.partitioned_file.effective_size(),
             prepared.file_metrics.bytes_processed.clone(),
         );
-        let mut will_scan = vec![false; rg_metadata.len()];
-        for entry in &rg_plan {
-            will_scan[entry.rg_index] = true;
-        }
-        let skipped_bytes: u64 = rg_metadata
+        // Every row group still in `rg_plan` is one this range owns, since the
+        // plan it was built from had `prune_by_range` applied. The planned row
+        // groups are therefore a subset of the in-range ones, and subtracting
+        // leaves exactly those the scan will skip.
+        let in_range_bytes: u64 = rg_metadata
             .iter()
-            .enumerate()
-            .filter(|(rg_index, rg_meta)| {
-                !will_scan[*rg_index]
-                    && prepared
-                        .file_range
-                        .as_ref()
-                        .is_none_or(|range| row_group_in_range(rg_meta, range))
+            .filter(|rg_meta| {
+                prepared
+                    .file_range
+                    .as_ref()
+                    .is_none_or(|range| row_group_in_range(rg_meta, range))
             })
-            .map(|(_, rg_meta)| row_group_bytes(rg_meta))
+            .map(row_group_bytes)
             .sum();
-        byte_progress.credit(skipped_bytes);
+        let planned_bytes: u64 = rg_plan.iter().map(|entry| entry.bytes).sum();
+        byte_progress.credit(in_range_bytes.saturating_sub(planned_bytes));
 
         let predicate_cache_inner_records =
             prepared.file_metrics.predicate_cache_inner_records.clone();
@@ -2649,9 +2648,16 @@ mod test {
                     .with_metrics(metrics.clone())
                     .build();
 
-                let (_, rows) =
-                    count_batches_and_rows(open_file(&morselizer, file).await.unwrap())
-                        .await;
+                let stream = open_file(&morselizer, file).await.unwrap();
+                assert_eq!(
+                    bytes_processed(&metrics),
+                    0,
+                    "nothing is pruned here, so range [{start}, {end}) must credit \
+                     nothing at open: every row group it owns is one it will read, \
+                     and the row groups it does not own belong to the other range",
+                );
+
+                let (_, rows) = count_batches_and_rows(stream).await;
 
                 assert_eq!(
                     bytes_processed(&metrics),
