@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    Array, BooleanArray, MapBuilder, StringArray, StringBuilder, StructArray,
+    Array, BooleanArray, MapBuilder, MapFieldNames, StringArray, StringBuilder,
+    StructArray,
 };
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, ScalarValue, utils::take_function_args};
@@ -125,8 +126,18 @@ impl ScalarUDFImpl for ArrowFieldFunc {
 
         // Build the metadata map array (same pattern as arrow_metadata.rs)
         let metadata = field.metadata();
-        let mut map_builder =
-            MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        // Match the field names declared in `return_type` (the arrow-rs
+        // default changed to `key`/`value` in arrow 60)
+        let map_field_names = MapFieldNames {
+            entry: "entries".to_string(),
+            key: "keys".to_string(),
+            value: "values".to_string(),
+        };
+        let mut map_builder = MapBuilder::new(
+            Some(map_field_names),
+            StringBuilder::new(),
+            StringBuilder::new(),
+        );
 
         let mut entries: Vec<_> = metadata.iter().collect();
         entries.sort_by_key(|(k, _)| *k);

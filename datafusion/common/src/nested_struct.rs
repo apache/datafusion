@@ -1123,8 +1123,8 @@ mod tests {
                         Arc::new(non_null_field(
                             "entries",
                             struct_type(vec![
-                                non_null_field("keys", DataType::Utf8),
-                                field("values", DataType::Int32),
+                                non_null_field("key", DataType::Utf8),
+                                field("value", DataType::Int32),
                             ]),
                         )),
                         false,
@@ -1148,8 +1148,8 @@ mod tests {
                         Arc::new(non_null_field(
                             "entries",
                             struct_type(vec![
-                                non_null_field("keys", DataType::Utf8),
-                                field("values", DataType::Int32),
+                                non_null_field("key", DataType::Utf8),
+                                field("value", DataType::Int32),
                             ]),
                         )),
                         false,
@@ -1176,8 +1176,8 @@ mod tests {
         assert!(map.is_null(1));
         let map0 = map.value(0);
         let entries = map0.as_any().downcast_ref::<StructArray>().unwrap();
-        let keys = get_column_as!(entries, "keys", StringArray);
-        let vals = get_column_as!(entries, "values", Int32Array);
+        let keys = get_column_as!(entries, "key", StringArray);
+        let vals = get_column_as!(entries, "value", Int32Array);
         assert_eq!(keys.value(0), "a");
         assert_eq!(vals.value(0), 1);
     }

@@ -33,7 +33,6 @@ use arrow::buffer::OffsetBuffer;
 use arrow::util::bench_util::create_primitive_array;
 use rand::Rng;
 use rand::SeedableRng;
-use rand::distr::{Distribution, StandardUniform};
 use rand::prelude::StdRng;
 
 /// Returns fixed seedable RNG
@@ -65,8 +64,7 @@ pub fn create_list_array<T>(
     zero_length_lists_probability: f32,
 ) -> ListArray
 where
-    T: ArrowPrimitiveType,
-    StandardUniform: Distribution<T::Native>,
+    T: ArrowPrimitiveType<Native = i64>,
 {
     let mut nulls_builder = NullBufferBuilder::new(size);
     let mut rng = StdRng::seed_from_u64(42);
