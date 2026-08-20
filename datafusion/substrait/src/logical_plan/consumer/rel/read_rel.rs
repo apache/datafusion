@@ -120,7 +120,7 @@ pub async fn from_read_rel(
                 }));
             }
 
-            // Check for produce_one_row pattern in the new expressions format.
+            // Check for produce_one_row pattern
             // A VirtualTable with exactly one row containing only empty/default fields represents
             // an EmptyRelation with produce_one_row=true. This pattern is used for queries without
             // a FROM clause (e.g., "SELECT 1 AS one") where a single phantom row is needed to
