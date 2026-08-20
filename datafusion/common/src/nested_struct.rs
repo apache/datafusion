@@ -114,7 +114,7 @@ fn cast_struct_column(
         }
 
         let struct_array =
-            StructArray::new(fields.into(), arrays, source_struct.nulls().cloned());
+            StructArray::try_new(fields.into(), arrays, source_struct.nulls().cloned())?;
         Ok(Arc::new(struct_array))
     } else {
         // Return error if source is not a struct type
@@ -397,7 +397,7 @@ fn cast_map_column(
         unreachable!("validated Map entries must be Struct")
     };
     let cast_entries =
-        StructArray::new(target_fields.clone(), vec![cast_keys, cast_values], None);
+        StructArray::try_new(target_fields.clone(), vec![cast_keys, cast_values], None)?;
 
     Ok(Arc::new(MapArray::try_new(
         Arc::clone(target_entries),
@@ -1660,6 +1660,73 @@ mod tests {
             None,
             sorted,
         ))
+    }
+
+    #[test]
+    fn test_safe_cast_to_non_nullable_struct_field_returns_error() {
+        let source_col: ArrayRef = Arc::new(StructArray::new(
+            vec![Arc::new(non_null_field("value", DataType::Utf8))].into(),
+            vec![Arc::new(StringArray::from(vec!["not-an-int"]))],
+            None,
+        ));
+        let target_type = struct_type(vec![non_null_field("value", DataType::Int32)]);
+        let cast_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let error = cast_column(&source_col, &target_type, &cast_options)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(
+            error,
+            "Found unmasked nulls for non-nullable StructArray field \"value\""
+        );
+    }
+
+    #[test]
+    fn test_safe_cast_to_non_nullable_map_value_returns_error() {
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::Utf8)),
+                Arc::new(non_null_field("values", DataType::Utf8)),
+            ]
+            .into(),
+            vec![
+                Arc::new(StringArray::from(vec!["key"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["not-an-int"])) as ArrayRef,
+            ],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            false,
+        ));
+        let target_type = DataType::Map(
+            Arc::new(non_null_field(
+                "entries",
+                struct_type(vec![
+                    non_null_field("keys", DataType::Utf8),
+                    non_null_field("values", DataType::Int32),
+                ]),
+            )),
+            false,
+        );
+        let cast_options = CastOptions {
+            safe: true,
+            ..DEFAULT_CAST_OPTIONS
+        };
+
+        let error = cast_column(&source_col, &target_type, &cast_options)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(
+            error,
+            "Found unmasked nulls for non-nullable StructArray field \"values\""
+        );
     }
 
     #[test]
