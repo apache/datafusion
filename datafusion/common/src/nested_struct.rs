@@ -358,7 +358,12 @@ fn mask_array_values(
 /// Nested Struct fields within keys and values are still matched by name. Key
 /// evolution is restricted by [`validate_map_key_compatibility`] so it cannot
 /// remove identity-bearing fields; sorted Maps require an unchanged key type.
-/// Entries hidden by null Map parents are compacted before casting.
+///
+/// Map-specific compaction is necessary because sliced Maps retain unreachable
+/// entries and null parents hide entries in their backing array, which `keys()`
+/// and `values()` expose to recursive casts. List-family casts currently
+/// preserve offsets and cast their backing values directly; consistent handling
+/// is tracked in #24506.
 fn cast_map_column(
     source_map: &MapArray,
     target_entries: &FieldRef,
