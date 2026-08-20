@@ -29,7 +29,7 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     JoinFilter, JoinOn, JoinOnRef, build_join_schema, check_join_is_valid,
-    estimate_join_statistics, reorder_output_after_swap,
+    estimate_join_statistics, reorder_output_after_swap, swap_join_projection,
     symmetric_join_output_partitioning,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
@@ -368,10 +368,16 @@ impl SortMergeJoinExec {
             self.join_type().swap(),
             self.sort_options.clone(),
             self.null_equality,
-        )?;
+        )?
+        .with_projection(swap_join_projection(
+            left.schema().fields().len(),
+            right.schema().fields().len(),
+            self.projection.as_deref(),
+            &self.join_type(),
+        ))?;
 
-        // TODO: OR this condition with having a built-in projection (like
-        //       ordinary hash join) when we support it.
+        // A semi, anti or mark join emits one side, and a projection already names the
+        // columns to emit, so in both cases swapping leaves the output order alone.
         if matches!(
             self.join_type(),
             JoinType::LeftSemi
@@ -380,7 +386,8 @@ impl SortMergeJoinExec {
                 | JoinType::RightAnti
                 | JoinType::LeftMark
                 | JoinType::RightMark
-        ) {
+        ) || self.projection.is_some()
+        {
             Ok(Arc::new(new_join))
         } else {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
@@ -835,11 +842,20 @@ impl ExecutionPlan for SortMergeJoinExec {
                         filter,
                         sort_options,
                         null_equality: null_equality.into(),
-                        projection: projection
-                            .iter()
-                            .flatten()
-                            .map(|index| *index as u32)
-                            .collect(),
+                        // Proto3 `repeated` cannot distinguish `None` from
+                        // `Some(vec![])`. `Some(vec![])` (reachable via
+                        // `try_embed_projection` for e.g. `SELECT count(1) … JOIN …`)
+                        // changes the output schema, so it is encoded with the
+                        // single-element sentinel `[u32::MAX]` (never a valid column
+                        // index); every other state is sent as-is. See
+                        // `try_from_proto` for the matching decoder.
+                        projection: match projection.as_ref() {
+                            None => Vec::new(),
+                            Some(indices) if indices.is_empty() => vec![u32::MAX],
+                            Some(indices) => {
+                                indices.iter().map(|index| *index as u32).collect()
+                            }
+                        },
                     },
                 )),
             ),
@@ -927,8 +943,12 @@ impl SortMergeJoinExec {
             })
             .collect();
 
-        let projection = (!projection.is_empty())
-            .then(|| projection.iter().map(|index| *index as usize).collect());
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|index| *index as usize).collect()),
+        };
 
         Ok(Arc::new(
             Self::try_new(

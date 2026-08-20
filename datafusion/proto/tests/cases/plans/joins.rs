@@ -367,26 +367,29 @@ fn roundtrip_sort_merge_join_with_projection() -> Result<()> {
         Arc::new(Column::new("col_b", 0)) as _,
     )];
 
-    let projection = Some(vec![1, 0]);
-    let result = roundtrip_test_and_return(
-        Arc::new(
-            SortMergeJoinExec::try_new(
-                Arc::new(EmptyExec::new(schema_left)),
-                Arc::new(EmptyExec::new(schema_right)),
-                on,
-                None,
-                JoinType::Inner,
-                vec![SortOptions::default()],
-                NullEquality::NullEqualsNothing,
-            )?
-            .with_projection(projection.clone())?,
-        ),
-        &ctx,
-        &codec,
-        &proto_converter,
-    )?;
-    let result = result.downcast_ref::<SortMergeJoinExec>().unwrap();
-    assert_eq!(result.projection, projection);
+    // An empty projection is not an absent one: it changes the output schema, and
+    // proto3 cannot tell the two apart without a sentinel.
+    for projection in [None, Some(vec![]), Some(vec![1, 0])] {
+        let result = roundtrip_test_and_return(
+            Arc::new(
+                SortMergeJoinExec::try_new(
+                    Arc::new(EmptyExec::new(Arc::clone(&schema_left))),
+                    Arc::new(EmptyExec::new(Arc::clone(&schema_right))),
+                    on.clone(),
+                    None,
+                    JoinType::Inner,
+                    vec![SortOptions::default()],
+                    NullEquality::NullEqualsNothing,
+                )?
+                .with_projection(projection.clone())?,
+            ),
+            &ctx,
+            &codec,
+            &proto_converter,
+        )?;
+        let result = result.downcast_ref::<SortMergeJoinExec>().unwrap();
+        assert_eq!(result.projection, projection);
+    }
 
     Ok(())
 }
