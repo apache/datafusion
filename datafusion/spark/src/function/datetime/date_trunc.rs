@@ -115,7 +115,12 @@ impl ScalarUDFImpl for SparkDateTrunc {
             other => other,
         };
 
-        let session_tz = info.config_options().execution.time_zone.clone();
+        let session_tz = info
+            .config_options()
+            .execution
+            .time_zone
+            .as_ref()
+            .map(ToString::to_string);
         let ts_type = ts_expr.get_type(info.schema())?;
 
         // Spark interprets timestamps in the session timezone before truncating,

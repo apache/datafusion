@@ -82,7 +82,7 @@ SET TIME ZONE = '+08'
 query T
 select arrow_typeof(now());
 ----
-Timestamp(ns, "+08")
+Timestamp(ns, "+08:00")
 
 query I
 SELECT count(1) result FROM (SELECT now() as n) a WHERE n > '2000-01-01'::date;

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
@@ -116,7 +115,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
             .execution
             .time_zone
             .as_ref()
-            .and_then(|tz| tz.parse::<Tz>().ok())
+            .map(|tz| tz.tz())
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
@@ -158,7 +157,7 @@ mod tests {
         config.execution.time_zone = if tz.is_empty() {
             None
         } else {
-            Some(tz.to_string())
+            Some(tz.parse().unwrap())
         };
         let schema = Arc::new(DFSchema::empty());
         SimplifyContext::builder()
