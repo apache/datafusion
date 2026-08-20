@@ -7237,6 +7237,44 @@ from aggregate_test_100;
 statement ok
 set datafusion.execution.batch_size = 8192;
 
+# Test negative nth_value update_batch() with batches smaller than, equal to,
+# and larger than N for both order-insensitive and order-sensitive accumulators.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 4) t(i);
+----
+2 2
+
+statement ok
+set datafusion.execution.batch_size = 3;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 6) t(i);
+----
+4 4
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 8) t(i);
+----
+6 6
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 
 # regr_*() testing retract_batch() from RegrAccumulator's internal implementation
 query RRIRRRRRR

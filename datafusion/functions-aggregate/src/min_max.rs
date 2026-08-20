@@ -84,7 +84,7 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     sql_example = r#"```sql
 > SELECT max(column_name) FROM table_name;
 +----------------------+
-| max(column_name)      |
+| max(column_name)     |
 +----------------------+
 | 150                  |
 +----------------------+
@@ -456,7 +456,7 @@ impl Accumulator for SlidingMaxAccumulator {
     sql_example = r#"```sql
 > SELECT min(column_name) FROM table_name;
 +----------------------+
-| min(column_name)      |
+| min(column_name)     |
 +----------------------+
 | 12                   |
 +----------------------+
