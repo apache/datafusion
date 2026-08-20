@@ -360,6 +360,74 @@ fn byte_array_order_preserves_matching_rows_at_every_pruning_level() {
 }
 
 #[test]
+fn large_string_in_list_preserves_rows_with_untrusted_page_order() {
+    let max_in_list_size = MAX_IN_LIST_SIZE + 2;
+    for order in [
+        StatisticsOrder::Modern,
+        StatisticsOrder::Missing,
+        StatisticsOrder::Unknown,
+    ] {
+        let file = TestFile::new(order);
+        // Only "az" occurs in the file. All other list members are above
+        // even the unsafe ["aé", "b"] interval in the first page's index.
+        let mut values = (0..=MAX_IN_LIST_SIZE)
+            .map(|index| lit(format!("z{index:03}")))
+            .collect::<Vec<_>>();
+        values.push(lit("az"));
+        let physical = logical2physical(&col("s").in_list(values, false), &file.schema);
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&file.schema))
+            .with_max_in_list_size(max_in_list_size)
+            .try_build(Arc::clone(&physical))
+            .unwrap();
+        assert!(
+            predicate
+                .predicate_expr()
+                .to_string()
+                .contains("IN_SET_INTERSECTS")
+        );
+
+        // Exercise the opener's configured-cap path, not the page filter's
+        // compatibility constructor that retains the default limit of 20.
+        let page_filter = crate::opener::build_page_pruning_predicate(
+            &physical,
+            &file.schema,
+            max_in_list_size,
+        );
+        assert_eq!(page_filter.filter_number(), 1);
+        let all = ParquetAccessPlan::new_all(file.metadata.num_row_groups());
+        assert_eq!(file.matching_rows(&physical, all.clone()), 1);
+        let file_metrics = metrics();
+        let pages = page_filter.prune_plan_with_page_index(
+            all,
+            &file.schema,
+            file.metadata.file_metadata().schema_descr(),
+            &file.metadata,
+            &file_metrics,
+        );
+        assert_eq!(
+            pages.row_group_indexes(),
+            if order == StatisticsOrder::Modern {
+                vec![0]
+            } else {
+                vec![0, 2]
+            },
+            "order={order:?}",
+        );
+        assert_eq!(file.matching_rows(&physical, pages), 1, "order={order:?}",);
+        assert_eq!(
+            file_metrics.page_index_rows_pruned.pruned(),
+            if order == StatisticsOrder::Modern {
+                6
+            } else {
+                3
+            },
+            "order={order:?}",
+        );
+    }
+}
+
+#[test]
 fn byte_array_order_keeps_null_counts_and_unrelated_column_bounds() {
     for order in [
         StatisticsOrder::Deprecated,

@@ -2588,6 +2588,7 @@ name = "datafusion-pruning"
 version = "55.0.0"
 dependencies = [
  "arrow",
+ "criterion",
  "datafusion-common",
  "datafusion-datasource",
  "datafusion-expr",
