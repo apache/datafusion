@@ -25,7 +25,7 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
-use crate::metrics::{ByteProgress, saturating_usize};
+use crate::metrics::ByteProgress;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
@@ -424,6 +424,16 @@ impl fmt::Debug for ParquetOpenState {
 struct PreparedParquetOpen {
     partition_index: usize,
     partitioned_file: PartitionedFile,
+    /// Tracks how much of this file range the scan has finished with.
+    ///
+    /// Held here, rather than built when the stream is, so that it covers the
+    /// fallible stages of opening a file too: loading metadata, preparing
+    /// filters, loading bloom filters. Any of those failing drops this state,
+    /// and the guard credits the range on the way out — matching
+    /// `files_processed`, which counts a file that failed to open as processed
+    /// (see `FileStreamScanState`). Otherwise a scan that skipped over a bad
+    /// file could never reach 100%.
+    byte_progress: ByteProgress,
     file_range: Option<datafusion_datasource::FileRange>,
     extensions: datafusion_datasource::FileExtensions,
     file_name: String,
@@ -822,8 +832,14 @@ impl ParquetMorselizer {
             )
         });
 
+        let byte_progress = ByteProgress::new(
+            partitioned_file.effective_size(),
+            file_metrics.bytes_processed.clone(),
+        );
+
         Ok(PreparedParquetOpen {
             partition_index: self.partition_index,
+            byte_progress,
             partitioned_file,
             file_range,
             extensions,
@@ -891,11 +907,8 @@ impl PreparedParquetOpen {
             self.file_metrics
                 .files_ranges_pruned_statistics
                 .add_pruned(1);
-            // The scan is done with every byte of this file range without
-            // reading any of them.
-            self.file_metrics
-                .bytes_processed
-                .add(saturating_usize(self.partitioned_file.effective_size()));
+            // Dropping `self` here credits the whole range: the scan is done
+            // with every byte of it without having read any.
             return Ok(None);
         }
 
@@ -1512,10 +1525,7 @@ impl RowGroupsPrunedParquetOpen {
         // another range. Without this the metric would sit at zero until the
         // first row group finishes decoding, reporting no progress for a scan
         // that may have just proved most of its work unnecessary.
-        let mut byte_progress = ByteProgress::new(
-            prepared.partitioned_file.effective_size(),
-            prepared.file_metrics.bytes_processed.clone(),
-        );
+        let mut byte_progress = prepared.byte_progress;
         // Every row group still in `rg_plan` is one this range owns, since the
         // plan it was built from had `prune_by_range` applied. The planned row
         // groups are therefore a subset of the in-range ones, and subtracting
@@ -2670,6 +2680,40 @@ mod test {
 
             assert_eq!(total_rows, 9, "the ranges together must scan every row");
             assert_eq!(total_processed, data_len);
+        }
+
+        /// A file that cannot be opened at all is still a file the scan is done
+        /// with. `files_processed` counts one under `OnError::Skip`, so its
+        /// byte-granular counterpart has to agree — otherwise a scan that
+        /// skipped a corrupt file could never reach 100%.
+        #[tokio::test]
+        async fn a_file_that_fails_to_open_still_credits_its_range() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, _) = write_three_row_groups(Arc::clone(&store)).await;
+
+            // Not a parquet file at all, so reading the footer fails long
+            // before a stream — and so before a `ByteProgress` would exist if
+            // one were only built alongside the decoder.
+            let garbage = vec![b'x'; 512];
+            let data_len = u64::try_from(garbage.len()).unwrap();
+            store
+                .put(&Path::from("corrupt.parquet"), garbage.into())
+                .await
+                .unwrap();
+
+            let file = PartitionedFile::new("corrupt.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(schema)
+                .with_projection_indices(&[0])
+                .with_metrics(metrics.clone())
+                .build();
+
+            let opened = open_file(&morselizer, file).await;
+            assert!(opened.is_err(), "a non-parquet file must fail to open");
+            assert_eq!(bytes_processed(&metrics), data_len);
         }
 
         /// A scan that stops early still ends up crediting the whole range, so a

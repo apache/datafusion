@@ -127,8 +127,10 @@ pub struct ParquetFileMetrics {
 /// left over is credited on drop. The counter therefore advances by exactly the
 /// size of the range being scanned however the scan ends: normally, at a
 /// `LIMIT`, when a dynamic filter proves the rest of the file irrelevant, or on
-/// an error. That total is what makes the metric usable as a completion
-/// fraction rather than just another counter.
+/// an error — including one that stops the file being opened at all, which is
+/// why the guard is created before the fallible stages of opening rather than
+/// alongside the decoder. That total is what makes the metric usable as a
+/// completion fraction rather than just another counter.
 ///
 /// The clamp and the final top-up also absorb two small inexactnesses in
 /// crediting by row group: a file is slightly larger than the sum of its row
@@ -167,7 +169,7 @@ impl ByteProgress {
 
 /// Narrow a byte count to the width [`Count`] stores, saturating rather than
 /// wrapping. Lossless on 64-bit targets.
-pub(crate) fn saturating_usize(bytes: u64) -> usize {
+fn saturating_usize(bytes: u64) -> usize {
     usize::try_from(bytes).unwrap_or(usize::MAX)
 }
 
