@@ -757,6 +757,21 @@ fn try_push_input(
     split_and_push_projection(proj, alias_generator)
 }
 
+/// If this is a passthrough column.  I.e,
+///
+///  - A bare column expression
+///  - A trivial alias rename (i.e, `p.column AS column`)
+fn passthrough_column(expr: &Expr) -> Option<&Column> {
+    match expr {
+        Expr::Column(col) => Some(col),
+        Expr::Alias(alias) => match alias.expr.as_ref() {
+            Expr::Column(col) if col.name == alias.name => Some(col),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Splits a projection into extractable pieces, pushes them towards leaf
 /// nodes, and adds a recovery projection if needed.
 ///
@@ -831,7 +846,13 @@ fn split_and_push_projection(
     let mut proj_exprs_captured: usize = 0;
 
     for (expr, (qualifier, field)) in proj.expr.iter().zip(original_schema.iter()) {
-        if let Expr::Alias(alias) = expr
+        if let Some(col) = passthrough_column(expr) {
+            // Pass-through — the input already produces this column, so
+            // there is nothing to extract; just track it in the extractor.
+            extractors[0].columns_needed.insert(col.clone());
+            recovery_exprs.push(expr.clone());
+            proj_exprs_captured += 1;
+        } else if let Expr::Alias(alias) = expr
             && alias.name.starts_with(EXTRACTED_EXPR_PREFIX)
         {
             // Insert the full Alias expression as the key so that
@@ -846,11 +867,6 @@ fn split_and_push_projection(
                 .extracted
                 .insert(expr.clone(), alias_name.clone());
             recovery_exprs.push(Expr::Column(Column::new_unqualified(&alias_name)));
-            proj_exprs_captured += 1;
-        } else if let Expr::Column(col) = expr {
-            // Plain column pass-through — track it in the extractor
-            extractors[0].columns_needed.insert(col.clone());
-            recovery_exprs.push(expr.clone());
             proj_exprs_captured += 1;
         } else {
             // Everything else: run through routing_extract
@@ -3161,6 +3177,80 @@ mod tests {
                   TableScan: test projection=[id, user]
         "#);
 
+        Ok(())
+    }
+
+    /// Reproduces a schema-ambiguity failure in `PushDownLeafProjections`.
+    ///
+    /// ```text
+    /// Optimizer rule 'push_down_leaf_projections' failed
+    /// caused by
+    /// Schema error: Schema contains qualified field name p.__datafusion_extracted_1
+    /// and unqualified field name __datafusion_extracted_1 which would be ambiguous
+    /// ```
+    ///
+    /// Four ingredients, each necessary:
+    ///
+    /// 1. a `SubqueryAlias` over each join input (bare aliased table scans pass),
+    /// 2. a **left** join (an inner join passes),
+    /// 3. a leaf expression on *each* side, so extraction pushes into both inputs,
+    /// 4. an aggregate above the join (a projection passes).
+    ///
+    /// With extraction pushed inside both aliases, the left input re-exposes its
+    /// alias qualified as `p.__datafusion_extracted_1`, while the recovery
+    /// projection above the join rebuilds the same reference unqualified via
+    /// `Column::new_unqualified`, so one schema ends up holding both spellings.
+    ///
+    /// Equivalent SQL:
+    /// ```sql
+    /// CREATE VIEW p AS SELECT user, id FROM test;
+    /// CREATE VIEW c AS SELECT user, id FROM other;
+    /// SELECT p.user['a'], count(1)
+    /// FROM p LEFT JOIN c ON p.id = c.id
+    /// WHERE c.user['t'] IS NOT NULL
+    /// GROUP BY 1;
+    /// ```
+    #[test]
+    fn test_leaf_expr_on_both_sides_of_left_join_under_aggregate() -> Result<()> {
+        use datafusion_expr::JoinType;
+        use datafusion_expr::test::function_stub::count;
+
+        fn view(name: &str, table: LogicalPlan) -> Result<LogicalPlan> {
+            LogicalPlanBuilder::from(table)
+                .project(vec![col("user"), col("id")])?
+                .alias(name)?
+                .build()
+        }
+
+        let left = view("p", test_table_scan_with_struct()?)?;
+        let right = view("c", test_table_scan_with_struct_named("right")?)?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join(right, JoinType::Left, (vec!["id"], vec!["id"]), None)?
+            .filter(leaf_udf(col("c.user"), "t").is_not_null())?
+            .aggregate(vec![leaf_udf(col("p.user"), "a")], vec![count(lit(1))])?
+            .build()?;
+
+        // The full optimizer, not `format_optimization_stages`: the triggering
+        // shape (`p.__datafusion_extracted_1 AS __datafusion_extracted_1`) only
+        // appears once projection merging has collapsed the recovery projection
+        // over the `SubqueryAlias`.
+        let ctx = OptimizerContext::new();
+        let optimized = Optimizer::new().optimize(plan, &ctx, |_, _| {})?;
+        insta::assert_snapshot!(format!("{optimized}"), @r#"
+        Projection: __datafusion_extracted_1 AS leaf_udf(p.user,Utf8("a")), COUNT(Int32(1))
+          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
+            Projection: p.__datafusion_extracted_1 AS __datafusion_extracted_1
+              Inner Join: p.id = c.id
+                SubqueryAlias: p
+                  Projection: test.id, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
+                    TableScan: test projection=[id, user]
+                SubqueryAlias: c
+                  Projection: right.id
+                    Filter: __datafusion_extracted_2 IS NOT NULL
+                      Projection: right.id, leaf_udf(right.user, Utf8("t")) AS __datafusion_extracted_2
+                        TableScan: right projection=[id, user]
+        "#);
         Ok(())
     }
 }

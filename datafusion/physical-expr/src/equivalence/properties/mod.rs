@@ -1165,8 +1165,27 @@ impl EquivalenceProperties {
         self.constraints.project(&indices)
     }
 
-    /// Projects the equivalences within according to `mapping` and
-    /// `output_schema`.
+    /// Projects these equivalence properties onto `output_schema` according to
+    /// `mapping`, returning the properties that still hold for the projected
+    /// output.
+    ///
+    /// `mapping` maps each source expression (evaluated against the current
+    /// schema) to the output column(s) it produces. This is more than a
+    /// column-index remap: the orderings, the equivalence group and the
+    /// constraints are all carried through `mapping`, keeping only what the
+    /// projected schema can still express.
+    ///
+    /// - Orderings: an existing ordering is carried to a target only when the
+    ///   mapping expression is order-preserving for it, as determined from the
+    ///   expression's [`SortProperties`]. For example, an ordering on `c` is
+    ///   preserved through `c + 1` but dropped through `abs(c)`. Orderings
+    ///   implied by the mapping are also derived, e.g. an ordering on `a + b`
+    ///   yields one on the projected `a_new + b_new`.
+    /// - Equivalence group: each class is re-expressed on the output columns.
+    /// - Constraints: projected onto the surviving column indices.
+    ///
+    /// Expressions and orderings not representable in `output_schema` are
+    /// dropped.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
         // Built here, so it satisfies the precondition by construction; going
