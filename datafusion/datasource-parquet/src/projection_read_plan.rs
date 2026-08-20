@@ -571,6 +571,14 @@ pub(crate) fn build_projection_read_plan(
     read_plan
 }
 
+/// Leaf selection accumulated for one projected root column.
+enum RootRead {
+    /// Decode every leaf and preserve the physical Arrow field.
+    Full,
+    /// Decode these leaf offsets relative to the start of this root.
+    Partial(BTreeSet<usize>),
+}
+
 /// Builds a [`ParquetReadPlan`] when at least one projected root column is
 /// consumed through a cast to a narrower nested type.
 ///
@@ -595,21 +603,20 @@ fn build_read_plan_with_cast_clipping(
     struct_accesses: &[StructFieldAccess],
     cast_accesses: &[CastColumnAccess],
 ) -> ParquetReadPlan {
-    let whole_roots: BTreeSet<usize> = whole_root_indices.iter().copied().collect();
     // Every referenced root's Parquet leaves, grouped in one pass over the
     // schema descriptor rather than one `leaf_indices_for_roots` scan per
     // root (this function may look up several roots).
     let leaves_by_root = leaves_grouped_by_root(schema_descr);
-
-    // Root -> relative leaf offsets required by every narrowing cast on that
-    // root. A set makes repeated and overlapping targets a natural union.
-    let mut kept_offsets_by_root: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
-    // Roots with a cast access that must fall back to a full read.
-    let mut fallback_roots: BTreeSet<usize> = BTreeSet::new();
+    // Keep one decision per root. The ordered map also determines the output
+    // schema order, which must match the Parquet reader's root order.
+    let mut root_reads: BTreeMap<usize, RootRead> = whole_root_indices
+        .iter()
+        .map(|root| (*root, RootRead::Full))
+        .collect();
 
     for access in cast_accesses {
         let root = access.root_index;
-        if whole_roots.contains(&root) || fallback_roots.contains(&root) {
+        if matches!(root_reads.get(&root), Some(RootRead::Full)) {
             continue;
         }
 
@@ -621,122 +628,83 @@ fn build_read_plan_with_cast_clipping(
         // arrow schema). If not, never risk a wrong mask: read the whole
         // root.
         if root_leaves.len() != count_leaves(physical_type) {
-            fallback_roots.insert(root);
+            root_reads.insert(root, RootRead::Full);
             continue;
         }
 
         match clip_for_cast(physical_type, &access.target_type) {
             Some((kept_offsets, _pruned_type)) => {
-                kept_offsets_by_root
+                if let RootRead::Partial(offsets) = root_reads
                     .entry(root)
-                    .or_default()
-                    .extend(kept_offsets);
+                    .or_insert_with(|| RootRead::Partial(BTreeSet::new()))
+                {
+                    offsets.extend(kept_offsets);
+                }
             }
             // Nothing prunable for this cast: every leaf is consumed.
             None => {
-                kept_offsets_by_root.remove(&root);
-                fallback_roots.insert(root);
+                root_reads.insert(root, RootRead::Full);
             }
         }
     }
 
-    // Add leaves reached through `get_field` to cast roots. The resolver
-    // returns absolute Parquet leaf indices; convert them back to offsets in
-    // their root so they can share the same union as cast clipping.
+    // Add every `get_field` root before resolving leaves. If an access matches
+    // no leaf, finalization safely falls back to a full read for that root.
+    for access in struct_accesses {
+        root_reads
+            .entry(access.root_index)
+            .or_insert_with(|| RootRead::Partial(BTreeSet::new()));
+    }
+
+    // The resolver returns absolute Parquet leaf indices. Convert each selected
+    // leaf to a root-relative offset so casts and field accesses share one union.
     let struct_access_tree = StructAccessTree::from_accesses(struct_accesses);
     for leaf in resolve_struct_field_leaves(&struct_access_tree, schema_descr) {
         let root = schema_descr.get_column_root_idx(leaf);
-        if !kept_offsets_by_root.contains_key(&root) {
+        let Some(RootRead::Partial(offsets)) = root_reads.get_mut(&root) else {
             continue;
-        }
+        };
         let Some(offset) = leaves_by_root
             .get(&root)
             .and_then(|root_leaves| root_leaves.binary_search(&leaf).ok())
         else {
-            kept_offsets_by_root.remove(&root);
-            fallback_roots.insert(root);
+            root_reads.insert(root, RootRead::Full);
             continue;
         };
-        kept_offsets_by_root
-            .get_mut(&root)
-            .expect("root presence checked above")
-            .insert(offset);
+        offsets.insert(offset);
     }
-
-    // Derive the reader's one emitted Arrow type from each merged leaf set.
-    // Any unsupported partial wrapper retains the total fallback guarantee.
-    let mut clipped_by_root: BTreeMap<usize, (Vec<usize>, DataType)> = BTreeMap::new();
-    for (root, kept_offsets) in kept_offsets_by_root {
-        if fallback_roots.contains(&root) {
-            continue;
-        }
-        let physical_type = file_schema.field(root).data_type();
-        let root_leaves = leaves_by_root.get(&root).map_or(&[][..], Vec::as_slice);
-        let kept_offsets = kept_offsets.into_iter().collect::<Vec<_>>();
-        let Some(pruned_type) = type_for_leaf_subset(physical_type, &kept_offsets) else {
-            fallback_roots.insert(root);
-            continue;
-        };
-        let absolute = kept_offsets
-            .into_iter()
-            .map(|offset| root_leaves[offset])
-            .collect();
-        clipped_by_root.insert(root, (absolute, pruned_type));
-    }
-
-    // `get_field` accesses on roots not already read in full (as a whole
-    // column, or as a cast that fell back) keep the existing (non-cast) leaf
-    // resolution.
-    let get_field_accesses: Vec<StructFieldAccess> = struct_accesses
-        .iter()
-        .filter(|a| {
-            !whole_roots.contains(&a.root_index)
-                && !fallback_roots.contains(&a.root_index)
-                && !clipped_by_root.contains_key(&a.root_index)
-        })
-        .cloned()
-        .collect();
 
     let mut leaf_indices: Vec<usize> = Vec::new();
-    let mut fields: BTreeMap<usize, Arc<Field>> = BTreeMap::new();
-
-    for root in whole_roots.iter().chain(fallback_roots.iter()) {
-        // A root with no parquet leaves contributes nothing to the mask;
-        // `ProjectionMask::roots` handles that case the same way, so match it
-        // rather than indexing and panicking.
-        if let Some(leaves) = leaves_by_root.get(root) {
-            leaf_indices.extend(leaves.iter().copied());
+    let mut fields = Vec::with_capacity(root_reads.len());
+    for (root, read) in root_reads {
+        let field = file_schema.field(root);
+        let root_leaves = leaves_by_root.get(&root).map_or(&[][..], Vec::as_slice);
+        match read {
+            RootRead::Partial(offsets)
+                if root_leaves.len() == count_leaves(field.data_type()) =>
+            {
+                let offsets = offsets.into_iter().collect::<Vec<_>>();
+                if let Some(projected_type) =
+                    type_for_leaf_subset(field.data_type(), &offsets)
+                {
+                    leaf_indices
+                        .extend(offsets.into_iter().map(|offset| root_leaves[offset]));
+                    fields.push(field_with_type(field, projected_type));
+                    continue;
+                }
+            }
+            RootRead::Full | RootRead::Partial(_) => {}
         }
-        fields.insert(*root, Arc::new(file_schema.field(*root).clone()));
-    }
 
-    for (&root, (kept, pruned_type)) in &clipped_by_root {
-        leaf_indices.extend(kept.iter().copied());
-        fields.insert(
-            root,
-            field_with_type(file_schema.field(root), pruned_type.clone()),
-        );
+        // Full reads and unsupported/empty partial reads preserve the physical
+        // field. A root with no Parquet leaves contributes only its Arrow field.
+        leaf_indices.extend(root_leaves.iter().copied());
+        fields.push(Arc::new(field.clone()));
     }
-
-    if !get_field_accesses.is_empty() {
-        let get_field_tree = StructAccessTree::from_accesses(&get_field_accesses);
-        leaf_indices.extend(resolve_struct_field_leaves(&get_field_tree, schema_descr));
-        let get_field_schema = build_filter_schema(file_schema, &[], &get_field_tree);
-        let get_field_roots: BTreeSet<usize> =
-            get_field_accesses.iter().map(|a| a.root_index).collect();
-        // `build_filter_schema` emits one field per accessed root in
-        // ascending root order, which is the order `get_field_roots` iterates
-        // in, so the two line up positionally. Pairing them beats looking each
-        // one up by name: no repeated linear scans, and no ambiguity if two
-        // roots happen to share a name.
-        debug_assert_eq!(get_field_roots.len(), get_field_schema.fields().len());
-        for (root, field) in get_field_roots.iter().zip(get_field_schema.fields()) {
-            fields.insert(*root, Arc::clone(field));
-        }
-    }
-
-    leaf_indices.sort_unstable();
-    leaf_indices.dedup();
+    // `root_reads` visits roots in schema order, every root's leaves were
+    // collected in descriptor order, and partial offsets are a `BTreeSet`.
+    // Therefore the final mask is already sorted and deduplicated.
+    debug_assert!(leaf_indices.windows(2).all(|pair| pair[0] < pair[1]));
 
     ParquetReadPlan {
         projection_mask: ProjectionMask::leaves(
@@ -744,7 +712,7 @@ fn build_read_plan_with_cast_clipping(
             leaf_indices.iter().copied(),
         ),
         projected_schema: Arc::new(Schema::new_with_metadata(
-            fields.into_values().collect::<Vec<_>>(),
+            fields,
             file_schema.metadata().clone(),
         )),
     }
