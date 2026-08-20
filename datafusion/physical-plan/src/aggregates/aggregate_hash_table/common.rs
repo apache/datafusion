@@ -544,8 +544,10 @@ impl HashAggregateAccumulator {
 
     /// Evaluate aggregate arguments and filter for one input batch.
     ///
-    /// For example, `AVG(x + 1) FILTER (WHERE x > 0)` evaluates `x > 0`
-    /// first, then evaluates `x + 1` only for selected rows.
+    /// For example, `AVG(2 / x) FILTER (WHERE x > 0)` evaluates `x > 0`
+    /// first, then evaluates `2 / x` only for selected rows.
+    /// Filtered rows will be evaluated to `NULL`, and won't trigger errors
+    /// such as divide by zero.
     ///
     /// These arrays can be passed directly to [`GroupsAccumulator`] next.
     pub(super) fn evaluate_acc_args(
