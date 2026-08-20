@@ -1840,8 +1840,8 @@ SELECT range_key, SUM(value) FROM (
 # TEST 48: Hash Join Dynamic Filter Pushdown on Compatible Range Inputs
 # The Parquet-backed probe accepts the partition-routed dynamic filter. Matching
 # Range split points keep build filter i aligned with probe partition i. The
-# build has rows only in partitions 0 and 2, so the runtime filter must route
-# with a four-way CASE rather than collapse to a single filter.
+# build has rows only in partitions 0 and 2, so the sparse runtime CASE includes
+# only those branches and lets empty partitions fall through to false.
 ##########
 
 statement ok
@@ -1882,7 +1882,7 @@ JOIN range_partitioned p ON b.range_key = p.range_key;
 Plan with Metrics
 01)HashJoinExec: mode=Partitioned<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
 02)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=range_key@0 = 5 OR range_key@0 = 20<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
-03)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN range_key@0 >= 5 AND range_key@0 <= 5 AND range_key@0 IN (SET) ([5]) WHEN 1 THEN false WHEN 2 THEN range_key@0 >= 20 AND range_key@0 <= 20 AND range_key@0 IN (SET) ([20]) ELSE false END ]<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
+03)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN range_key@0 >= 5 AND range_key@0 <= 5 AND range_key@0 IN (SET) ([5]) WHEN 2 THEN range_key@0 >= 20 AND range_key@0 <= 20 AND range_key@0 IN (SET) ([20]) ELSE false END ]<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
 
 query III
 SELECT b.range_key, b.value, p.value
