@@ -83,9 +83,9 @@ pub fn avg_distinct(expr: Expr) -> Expr {
     sql_example = r#"```sql
 > SELECT avg(column_name) FROM table_name;
 +---------------------------+
-| avg(column_name)           |
+| avg(column_name)          |
 +---------------------------+
-| 42.75                      |
+| 42.75                     |
 +---------------------------+
 ```"#,
     standard_argument(name = "expression",)

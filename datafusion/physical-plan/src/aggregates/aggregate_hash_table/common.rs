@@ -28,14 +28,16 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{
-    AggregateArgumentMetrics, GroupByMetrics, GroupValues, new_group_values,
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+    GroupByMetrics, GroupValues, new_group_values,
 };
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
-    evaluate_group_by,
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
 };
+
+use super::AggregateTableMetrics;
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
@@ -80,6 +82,9 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
 
     /// Per-aggregate timing metrics for evaluating aggregate arguments.
     pub(super) aggregate_argument_metrics: AggregateArgumentMetrics,
+
+    /// Per-aggregate timing metrics for accumulator operations.
+    pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
 
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
@@ -140,17 +145,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
-        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
-            &agg.metrics,
-            partition,
-            agg.aggr_expr
-                .iter()
-                .map(|agg_expr| aggregate_metric_label(agg_expr)),
-        );
+        let metrics = AggregateTableMetrics::new(agg, partition);
 
         Ok(Self {
-            group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
-            aggregate_argument_metrics,
+            group_by_metrics: metrics.group_by,
+            aggregate_argument_metrics: metrics.aggregate_arguments,
+            aggregate_accumulator_metrics: metrics.accumulator,
             input_schema,
             output_schema,
             state_schema,
@@ -208,8 +208,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         &mut self,
         batch: &RecordBatch,
         aggregate_fn: AggregateBatchFn,
+        accumulator_phase: AccumulatorPhase,
     ) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building_mut();
 
         let _timer = self.group_by_metrics.aggregation_time.timer();
@@ -220,12 +222,15 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 
-            for (acc, values) in state
+            for (idx, (acc, values)) in state
                 .accumulators
                 .iter_mut()
                 .zip(evaluated_batch.accumulator_args.iter())
+                .enumerate()
             {
-                aggregate_fn(acc, values, group_indices, total_num_groups)?;
+                accumulator_metrics.time(idx, accumulator_phase, || {
+                    aggregate_fn(acc, values, group_indices, total_num_groups)
+                })?;
             }
         }
 
@@ -244,9 +249,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     pub(super) fn next_output_batch_inner(
         &mut self,
         materialize_accumulator_fn: MaterializeAccumulatorFn,
+        accumulator_phase: AccumulatorPhase,
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
 
         let mut output =
             match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
@@ -260,8 +267,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     let emit_to = EmitTo::All;
                     let timer = self.group_by_metrics.emitting_time.timer();
                     let mut columns = state.group_values.emit(emit_to)?;
-                    for acc in state.accumulators.iter_mut() {
-                        columns.extend(materialize_accumulator_fn(acc, emit_to)?);
+                    for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                        columns.extend(accumulator_metrics.time(
+                            idx,
+                            accumulator_phase,
+                            || materialize_accumulator_fn(acc, emit_to),
+                        )?);
                     }
                     drop(timer);
 
@@ -322,14 +333,19 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building_mut();
         if state.group_values.is_empty() {
             return Ok(None);
         }
 
         let mut output = state.group_values.emit(EmitTo::All)?;
-        for acc in &mut state.accumulators {
-            output.extend(acc.state(EmitTo::All)?);
+        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+            output.extend(accumulator_metrics.time(
+                idx,
+                AccumulatorPhase::State,
+                || acc.state(EmitTo::All),
+            )?);
         }
 
         let batch = RecordBatch::try_new(state_schema, output)?;

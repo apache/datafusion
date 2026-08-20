@@ -284,56 +284,51 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                let nullable_then = case
-                    .when_then_expr
-                    .iter()
-                    .filter_map(|(w, t)| {
-                        let is_nullable = match t.nullable(input_schema) {
-                            Err(e) => return Some(Err(e)),
-                            Ok(n) => n,
-                        };
+                let nullable_then = case.when_then_expr.iter().find_map(|(w, t)| {
+                    let is_nullable = match t.nullable(input_schema) {
+                        Err(e) => return Some(Err(e)),
+                        Ok(n) => n,
+                    };
 
-                        // Branches with a then expression that is not nullable do not impact the
-                        // nullability of the case expression.
-                        if !is_nullable {
-                            return None;
-                        }
+                    // Branches with a then expression that is not nullable do not impact the
+                    // nullability of the case expression.
+                    if !is_nullable {
+                        return None;
+                    }
 
-                        // For case-with-expression assume all 'then' expressions are reachable
-                        if case.expr.is_some() {
-                            return Some(Ok(()));
-                        }
+                    // For case-with-expression assume all 'then' expressions are reachable
+                    if case.expr.is_some() {
+                        return Some(Ok(()));
+                    }
 
-                        // For branches with a nullable 'then' expression, try to determine
-                        // if the 'then' expression is ever reachable in the situation where
-                        // it would evaluate to null.
-                        let bounds = match predicate_bounds::evaluate_bounds(
-                            w,
-                            Some(unwrap_certainly_null_expr(t)),
-                            input_schema,
-                        ) {
-                            Err(e) => return Some(Err(e)),
-                            Ok(b) => b,
-                        };
+                    // For branches with a nullable 'then' expression, try to determine
+                    // if the 'then' expression is ever reachable in the situation where
+                    // it would evaluate to null.
+                    let bounds = match predicate_bounds::evaluate_bounds(
+                        w,
+                        Some(unwrap_certainly_null_expr(t)),
+                        input_schema,
+                    ) {
+                        Err(e) => return Some(Err(e)),
+                        Ok(b) => b,
+                    };
 
-                        let can_be_true = match bounds
-                            .contains_value(ScalarValue::Boolean(Some(true)))
-                        {
+                    let can_be_true =
+                        match bounds.contains_value(ScalarValue::Boolean(Some(true))) {
                             Err(e) => return Some(Err(e)),
                             Ok(b) => b,
                         };
 
-                        if !can_be_true {
-                            // If the derived 'when' expression can never evaluate to true, the
-                            // 'then' expression is not reachable when it would evaluate to NULL.
-                            // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                            None
-                        } else {
-                            // The branch might be taken
-                            Some(Ok(()))
-                        }
-                    })
-                    .next();
+                    if !can_be_true {
+                        // If the derived 'when' expression can never evaluate to true, the
+                        // 'then' expression is not reachable when it would evaluate to NULL.
+                        // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                        None
+                    } else {
+                        // The branch might be taken
+                        Some(Ok(()))
+                    }
+                });
 
                 if let Some(nullable_then) = nullable_then {
                     // There is at least one reachable nullable 'then' expression, so the case
@@ -374,9 +369,9 @@ impl ExprSchemable for Expr {
 
                 Ok(expr_nullable | subquery_nullable)
             }
-            Expr::ScalarSubquery(subquery) => {
-                Ok(subquery.subquery.schema().field(0).is_nullable())
-            }
+            // A scalar subquery may return no rows, in which case it evaluates to NULL
+            // regardless of the nullability of its projected field.
+            Expr::ScalarSubquery(_) => Ok(true),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
             }
@@ -522,9 +517,15 @@ impl ExprSchemable for Expr {
             | Expr::Exists { .. } => {
                 Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
-            Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
-            }
+            Expr::ScalarSubquery(subquery) => Ok(Arc::new(
+                subquery
+                    .subquery
+                    .schema()
+                    .field(0)
+                    .as_ref()
+                    .clone()
+                    .with_nullable(true),
+            )),
             Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
                 let (left_field, right_field) =
                     (left.to_field(schema)?.1, right.to_field(schema)?.1);
@@ -546,7 +547,6 @@ impl ExprSchemable for Expr {
                 let WindowFunction {
                     fun,
                     params: WindowFunctionParams { args, .. },
-                    ..
                 } = window_function.as_ref();
 
                 let fields = args
@@ -806,7 +806,7 @@ mod tests {
     use crate::logical_plan::builder::LogicalTableSource;
     use crate::{
         LogicalPlanBuilder, and, col, in_subquery, lit, not, or,
-        out_ref_col_with_metadata, when,
+        out_ref_col_with_metadata, scalar_subquery, when,
     };
 
     use arrow::datatypes::Schema;
@@ -1272,6 +1272,23 @@ mod tests {
             err.strip_backtrace(),
             "Error during planning: subquery must return exactly one column of data to compare against"
         );
+    }
+
+    #[test]
+    fn scalar_subquery_is_nullable_with_non_nullable_output() {
+        let subquery = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(!subquery.schema().field(0).is_nullable());
+
+        let expr = scalar_subquery(Arc::new(subquery));
+        assert!(expr.nullable(&MockExprSchema::new()).unwrap());
+
+        let field = expr.to_field(&MockExprSchema::new()).unwrap().1;
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
     }
 
     #[test]
