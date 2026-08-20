@@ -27,7 +27,9 @@ use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
-use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
+use crate::{
+    LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
+};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
@@ -370,9 +372,10 @@ impl ExprSchemable for Expr {
                 Ok(expr_nullable | subquery_nullable)
             }
             Expr::ScalarSubquery(subquery) => Ok(scalar_subquery_nullable(subquery)),
-            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
-            }
+            Expr::BinaryExpr(BinaryExpr { left, right, op }) => match op {
+                Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => Ok(false),
+                _ => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
+            },
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
@@ -535,10 +538,14 @@ impl ExprSchemable for Expr {
                 let mut coercer = BinaryTypeCoercer::new(lhs_type, op, rhs_type);
                 coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
                 coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
+                let nullable = match op {
+                    Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
+                    _ => lhs_nullable || rhs_nullable,
+                };
                 Ok(Arc::new(Field::new(
                     &schema_name,
                     coercer.get_result_type()?,
-                    lhs_nullable || rhs_nullable,
+                    nullable,
                 )))
             }
             Expr::WindowFunction(window_function) => {
@@ -829,12 +836,30 @@ mod tests {
 
     #[test]
     fn expr_schema_nullability() {
-        let expr = col("foo").eq(lit(1));
-        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
-        assert!(
-            expr.nullable(&MockExprSchema::new().with_nullable(true))
-                .unwrap()
-        );
+        let cases = [
+            (Operator::Eq, false, false),
+            (Operator::Eq, true, true),
+            (Operator::IsDistinctFrom, true, false),
+            (Operator::IsNotDistinctFrom, true, false),
+        ];
+
+        for (op, input_nullable, expected) in cases {
+            let expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col("foo")),
+                op,
+                Box::new(col("bar")),
+            ));
+            let schema = MockExprSchema::new()
+                .with_data_type(DataType::Boolean)
+                .with_nullable(input_nullable);
+
+            assert_eq!(expr.nullable(&schema).unwrap(), expected, "{op}");
+            assert_eq!(
+                expr.to_field(&schema).unwrap().1.is_nullable(),
+                expected,
+                "{op}"
+            );
+        }
 
         test_is_expr_nullable!(is_null);
         test_is_expr_nullable!(is_not_null);
