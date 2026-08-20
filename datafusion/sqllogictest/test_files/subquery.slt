@@ -2052,6 +2052,25 @@ SELECT (SELECT max(v) FROM sq_values);
 ----
 3
 
+# An ungrouped aggregate produces exactly one row even on empty input, so the
+# subquery's result is not nullable and SimplifyExpressions folds IS NULL to
+# false. The query result alone cannot show the fold (a non-empty subquery
+# never evaluates to NULL at runtime), so pin the simplified plan.
+query TT
+EXPLAIN SELECT (SELECT count(*) FROM sq_empty) IS NULL;
+----
+logical_plan
+01)Projection: Boolean(false) AS count(*) IS NULL
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[false as count(*) IS NULL]
+02)--PlaceholderRowExec
+
+query B
+SELECT (SELECT count(*) FROM sq_empty) IS NULL;
+----
+false
+
 # Multiple scalar subqueries, one returns multiple rows → error
 query error DataFusion error: Execution error: Scalar subquery returned more than one row
 SELECT (SELECT count(*) FROM sq_empty), (SELECT v FROM sq_values);
