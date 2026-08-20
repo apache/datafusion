@@ -26,7 +26,8 @@ mod tests {
         ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
         tests::EmptyExec,
     };
-    use datafusion_ffi::tests::utils::get_module;
+    use datafusion_ffi::tests::utils::{get_byte_metrics_exec, get_module};
+    use datafusion_physical_expr_common::metrics::MetricValue;
     use datafusion_physical_plan::execution_plan::InvariantLevel;
     use datafusion_physical_plan::{
         ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
@@ -71,8 +72,7 @@ mod tests {
     #[test]
     fn test_ffi_execution_plan_byte_metrics_cross_library() -> Result<(), DataFusionError>
     {
-        let module = get_module()?;
-        let plan = (module.create_exec_with_byte_metrics)();
+        let plan = get_byte_metrics_exec()?;
         let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
         assert!(plan.is::<ForeignExecutionPlan>());
 
@@ -83,8 +83,40 @@ mod tests {
         // that boundary - not just the in-process From conversions covered
         // by physical_expr::metrics's roundtrip tests.
         let metrics = plan.metrics().expect("plan should report metrics");
-        let rendered: Vec<String> = metrics.iter().map(|m| m.to_string()).collect();
 
+        // Match the discriminant itself, not just its Display output - this
+        // proves the BytesCount/BytesGauge variants (not e.g. a generic
+        // Count/Gauge that happens to render the same string) survived the
+        // ABI round trip.
+        let mut found_bytes_count = false;
+        let mut found_bytes_gauge = false;
+        for metric in metrics.iter() {
+            match metric.value() {
+                MetricValue::BytesCount { name, count } => {
+                    assert_eq!(name.as_ref(), "bytes_scanned");
+                    assert_eq!(count.value(), 1536);
+                    found_bytes_count = true;
+                }
+                MetricValue::BytesGauge { name, gauge } => {
+                    assert_eq!(name.as_ref(), "stream_memory_usage");
+                    assert_eq!(gauge.value(), 2048);
+                    found_bytes_gauge = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            found_bytes_count,
+            "expected a BytesCount metric, got: {metrics:?}"
+        );
+        assert!(
+            found_bytes_gauge,
+            "expected a BytesGauge metric, got: {metrics:?}"
+        );
+
+        // Also confirm the byte-unit Display formatting these variants exist
+        // for in the first place still applies post-round-trip.
+        let rendered: Vec<String> = metrics.iter().map(|m| m.to_string()).collect();
         assert!(
             rendered
                 .iter()

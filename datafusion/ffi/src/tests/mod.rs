@@ -120,8 +120,6 @@ pub struct ForeignLibraryModule {
 
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
-    pub create_exec_with_byte_metrics: extern "C" fn() -> FFI_ExecutionPlan,
-
     pub create_table_with_statistics:
         extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 
@@ -242,9 +240,20 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
 /// cross-library `metrics()` FFI call rather than only the in-process
 /// `FFI_MetricValue` conversion tests in `physical_expr::metrics`.
 ///
+/// This is deliberately exported as its own top-level symbol rather than a
+/// new field on [`ForeignLibraryModule`]: that struct is public and
+/// `#[repr(C)]` with no private/gated constructor, so every field is part of
+/// its exhaustive-construction ABI surface - adding one is exactly what
+/// `cargo-semver-checks`'s `constructible_struct_adds_field` lint flags, even
+/// for a test-only, `integration-tests`-gated struct like this one. A
+/// separate exported symbol, loaded the same way [`load_module`] loads
+/// `datafusion_ffi_get_module`, avoids touching that struct's layout at all.
+///
 /// [`MetricValue::BytesCount`]: datafusion_physical_expr_common::metrics::MetricValue::BytesCount
 /// [`MetricValue::BytesGauge`]: datafusion_physical_expr_common::metrics::MetricValue::BytesGauge
-pub(crate) extern "C" fn create_exec_with_byte_metrics() -> FFI_ExecutionPlan {
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_ExecutionPlan
+{
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, MetricBuilder,
     };
@@ -393,7 +402,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_exec_with_expressions,
         create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
-        create_exec_with_byte_metrics,
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
