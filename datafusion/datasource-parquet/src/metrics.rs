@@ -63,6 +63,23 @@ pub struct ParquetFileMetrics {
     pub row_groups_pruned_dynamic_filter: Count,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
+    /// Total number of bytes the scan is finished with, whether they were read
+    /// or skipped.
+    ///
+    /// Where [`Self::bytes_scanned`] counts only the bytes fetched from the
+    /// object store, this counts every byte the scan has resolved: the bytes it
+    /// read, plus the bytes of the row groups (and whole files) that pruning
+    /// proved cannot contribute. Over the lifetime of a file it therefore sums
+    /// to that file's size — or, for a file split into byte ranges for
+    /// parallelism, to the size of the range — so
+    /// `bytes_processed / total file bytes` is a scan completion fraction,
+    /// which `bytes_scanned` on its own is not: it understates progress by
+    /// however much pruning and projection pushdown saved.
+    ///
+    /// Credited at row-group granularity: a row group's bytes land when the
+    /// scan is done with it. Crediting a row group's bytes progressively as its
+    /// rows are decoded is left to a follow-up.
+    pub bytes_processed: Count,
     /// Total rows filtered out by predicates pushed into parquet scan
     pub pushdown_rows_pruned: Count,
     /// Total rows passed predicates pushed into parquet scan
@@ -101,6 +118,52 @@ pub struct ParquetFileMetrics {
     /// number of rows that were stored in the cache after evaluating predicates
     /// reused for the output.
     pub predicate_cache_records: Gauge,
+}
+
+/// Tracks how much of one file — or one byte range of a file — a scan has
+/// finished with, crediting [`ParquetFileMetrics::bytes_processed`] as it goes.
+///
+/// Every credit is clamped to the bytes left in the budget, and whatever is
+/// left over is credited on drop. The counter therefore advances by exactly the
+/// size of the range being scanned however the scan ends: normally, at a
+/// `LIMIT`, when a dynamic filter proves the rest of the file irrelevant, or on
+/// an error. That total is what makes the metric usable as a completion
+/// fraction rather than just another counter.
+///
+/// The clamp and the final top-up also absorb two small inexactnesses in
+/// crediting by row group: a file is slightly larger than the sum of its row
+/// groups (the footer, the page index and any padding belong to no row group),
+/// and a row group is assigned to a byte range by the offset of its first page,
+/// so a range's row groups do not add up to precisely its length.
+#[derive(Debug)]
+pub(crate) struct ByteProgress {
+    /// Bytes of the scanned range not yet credited.
+    remaining: u64,
+    bytes_processed: Count,
+}
+
+impl ByteProgress {
+    /// Start tracking a range of `total` bytes.
+    pub(crate) fn new(total: u64, bytes_processed: Count) -> Self {
+        Self {
+            remaining: total,
+            bytes_processed,
+        }
+    }
+
+    /// Record that the scan is finished with `bytes` more of the range.
+    pub(crate) fn credit(&mut self, bytes: u64) {
+        let bytes = bytes.min(self.remaining);
+        self.remaining -= bytes;
+        self.bytes_processed
+            .add(usize::try_from(bytes).unwrap_or(usize::MAX));
+    }
+}
+
+impl Drop for ByteProgress {
+    fn drop(&mut self) {
+        self.credit(self.remaining);
+    }
 }
 
 impl ParquetFileMetrics {
@@ -143,6 +206,12 @@ impl ParquetFileMetrics {
             .with_type(MetricType::Summary)
             .with_category(MetricCategory::Bytes)
             .counter("bytes_scanned", partition);
+
+        let bytes_processed = builder
+            .clone()
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Bytes)
+            .counter("bytes_processed", partition);
 
         let metadata_load_time = builder
             .clone()
@@ -219,6 +288,7 @@ impl ParquetFileMetrics {
             row_groups_pruned_statistics,
             row_groups_pruned_dynamic_filter,
             bytes_scanned,
+            bytes_processed,
             pushdown_rows_pruned,
             pushdown_rows_matched,
             row_pushdown_eval_time,

@@ -25,12 +25,13 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::metrics::ByteProgress;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
 };
 use crate::row_filter::RowFilterGenerator;
-use crate::row_group_filter::RowGroupAccessPlanFilter;
+use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
     ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
@@ -890,6 +891,12 @@ impl PreparedParquetOpen {
             self.file_metrics
                 .files_ranges_pruned_statistics
                 .add_pruned(1);
+            // The scan is done with every byte of this file range without
+            // reading any of them.
+            self.file_metrics.bytes_processed.add(
+                usize::try_from(self.partitioned_file.effective_size())
+                    .unwrap_or(usize::MAX),
+            );
             return Ok(None);
         }
 
@@ -1480,7 +1487,10 @@ impl RowGroupsPrunedParquetOpen {
                 .row_group_indexes
                 .iter()
                 .copied()
-                .map(|rg_index| RgPlanEntry { rg_index })
+                .map(|rg_index| RgPlanEntry {
+                    rg_index,
+                    bytes: row_group_bytes(&rg_metadata[rg_index]),
+                })
                 .collect();
 
             let mut builder =
@@ -1496,6 +1506,34 @@ impl RowGroupsPrunedParquetOpen {
 
             (builder.build()?, rg_plan, has_row_selection)
         };
+
+        // Track how much of this file range the scan has finished with. Credit
+        // up front every row group it will not read: those pruning removed, and
+        // — for a file split into ranges for parallelism — those belonging to
+        // another range. Without this the metric would sit at zero until the
+        // first row group finishes decoding, reporting no progress for a scan
+        // that may have just proved most of its work unnecessary.
+        let mut byte_progress = ByteProgress::new(
+            prepared.partitioned_file.effective_size(),
+            prepared.file_metrics.bytes_processed.clone(),
+        );
+        let mut will_scan = vec![false; rg_metadata.len()];
+        for entry in &rg_plan {
+            will_scan[entry.rg_index] = true;
+        }
+        let skipped_bytes: u64 = rg_metadata
+            .iter()
+            .enumerate()
+            .filter(|(rg_index, rg_meta)| {
+                !will_scan[*rg_index]
+                    && prepared
+                        .file_range
+                        .as_ref()
+                        .is_none_or(|range| row_group_in_range(rg_meta, range))
+            })
+            .map(|(_, rg_meta)| row_group_bytes(rg_meta))
+            .sum();
+        byte_progress.credit(skipped_bytes);
 
         let predicate_cache_inner_records =
             prepared.file_metrics.predicate_cache_inner_records.clone();
@@ -1557,6 +1595,7 @@ impl RowGroupsPrunedParquetOpen {
             baseline_metrics: prepared.baseline_metrics,
             row_group_pruner,
             row_groups_pruned_dynamic,
+            byte_progress,
         }
         .into_stream();
 
@@ -1577,6 +1616,12 @@ impl RowGroupsPrunedParquetOpen {
             _ => Ok(stream),
         }
     }
+}
+
+/// The on-disk size of a row group, as credited to
+/// [`ParquetFileMetrics::bytes_processed`].
+fn row_group_bytes(rg_meta: &RowGroupMetaData) -> u64 {
+    u64::try_from(rg_meta.compressed_size()).unwrap_or(0)
 }
 
 type ConstantColumns = HashMap<String, ScalarValue>;
@@ -2404,6 +2449,248 @@ mod test {
             expr.children().into_iter().map(Arc::clone).collect(),
             expr,
         ))
+    }
+
+    /// `bytes_processed` reports how much of a file range a scan has finished
+    /// with, so every one of these asserts the same invariant: by the time the
+    /// stream is dropped it has advanced by exactly the size of the range,
+    /// however the scan got there.
+    mod bytes_processed {
+        use super::*;
+
+        /// Three batches of three rows, each forced into its own row group.
+        async fn write_three_row_groups(store: Arc<dyn ObjectStore>) -> (SchemaRef, u64) {
+            let batches = vec![
+                record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap(),
+                record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap(),
+                record_batch!(("a", Int32, vec![Some(7), Some(8), Some(9)])).unwrap(),
+            ];
+            let schema = batches[0].schema();
+            let props = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(3))
+                .build();
+            let data_len =
+                write_parquet_batches(store, "test.parquet", batches, Some(props)).await;
+            (schema, u64::try_from(data_len).unwrap())
+        }
+
+        fn bytes_processed(metrics: &ExecutionPlanMetricsSet) -> u64 {
+            u64::try_from(counter_metric_value(metrics, "bytes_processed")).unwrap()
+        }
+
+        #[tokio::test]
+        async fn scanning_a_whole_file_credits_all_of_it() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_metrics(metrics.clone())
+                .build();
+
+            let (_, rows) =
+                count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+
+            assert_eq!(rows, 9);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// Credit lands a row group at a time while the scan runs, rather than
+        /// all at once when the file closes — which is what makes this finer
+        /// grained than `files_processed`.
+        #[tokio::test]
+        async fn credit_advances_while_the_scan_runs() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_metrics(metrics.clone())
+                .build();
+
+            let mut stream = open_file(&morselizer, file).await.unwrap();
+            assert_eq!(
+                bytes_processed(&metrics),
+                0,
+                "nothing is pruned here, so nothing is credited before decoding",
+            );
+
+            let mut seen = 0;
+            let mut batches = 0;
+            while let Some(batch) = stream.next().await {
+                batch.unwrap();
+                batches += 1;
+                let processed = bytes_processed(&metrics);
+                assert!(
+                    processed > seen,
+                    "batch {batches} must have advanced the credit past {seen}, \
+                     got {processed}",
+                );
+                assert!(
+                    processed < data_len,
+                    "the whole file must not be credited while row groups remain",
+                );
+                seen = processed;
+            }
+
+            assert_eq!(batches, 3, "one batch per row group");
+            drop(stream);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// The point of the metric: bytes pruning saved are credited when the
+        /// file is opened, not withheld until something is decoded.
+        #[tokio::test]
+        async fn row_group_pruning_is_credited_before_any_batch_is_read() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            // Only the first row group holds values below 4.
+            let predicate = logical2physical(&col("a").lt(lit(4)), &schema);
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .with_metrics(metrics.clone())
+                .build();
+
+            let stream = open_file(&morselizer, file).await.unwrap();
+            let pruned_at_open = bytes_processed(&metrics);
+            assert!(
+                pruned_at_open > 0,
+                "the two pruned row groups must be credited at open, before any \
+                 batch is decoded, since that is the progress `files_processed` misses",
+            );
+
+            let (_, rows) = count_batches_and_rows(stream).await;
+            assert_eq!(rows, 3);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// A file pruned by a dynamic filter never loads its footer, so its
+        /// whole size is credited from the plan-time file size.
+        #[tokio::test]
+        async fn a_file_pruned_before_open_credits_its_whole_size() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len)
+                .with_statistics(Arc::new(
+                    Statistics::new_unknown(&schema).add_column_statistics(
+                        ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(9))))
+                            .with_null_count(Precision::Exact(0)),
+                    ),
+                ));
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            // No row in the file can match, so file-level pruning skips it
+            // without reading anything.
+            let predicate =
+                make_dynamic_expr(logical2physical(&col("a").gt(lit(100)), &schema));
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_metrics(metrics.clone())
+                .build();
+
+            let (_, rows) =
+                count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+
+            assert_eq!(rows, 0);
+            assert_eq!(
+                counter_metric_value(&metrics, "bytes_scanned"),
+                0,
+                "the file must have been pruned without being read",
+            );
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
+
+        /// A file split into byte ranges for parallelism: each range credits its
+        /// own size and no more, so the ranges add up to the file exactly rather
+        /// than each claiming all of it.
+        #[tokio::test]
+        async fn each_range_of_a_split_file_credits_only_its_own_bytes() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+
+            let split = i64::try_from(data_len).unwrap() / 2;
+            let ranges = [(0, split), (split, i64::try_from(data_len).unwrap())];
+
+            let mut total_processed = 0;
+            let mut total_rows = 0;
+            for (start, end) in ranges {
+                let file = PartitionedFile::new_with_range(
+                    "test.parquet".to_string(),
+                    data_len,
+                    start,
+                    end,
+                );
+                let expected = file.effective_size();
+                let metrics = ExecutionPlanMetricsSet::new();
+
+                let morselizer = ParquetMorselizerBuilder::new()
+                    .with_store(Arc::clone(&store))
+                    .with_schema(Arc::clone(&schema))
+                    .with_projection_indices(&[0])
+                    .with_metrics(metrics.clone())
+                    .build();
+
+                let (_, rows) =
+                    count_batches_and_rows(open_file(&morselizer, file).await.unwrap())
+                        .await;
+
+                assert_eq!(
+                    bytes_processed(&metrics),
+                    expected,
+                    "range [{start}, {end}) must credit exactly its own length",
+                );
+                total_processed += expected;
+                total_rows += rows;
+            }
+
+            assert_eq!(total_rows, 9, "the ranges together must scan every row");
+            assert_eq!(total_processed, data_len);
+        }
+
+        /// A scan that stops early still ends up crediting the whole range, so a
+        /// consumer dividing by the plan's byte total is not left permanently
+        /// short of 100%.
+        #[tokio::test]
+        async fn a_limit_that_ends_the_scan_early_still_credits_the_range() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, data_len) = write_three_row_groups(Arc::clone(&store)).await;
+            let file = PartitionedFile::new("test.parquet".to_string(), data_len);
+            let metrics = ExecutionPlanMetricsSet::new();
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_limit(2)
+                .with_metrics(metrics.clone())
+                .build();
+
+            let (_, rows) =
+                count_batches_and_rows(open_file(&morselizer, file).await.unwrap()).await;
+
+            assert_eq!(rows, 2);
+            assert_eq!(bytes_processed(&metrics), data_len);
+        }
     }
 
     #[tokio::test]
