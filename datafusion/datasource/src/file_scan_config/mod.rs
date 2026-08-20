@@ -39,7 +39,8 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
+    Constraint, Constraints, Result, ScalarValue, Statistics, internal_datafusion_err,
+    internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -1267,10 +1268,43 @@ impl FileScanConfig {
     pub fn statistics(&self) -> Statistics {
         let filter_may_change_row_count = self.file_source.filter().is_some()
             && self.statistics.num_rows != Precision::Exact(0);
-        if filter_may_change_row_count {
+        let mut statistics = if filter_may_change_row_count {
             self.statistics.clone().to_inexact()
         } else {
             self.statistics.clone()
+        };
+        self.add_key_distinct_counts(&mut statistics);
+        statistics
+    }
+
+    /// Records that a key column holds one distinct value per row.
+    ///
+    /// No file format stores a distinct count, so without this a join on a key has to
+    /// guess how many rows it produces. Constraints are not verified, hence inexact.
+    /// A composite key says nothing about its columns on their own, so only
+    /// single-column keys are used.
+    fn add_key_distinct_counts(&self, statistics: &mut Statistics) {
+        let num_rows = statistics.num_rows.to_inexact();
+        for constraint in self.constraints.iter() {
+            let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) =
+                constraint;
+            let [index] = indices[..] else {
+                continue;
+            };
+            let Some(column) = statistics.column_statistics.get_mut(index) else {
+                continue;
+            };
+            if column.distinct_count != Precision::Absent {
+                continue;
+            }
+            // A unique column may hold NULL more than once, and a NULL is not a
+            // distinct value. A primary key cannot be null, and an unknown null count
+            // is taken as none.
+            let nulls = match column.null_count {
+                Precision::Absent => Precision::Inexact(0),
+                nulls => nulls,
+            };
+            column.distinct_count = num_rows.sub(&nulls);
         }
     }
 
@@ -2133,6 +2167,101 @@ mod tests {
     }
 
     // sets default for configs that play no role in projections
+    fn config_with_constraints(
+        table_schema: TableSchema,
+        statistics: Statistics,
+        constraints: Vec<Constraint>,
+        projection: Option<Vec<usize>>,
+    ) -> FileScanConfig {
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_statistics(statistics)
+        .with_constraints(Constraints::new_unverified(constraints))
+        .with_projection_indices(projection)
+        .unwrap()
+        .build()
+    }
+
+    /// A key column has one distinct value per row, which no file format records.
+    #[test]
+    fn key_columns_report_a_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("part", DataType::Int32, false),
+            Field::new("code", DataType::Int32, true),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+        // A unique column may repeat NULL, which is not a distinct value.
+        statistics.column_statistics[2].null_count = Precision::Exact(10);
+
+        let stats = |constraints| {
+            config_with_constraints(
+                table_schema.clone(),
+                statistics.clone(),
+                constraints,
+                None,
+            )
+            .statistics()
+        };
+
+        // Unverified constraints, so the count is inexact.
+        let primary_key = stats(vec![Constraint::PrimaryKey(vec![0])]);
+        assert_eq!(
+            primary_key.column_statistics[0].distinct_count,
+            Precision::Inexact(100)
+        );
+        assert_eq!(
+            primary_key.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+
+        let unique = stats(vec![Constraint::Unique(vec![2])]);
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Inexact(90)
+        );
+
+        // A composite key leaves its columns alone: only the combination is unique.
+        let composite = stats(vec![Constraint::PrimaryKey(vec![0, 1])]);
+        assert_eq!(
+            composite.column_statistics[0].distinct_count,
+            Precision::Absent
+        );
+        assert_eq!(
+            composite.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+    }
+
+    /// The count has to reach the plan, which reads statistics through the projection.
+    #[test]
+    fn a_projected_scan_keeps_the_key_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, true),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+
+        let config = config_with_constraints(
+            table_schema,
+            statistics,
+            vec![Constraint::PrimaryKey(vec![1])],
+            Some(vec![1]),
+        );
+
+        let projected = config.partition_statistics(None).unwrap();
+        assert_eq!(
+            projected.column_statistics[0].distinct_count,
+            Precision::Inexact(100)
+        );
+    }
+
     fn config_for_projection(
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
