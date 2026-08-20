@@ -1663,6 +1663,46 @@ changes.</p>
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24019">issue #24019</a> for details.</p>
 </section>
+<section id="range-window-frames-with-offsets-now-reject-order-by-types-without-arithmetic">
+<h3>RANGE window frames with offsets now reject ORDER BY types without arithmetic<a class="headerlink" href="#range-window-frames-with-offsets-now-reject-order-by-types-without-arithmetic" title="Link to this heading">#</a></h3>
+<p>A <code class="docutils literal notranslate"><span class="pre">RANGE</span></code> frame offset such as <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">PRECEDING</span></code> is measured in <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> values
+rather than in rows, so the frame bound is computed as <code class="docutils literal notranslate"><span class="pre">current_value</span> <span class="pre">-</span> <span class="pre">1</span></code>. That
+requires arithmetic on the <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> type. For types that have no such
+arithmetic – <code class="docutils literal notranslate"><span class="pre">Utf8</span></code>, <code class="docutils literal notranslate"><span class="pre">Binary</span></code>, <code class="docutils literal notranslate"><span class="pre">Boolean</span></code>, <code class="docutils literal notranslate"><span class="pre">List</span></code> and <code class="docutils literal notranslate"><span class="pre">Null</span></code> – such frames are
+now rejected when the query is planned:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="n">PRECEDING</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CURRENT</span><span class="w"> </span><span class="k">ROW</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;a&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;b&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">))</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+<span class="c1">-- Error during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Utf8</span>
+</pre></div>
+</div>
+<p>What this replaces depends on the <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> type. Over <code class="docutils literal notranslate"><span class="pre">Utf8</span></code>, <code class="docutils literal notranslate"><span class="pre">Boolean</span></code> and
+<code class="docutils literal notranslate"><span class="pre">List</span></code> keys such queries planned successfully, and in DataFusion 54 the failing
+frame-bound arithmetic was silently treated as an overflow
+(<a class="reference external" href="https://github.com/apache/datafusion/pull/22140">#22140</a>): the bound collapsed
+to the partition edge, and the query returned results computed over that wrongly
+widened frame instead of an offset window. DataFusion 53 and earlier failed
+during execution with an arithmetic error. Rows whose order key value was <code class="docutils literal notranslate"><span class="pre">NULL</span></code>
+never reached the arithmetic, so queries where every order key value was <code class="docutils literal notranslate"><span class="pre">NULL</span></code>
+returned correct results throughout; those also now fail at planning. Over a
+<code class="docutils literal notranslate"><span class="pre">Null</span></code>-typed key the offset itself failed to coerce, erroring at planning time
+with <code class="docutils literal notranslate"><span class="pre">Cast</span> <span class="pre">error:</span> <span class="pre">Casting</span> <span class="pre">from</span> <span class="pre">Utf8</span> <span class="pre">to</span> <span class="pre">Null</span> <span class="pre">not</span> <span class="pre">supported</span></code>, and binary keys were
+rejected for every <code class="docutils literal notranslate"><span class="pre">RANGE</span></code> frame with the internal error quoted below – for
+those two, only the error message changes.</p>
+<p>Such an <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> type is still usable with the <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">PRECEDING</span></code>,
+<code class="docutils literal notranslate"><span class="pre">CURRENT</span> <span class="pre">ROW</span></code> and <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">FOLLOWING</span></code> bounds, which are located by comparing
+<code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> values rather than by computing them. Binary order keys additionally
+gained support for those bounds in this release, having previously failed with
+<code class="docutils literal notranslate"><span class="pre">Internal</span> <span class="pre">error:</span> <span class="pre">Cannot</span> <span class="pre">run</span> <span class="pre">range</span> <span class="pre">queries</span> <span class="pre">on</span> <span class="pre">datatype:</span> <span class="pre">Binary</span></code>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Queries using <code class="docutils literal notranslate"><span class="pre">offset</span> <span class="pre">PRECEDING</span></code> or <code class="docutils literal notranslate"><span class="pre">offset</span> <span class="pre">FOLLOWING</span></code> in a <code class="docutils literal notranslate"><span class="pre">RANGE</span></code> frame over
+a non-numeric, non-temporal <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> key. To count rows rather than compare
+values, use a <code class="docutils literal notranslate"><span class="pre">ROWS</span></code> frame; to include everything up to the partition edge,
+use <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">PRECEDING</span></code> or <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">FOLLOWING</span></code>.</p></li>
+</ul>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24327">issue #24327</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1753,6 +1793,7 @@ changes.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exprtype-gained-a-sqlsimilartopattern-variant"><code class="docutils literal notranslate"><span class="pre">ExprType</span></code> gained a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-parquet-options-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: parquet options conversions are fallible</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-window-frames-with-offsets-now-reject-order-by-types-without-arithmetic">RANGE window frames with offsets now reject ORDER BY types without arithmetic</a></li>
 </ul>
 </li>
 </ul>
