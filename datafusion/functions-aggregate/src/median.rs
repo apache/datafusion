@@ -73,7 +73,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT median(column_name) FROM table_name;
 +----------------------+
-| median(column_name)   |
+| median(column_name)  |
 +----------------------+
 | 45.5                 |
 +----------------------+

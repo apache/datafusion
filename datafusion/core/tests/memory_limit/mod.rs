@@ -941,11 +941,10 @@ impl TestCase {
 
         match df.collect().await {
             Ok(_batches) => {
-                if !expected_success {
-                    panic!(
-                        "Unexpected success when running, expected memory limit failure"
-                    )
-                }
+                assert!(
+                    expected_success,
+                    "Unexpected success when running, expected memory limit failure"
+                );
             }
             Err(e) => {
                 if expected_success {
@@ -1216,14 +1215,14 @@ impl TableProvider for SortedTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mem_conf = MemorySourceConfig::try_new(
             &self.batches,
             self.schema(),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?
         .try_with_sort_information(self.sort_information.clone())?;
 

@@ -1646,8 +1646,7 @@ async fn test_metadata_based_udf() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
         Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            [("modify_values".to_string(), "double_output".to_string())]
-                .into_iter()
+            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
                 .collect(),
         ),
     ]));
@@ -1661,8 +1660,7 @@ async fn test_metadata_based_udf() -> Result<()> {
     let t = ctx.table("t").await?;
     let no_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(HashMap::new()));
     let with_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect(),
     ));
 
@@ -1716,8 +1714,7 @@ async fn test_metadata_based_udf() -> Result<()> {
 async fn test_metadata_based_udf_with_literal() -> Result<()> {
     let ctx = SessionContext::new();
     let input_metadata: HashMap<String, String> =
-        [("modify_values".to_string(), "double_output".to_string())]
-            .into_iter()
+        std::iter::once(("modify_values".to_string(), "double_output".to_string()))
             .collect();
     let input_metadata = FieldMetadata::from(input_metadata);
     let df = ctx.sql("select 0;").await?.select(vec![
@@ -1728,8 +1725,7 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
     ])?;
 
     let output_metadata: HashMap<String, String> =
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect();
     let custom_udf = ScalarUDF::from(MetadataBasedUdf::new(output_metadata.clone()));
 
@@ -1820,11 +1816,11 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
 
         // If we have the extension type set, we are outputting a boolean value.
         // Otherwise we output a string representation of the numeric value.
-        fn print_value(v: Option<i8>, as_bool: bool) -> Option<String> {
-            v.map(|x| match as_bool {
+        fn print_value(x: i8, as_bool: bool) -> String {
+            match as_bool {
                 true => format!("{}", x != 0),
                 false => format!("{x}"),
-            })
+            }
         }
 
         match &args.args[0] {
@@ -1834,7 +1830,7 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
                     .downcast_ref::<Int8Array>()
                     .unwrap()
                     .iter()
-                    .map(|v| print_value(v, output_as_bool))
+                    .map(|v| v.map(|v| print_value(v, output_as_bool)))
                     .collect();
                 let array_ref = Arc::new(StringArray::from(array_values)) as ArrayRef;
                 Ok(ColumnarValue::Array(array_ref))
@@ -1844,10 +1840,9 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
                     return exec_err!("incorrect data type");
                 };
 
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(print_value(
-                    *value,
-                    output_as_bool,
-                ))))
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                    value.map(|v| print_value(v, output_as_bool)),
+                )))
             }
         }
     }
@@ -1877,7 +1872,7 @@ impl ExtensionType for MyUserExtensionType {
         &self,
         data_type: &DataType,
     ) -> std::result::Result<(), ArrowError> {
-        if let DataType::Utf8 = data_type {
+        if *data_type == DataType::Utf8 {
             Ok(())
         } else {
             Err(ArrowError::InvalidArgumentError(
