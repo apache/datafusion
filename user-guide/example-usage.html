@@ -536,10 +536,11 @@ unexpectedly.</p>
 <section id="identifiers-and-capitalization">
 <h2>Identifiers and Capitalization<a class="headerlink" href="#identifiers-and-capitalization" title="Link to this heading">#</a></h2>
 <p>Please be aware that all identifiers are effectively made lower-case in SQL, so if your csv file has capital letters (ex: <code class="docutils literal notranslate"><span class="pre">Name</span></code>) you must put your column name in double quotes or the examples won’t work.</p>
+<p>This behavior can be disabled by setting the <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.enable_ident_normalization</span></code> config to <code class="docutils literal notranslate"><span class="pre">false</span></code>. See <a class="reference internal" href="configs.html"><span class="std std-doc">Configuration Settings</span></a> for details.</p>
 <p>To illustrate this behavior, consider the <a class="reference download internal" download="" href="../_downloads/3cce4d737d8c5814f5b50d859d21ba53/capitalized_example.csv"><span class="xref download myst"><code class="docutils literal notranslate"><span class="pre">capitalized_example.csv</span></code></span></a> file:</p>
-</section>
-<section id="id1">
-<h2>Run a SQL query against data stored in a CSV:<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>Using the SQL API:</p></li>
+</ul>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
 
 <span class="cp">#[tokio::main]</span>
@@ -557,9 +558,9 @@ unexpectedly.</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-</section>
-<section id="id2">
-<h2>Use the DataFrame API to process data stored in a CSV:<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>Using the DataFrame API:</p></li>
+</ul>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">functions_aggregate</span><span class="p">::</span><span class="n">expr_fn</span><span class="p">::</span><span class="n">min</span><span class="p">;</span>
 
@@ -582,9 +583,7 @@ unexpectedly.</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-</section>
-<section id="id3">
-<h2>Output from both examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<p>Output from both examples:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>+---+--------+
 | A | MIN(b) |
 +---+--------+
@@ -649,9 +648,6 @@ unexpectedly.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#output-from-both-examples">Output from both examples</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#arrow-versions">Arrow Versions</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#identifiers-and-capitalization">Identifiers and Capitalization</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Run a SQL query against data stored in a CSV:</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">Use the DataFrame API to process data stored in a CSV:</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">Output from both examples</a></li>
 </ul>
   </nav></div>
 
