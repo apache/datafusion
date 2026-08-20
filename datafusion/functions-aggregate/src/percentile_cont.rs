@@ -99,11 +99,11 @@ pub fn percentile_cont(order_by: Sort, percentile: Expr) -> Expr {
     syntax_example = "percentile_cont(percentile) WITHIN GROUP (ORDER BY expression)",
     sql_example = r#"```sql
 > SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
-+----------------------------------------------------------+
++-----------------------------------------------------------+
 | percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
-+----------------------------------------------------------+
-| 45.5                                                     |
-+----------------------------------------------------------+
++-----------------------------------------------------------+
+| 45.5                                                      |
++-----------------------------------------------------------+
 ```
 
 An alternate syntax is also supported:

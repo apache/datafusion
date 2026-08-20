@@ -74,7 +74,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 +--------------------------+
 | names_list               |
 +--------------------------+
-| Charlie, Bob, Alice |
+| Charlie, Bob, Alice      |
 +--------------------------+
 ```"#,
     argument(

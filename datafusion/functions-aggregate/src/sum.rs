@@ -153,7 +153,7 @@ macro_rules! downcast_sum {
     sql_example = r#"```sql
 > SELECT sum(column_name) FROM table_name;
 +-----------------------+
-| sum(column_name)       |
+| sum(column_name)      |
 +-----------------------+
 | 12345                 |
 +-----------------------+
