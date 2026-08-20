@@ -1243,6 +1243,20 @@ fn prev_value(value: ScalarValue) -> ScalarValue {
     value_transition!(MIN, false, value)
 }
 
+/// Returns the previous distinct value of `value`, or `None` if `value` is
+/// null, already at the type minimum, or a type that has no predecessor.
+pub fn checked_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
+    if value.is_null() {
+        return None;
+    }
+    let predecessor = prev_value(value.clone());
+    if predecessor.is_null() || predecessor == *value {
+        None
+    } else {
+        Some(predecessor)
+    }
+}
+
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
     fn one() -> Self;
 }

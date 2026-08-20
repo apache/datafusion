@@ -17,23 +17,20 @@
 
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
-use crate::expressions::{Column, Literal, UnKnownColumn};
-use crate::utils::collect_columns;
+use crate::expressions::{Literal, UnKnownColumn};
+use crate::simplifier::const_evaluator::create_dummy_batch;
 use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     physical_exprs_contains, physical_exprs_equal,
 };
 pub use datafusion_common::SplitPoint;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, ScalarValue, validate_range_split_points};
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::interval_arithmetic::checked_predecessor;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-use arrow::array::new_null_array;
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
 #[cfg(feature = "proto")]
 use datafusion_physical_expr_common::sort_expr::{
     sort_exprs_try_from_proto, sort_exprs_try_to_proto,
@@ -262,10 +259,9 @@ impl RangePartitioning {
     /// Returns `None` if any range key cannot be projected or if projection
     /// collapses distinct range keys into duplicate output expressions.
     ///
-    /// A range key that is not emitted as-is can still be projected when the
-    /// mapping contains a monotonic function of that key (for example
-    /// `date_bin(interval, timestamp)` or `date_trunc(unit, timestamp)` while
-    /// range-partitioned on `timestamp`).
+    /// If a projection drops a range key but keeps a monotonic function of it
+    /// (for example `date_bin(interval, timestamp)` or `date_trunc(unit, timestamp)`
+    /// while range-partitioned on `timestamp`), the range can still be projected.
     /// Adjacent partitions stay disjoint only when evaluating the function at
     /// each split point and its predecessor yields different values, so bins
     /// do not straddle file groups.
@@ -291,7 +287,6 @@ impl RangePartitioning {
                 &sort_expr.expr,
                 &split_points,
                 key_idx,
-                input_eq_properties.schema(),
             ) {
                 return None;
             }
@@ -300,7 +295,6 @@ impl RangePartitioning {
                 &sort_expr.expr,
                 &split_points,
                 key_idx,
-                input_eq_properties.schema(),
             ) {
                 split_points = updated;
             }
@@ -325,65 +319,10 @@ fn monotonic_range_key_projection(
     eq_properties: &EquivalenceProperties,
 ) -> Option<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> {
     mapping.iter().find_map(|(source, targets)| {
-        is_order_preserving_function_of(source, &sort_expr.expr, eq_properties.schema())
+        eq_properties
+            .is_monotonic_function_of(source, &sort_expr.expr)
             .then(|| (Arc::clone(&targets.first().0), Arc::clone(source)))
     })
-}
-
-/// Returns true when `expr` is a (possibly non-strict) monotonic function of
-/// `range_key` plus literals, such as `date_bin(interval, timestamp)` or
-/// `date_trunc(unit, timestamp)`.
-fn is_order_preserving_function_of(
-    expr: &Arc<dyn PhysicalExpr>,
-    range_key: &Arc<dyn PhysicalExpr>,
-    schema: &arrow::datatypes::SchemaRef,
-) -> bool {
-    if expr.eq(range_key) {
-        return false;
-    }
-    let expr_cols = collect_columns(expr);
-    let key_cols = collect_columns(range_key);
-    if key_cols.is_empty() || expr_cols != key_cols {
-        return false;
-    }
-    let Ok(child_properties) = expr
-        .children()
-        .iter()
-        .map(|child| function_child_properties(child, range_key, schema))
-        .collect::<Result<Vec<_>>>()
-    else {
-        return false;
-    };
-    matches!(
-        expr.get_properties(&child_properties)
-            .map(|properties| properties.sort_properties),
-        Ok(SortProperties::Ordered(_))
-    )
-}
-
-fn function_child_properties(
-    child: &Arc<dyn PhysicalExpr>,
-    range_key: &Arc<dyn PhysicalExpr>,
-    schema: &arrow::datatypes::SchemaRef,
-) -> Result<ExprProperties> {
-    if child.eq(range_key) {
-        let data_type = child.data_type(schema)?;
-        return Ok(ExprProperties {
-            sort_properties: SortProperties::Ordered(Default::default()),
-            range: Interval::make_unbounded(&data_type)?,
-            preserves_lex_ordering: true,
-            strictly_order_preserving: true,
-        });
-    }
-    if child.downcast_ref::<Literal>().is_some() {
-        return Ok(ExprProperties {
-            sort_properties: SortProperties::Singleton,
-            range: Interval::make_unbounded(&child.data_type(schema)?)?,
-            preserves_lex_ordering: true,
-            strictly_order_preserving: true,
-        });
-    }
-    Ok(ExprProperties::new_unknown())
 }
 
 /// Adjacent range partitions remain disjoint on `fn_expr` when the function
@@ -393,22 +332,18 @@ fn monotonic_fn_keeps_partitions_disjoint(
     range_key: &Arc<dyn PhysicalExpr>,
     split_points: &[SplitPoint],
     key_idx: usize,
-    schema: &arrow::datatypes::SchemaRef,
 ) -> bool {
     split_points.iter().all(|split_point| {
         let Some(split_value) = split_point.values().get(key_idx) else {
             return false;
         };
-        let Some(predecessor) = scalar_predecessor(split_value) else {
+        let Some(predecessor) = checked_predecessor(split_value) else {
             return false;
         };
-        let Some(at_split) =
-            evaluate_expr_on_key(fn_expr, range_key, split_value, schema)
-        else {
+        let Some(at_split) = evaluate_expr_on_key(fn_expr, range_key, split_value) else {
             return false;
         };
-        let Some(below_split) =
-            evaluate_expr_on_key(fn_expr, range_key, &predecessor, schema)
+        let Some(below_split) = evaluate_expr_on_key(fn_expr, range_key, &predecessor)
         else {
             return false;
         };
@@ -421,14 +356,12 @@ fn project_split_points_through_fn(
     range_key: &Arc<dyn PhysicalExpr>,
     split_points: &[SplitPoint],
     key_idx: usize,
-    schema: &arrow::datatypes::SchemaRef,
 ) -> Option<Vec<SplitPoint>> {
     split_points
         .iter()
         .map(|split_point| {
             let split_value = split_point.values().get(key_idx)?;
-            let projected =
-                evaluate_expr_on_key(fn_expr, range_key, split_value, schema)?;
+            let projected = evaluate_expr_on_key(fn_expr, range_key, split_value)?;
             let mut values = split_point.values().to_vec();
             values[key_idx] = projected;
             Some(SplitPoint::new(values))
@@ -436,59 +369,29 @@ fn project_split_points_through_fn(
         .collect()
 }
 
+/// Evaluates `expr` after substituting `range_key` with `value`.
 fn evaluate_expr_on_key(
     expr: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
     value: &ScalarValue,
-    schema: &Schema,
 ) -> Option<ScalarValue> {
-    let column = range_key.downcast_ref::<Column>()?;
-    // The table schema may mark columns non-nullable. Build a 1-row batch with
-    // nullable fields so unused columns can be null while still evaluating `expr`.
-    let nullable_schema = Arc::new(Schema::new(
-        schema
-            .fields()
-            .iter()
-            .map(|field| field.as_ref().clone().with_nullable(true))
-            .collect::<Vec<_>>(),
-    ));
-    let arrays = nullable_schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(idx, field)| {
-            if idx == column.index() {
-                value.to_array_of_size(1).ok()
+    let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(value.clone()));
+    let rewritten = Arc::clone(expr)
+        .transform(|node| {
+            if node.eq(range_key) {
+                Ok(Transformed::yes(Arc::clone(&literal)))
             } else {
-                Some(new_null_array(field.data_type(), 1))
+                Ok(Transformed::no(node))
             }
         })
-        .collect::<Option<Vec<_>>>()?;
-    let batch = RecordBatch::try_new(nullable_schema, arrays).ok()?;
-    match expr.evaluate(&batch).ok()? {
+        .ok()?;
+    if !rewritten.transformed {
+        return None;
+    }
+    let batch = create_dummy_batch().ok()?;
+    match rewritten.data.evaluate(batch).ok()? {
         ColumnarValue::Scalar(scalar) => Some(scalar),
         ColumnarValue::Array(array) => ScalarValue::try_from_array(&array, 0).ok(),
-    }
-}
-
-fn scalar_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
-    match value {
-        ScalarValue::TimestampNanosecond(Some(v), tz) => Some(
-            ScalarValue::TimestampNanosecond(Some(v.checked_sub(1)?), tz.clone()),
-        ),
-        ScalarValue::TimestampMicrosecond(Some(v), tz) => Some(
-            ScalarValue::TimestampMicrosecond(Some(v.checked_sub(1)?), tz.clone()),
-        ),
-        ScalarValue::TimestampMillisecond(Some(v), tz) => Some(
-            ScalarValue::TimestampMillisecond(Some(v.checked_sub(1)?), tz.clone()),
-        ),
-        ScalarValue::TimestampSecond(Some(v), tz) => Some(ScalarValue::TimestampSecond(
-            Some(v.checked_sub(1)?),
-            tz.clone(),
-        )),
-        ScalarValue::Int64(Some(v)) => Some(ScalarValue::Int64(Some(v.checked_sub(1)?))),
-        ScalarValue::Int32(Some(v)) => Some(ScalarValue::Int32(Some(v.checked_sub(1)?))),
-        _ => None,
     }
 }
 
@@ -506,15 +409,13 @@ fn range_monotonic_fn_satisfies_keys(
         return false;
     }
     let range_key = &range.ordering()[0].expr;
-    let schema = eq_properties.schema();
     required_exprs.iter().any(|required| {
-        is_order_preserving_function_of(required, range_key, schema)
+        eq_properties.is_monotonic_function_of(required, range_key)
             && monotonic_fn_keeps_partitions_disjoint(
                 required,
                 range_key,
                 range.split_points(),
                 0,
-                schema,
             )
     })
 }

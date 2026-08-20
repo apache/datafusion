@@ -1300,6 +1300,31 @@ impl EquivalenceProperties {
             .unwrap_or_else(|_| ExprProperties::new_unknown())
     }
 
+    /// Returns true when `expr` is a (possibly non-strict) monotonic function of
+    /// `range_key` plus literals, such as `date_bin(interval, timestamp)` or
+    /// `date_trunc(unit, timestamp)`.
+    ///
+    /// The identity `expr == range_key` returns false so callers can treat "emit
+    /// the key as-is" separately from "emit a function of the key".
+    pub(crate) fn is_monotonic_function_of(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        range_key: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        if expr.eq(range_key) {
+            return false;
+        }
+        let dependencies = Dependencies::new(std::iter::once(PhysicalSortExpr::new(
+            Arc::clone(range_key),
+            Default::default(),
+        )));
+        matches!(
+            get_expr_properties(expr, &dependencies, &self.schema)
+                .map(|properties| properties.sort_properties),
+            Ok(SortProperties::Ordered(_))
+        )
+    }
+
     /// Transforms this `EquivalenceProperties` by mapping columns in the
     /// original schema to columns in the new schema by index.
     pub fn with_new_schema(mut self, schema: SchemaRef) -> Result<Self> {
