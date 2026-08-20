@@ -373,6 +373,7 @@ fn cast_map_column(
         *source_sorted,
         target_entries,
         target_sorted,
+        None,
     )?;
 
     let offsets = source_map.value_offsets();
@@ -574,8 +575,15 @@ fn validate_map_compatibility<'a>(
     source_sorted: bool,
     target_entries: &'a Field,
     target_sorted: bool,
+    field_name: Option<&str>,
 ) -> Result<(&'a FieldRef, &'a FieldRef)> {
     if source_sorted != target_sorted {
+        if let Some(field_name) = field_name {
+            return _plan_err!(
+                "Cannot change Map sorted flag for field '{}' during schema adaptation",
+                field_name
+            );
+        }
         return _plan_err!("Cannot change Map sorted flag during schema adaptation");
     }
     let (source_key, source_value) = validate_map_entries_field(source_entries)?;
@@ -747,7 +755,13 @@ pub fn validate_data_type_compatibility(
             validate_field_compatibility(s, t)?;
         }
         (DataType::Map(s, source_sorted), DataType::Map(t, target_sorted)) => {
-            validate_map_compatibility(s, *source_sorted, t, *target_sorted)?;
+            validate_map_compatibility(
+                s,
+                *source_sorted,
+                t,
+                *target_sorted,
+                Some(field_name),
+            )?;
         }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
@@ -2048,6 +2062,28 @@ mod tests {
             &source_col,
             &sorted_target,
             "Cannot change Map sorted flag",
+        );
+    }
+
+    #[test]
+    fn test_map_sorted_flag_validation_error_includes_field_name() {
+        let source_col = struct_map_array();
+        let DataType::Map(target_entries, sorted) = source_col.data_type() else {
+            unreachable!()
+        };
+        let target_type = DataType::Map(Arc::clone(target_entries), !sorted);
+
+        let error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &target_type,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_contains!(
+            error,
+            "Cannot change Map sorted flag for field 'map_col' during schema adaptation"
         );
     }
 
