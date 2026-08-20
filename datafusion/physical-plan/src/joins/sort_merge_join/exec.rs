@@ -233,11 +233,6 @@ impl SortMergeJoinExec {
         })
     }
 
-    /// Whether the join emits fewer or reordered columns than it joins.
-    pub fn contains_projection(&self) -> bool {
-        self.projection.is_some()
-    }
-
     /// Get probe side (e.g streaming side) information for this sort merge join.
     /// In current implementation, probe side is determined according to join type.
     pub fn probe_side(join_type: &JoinType) -> JoinSide {
@@ -417,23 +412,20 @@ impl DisplayAs for SortMergeJoinExec {
                     } else {
                         ""
                     };
-                let display_projections = if self.contains_projection() {
-                    format!(
+                let display_projections = match &self.projection {
+                    Some(projection) => format!(
                         ", projection=[{}]",
-                        self.projection
-                            .as_ref()
-                            .unwrap()
+                        projection
                             .iter()
                             .map(|index| format!(
                                 "{}@{}",
-                                self.schema.fields().get(*index).unwrap().name(),
+                                self.schema.field(*index).name(),
                                 index
                             ))
                             .collect::<Vec<_>>()
                             .join(", ")
-                    )
-                } else {
-                    "".to_string()
+                    ),
+                    None => String::new(),
                 };
                 write!(
                     f,
@@ -721,7 +713,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if self.contains_projection() {
+        if self.projection.is_some() {
             return Ok(None);
         }
         // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
