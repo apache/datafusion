@@ -34,19 +34,22 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
-    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_on,
+    EmbeddedProjection, ProjectionExec, join_allows_pushdown, join_table_borders,
+    new_join_children, physical_to_column_exprs, try_embed_projection, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
 use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, InputDistributionRequirements, PlanProperties,
-    ReplaceChildrenOptions, SendableRecordBatchStream, Statistics, validate_child_count,
+    ReplaceChildrenOptions, SendableRecordBatchStream, Statistics, common::can_project,
+    validate_child_count,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::project_schema;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
@@ -54,9 +57,12 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::equivalence::{
+    ProjectionMapping, join_equivalence_properties,
+};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use futures::StreamExt;
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
@@ -128,6 +134,8 @@ pub struct SortMergeJoinExec {
     pub sort_options: Vec<SortOptions>,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
+    /// The columns of `schema` to emit, in order. `None` emits all of them.
+    pub projection: Option<Vec<usize>>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
 }
@@ -187,7 +195,7 @@ impl SortMergeJoinExec {
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
         let cache =
-            Self::compute_properties(&left, &right, Arc::clone(&schema), join_type, &on)?;
+            Self::compute_properties(&left, &right, &schema, join_type, &on, None)?;
         Ok(Self {
             left,
             right,
@@ -200,8 +208,34 @@ impl SortMergeJoinExec {
             right_sort_exprs,
             sort_options,
             null_equality,
+            projection: None,
             cache: Arc::new(cache),
         })
+    }
+
+    /// Returns this join emitting only the columns in `projection`, in that order.
+    /// The indices address the join's own schema, before any projection.
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        can_project(&self.schema, projection.as_deref())?;
+        let cache = Self::compute_properties(
+            &self.left,
+            &self.right,
+            &self.schema,
+            self.join_type,
+            &self.on,
+            projection.as_deref(),
+        )?;
+        Ok(Self {
+            projection,
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache: Arc::new(cache),
+            ..Self::clone(self)
+        })
+    }
+
+    /// Whether the join emits fewer or reordered columns than it joins.
+    pub fn contains_projection(&self) -> bool {
+        self.projection.is_some()
     }
 
     /// Get probe side (e.g streaming side) information for this sort merge join.
@@ -281,23 +315,31 @@ impl SortMergeJoinExec {
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         join_type: JoinType,
         join_on: JoinOnRef,
+        projection: Option<&[usize]>,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = join_equivalence_properties(
+        let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            schema,
+            Arc::clone(schema),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
             join_on,
         )?;
 
-        let output_partitioning =
+        let mut output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type)?;
+
+        if let Some(projection) = projection {
+            let mapping = ProjectionMapping::from_indices(projection, schema)?;
+            let projected = project_schema(schema, Some(projection))?;
+            output_partitioning = output_partitioning.project(&mapping, &eq_properties);
+            eq_properties = eq_properties.project(&mapping, projected);
+        }
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -346,6 +388,12 @@ impl SortMergeJoinExec {
     }
 }
 
+impl EmbeddedProjection for SortMergeJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 impl DisplayAs for SortMergeJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
@@ -362,9 +410,27 @@ impl DisplayAs for SortMergeJoinExec {
                     } else {
                         ""
                     };
+                let display_projections = if self.contains_projection() {
+                    format!(
+                        ", projection=[{}]",
+                        self.projection
+                            .as_ref()
+                            .unwrap()
+                            .iter()
+                            .map(|index| format!(
+                                "{}@{}",
+                                self.schema.fields().get(*index).unwrap().name(),
+                                index
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "".to_string()
+                };
                 write!(
                     f,
-                    "{}: join_type={:?}, on=[{}]{}{}",
+                    "{}: join_type={:?}, on=[{}]{}{}{}",
                     Self::static_name(),
                     self.join_type,
                     on,
@@ -373,6 +439,7 @@ impl DisplayAs for SortMergeJoinExec {
                         |f| format!(", filter={}", f.expression())
                     ),
                     display_null_equality,
+                    display_projections,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -467,15 +534,18 @@ impl ExecutionPlan for SortMergeJoinExec {
                 }))
             }
             ChildrenPropertiesMode::Recompute => match &children[..] {
-                [left, right] => Ok(Arc::new(SortMergeJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    self.on.clone(),
-                    self.filter.clone(),
-                    self.join_type,
-                    self.sort_options.clone(),
-                    self.null_equality,
-                )?)),
+                [left, right] => Ok(Arc::new(
+                    SortMergeJoinExec::try_new(
+                        Arc::clone(left),
+                        Arc::clone(right),
+                        self.on.clone(),
+                        self.filter.clone(),
+                        self.join_type,
+                        self.sort_options.clone(),
+                        self.null_equality,
+                    )?
+                    .with_projection(self.projection.clone())?,
+                )),
                 _ => internal_err!("SortMergeJoin wrong number of children"),
             },
         }
@@ -546,7 +616,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         )
         .with_compression_type(context.session_config().spill_compression());
 
-        if matches!(
+        let joined = if matches!(
             self.join_type,
             JoinType::LeftSemi
                 | JoinType::LeftAnti
@@ -589,7 +659,16 @@ impl ExecutionPlan for SortMergeJoinExec {
                 spill_manager,
                 context.runtime_env(),
             )
-        }
+        }?;
+
+        let Some(projection) = self.projection.clone() else {
+            return Ok(joined);
+        };
+        let schema = self.schema();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            joined.map(move |batch| Ok(batch?.project(&projection)?)),
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -614,14 +693,18 @@ impl ExecutionPlan for SortMergeJoinExec {
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         let left_stats = input_stats[0].as_ref().clone();
         let right_stats = input_stats[1].as_ref().clone();
-        Ok(Arc::new(estimate_join_statistics(
+        let stats = estimate_join_statistics(
             left_stats,
             right_stats,
             &self.on,
             self.null_equality,
             &self.join_type,
             &self.schema,
-        )?))
+        )?;
+        Ok(Arc::new(match &self.projection {
+            Some(projection) => stats.project(Some(projection)),
+            None => stats,
+        }))
     }
 
     /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,
@@ -631,6 +714,9 @@ impl ExecutionPlan for SortMergeJoinExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.contains_projection() {
+            return Ok(None);
+        }
         // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
         let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())
         else {
@@ -642,13 +728,15 @@ impl ExecutionPlan for SortMergeJoinExec {
             &projection_as_columns,
         );
 
+        // Pushing into the children needs each side's columns to stay together, which
+        // an arbitrary projection does not. The join can apply that one itself.
         if !join_allows_pushdown(
             &projection_as_columns,
             &self.schema(),
             far_right_left_col_ind,
             far_left_right_col_ind,
         ) {
-            return Ok(None);
+            return try_embed_projection(projection, self);
         }
 
         let Some(new_on) = update_join_on(
@@ -657,7 +745,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.on(),
             self.left().schema().fields().len(),
         ) else {
-            return Ok(None);
+            return try_embed_projection(projection, self);
         };
 
         let (new_left, new_right) = new_join_children(
@@ -696,6 +784,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             join_type,
             sort_options,
             null_equality,
+            projection,
             // derived from the children's schemas by `try_new` on decode
             schema: _,
             // runtime metrics, not part of the plan
@@ -746,6 +835,11 @@ impl ExecutionPlan for SortMergeJoinExec {
                         filter,
                         sort_options,
                         null_equality: null_equality.into(),
+                        projection: projection
+                            .iter()
+                            .flatten()
+                            .map(|index| *index as u32)
+                            .collect(),
                     },
                 )),
             ),
@@ -781,6 +875,7 @@ impl SortMergeJoinExec {
             filter,
             sort_options,
             null_equality,
+            projection,
         } = &**sort_join;
 
         let left =
@@ -832,14 +927,20 @@ impl SortMergeJoinExec {
             })
             .collect();
 
-        Ok(Arc::new(Self::try_new(
-            left,
-            right,
-            on,
-            filter,
-            join_type,
-            sort_options,
-            null_equality,
-        )?))
+        let projection = (!projection.is_empty())
+            .then(|| projection.iter().map(|index| *index as usize).collect());
+
+        Ok(Arc::new(
+            Self::try_new(
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                sort_options,
+                null_equality,
+            )?
+            .with_projection(projection)?,
+        ))
     }
 }

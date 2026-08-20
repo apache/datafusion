@@ -348,6 +348,50 @@ fn roundtrip_sym_hash_join() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_sort_merge_join_with_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let schema_left = Arc::new(Schema::new(vec![Field::new(
+        "col_a",
+        DataType::Int64,
+        false,
+    )]));
+    let schema_right = Arc::new(Schema::new(vec![Field::new(
+        "col_b",
+        DataType::Int64,
+        false,
+    )]));
+    let on = vec![(
+        Arc::new(Column::new("col_a", 0)) as _,
+        Arc::new(Column::new("col_b", 0)) as _,
+    )];
+
+    let projection = Some(vec![1, 0]);
+    let result = roundtrip_test_and_return(
+        Arc::new(
+            SortMergeJoinExec::try_new(
+                Arc::new(EmptyExec::new(schema_left)),
+                Arc::new(EmptyExec::new(schema_right)),
+                on,
+                None,
+                JoinType::Inner,
+                vec![SortOptions::default()],
+                NullEquality::NullEqualsNothing,
+            )?
+            .with_projection(projection.clone())?,
+        ),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+    let result = result.downcast_ref::<SortMergeJoinExec>().unwrap();
+    assert_eq!(result.projection, projection);
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_sort_merge_join() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
