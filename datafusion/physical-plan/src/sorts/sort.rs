@@ -1821,25 +1821,23 @@ mod proto_tests {
         assert_eq!(node.fetch, 0);
     }
 
-    /// The other end of the range does *not* survive: `fetch` goes onto the
-    /// wire as `usize as i64`, so on a 64-bit target `usize::MAX` wraps to
-    /// `-1` — the very value that means "absent" — and reads back as an
-    /// unlimited sort. That is pre-existing behavior of the `i64` wire field
-    /// rather than something this tier introduces; pinning it keeps any change
-    /// to the encoding a deliberate one instead of a silent fix.
+    /// `usize::MAX` does not fit the signed wire field on a 64-bit target and
+    /// must be rejected instead of wrapping to the `-1` "absent" encoding.
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn try_to_proto_wraps_usize_max_fetch_into_the_absent_encoding() {
+    fn try_to_proto_rejects_usize_max_fetch() {
         let encoder = StubPlanEncoder::ok();
-        let node = encode(&sort_fixture(Some(usize::MAX)), &encoder);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let err = sort_fixture(Some(usize::MAX))
+            .try_to_proto(&ctx)
+            .unwrap_err();
 
-        assert_eq!(node.fetch, -1);
-
-        // ... and so the limit is gone by the time the node is read back.
-        let decoder = StubPlanDecoder::ok();
         assert_eq!(
-            decode(decodable_node(node.fetch, false), &decoder).fetch(),
-            None
+            err.strip_backtrace(),
+            format!(
+                "Error during planning: SortExec: fetch value {} is out of range for the plan wire format",
+                usize::MAX
+            )
         );
     }
 
