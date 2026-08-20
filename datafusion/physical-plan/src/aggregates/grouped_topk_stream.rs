@@ -247,9 +247,7 @@ impl Stream for GroupedTopKAggregateStream {
                         print_batches(std::slice::from_ref(&batch))?;
                     }
                     self.row_count += batch.num_rows();
-                    let batches = &[batch];
-                    let group_by_values =
-                        evaluate_group_by(&self.group_by, batches.first().unwrap())?;
+                    let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
                     assert_eq!(
                         group_by_values.len(),
                         1,
@@ -274,10 +272,7 @@ impl Stream for GroupedTopKAggregateStream {
                             .enumerate()
                             .map(|(idx, expr)| {
                                 self.aggregate_argument_metrics.time(idx, || {
-                                    evaluate_expressions_to_arrays(
-                                        expr,
-                                        batches.first().unwrap(),
-                                    )
+                                    evaluate_expressions_to_arrays(expr, &batch)
                                 })
                             })
                             .collect::<Result<Vec<_>>>()?;
