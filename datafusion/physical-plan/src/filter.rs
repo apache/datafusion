@@ -343,6 +343,15 @@ impl FilterExec {
         let input_num_rows = input_stats.num_rows;
         let input_total_byte_size = input_stats.total_byte_size;
 
+        // A column holding each of its values once, as a primary key or unique
+        // constraint says, matches one row at most. No selectivity expresses that.
+        let matches_one_row = eq_columns.iter().any(|index| {
+            input_stats
+                .column_statistics
+                .get(*index)
+                .is_some_and(|column| holds_each_value_once(column, &input_num_rows))
+        });
+
         let (selectivity, num_rows, column_statistics) = if is_infeasible {
             // Contradictory predicate: no rows survive. Row-bounded counts are
             // zero; value statistics are undefined on an empty column.
@@ -406,6 +415,10 @@ impl FilterExec {
             }
         };
 
+        let num_rows = match num_rows.get_value() {
+            Some(rows) if matches_one_row && *rows > 1 => Precision::Inexact(1),
+            _ => num_rows,
+        };
         let total_byte_size =
             scale_byte_size_at_rows(input_total_byte_size, selectivity, num_rows);
 
@@ -959,6 +972,19 @@ impl EmbeddedProjection for FilterExec {
 ///
 /// Only AND conjunctions are traversed; OR is intentionally skipped
 /// since `a = 1 OR a = 2` does not pin NDV to 1.
+/// Whether the column has as many distinct values as it has non-null rows, so each
+/// value appears once.
+fn holds_each_value_once(column: &ColumnStatistics, num_rows: &Precision<usize>) -> bool {
+    let (Some(rows), Some(distinct), Some(nulls)) = (
+        num_rows.get_value(),
+        column.distinct_count.get_value(),
+        column.null_count.get_value(),
+    ) else {
+        return false;
+    };
+    distinct.saturating_add(*nulls) >= *rows
+}
+
 fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize>, bool) {
     let mut eq_values: HashMap<usize, ScalarValue> = HashMap::new();
     let mut infeasible = false;
@@ -1458,6 +1484,59 @@ mod tests {
         assert_eq!(1, ne_pairs.len());
         assert!(ne_pairs[0].0.eq(&col("c1", &schema)?));
         assert!(ne_pairs[0].1.eq(&col("c13", &schema)?));
+
+        Ok(())
+    }
+
+    /// An equality on a column that holds each value once matches one row at most,
+    /// including on a type interval analysis cannot read, where the default
+    /// selectivity would otherwise apply.
+    #[tokio::test]
+    async fn test_filter_statistics_equality_on_a_unique_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
+        let unique = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            distinct_count: Precision::Exact(100),
+            ..Default::default()
+        };
+        let rows = |column: ColumnStatistics| -> Result<Precision<usize>> {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(100),
+                    total_byte_size: Precision::Exact(800),
+                    column_statistics: vec![column],
+                },
+                schema.clone(),
+            ));
+            let predicate =
+                binary(col("id", &schema)?, Operator::Eq, lit("seven"), &schema)?;
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+            Ok(StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?
+                .num_rows)
+        };
+
+        assert_eq!(rows(unique.clone())?, Precision::Inexact(1));
+
+        // The nulls a unique column may repeat do not make it hold a value twice.
+        assert_eq!(
+            rows(ColumnStatistics {
+                null_count: Precision::Exact(10),
+                distinct_count: Precision::Exact(90),
+                ..unique.clone()
+            })?,
+            Precision::Inexact(1)
+        );
+
+        // Without a distinct count, the default selectivity applies as before.
+        assert_eq!(
+            rows(ColumnStatistics {
+                distinct_count: Precision::Absent,
+                ..unique
+            })?,
+            Precision::Inexact(20)
+        );
 
         Ok(())
     }
