@@ -1217,6 +1217,20 @@ macro_rules! eq_array_primitive {
     }};
 }
 
+// IEEE `==` treats NaN != NaN and +0.0 == -0.0. ScalarValue::PartialEq
+// compares to_bits() so Eq/Hash stay well-defined. eq_array is an
+// optimized equivalent of try_from_array + eq, so floats must use bits.
+macro_rules! eq_array_float {
+    ($array:expr, $index:expr, $array_cast:ident, $VALUE:expr) => {{
+        let array = $array_cast($array)?;
+        let is_valid = array.is_valid($index);
+        Ok::<bool, DataFusionError>(match $VALUE {
+            Some(val) => is_valid && array.value($index).to_bits() == val.to_bits(),
+            None => !is_valid,
+        })
+    }};
+}
+
 impl ScalarValue {
     /// Create a [`Result<ScalarValue>`] with the provided value and datatype
     ///
@@ -4522,6 +4536,9 @@ impl ScalarValue {
     /// This function has a few narrow use cases such as hash table key
     /// comparisons where comparing a single row at a time is necessary.
     ///
+    /// Floating-point values are compared by bit pattern (same as [`PartialEq`]),
+    /// so identical NaNs are equal and `+0.0` is distinct from `-0.0`.
+    ///
     /// # Errors
     ///
     /// Errors if
@@ -4574,13 +4591,13 @@ impl ScalarValue {
                 eq_array_primitive!(array, index, as_boolean_array, val)?
             }
             ScalarValue::Float16(val) => {
-                eq_array_primitive!(array, index, as_float16_array, val)?
+                eq_array_float!(array, index, as_float16_array, val)?
             }
             ScalarValue::Float32(val) => {
-                eq_array_primitive!(array, index, as_float32_array, val)?
+                eq_array_float!(array, index, as_float32_array, val)?
             }
             ScalarValue::Float64(val) => {
-                eq_array_primitive!(array, index, as_float64_array, val)?
+                eq_array_float!(array, index, as_float64_array, val)?
             }
             ScalarValue::Int8(val) => {
                 eq_array_primitive!(array, index, as_int8_array, val)?
@@ -8088,6 +8105,118 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_eq_array_float_nan_and_signed_zero() {
+        // IEEE `==` treats NaN != NaN and +0.0 == -0.0. ScalarValue
+        // equality uses bit patterns so Eq/Hash stay consistent. eq_array
+        // is documented as try_from_array + eq, so these cases must agree.
+
+        fn check(scalar: &ScalarValue, array: &ArrayRef) {
+            for index in 0..array.len() {
+                let from_array = ScalarValue::try_from_array(array, index).unwrap();
+                assert_eq!(
+                    scalar.eq_array(array, index).unwrap(),
+                    scalar == &from_array,
+                    "{scalar:?}.eq_array vs PartialEq at {index} (array value {from_array:?})"
+                );
+            }
+        }
+
+        // Distinct quiet vs signaling NaN payloads so different bit patterns
+        // stay unequal, matching PartialEq rather than collapsing all NaNs.
+        let f16_nan = f16::NAN;
+        let f16_other_nan = f16::from_bits(0x7c01);
+        assert_ne!(f16_nan.to_bits(), f16_other_nan.to_bits());
+        let f16_array: ArrayRef = Arc::new(Float16Array::from(vec![
+            Some(f16_nan),
+            Some(f16_other_nan),
+            Some(f16::ZERO),
+            Some(f16::NEG_ZERO),
+            Some(f16::from_f32(1.0)),
+            None,
+        ]));
+        let f16_scalars = [
+            ScalarValue::Float16(Some(f16_nan)),
+            ScalarValue::Float16(Some(f16_other_nan)),
+            ScalarValue::Float16(Some(f16::ZERO)),
+            ScalarValue::Float16(Some(f16::NEG_ZERO)),
+            ScalarValue::Float16(Some(f16::from_f32(1.0))),
+            ScalarValue::Float16(None),
+        ];
+
+        let f32_nan = f32::NAN;
+        let f32_other_nan = f32::from_bits(0x7f800001);
+        assert_ne!(f32_nan.to_bits(), f32_other_nan.to_bits());
+        let f32_array: ArrayRef = Arc::new(Float32Array::from(vec![
+            Some(f32_nan),
+            Some(f32_other_nan),
+            Some(0.0),
+            Some(-0.0),
+            Some(1.0),
+            None,
+        ]));
+        let f32_scalars = [
+            ScalarValue::Float32(Some(f32_nan)),
+            ScalarValue::Float32(Some(f32_other_nan)),
+            ScalarValue::Float32(Some(0.0)),
+            ScalarValue::Float32(Some(-0.0)),
+            ScalarValue::Float32(Some(1.0)),
+            ScalarValue::Float32(None),
+        ];
+
+        let f64_nan = f64::NAN;
+        let f64_other_nan = f64::from_bits(0x7ff0000000000001);
+        assert_ne!(f64_nan.to_bits(), f64_other_nan.to_bits());
+        let f64_array: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(f64_nan),
+            Some(f64_other_nan),
+            Some(0.0),
+            Some(-0.0),
+            Some(1.0),
+            None,
+        ]));
+        let f64_scalars = [
+            ScalarValue::Float64(Some(f64_nan)),
+            ScalarValue::Float64(Some(f64_other_nan)),
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(-0.0)),
+            ScalarValue::Float64(Some(1.0)),
+            ScalarValue::Float64(None),
+        ];
+
+        for (scalars, array) in [
+            (&f16_scalars[..], &f16_array),
+            (&f32_scalars[..], &f32_array),
+            (&f64_scalars[..], &f64_array),
+        ] {
+            for scalar in scalars {
+                check(scalar, array);
+            }
+
+            // Direct assertions for the IEEE mismatches this fix targets.
+            assert!(
+                scalars[0].eq_array(array, 0).unwrap(),
+                "identical NaN bits must compare equal: {:?}",
+                scalars[0]
+            );
+            assert!(
+                !scalars[0].eq_array(array, 1).unwrap(),
+                "distinct NaN payloads must remain unequal: {:?}",
+                scalars[0]
+            );
+            assert!(
+                !scalars[2].eq_array(array, 3).unwrap(),
+                "+0.0 must not equal -0.0: {:?}",
+                scalars[2]
+            );
+            assert!(
+                !scalars[3].eq_array(array, 2).unwrap(),
+                "-0.0 must not equal +0.0: {:?}",
+                scalars[3]
+            );
         }
     }
 
