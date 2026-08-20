@@ -63,7 +63,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, Column, IsNotNullExpr, Literal, lit,
+    BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
@@ -344,13 +344,9 @@ impl FilterExec {
         let input_total_byte_size = input_stats.total_byte_size;
 
         // A column holding each of its values once, as a primary key or unique
-        // constraint says, matches one row at most. No selectivity expresses that.
-        let matches_one_row = eq_columns.iter().any(|index| {
-            input_stats
-                .column_statistics
-                .get(*index)
-                .is_some_and(|column| holds_each_value_once(column, &input_num_rows))
-        });
+        // constraint says, matches one row per value asked for. No selectivity
+        // expresses that.
+        let match_limit = unique_match_limit(predicate, &input_stats);
 
         let (selectivity, num_rows, column_statistics) = if is_infeasible {
             // Contradictory predicate: no rows survive. Row-bounded counts are
@@ -415,8 +411,8 @@ impl FilterExec {
             }
         };
 
-        let num_rows = match num_rows.get_value() {
-            Some(rows) if matches_one_row && *rows > 1 => Precision::Inexact(1),
+        let num_rows = match (match_limit, num_rows.get_value()) {
+            (Some(limit), Some(rows)) if *rows > limit => Precision::Inexact(limit),
             _ => num_rows,
         };
         let total_byte_size =
@@ -972,6 +968,63 @@ impl EmbeddedProjection for FilterExec {
 ///
 /// Only AND conjunctions are traversed; OR is intentionally skipped
 /// since `a = 1 OR a = 2` does not pin NDV to 1.
+/// The most rows a filter can match, when it restricts a column holding each value
+/// once to a fixed set of values: one row per value.
+fn unique_match_limit(
+    predicate: &Arc<dyn PhysicalExpr>,
+    statistics: &Statistics,
+) -> Option<usize> {
+    let mut limit: Option<usize> = None;
+    for expr in split_conjunction(predicate) {
+        let Some((index, values)) = restricted_column(expr) else {
+            continue;
+        };
+        let holds_once = statistics
+            .column_statistics
+            .get(index)
+            .is_some_and(|column| holds_each_value_once(column, &statistics.num_rows));
+        if !holds_once {
+            continue;
+        }
+        limit = Some(limit.map_or(values, |limit: usize| limit.min(values)));
+    }
+    limit
+}
+
+/// The column an expression restricts to a fixed set of values, and how many values
+/// that is. NULL is never one of them: it matches nothing.
+fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
+    if let Some(in_list) = expr.downcast_ref::<InListExpr>() {
+        if in_list.negated() {
+            return None;
+        }
+        let column = in_list.expr().downcast_ref::<Column>()?;
+        let mut values: Vec<&ScalarValue> = vec![];
+        for expr in in_list.list() {
+            let value = expr.downcast_ref::<Literal>()?.value();
+            if !value.is_null() && !values.contains(&value) {
+                values.push(value);
+            }
+        }
+        return Some((column.index(), values.len()));
+    }
+
+    let binary = expr.downcast_ref::<BinaryExpr>()?;
+    if *binary.op() != Operator::Eq {
+        return None;
+    }
+    let (column, literal) = match (
+        binary.left().downcast_ref::<Column>(),
+        binary.right().downcast_ref::<Column>(),
+    ) {
+        (Some(column), None) => (column, binary.right()),
+        (None, Some(column)) => (column, binary.left()),
+        _ => return None,
+    };
+    let value = literal.downcast_ref::<Literal>()?.value();
+    (!value.is_null()).then_some((column.index(), 1))
+}
+
 /// Whether the column has as many distinct values as it has non-null rows, so each
 /// value appears once.
 fn holds_each_value_once(column: &ColumnStatistics, num_rows: &Precision<usize>) -> bool {
@@ -1537,6 +1590,47 @@ mod tests {
             })?,
             Precision::Inexact(20)
         );
+
+        Ok(())
+    }
+
+    /// Asking a unique column for three values matches three rows at most.
+    #[tokio::test]
+    async fn test_filter_statistics_in_list_on_a_unique_column() -> Result<()> {
+        use datafusion_physical_expr::expressions::in_list;
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
+        let rows = |list: Vec<&str>, negated: bool| -> Result<Precision<usize>> {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(100),
+                    total_byte_size: Precision::Exact(800),
+                    column_statistics: vec![ColumnStatistics {
+                        null_count: Precision::Exact(0),
+                        distinct_count: Precision::Exact(100),
+                        ..Default::default()
+                    }],
+                },
+                schema.clone(),
+            ));
+            let predicate = in_list(
+                col("id", &schema)?,
+                list.into_iter().map(|value| lit(value) as _).collect(),
+                &negated,
+                &schema,
+            )?;
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+            Ok(StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?
+                .num_rows)
+        };
+
+        assert_eq!(rows(vec!["a", "b", "c"], false)?, Precision::Inexact(3));
+        // Repeats ask for the same row twice.
+        assert_eq!(rows(vec!["a", "b", "a"], false)?, Precision::Inexact(2));
+        // `NOT IN` selects nearly everything, so the default applies.
+        assert_eq!(rows(vec!["a", "b", "c"], true)?, Precision::Inexact(20));
 
         Ok(())
     }
