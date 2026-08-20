@@ -657,6 +657,73 @@ mod tests {
         Ok(())
     }
 
+    fn analyze_between_helper(
+        lower: f32,
+        upper: f32,
+        negated: bool,
+        explicit_not: bool,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float32)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float32(Some(lower)),
+                ScalarValue::Float32(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+
+        let between = col("a").between(lit(-1.0f32), lit(1.0f32));
+        let predicate = if explicit_not {
+            between.not()
+        } else if negated {
+            col("a").not_between(lit(-1.0f32), lit(1.0f32))
+        } else {
+            between
+        };
+        let physical_expr = create_physical_expr(
+            &predicate,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let output = analyze(
+            &physical_expr,
+            AnalysisContext::new(boundaries),
+            df_schema.as_ref(),
+        )?;
+        Ok(output.boundaries[0].interval.clone())
+    }
+
+    #[test]
+    fn test_analyze_not_between_clamped() -> datafusion_common::Result<()> {
+        let expected = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, false, false)?, expected);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, true, false)?, None);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, false, true)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_analyze_not_between_containing() -> datafusion_common::Result<()> {
+        let between = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        let containing = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-2.0)),
+            ScalarValue::Float32(Some(2.0)),
+        )?);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, false, false)?, between);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, true, false)?, containing);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, false, true)?, containing);
+        Ok(())
+    }
+
     // Regression test for the nested signed-zero case.
     //
     // `NOT(a = +0.0) AND b` with `a ∈ [-0.0,-0.0]`, `b ∈ [false,true]`:

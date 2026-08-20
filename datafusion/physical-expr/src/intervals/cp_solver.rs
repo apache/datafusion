@@ -410,7 +410,7 @@ pub fn propagate_comparison(
         }
     } else {
         // Uncertainty cannot change any end-point of the intervals.
-        Ok(None)
+        Ok(Some((left_child.clone(), right_child.clone())))
     }
 }
 
@@ -1742,6 +1742,25 @@ mod tests {
         // not refinable.
         let left = Interval::make(Some(-1_i64), Some(1_i64))?;
         let right = Interval::make(Some(0_i64), Some(2_i64))?;
+        assert_eq!(
+            Some((left.clone(), right.clone())),
+            propagate_comparison(&Operator::Eq, &Interval::FALSE, &left, &right)?
+        );
+
+        // A structurally singleton-looking `[NULL, NULL]` interval is
+        // unbounded, not a known value, and must not be treated as equal to a
+        // bounded singleton.
+        let left = Interval::make(Some(0_i64), Some(0_i64))?;
+        let right = Interval::make::<i64>(None, None)?;
+        assert_eq!(
+            Some((left.clone(), right.clone())),
+            propagate_comparison(&Operator::Eq, &Interval::FALSE, &left, &right)?
+        );
+
+        // Two fully unbounded intervals likewise provide no proof that the
+        // operands are equal singletons.
+        let left = Interval::make::<i64>(None, None)?;
+        let right = Interval::make::<i64>(None, None)?;
         assert_eq!(
             Some((left.clone(), right.clone())),
             propagate_comparison(&Operator::Eq, &Interval::FALSE, &left, &right)?
