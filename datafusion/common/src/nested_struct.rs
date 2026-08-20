@@ -692,10 +692,18 @@ fn is_injective_map_key_cast(source_type: &DataType, target_type: &DataType) -> 
             | (DataType::Int32, DataType::Int64)
             | (
                 DataType::UInt8,
-                DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+                DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
             )
-            | (DataType::UInt16, DataType::UInt32 | DataType::UInt64)
-            | (DataType::UInt32, DataType::UInt64)
+            | (
+                DataType::UInt16,
+                DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64
+            )
+            | (DataType::UInt32, DataType::Int64 | DataType::UInt64)
             | (DataType::Utf8, DataType::LargeUtf8 | DataType::Utf8View)
             | (
                 DataType::Binary,
@@ -863,7 +871,7 @@ mod tests {
         array::{
             BinaryArray, FixedSizeListArray, Int32Array, Int32Builder, Int64Array,
             ListArray, ListViewArray, MapArray, MapBuilder, NullArray, StringArray,
-            StringBuilder,
+            StringBuilder, UInt32Array,
         },
         buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
@@ -1767,6 +1775,70 @@ mod tests {
         let values = map.values().as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(values.value(0), "a");
         assert_eq!(values.value(1), "b");
+    }
+
+    #[test]
+    fn test_cast_map_uint32_keys_to_int64() {
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::UInt32)),
+                arc_field("values", DataType::Utf8),
+            ]
+            .into(),
+            vec![
+                Arc::new(UInt32Array::from(vec![u32::MAX])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["value"])) as ArrayRef,
+            ],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            false,
+        ));
+        let target_type = map_type(DataType::Int64, DataType::Utf8);
+
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let keys = result
+            .as_map()
+            .keys()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(keys.value(0), i64::from(u32::MAX));
+    }
+
+    #[test]
+    fn test_injective_unsigned_to_signed_map_key_casts() {
+        for (source_type, target_type) in [
+            (DataType::UInt8, DataType::Int16),
+            (DataType::UInt8, DataType::Int32),
+            (DataType::UInt8, DataType::Int64),
+            (DataType::UInt16, DataType::Int32),
+            (DataType::UInt16, DataType::Int64),
+            (DataType::UInt32, DataType::Int64),
+        ] {
+            assert!(is_injective_map_key_cast(&source_type, &target_type));
+        }
+        for (source_type, target_type) in [
+            (DataType::UInt8, DataType::Int8),
+            (DataType::UInt16, DataType::Int16),
+            (DataType::UInt32, DataType::Int32),
+        ] {
+            assert!(!is_injective_map_key_cast(&source_type, &target_type));
+        }
     }
 
     #[test]
