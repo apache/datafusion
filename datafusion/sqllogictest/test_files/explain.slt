@@ -839,3 +839,23 @@ physical_plan
 
 statement ok
 reset datafusion.sql_parser.dialect;
+
+# Test `DataSourceExec` tree-style explain
+statement ok
+CREATE TABLE test_memtable AS
+SELECT *
+FROM generate_series(100);
+
+query TT
+EXPLAIN FORMAT TREE
+SELECT *
+FROM test_memtable;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       DataSourceExec      │
+03)│    --------------------   │
+04)│        bytes: 65632       │
+05)│       format: memory      │
+06)│         rows: 101         │
+07)└───────────────────────────┘
