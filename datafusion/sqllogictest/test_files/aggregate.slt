@@ -2733,6 +2733,26 @@ c 122
 d 123.15
 e 110.266666666667
 
+# inline ORDER BY preserves percentile and centroids arguments
+query TR
+SELECT c1, approx_percentile_cont(0.95, 200 ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a 73.55
+b 68
+c 122.5
+d 124.2
+e 115.6
+
+# inline ORDER BY preserves the weight argument
+query TR
+SELECT c1, approx_percentile_cont_with_weight(1, 0.95 ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a 73.55
+b 68
+c 122.5
+d 124.2
+e 115.6
+
 # csv_query_sum_crossjoin
 query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1
@@ -7236,6 +7256,44 @@ from aggregate_test_100;
 
 statement ok
 set datafusion.execution.batch_size = 8192;
+
+# Test negative nth_value update_batch() with batches smaller than, equal to,
+# and larger than N for both order-insensitive and order-sensitive accumulators.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 4) t(i);
+----
+2 2
+
+statement ok
+set datafusion.execution.batch_size = 3;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 6) t(i);
+----
+4 4
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+query II
+select nth_value(i, -3), nth_value(i, -3 order by i)
+from generate_series(1, 8) t(i);
+----
+6 6
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
 
 
 # regr_*() testing retract_batch() from RegrAccumulator's internal implementation
