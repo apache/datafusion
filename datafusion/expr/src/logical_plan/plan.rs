@@ -5835,6 +5835,69 @@ mod tests {
             1
         );
 
+        let values =
+            LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
+        assert_eq!(values.min_rows(), 2);
+
+        let sort_key = col("column1").sort(true, false);
+        let sort = LogicalPlanBuilder::from(values.clone())
+            .sort(vec![sort_key.clone()])?
+            .build()?;
+        assert_eq!(sort.min_rows(), 2);
+        let sort_with_fetch = LogicalPlanBuilder::from(values.clone())
+            .sort_with_limit(vec![sort_key], Some(1))?
+            .build()?;
+        assert_eq!(sort_with_fetch.min_rows(), 1);
+
+        let limit = LogicalPlanBuilder::from(values.clone())
+            .limit(1, Some(5))?
+            .build()?;
+        assert_eq!(limit.min_rows(), 1);
+
+        let grouped = LogicalPlanBuilder::from(values)
+            .aggregate(vec![col("column1")], vec![count(lit(1))])?
+            .build()?;
+        assert_eq!(grouped.min_rows(), 0);
+
+        let scan = table_scan(Some("employee"), &employee_schema(), None)?.build()?;
+        assert_eq!(scan.min_rows(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn min_rows_of_joins() -> Result<()> {
+        let two_rows = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
+            .alias("l")?
+            .build()?;
+        let one_row = LogicalPlanBuilder::values(vec![vec![lit(1)]])?
+            .alias("r")?
+            .build()?;
+
+        let cross_join = LogicalPlanBuilder::from(two_rows.clone())
+            .cross_join(one_row.clone())?
+            .build()?;
+        assert_eq!(cross_join.min_rows(), 2);
+
+        for (join_type, expected_min_rows) in [
+            // An inner join with a join condition may filter out every row,
+            // while outer joins preserve the rows of the outer side(s).
+            (JoinType::Inner, 0),
+            (JoinType::Left, 2),
+            (JoinType::Right, 1),
+            (JoinType::Full, 2),
+            (JoinType::LeftSemi, 0),
+        ] {
+            let join = LogicalPlanBuilder::from(two_rows.clone())
+                .join_on(
+                    one_row.clone(),
+                    join_type,
+                    [col("l.column1").eq(col("r.column1"))],
+                )?
+                .build()?;
+            assert_eq!(join.min_rows(), expected_min_rows, "{join_type} join");
+        }
+
         Ok(())
     }
 
