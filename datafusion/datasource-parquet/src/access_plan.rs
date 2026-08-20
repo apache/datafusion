@@ -573,8 +573,59 @@ impl ParquetAccessPlan {
         let row_group_indexes = self.row_group_indexes();
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
 
+        let (row_group_indexes, row_selection) =
+            strip_empty_row_groups(row_group_indexes, row_selection, row_group_meta_data);
+
         PreparedAccessPlan::new(row_group_indexes, row_selection)
     }
+}
+
+/// Strip row groups whose post-pruning `RowSelection` selects zero rows.
+///
+/// arrow-rs's push decoder silently advances past such row groups inside
+/// `try_next_reader`, but the rest of DataFusion (per-RG metadata maps and the
+/// runtime dynamic-pruner) assumes a 1:1 correspondence between the prepared
+/// plan and the readers the decoder hands back. Removing these empty entries
+/// here keeps that invariant so downstream per-RG bookkeeping stays in sync
+/// with the decoder.
+///
+/// The flat `RowSelection` is split per row group with
+/// [`RowSelection::split_off`] (mirroring arrow-rs's own logic) and the
+/// surviving segments are concatenated back into the result selection. When
+/// `row_selection` is `None` (no page-index pruning, no user-supplied
+/// selection) no row group can be empty and the inputs are returned unchanged.
+fn strip_empty_row_groups(
+    row_group_indexes: Vec<usize>,
+    row_selection: Option<RowSelection>,
+    row_group_meta_data: &[RowGroupMetaData],
+) -> (Vec<usize>, Option<RowSelection>) {
+    let Some(mut remaining) = row_selection else {
+        return (row_group_indexes, None);
+    };
+
+    let mut kept_indexes = Vec::with_capacity(row_group_indexes.len());
+    let mut kept_selectors: Vec<RowSelector> = Vec::new();
+
+    for &rg_idx in row_group_indexes.iter() {
+        let rg_row_count = row_group_meta_data[rg_idx].num_rows() as usize;
+        // `split_off` cuts off the first `rg_row_count` rows worth of
+        // selection — this row group's segment. `remaining` keeps the rest.
+        let rg_segment = remaining.split_off(rg_row_count);
+        if rg_segment.row_count() > 0 {
+            kept_indexes.push(rg_idx);
+            kept_selectors.extend(rg_segment.iter().copied());
+        }
+        // Empty segment ⇒ arrow-rs would have silently skipped this row group
+        // anyway; drop it from our plan so per-RG bookkeeping stays in sync.
+    }
+
+    let result_selection = if kept_selectors.is_empty() {
+        None
+    } else {
+        Some(RowSelection::from(kept_selectors))
+    };
+
+    (kept_indexes, result_selection)
 }
 
 /// Represents a prepared, fully resolved [`ParquetAccessPlan`]
@@ -1049,6 +1100,41 @@ mod test {
 
     /// [`RowGroupMetaData`] that returns 4 row groups with 10, 20, 30, 40 rows
     /// respectively
+    #[test]
+    fn test_strip_empty_row_groups_drops_only_empties() {
+        // 4 row groups of [10, 20, 30, 40] rows. RG 1 and RG 3 select nothing
+        // after pruning, so they must be dropped; RG 0 and RG 2 survive with
+        // their re-concatenated selections intact.
+        let selection = RowSelection::from(vec![
+            RowSelector::select(10), // RG 0: keep all 10
+            RowSelector::skip(30),   // RG 1 (20) fully skipped + RG 2's leading 10
+            RowSelector::select(20), // RG 2: keep 20
+            RowSelector::skip(40),   // RG 3: skip all 40
+        ]);
+
+        let (indexes, result) = strip_empty_row_groups(
+            vec![0, 1, 2, 3],
+            Some(selection),
+            &ROW_GROUP_METADATA,
+        );
+
+        // RG 1 and RG 3 are dropped; the surviving indexes stay in order.
+        assert_eq!(indexes, vec![0, 2]);
+        let result = result.expect("survivors keep a selection");
+        assert_eq!(result.row_count(), 30); // 10 from RG 0 + 20 from RG 2
+        assert_eq!(result.skipped_row_count(), 10); // RG 2's leading skip
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_none_selection_unchanged() {
+        // With no row selection no row group can be empty, so the inputs pass
+        // through unchanged.
+        let (indexes, result) =
+            strip_empty_row_groups(vec![0, 1, 2, 3], None, &ROW_GROUP_METADATA);
+        assert_eq!(indexes, vec![0, 1, 2, 3]);
+        assert!(result.is_none());
+    }
+
     static ROW_GROUP_METADATA: LazyLock<Vec<RowGroupMetaData>> = LazyLock::new(|| {
         let schema_descr = get_test_schema_descr();
         let row_counts = [10, 20, 30, 40];
