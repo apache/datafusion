@@ -452,7 +452,7 @@
 <h1>Data Types<a class="headerlink" href="#data-types" title="Link to this heading">#</a></h1>
 <p>DataFusion uses Arrow, and thus the Arrow type system, for query
 execution. The SQL types from
-<a class="reference external" href="https://github.com/sqlparser-rs/sqlparser-rs/blob/main/src/ast/data_type.rs#L27">sqlparser-rs</a>
+<a class="reference external" href="https://github.com/sqlparser-rs/sqlparser-rs/blob/main/src/ast/data_type.rs#L49">sqlparser-rs</a>
 are mapped to <a class="reference external" href="https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html">Arrow data types</a> according to the following table.
 This mapping occurs when defining the schema in a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> command or when performing a SQL <code class="docutils literal notranslate"><span class="pre">CAST</span></code> operation.</p>
 <p>For background on extension types and custom metadata, see the
@@ -507,10 +507,23 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">STRING</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
 </tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">CHARACTER</span> <span class="pre">VARYING</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">CHAR</span> <span class="pre">VARYING</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">NVARCHAR</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Utf8View</span></code></p></td>
+</tr>
 </tbody>
 </table>
 </div>
 <p>By default, string types are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>. This can be configured using the <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.map_string_types_to_utf8view</span></code> setting. When set to <code class="docutils literal notranslate"><span class="pre">false</span></code>, string types are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8</span></code> instead.</p>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">CHAR</span></code>, <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code>, <code class="docutils literal notranslate"><span class="pre">STRING</span></code>, <code class="docutils literal notranslate"><span class="pre">CHARACTER</span> <span class="pre">VARYING</span></code>, <code class="docutils literal notranslate"><span class="pre">CHAR</span> <span class="pre">VARYING</span></code>, and <code class="docutils literal notranslate"><span class="pre">NVARCHAR</span></code> can
+optionally receive the maximum length (e.g., <code class="docutils literal notranslate"><span class="pre">VARCHAR(n)</span></code>). However, this limit is ignored. To raise
+an error when the length is passed, set <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.support_varchar_with_length</span></code> to
+<code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
 </section>
 <section id="numeric-types">
 <h2>Numeric Types<a class="headerlink" href="#numeric-types" title="Link to this heading">#</a></h2>
@@ -524,40 +537,37 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TINYINT</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Int8</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SMALLINT</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SMALLINT</span></code> or <code class="docutils literal notranslate"><span class="pre">INT2</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Int16</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">INT</span></code> or <code class="docutils literal notranslate"><span class="pre">INTEGER</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">INT</span></code> or <code class="docutils literal notranslate"><span class="pre">INTEGER</span></code> or <code class="docutils literal notranslate"><span class="pre">INT4</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Int32</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BIGINT</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BIGINT</span></code> or <code class="docutils literal notranslate"><span class="pre">INT8</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Int64</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TINYINT</span> <span class="pre">UNSIGNED</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TINYINT</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">UTINYINT</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">UInt8</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SMALLINT</span> <span class="pre">UNSIGNED</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SMALLINT</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">INT2</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">USMALLINT</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">UInt16</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">INT</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">INTEGER</span> <span class="pre">UNSIGNED</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">INT</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">INTEGER</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">INT4</span> <span class="pre">UNSIGNED</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">UInt32</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BIGINT</span> <span class="pre">UNSIGNED</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BIGINT</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">INT8</span> <span class="pre">UNSIGNED</span></code> or <code class="docutils literal notranslate"><span class="pre">UBIGINT</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">UInt64</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">FLOAT</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">FLOAT</span></code> or <code class="docutils literal notranslate"><span class="pre">FLOAT4</span></code> or <code class="docutils literal notranslate"><span class="pre">REAL</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Float32</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">REAL</span></code></p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Float32</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code> or <code class="docutils literal notranslate"><span class="pre">DOUBLE</span> <span class="pre">PRECISION</span></code> or <code class="docutils literal notranslate"><span class="pre">FLOAT8</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Float64</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DECIMAL(precision,</span> <span class="pre">scale)</span></code> where precision ≤ 38</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DECIMAL(precision,</span> <span class="pre">scale)</span> <span class="pre">or</span> <span class="pre">NUMERIC(precision,</span> <span class="pre">scale)</span></code> where precision ≤ 38</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Decimal128(precision,</span> <span class="pre">scale)</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DECIMAL(precision,</span> <span class="pre">scale)</span></code> where precision &gt; 38</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DECIMAL(precision,</span> <span class="pre">scale)</span> <span class="pre">or</span> <span class="pre">NUMERIC(precision,</span> <span class="pre">scale)</span></code> where precision &gt; 38</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Decimal256(precision,</span> <span class="pre">scale)</span></code></p></td>
 </tr>
 </tbody>
@@ -599,7 +609,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BOOLEAN</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BOOLEAN</span></code> or <code class="docutils literal notranslate"><span class="pre">BOOL</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Boolean</span></code></p></td>
 </tr>
 </tbody>
@@ -618,11 +628,52 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BYTEA</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Binary</span></code></p></td>
 </tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BLOB</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Binary</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BINARY</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Binary</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">VARBINARY</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Binary</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BYTES</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Binary</span></code></p></td>
+</tr>
 </tbody>
 </table>
 </div>
 <p>You can create binary literals using a hex string literal such as
 <code class="docutils literal notranslate"><span class="pre">X'1234'</span></code> to create a <code class="docutils literal notranslate"><span class="pre">Binary</span></code> value of two bytes, <code class="docutils literal notranslate"><span class="pre">0x12</span></code> and <code class="docutils literal notranslate"><span class="pre">0x34</span></code>.</p>
+</section>
+<section id="nested-types">
+<h2>Nested Types<a class="headerlink" href="#nested-types" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>SQL DataType</p></th>
+<th class="head text-left"><p>Arrow DataType</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ARRAY&lt;T&gt;</span></code> or <code class="docutils literal notranslate"><span class="pre">T[]</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">List(T)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">T[n]</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">FixedSizeList(n</span> <span class="pre">x</span> <span class="pre">T)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">MAP(k,</span> <span class="pre">v)</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Map(k,</span> <span class="pre">v)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">STRUCT&lt;[c0]</span> <span class="pre">T0[,</span> <span class="pre">...,</span> <span class="pre">[cn]</span> <span class="pre">Tn]&gt;</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Struct(c0:</span> <span class="pre">T0[,</span> <span class="pre">...,</span> <span class="pre">cn:</span> <span class="pre">Tn])</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>While columns defined with <code class="docutils literal notranslate"><span class="pre">STRUCT</span></code> require all rows to have the same schema, <code class="docutils literal notranslate"><span class="pre">MAP</span></code> imposes no such
+restriction.</p>
+<p>Also note that <code class="docutils literal notranslate"><span class="pre">STRUCT</span></code> can be declared without defining the field names. In that case, they will be
+set to <code class="docutils literal notranslate"><span class="pre">c0</span></code>, <code class="docutils literal notranslate"><span class="pre">c1</span></code>, …, <code class="docutils literal notranslate"><span class="pre">cn</span></code>.</p>
 </section>
 <section id="unsupported-sql-types">
 <h2>Unsupported SQL Types<a class="headerlink" href="#unsupported-sql-types" title="Link to this heading">#</a></h2>
@@ -636,37 +687,22 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">UUID</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BLOB</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">CLOB</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">CLOB</span></code></p></td>
-<td class="text-left"><p><em>Not yet supported</em></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BINARY</span></code></p></td>
-<td class="text-left"><p><em>Not yet supported</em></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">VARBINARY</span></code></p></td>
-<td class="text-left"><p><em>Not yet supported</em></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">REGCLASS</span></code></p></td>
-<td class="text-left"><p><em>Not yet supported</em></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">NVARCHAR</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">REGCLASS</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">CUSTOM</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ARRAY</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ENUM</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ENUM</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SET</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SET</span></code></p></td>
-<td class="text-left"><p><em>Not yet supported</em></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DATETIME</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DATETIME</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
 </tbody>
@@ -727,6 +763,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#date-time-types">Date/Time Types</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#boolean-types">Boolean Types</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#binary-types">Binary Types</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nested-types">Nested Types</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#unsupported-sql-types">Unsupported SQL Types</a></li>
 </ul>
   </nav></div>
