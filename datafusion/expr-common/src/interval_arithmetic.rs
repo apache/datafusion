@@ -2275,7 +2275,8 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, handle_overflow, next_value, prev_value, satisfy_greater,
+            Interval, checked_predecessor, handle_overflow, next_value, prev_value,
+            satisfy_greater,
         },
         operator::Operator,
     };
@@ -2370,6 +2371,29 @@ mod tests {
         });
 
         Ok(())
+    }
+
+    #[test]
+    fn test_checked_predecessor() {
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(10))),
+            Some(ScalarValue::Int64(Some(9)))
+        );
+        assert_eq!(checked_predecessor(&ScalarValue::Int64(None)), None);
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(i64::MIN))),
+            None
+        );
+        assert_eq!(
+            checked_predecessor(&ScalarValue::TimestampNanosecond(Some(i64::MIN), None)),
+            None
+        );
+        // Types without a discrete predecessor return the same value from
+        // `prev_value`, which `checked_predecessor` treats as absent.
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Utf8(Some("a".into()))),
+            None
+        );
     }
 
     #[test]

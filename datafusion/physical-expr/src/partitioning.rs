@@ -1489,6 +1489,32 @@ mod tests {
             PartitioningSatisfaction::NotSatisfied,
         );
 
+        let min_ts = fixture.range_partitioning([1], vec![ts_ns_split(i64::MIN)]);
+        assert_satisfaction(
+            "type-minimum split has no predecessor so date_bin grouping is not disjoint",
+            &min_ts,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let compound = fixture.range_partitioning(
+            [0, 1],
+            vec![SplitPoint::new(vec![
+                ScalarValue::Utf8(Some("k".into())),
+                ScalarValue::TimestampNanosecond(Some(hour_ns), None),
+            ])],
+        );
+        assert_satisfaction(
+            "multi-key Range([key, timestamp]) does not use single-key date_bin subset logic",
+            &compound,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
         Ok(())
     }
 
@@ -1520,6 +1546,85 @@ mod tests {
             panic!("expected UnknownPartitioning, got {projected:?}");
         };
         assert_eq!(partition_count, 2);
+
+        let min_ts = fixture.range_partitioning([0], vec![ts_ns_split(i64::MIN)]);
+        let projected = min_ts.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_project_through_date_trunc() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour");
+        let target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("time_bin", 0));
+        let mapping = ProjectionMapping::from_iter([(
+            Arc::clone(&trunc_hour),
+            ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+        )]);
+
+        let aligned = fixture.range_partitioning([0], vec![ts_ns_split(hour_ns)]);
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([time_bin@0 ASC], [(1704070800000000000)], 2)"
+        );
+
+        let trunc_day = date_trunc_of(fixture.col(0), "day");
+        let day_mapping = ProjectionMapping::from_iter([(
+            Arc::clone(&trunc_day),
+            ProjectionTargets::from(vec![(Arc::clone(&target), 0)]),
+        )]);
+        let projected = aligned.project(&day_mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_project_compound_through_date_bin() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("key", DataType::Utf8),
+            ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        ])?;
+        let hour_ns = 1_704_070_800_000_000_000i64;
+        let date_bin = date_bin_of(fixture.col(1), 60_000_000_000);
+        let key_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("key", 0));
+        let bin_target: Arc<dyn PhysicalExpr> = Arc::new(Column::new("time_bin", 1));
+        let mapping = ProjectionMapping::from_iter([
+            (
+                fixture.col(0),
+                ProjectionTargets::from(vec![(Arc::clone(&key_target), 0)]),
+            ),
+            (
+                Arc::clone(&date_bin),
+                ProjectionTargets::from(vec![(Arc::clone(&bin_target), 1)]),
+            ),
+        ]);
+
+        let aligned = fixture.range_partitioning(
+            [0, 1],
+            vec![SplitPoint::new(vec![
+                ScalarValue::Utf8(Some("k".into())),
+                ScalarValue::TimestampNanosecond(Some(hour_ns), None),
+            ])],
+        );
+        let projected = aligned.project(&mapping, &fixture.eq_properties);
+        assert_eq!(
+            projected.to_string(),
+            "Range([key@0 ASC, time_bin@1 ASC], [(k, 1704070800000000000)], 2)"
+        );
 
         Ok(())
     }
