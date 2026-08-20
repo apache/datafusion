@@ -536,10 +536,10 @@ pub fn create_physical_expr(
                         );
                     }
                     let dt = schema.field(0).data_type().clone();
-                    let nullable = schema.field(0).is_nullable();
                     Ok(Arc::new(ScalarSubqueryExpr::new(
                         dt,
-                        nullable,
+                        // A scalar subquery may return no rows and evaluate to NULL.
+                        true,
                         index,
                         planning_ctx.results().clone(),
                     )))
