@@ -397,19 +397,25 @@ impl FileFormat for CsvFormat {
                         Box::new(err),
                     )
                 })?;
-            ensure_unique_field_names(&schema).map_err(|err| {
-                DataFusionError::Context(
-                    format!("Error when processing CSV file {}", object.location),
-                    Box::new(err),
-                )
-            })?;
             records_to_read -= records_read;
-            schemas.push(schema);
+            schemas.push((&object.location, schema));
             if records_to_read == 0 {
                 break;
             }
         }
 
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing CSV file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
+
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
     }

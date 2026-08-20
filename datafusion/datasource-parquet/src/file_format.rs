@@ -17,6 +17,7 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -390,14 +391,16 @@ impl FileFormat for ParquetFormat {
         schemas
             .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
+        let mut seen = HashSet::new();
         for (location, schema) in &schemas {
-            ensure_unique_field_names(schema).map_err(|err| {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
                 DataFusionError::Context(
                     format!("Error when processing Parquet file {location}"),
                     Box::new(err),
                 )
             })?;
         }
+        drop(seen);
 
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 

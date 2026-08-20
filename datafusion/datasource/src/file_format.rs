@@ -47,9 +47,14 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 /// Rejects an inferred schema that names the same field more than once.
 ///
 /// [`Schema::try_merge`] coalesces fields by name, so callers validate each
-/// inferred file schema before merging.
-pub fn ensure_unique_field_names(schema: &Schema) -> Result<()> {
-    let mut seen = HashSet::with_capacity(schema.fields().len());
+/// inferred file schema before merging. `seen` is cleared before use so callers
+/// can reuse its allocation across schemas.
+pub fn ensure_unique_field_names<'a>(
+    schema: &'a Schema,
+    seen: &mut HashSet<&'a str>,
+) -> Result<()> {
+    seen.clear();
+    seen.reserve(schema.fields().len());
     for field in schema.fields() {
         if !seen.insert(field.name()) {
             return schema_err!(SchemaError::DuplicateUnqualifiedField {
