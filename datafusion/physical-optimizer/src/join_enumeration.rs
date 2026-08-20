@@ -1196,7 +1196,7 @@ impl Rebuilder<'_> {
                 Ok((Arc::new(join), required.to_vec()))
             }
             JoinKind::SortMerge => {
-                let join = SortMergeJoinExec::try_new(
+                let join: Arc<dyn ExecutionPlan> = Arc::new(SortMergeJoinExec::try_new(
                     left.plan,
                     right.plan,
                     on,
@@ -1204,8 +1204,20 @@ impl Rebuilder<'_> {
                     join_type,
                     vec![SortOptions::default(); keys],
                     self.graph.null_equality(),
-                )?;
-                Ok((Arc::new(join), natural))
+                )?);
+                // A sort merge join emits every column, so drop the ones nothing above
+                // needs here rather than once above the whole subtree: what this join
+                // emits is what the next one sorts. `ProjectionPushdown` cannot do it
+                // afterwards, since it only pushes through a join whose columns stay
+                // left-then-right, and reordering interleaves them. Reordering alone is
+                // left to the parent, which addresses columns by position anyway.
+                if required.len() == natural.len() {
+                    return Ok((join, natural));
+                }
+                let Some(projection) = projection_for(required, &natural)? else {
+                    return Ok((join, natural));
+                };
+                Ok((narrow(join, &projection)?, required.to_vec()))
             }
         }
     }
@@ -1366,6 +1378,25 @@ fn key_expr(
         return internal_err!("join enumeration lost column {col:?}");
     };
     Ok(Arc::new(Column::new(plan.schema().field(index).name(), index)) as _)
+}
+
+/// Wraps `plan` in a projection keeping only `indices`, in that order.
+fn narrow(
+    plan: Arc<dyn ExecutionPlan>,
+    indices: &[usize],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let exprs: Vec<ProjectionExpr> = indices
+        .iter()
+        .map(|&index| {
+            let name = schema.field(index).name();
+            ProjectionExpr {
+                expr: Arc::new(Column::new(name, index)),
+                alias: name.clone(),
+            }
+        })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(exprs, plan)?))
 }
 
 fn projection_for(required: &[ColRef], emitted: &[ColRef]) -> Result<Option<Vec<usize>>> {
@@ -1612,21 +1643,9 @@ fn reorder(
     if columns == graph.output {
         return Ok(Some(plan));
     }
-    // Only a sort merge subtree reaches here, having no projection of its own.
-    let schema = plan.schema();
-    let exprs = graph
-        .output
-        .iter()
-        .map(|col| {
-            let Some(index) = position(&columns, *col) else {
-                return internal_err!("join enumeration lost column {col:?}");
-            };
-            let name = schema.field(index).name();
-            Ok(ProjectionExpr {
-                expr: Arc::new(Column::new(name, index)),
-                alias: name.clone(),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(Some(Arc::new(ProjectionExec::try_new(exprs, plan)?)))
+    // Only a sort merge subtree reaches here, when its root emits more than the output.
+    let Some(projection) = projection_for(&graph.output, &columns)? else {
+        return Ok(Some(plan));
+    };
+    Ok(Some(narrow(plan, &projection)?))
 }
