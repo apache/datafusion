@@ -3789,6 +3789,21 @@ mod tests {
     }
 
     #[test]
+    fn simplify_scalar_subquery_is_null() {
+        let subquery = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let scalar_subquery = scalar_subquery(Arc::new(subquery));
+
+        assert_eq!(
+            simplify(scalar_subquery.clone().is_null()),
+            scalar_subquery.is_null()
+        );
+    }
+
+    #[test]
     fn simplify_expr_is_unknown() {
         assert_eq!(simplify(col("c2").is_unknown()), col("c2").is_unknown(),);
 

@@ -2010,6 +2010,18 @@ SELECT (SELECT v FROM sq_empty);
 ----
 NULL
 
+# A zero-row scalar subquery is nullable even when its projected expression is not.
+query I
+SELECT (SELECT 1 WHERE FALSE);
+----
+NULL
+
+# Its nullability must prevent SimplifyExpressions from folding IS NULL to false.
+query B
+SELECT (SELECT 1 WHERE FALSE) IS NULL;
+----
+true
+
 # Scalar subquery returning zero rows in arithmetic → NULL propagation
 query I
 SELECT x + (SELECT v FROM sq_empty) FROM sq_main;
