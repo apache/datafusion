@@ -1076,6 +1076,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
                 | DataType::LargeList(_)
                 | DataType::FixedSizeList(_, _)
                 | DataType::Boolean
+                | DataType::Time32(_)
+                | DataType::Time64(_)
         )
     {
         Ok(col_type.clone())
@@ -1106,9 +1108,8 @@ fn coerce_window_frame(
                 let target_type = extract_window_frame_target_type(&col_type)?;
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
                 // `current_value ± offset`, so it is only meaningful for target
-                // types that support arithmetic. Strings, binaries, booleans
-                // and lists are orderable -- which is all a free range frame
-                // needs -- but have no such arithmetic.
+                // types that support arithmetic. Other orderable target types can
+                // still use free range frames, whose bounds require comparison only.
                 let supports_offset_arithmetic =
                     target_type.is_numeric() || is_interval(&target_type);
                 if !supports_offset_arithmetic && !window_frame.free_range() {
