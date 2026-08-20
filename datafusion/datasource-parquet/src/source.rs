@@ -853,19 +853,20 @@ impl FileSource for ParquetSource {
             .collect();
         if filters
             .iter()
-            .all(|f| matches!(f.discriminant, PushedDown::No))
+            .all(|f| matches!(f.discriminant, PushedDown::Unsupported))
         {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
+                vec![PushedDown::Unsupported; filters.len()],
             ));
         }
         let allowed_filters = filters
             .iter()
             .filter_map(|f| match f.discriminant {
-                PushedDown::Yes => Some(Arc::clone(&f.predicate)),
-                PushedDown::No => None,
+                PushedDown::Exact => Some(Arc::clone(&f.predicate)),
+                PushedDown::Inexact => Some(Arc::clone(&f.predicate)),
+                PushedDown::Unsupported => None,
             })
             .collect_vec();
         let predicate = match source.predicate {
@@ -877,13 +878,21 @@ impl FileSource for ParquetSource {
         source.predicate = Some(predicate);
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
-        // If pushdown_filters is false we tell our parents that they still have to handle the filters,
-        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
+        // If pushdown_filters is false, retained filters are used only for
+        // statistics pruning. Report them as inexact so an ancestor still
+        // evaluates them while dynamic-filter producers know there is a consumer.
         if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            )
-            .with_updated_node(source));
+            let results = filters
+                .iter()
+                .map(|filter| match filter.discriminant {
+                    PushedDown::Exact | PushedDown::Inexact => PushedDown::Inexact,
+                    PushedDown::Unsupported => PushedDown::Unsupported,
+                })
+                .collect();
+            return Ok(
+                FilterPushdownPropagation::with_parent_pushdown_result(results)
+                    .with_updated_node(source),
+            );
         }
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             filters.iter().map(|f| f.discriminant).collect(),
@@ -2037,7 +2046,7 @@ mod tests {
     fn test_try_pushdown_filters_rejects_virtual_column_refs() {
         // Virtual columns are produced by the reader and cannot be referenced
         // inside a RowFilter. `try_pushdown_filters` must report such filters
-        // as `PushedDown::No` so the FilterExec above the scan stays in
+        // as `PushedDown::Unsupported` so the FilterExec above the scan stays in
         // place — otherwise the scan would silently drop the predicate and
         // produce wrong results.
         use arrow::datatypes::{DataType, Field, FieldRef, Schema};
@@ -2091,22 +2100,30 @@ mod tests {
 
         assert_eq!(prop.filters.len(), 4);
         assert!(
-            matches!(prop.filters[0], PushedDown::Yes),
-            "file-column filter should be pushable"
+            matches!(prop.filters[0], PushedDown::Exact),
+            "file-column filter should be applied exactly"
         );
         assert!(
-            matches!(prop.filters[1], PushedDown::No),
+            matches!(prop.filters[1], PushedDown::Unsupported),
             "filter referencing only a virtual column must not be pushed down"
         );
         assert!(
-            matches!(prop.filters[2], PushedDown::No),
+            matches!(prop.filters[2], PushedDown::Unsupported),
             "filter mixing a virtual column with a file column must not be \
              pushed down (row filter would silently drop it)"
         );
         assert!(
-            matches!(prop.filters[3], PushedDown::No),
+            matches!(prop.filters[3], PushedDown::Unsupported),
             "file_row_index() rewrites to a virtual column and must not be \
              pushed down"
         );
+
+        let pruning_only_source = ParquetSource::new(source.table_schema().clone());
+        let pruning_filter =
+            logical2physical(&col("value").eq(logical_lit(1i64)), full_schema);
+        let prop = pruning_only_source
+            .try_pushdown_filters(vec![pruning_filter], &config)
+            .expect("statistics-only pushdown must not error");
+        assert_eq!(prop.filters, vec![PushedDown::Inexact]);
     }
 }

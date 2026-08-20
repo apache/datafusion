@@ -158,12 +158,10 @@ use crate::aggregates::{
     partial_reduce_stream::PartialReduceHashAggregateStream,
     single_stream::SingleHashAggregateStream,
 };
-use crate::execution_plan::{
-    CardinalityEffect, EmissionType, plan_contains_expression_id,
-};
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    FilterPushdownPropagation, PushedDown,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
@@ -2274,17 +2272,17 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
 
-        // If this node tried to pushdown some dynamic filter before, now we check
-        // if the child accept the filter
-        if phase == FilterPushdownPhase::Post
-            && let Some(dyn_filter) = &self.dynamic_filter
-        {
-            let child_accepts_dyn_filter = dyn_filter
-                .filter
-                .expression_id()
-                .map(|id| plan_contains_expression_id(&self.input, id))
-                .transpose()?
-                .unwrap_or(false);
+        // Use the child's planning result rather than inspecting the rewritten
+        // child plan. This also works when the consumer is hidden behind an
+        // opaque plan boundary.
+        if phase == FilterPushdownPhase::Post && self.dynamic_filter.is_some() {
+            let child_accepts_dyn_filter = child_pushdown_result
+                .self_filters
+                .first()
+                .and_then(|filters| filters.first())
+                .is_some_and(|filter| {
+                    !matches!(filter.discriminant, PushedDown::Unsupported)
+                });
 
             if !child_accepts_dyn_filter {
                 // Child can't consume the self dynamic filter, so disable it by setting
@@ -3202,7 +3200,6 @@ mod tests {
     use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::filter::FilterExecBuilder;
     use crate::metrics::MetricValue;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test::TestMemoryExec;
@@ -3238,7 +3235,7 @@ mod tests {
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::{Literal, NotExpr};
+    use datafusion_physical_expr::expressions::Literal;
 
     use crate::projection::ProjectionExec;
     use crate::repartition::RepartitionExec;
@@ -8051,38 +8048,6 @@ mod tests {
         // Hard to assert this because the filter is identical. No error means
         // the filter was accepted. That's a good enough assertion for now.
         let _agg = agg.with_dynamic_filter_expr(remapped_df)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_plan_contains_expression_id_recurses_plans_and_expressions() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![col("a", &schema)?],
-            lit(true),
-        ));
-        let expression_id = dynamic_filter
-            .expression_id()
-            .expect("dynamic filters always have an expression ID");
-
-        assert!(!plan_contains_expression_id(&empty, expression_id)?);
-
-        let dynamic_filter_expr: Arc<dyn PhysicalExpr> =
-            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter);
-        let predicate: Arc<dyn PhysicalExpr> =
-            Arc::new(NotExpr::new(dynamic_filter_expr));
-        let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExecBuilder::new(predicate, empty).build()?);
-        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-            [ProjectionExpr::new_from_expression(
-                col("a", &schema)?,
-                &schema,
-            )?],
-            filter,
-        )?);
-
-        assert!(plan_contains_expression_id(&projection, expression_id)?);
         Ok(())
     }
 

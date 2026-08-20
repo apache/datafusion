@@ -24,11 +24,11 @@ use std::vec;
 
 use crate::execution_plan::{
     EmissionType, boundedness_from_children, has_same_children_properties,
-    plan_contains_expression_id, stub_properties,
+    stub_properties,
 };
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    FilterPushdownPropagation, PushedDown,
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
@@ -1449,20 +1449,11 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        // Only compute a dynamic filter when the probe subtree contains a consumer.
-        // Searching from `self` would always find the producer expression owned by this join.
-        let enable_dynamic_filter_pushdown = if self
+        // `dynamic_filter` is installed during filter pushdown only when the
+        // probe side reports that it retained the expression.
+        let enable_dynamic_filter_pushdown = self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
-        {
-            self.dynamic_filter
-                .as_ref()
-                .and_then(|df| df.filter.expression_id())
-                .map(|id| plan_contains_expression_id(&self.right, id))
-                .transpose()?
-                .unwrap_or(false)
-        } else {
-            false
-        };
+            && self.dynamic_filter.is_some();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -1813,14 +1804,16 @@ impl ExecutionPlan for HashJoinExec {
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
-        if let Some(filter) = right_child_self_filters.first() {
-            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
-            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
+        if let Some(filter) = right_child_self_filters
+            .first()
+            .filter(|filter| !matches!(filter.discriminant, PushedDown::Unsupported))
+        {
             let predicate = Arc::clone(&filter.predicate);
             if let Ok(dynamic_filter) =
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
+                // The probe side retained the self filter, either for exact
+                // filtering or inexact pruning, so keep its producer state.
                 let new_node = self
                     .builder()
                     .with_dynamic_filter(Some(HashJoinExecDynamicFilter {

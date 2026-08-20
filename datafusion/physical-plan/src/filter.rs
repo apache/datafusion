@@ -713,7 +713,8 @@ impl ExecutionPlan for FilterExec {
                 .parent_filters
                 .iter()
                 .filter_map(|f| {
-                    matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
+                    (!matches!(f.all(), PushedDown::Exact))
+                        .then_some(Arc::clone(&f.filter))
                 })
                 .collect();
 
@@ -734,8 +735,8 @@ impl ExecutionPlan for FilterExec {
             .expect("we have exactly one child")
             .iter()
             .filter_map(|f| match f.discriminant {
-                PushedDown::Yes => None,
-                PushedDown::No => Some(&f.predicate),
+                PushedDown::Exact => None,
+                PushedDown::Inexact | PushedDown::Unsupported => Some(&f.predicate),
             })
             .cloned();
 
@@ -810,7 +811,7 @@ impl ExecutionPlan for FilterExec {
         };
 
         Ok(FilterPushdownPropagation {
-            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
+            filters: vec![PushedDown::Exact; child_pushdown_result.parent_filters.len()],
             updated_node,
         })
     }
