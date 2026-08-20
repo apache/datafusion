@@ -63,23 +63,6 @@ pub struct ParquetFileMetrics {
     pub row_groups_pruned_dynamic_filter: Count,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
-    /// Total number of bytes the scan is finished with, whether they were read
-    /// or skipped.
-    ///
-    /// Where [`Self::bytes_scanned`] counts only the bytes fetched from the
-    /// object store, this counts every byte the scan has resolved: the bytes it
-    /// read, plus the bytes of the row groups (and whole files) that pruning
-    /// proved cannot contribute. Over the lifetime of a file it therefore sums
-    /// to that file's size — or, for a file split into byte ranges for
-    /// parallelism, to the size of the range — so
-    /// `bytes_processed / total file bytes` is a scan completion fraction,
-    /// which `bytes_scanned` on its own is not: it understates progress by
-    /// however much pruning and projection pushdown saved.
-    ///
-    /// Credited at row-group granularity: a row group's bytes land when the
-    /// scan is done with it. Crediting a row group's bytes progressively as its
-    /// rows are decoded is left to a follow-up.
-    pub bytes_processed: Count,
     /// Total rows filtered out by predicates pushed into parquet scan
     pub pushdown_rows_pruned: Count,
     /// Total rows passed predicates pushed into parquet scan
@@ -222,12 +205,6 @@ impl ParquetFileMetrics {
             .with_category(MetricCategory::Bytes)
             .counter("bytes_scanned", partition);
 
-        let bytes_processed = builder
-            .clone()
-            .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_processed", partition);
-
         let metadata_load_time = builder
             .clone()
             .with_type(MetricType::Summary)
@@ -303,7 +280,6 @@ impl ParquetFileMetrics {
             row_groups_pruned_statistics,
             row_groups_pruned_dynamic_filter,
             bytes_scanned,
-            bytes_processed,
             pushdown_rows_pruned,
             pushdown_rows_matched,
             row_pushdown_eval_time,
@@ -317,6 +293,39 @@ impl ParquetFileMetrics {
             predicate_cache_inner_records,
             predicate_cache_records,
         }
+    }
+
+    /// The `bytes_processed` counter for one file: the total number of bytes the
+    /// scan is finished with, whether they were read or skipped.
+    ///
+    /// Where [`Self::bytes_scanned`] counts only the bytes fetched from the
+    /// object store, this counts every byte the scan has resolved: the bytes it
+    /// read, plus the bytes of the row groups (and whole files) that pruning
+    /// proved cannot contribute. Over the lifetime of a file it therefore sums
+    /// to that file's size — or, for a file split into byte ranges for
+    /// parallelism, to the size of the range — so
+    /// `bytes_processed / total file bytes` is a scan completion fraction,
+    /// which `bytes_scanned` on its own is not: it understates progress by
+    /// however much pruning and projection pushdown saved.
+    ///
+    /// Credited at row-group granularity: a row group's bytes land when the
+    /// scan is done with it. Crediting a row group's bytes progressively as its
+    /// rows are decoded is left to a follow-up.
+    ///
+    /// Built on demand rather than held on [`ParquetFileMetrics`] because only
+    /// [`ByteProgress`] ever touches it, and a public field would make every
+    /// future metric added here a breaking change for anyone constructing the
+    /// struct with a literal.
+    pub(crate) fn bytes_processed_counter(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+    ) -> Count {
+        MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Bytes)
+            .counter("bytes_processed", partition)
     }
 
     /// Record pages whose page-index pruning was skipped because the containing

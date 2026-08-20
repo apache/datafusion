@@ -834,7 +834,11 @@ impl ParquetMorselizer {
 
         let byte_progress = ByteProgress::new(
             partitioned_file.effective_size(),
-            file_metrics.bytes_processed.clone(),
+            ParquetFileMetrics::bytes_processed_counter(
+                &self.metrics,
+                self.partition_index,
+                &file_name,
+            ),
         );
 
         Ok(PreparedParquetOpen {
