@@ -1372,7 +1372,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&left, &right, BitwiseXor) => {
+            }) if !info.nullable(&right)? && expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 Transformed::yes(if expr == *right {
                     Expr::Literal(
@@ -1389,7 +1389,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&right, &left, BitwiseXor) => {
+            }) if !info.nullable(&left)? && expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 Transformed::yes(if expr == *left {
                     Expr::Literal(
@@ -3020,16 +3020,19 @@ mod tests {
         // c2 ^ ((c2 ^ (c2 | c1)) ^ (c1 & c2)) --> (c2 | c1) ^ (c1 & c2)
 
         let expr = bitwise_xor(
-            col("c2"),
+            col("c2_non_null"),
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
         );
 
         let expected = bitwise_xor(
-            bitwise_or(col("c2"), col("c1")),
-            bitwise_and(col("c1"), col("c2")),
+            bitwise_or(col("c2_non_null"), col("c1")),
+            bitwise_and(col("c1"), col("c2_non_null")),
         );
 
         assert_eq!(simplify(expr), expected);
@@ -3038,18 +3041,24 @@ mod tests {
         // c2 ^ (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) --> c2 ^ ((c2 | c1) ^ (c1 & c2))
 
         let expr = bitwise_xor(
-            col("c2"),
+            col("c2_non_null"),
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_xor(
+                    bitwise_and(col("c1"), col("c2_non_null")),
+                    col("c2_non_null"),
+                ),
             ),
         );
 
         let expected = bitwise_xor(
-            col("c2"),
+            col("c2_non_null"),
             bitwise_xor(
-                bitwise_or(col("c2"), col("c1")),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_or(col("c2_non_null"), col("c1")),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
         );
 
@@ -3060,15 +3069,18 @@ mod tests {
 
         let expr = bitwise_xor(
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
-            col("c2"),
+            col("c2_non_null"),
         );
 
         let expected = bitwise_xor(
-            bitwise_or(col("c2"), col("c1")),
-            bitwise_and(col("c1"), col("c2")),
+            bitwise_or(col("c2_non_null"), col("c1")),
+            bitwise_and(col("c1"), col("c2_non_null")),
         );
 
         assert_eq!(simplify(expr), expected);
@@ -3078,21 +3090,45 @@ mod tests {
 
         let expr = bitwise_xor(
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_xor(
+                    bitwise_and(col("c1"), col("c2_non_null")),
+                    col("c2_non_null"),
+                ),
             ),
-            col("c2"),
+            col("c2_non_null"),
         );
 
         let expected = bitwise_xor(
             bitwise_xor(
-                bitwise_or(col("c2"), col("c1")),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_or(col("c2_non_null"), col("c1")),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
-            col("c2"),
+            col("c2_non_null"),
         );
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_does_not_cancel_nullable_bitwise_xor() {
+        let nullable = col("c3");
+        let other = col("c3_non_null");
+
+        let expr = bitwise_xor(nullable.clone(), nullable.clone());
+        assert_eq!(simplify(expr.clone()), expr);
+
+        let expr = bitwise_xor(
+            bitwise_xor(nullable.clone(), other.clone()),
+            nullable.clone(),
+        );
+        assert_eq!(simplify(expr.clone()), expr);
+
+        let expr = bitwise_xor(nullable.clone(), bitwise_xor(other, nullable));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     #[test]
@@ -3184,13 +3220,13 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_xor() {
         // c4 ^ c4 -> 0
-        let expr = (col("c4")).bitxor(col("c4"));
+        let expr = (col("c4_non_null")).bitxor(col("c4_non_null"));
         let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
 
         // c3 ^ c3 -> 0
-        let expr = col("c3").bitxor(col("c3"));
+        let expr = col("c3_non_null").bitxor(col("c3_non_null"));
         let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
@@ -3749,6 +3785,21 @@ mod tests {
         assert_eq!(
             simplify(Expr::IsNull(Box::new(col("c1_non_null")))),
             lit(false)
+        );
+    }
+
+    #[test]
+    fn simplify_scalar_subquery_is_null() {
+        let subquery = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let scalar_subquery = scalar_subquery(Arc::new(subquery));
+
+        assert_eq!(
+            simplify(scalar_subquery.clone().is_null()),
+            scalar_subquery.is_null()
         );
     }
 

@@ -604,6 +604,8 @@ pub trait ReadOptions<'a> {
     }
 
     /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn _get_resolved_schema<'life0, 'async_trait>(
         &'a self,
         config: &'life0 SessionConfig,
@@ -662,6 +664,8 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -713,6 +717,8 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -751,6 +757,8 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -785,6 +793,8 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -818,6 +828,8 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,

@@ -185,11 +185,7 @@ pub fn check_subquery_expr(
                     }
                 }
                 _ => {
-                    if inner_plan
-                        .max_rows()
-                        .filter(|max_row| *max_row <= 1)
-                        .is_some()
-                    {
+                    if inner_plan.max_rows().is_some_and(|max_row| max_row <= 1) {
                         Ok(())
                     } else {
                         plan_err!(
@@ -221,7 +217,6 @@ pub fn check_subquery_expr(
                 ),
             }?;
         }
-        check_correlations_in_subquery(inner_plan)
     } else {
         if let Expr::InSubquery(subquery) = expr {
             // InSubquery should only return one column
@@ -265,8 +260,8 @@ pub fn check_subquery_expr(
                 outer_plan.display()
             ),
         }?;
-        check_correlations_in_subquery(inner_plan)
     }
+    check_correlations_in_subquery(inner_plan)
 }
 
 // Recursively check the unsupported outer references in the sub query plan.

@@ -916,6 +916,22 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     }
 
     let first_schema = inputs[0].schema();
+
+    // Fast path: when every input already shares the first input's schema, the
+    // field-by-field metadata/nullability merge below is redundant work that
+    // scales as O(n^2 * fields). This is common in practice: unions built from
+    // repartitioned copies of the same plan (e.g. observed in InfluxDB) hand us
+    // children that all carry the exact same schema. A pointer-equality check
+    // catches the shared-`Arc` case for free, and a content `==` comparison
+    // catches distinct-but-equal schemas; both let us return early and hand back
+    // the first schema unchanged.
+    if inputs[1..].iter().all(|input| {
+        let schema = input.schema();
+        Arc::ptr_eq(&schema, &first_schema) || schema == first_schema
+    }) {
+        return Ok(first_schema);
+    }
+
     let first_field_count = first_schema.fields().len();
 
     // validate that all inputs have the same number of fields
@@ -1624,6 +1640,36 @@ mod tests {
         // Check that we have 2 inputs
         assert_eq!(union.inputs().len(), 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_schema_fast_path_content_equal() -> Result<()> {
+        // Inputs whose schemas are pointer-distinct but structurally equal must
+        // take the content-equality (`==`) fast path and still produce a schema
+        // equal to the shared one, matching the slow-path merge exactly.
+        let schema = create_test_schema()?;
+        let distinct: SchemaRef = Arc::new((*schema).clone());
+        // Guard the branch under test: these must NOT be the same allocation, so
+        // the fast path is reached via `==` rather than `Arc::ptr_eq`.
+        assert!(!Arc::ptr_eq(&schema, &distinct));
+
+        let memory_exec1 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let memory_exec2 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&distinct), None)?);
+        let memory_exec3 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&distinct), None)?);
+
+        // Capture the first child's schema before it is moved into the union.
+        let first_input_schema = memory_exec1.schema();
+        let union_plan =
+            UnionExec::try_new(vec![memory_exec1, memory_exec2, memory_exec3])?;
+
+        // The fast path returns the first child's schema Arc unchanged. Assert
+        // pointer equality (not just `==`): a slow-path merge would build a new,
+        // merely-equal Schema, so only ptr-eq proves the merge was skipped.
+        assert!(Arc::ptr_eq(&union_plan.schema(), &first_input_schema));
         Ok(())
     }
 
