@@ -475,8 +475,9 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_groupby_metrics_final_mode() -> Result<()> {
+    async fn assert_groupby_metrics_final_mode(
+        enable_migration_aggregate: bool,
+    ) -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
@@ -536,12 +537,12 @@ mod tests {
             schema,
         )?);
 
-        let task_ctx = Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+        let task_ctx = Arc::new(TaskContext::default().with_session_config(
+            SessionConfig::new().set_bool(
+                "datafusion.execution.enable_migration_aggregate",
+                enable_migration_aggregate,
             ),
-        );
+        ));
         let _result =
             collect(Arc::clone(&final_aggregate) as _, Arc::clone(&task_ctx)).await?;
 
@@ -563,6 +564,15 @@ mod tests {
         );
         assert_aggregate_metric_times_positive(&metrics, "merge_time");
         assert_aggregate_metric_times_positive(&metrics, "evaluate_time");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_groupby_metrics_final_mode() -> Result<()> {
+        for enable_migration_aggregate in [true, false] {
+            assert_groupby_metrics_final_mode(enable_migration_aggregate).await?;
+        }
 
         Ok(())
     }

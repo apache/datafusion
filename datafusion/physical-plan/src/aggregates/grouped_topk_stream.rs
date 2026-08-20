@@ -332,6 +332,7 @@ mod tests {
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::assert_batches_eq;
     use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
@@ -371,7 +372,18 @@ mod tests {
             .with_limit_options(Some(LimitOptions::new(2))),
         );
         let context = Arc::new(TaskContext::default());
-        let _result = collect(Arc::clone(&aggregate_exec) as _, context).await?;
+        let result = collect(Arc::clone(&aggregate_exec) as _, context).await?;
+        assert_batches_eq!(
+            [
+                "+---+--------+",
+                "| k | MIN(a) |",
+                "+---+--------+",
+                "| 4 | 1.0    |",
+                "| 3 | 2.0    |",
+                "+---+--------+",
+            ],
+            &result
+        );
 
         let metrics = aggregate_exec.metrics().unwrap();
         let argument_metric = metrics.iter().find(|metric| {
