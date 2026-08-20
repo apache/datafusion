@@ -1663,6 +1663,41 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_map_int32_keys_to_int64() {
+        let mut builder =
+            MapBuilder::new(None, Int32Builder::new(), StringBuilder::new());
+        builder.keys().append_value(1);
+        builder.keys().append_value(2);
+        builder.values().append_value("a");
+        builder.values().append_value("b");
+        builder.append(true).unwrap();
+
+        let source_col: ArrayRef = Arc::new(builder.finish());
+        let target_type = map_type(DataType::Int64, DataType::Utf8);
+
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        assert_eq!(result.data_type(), &target_type);
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 2]);
+
+        let keys = map.keys().as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(keys.values(), &[1, 2]);
+        let values = map.values().as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "a");
+        assert_eq!(values.value(1), "b");
+    }
+
+    #[test]
     fn test_map_entry_names_match_positionally_and_adapt_nested_structs() {
         let source_col = nested_struct_map_array("source_keys", "source_values", false);
         let target_type = map_type_with_entry_names(
