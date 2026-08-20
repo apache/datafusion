@@ -1515,6 +1515,61 @@ mod tests {
             PartitioningSatisfaction::NotSatisfied,
         );
 
+        let bin_only = Distribution::KeyPartitioned(vec![date_bin_of(
+            fixture.col(1),
+            60_000_000_000,
+        )]);
+        assert_satisfaction(
+            "aligned hour split: Range(timestamp) subset-satisfies GROUP BY date_bin(60s, timestamp)",
+            &aligned,
+            &bin_only,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Subset,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let null_split = fixture.range_partitioning(
+            [1],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                None, None,
+            )])],
+        );
+        assert_satisfaction(
+            "null split has no predecessor so date_bin grouping is not disjoint",
+            &null_split,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        // `RangePartitioning::new` skips validation, so disjointness must still
+        // fail closed on split points that do not match the range key.
+        let empty_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([1]),
+            vec![SplitPoint::new(vec![])],
+        ));
+        assert_satisfaction(
+            "split point missing the range key is not disjoint for date_bin grouping",
+            &empty_split,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        let mismatched_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([1]),
+            vec![int_split_point([10])],
+        ));
+        assert_satisfaction(
+            "non-timestamp split cannot be evaluated as date_bin, so grouping is not disjoint",
+            &mismatched_split,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
         Ok(())
     }
 
@@ -1549,6 +1604,38 @@ mod tests {
 
         let min_ts = fixture.range_partitioning([0], vec![ts_ns_split(i64::MIN)]);
         let projected = min_ts.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let null_split = fixture.range_partitioning(
+            [0],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                None, None,
+            )])],
+        );
+        let projected = null_split.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let empty_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([0]),
+            vec![SplitPoint::new(vec![])],
+        ));
+        let projected = empty_split.project(&mapping, &fixture.eq_properties);
+        let Partitioning::UnknownPartitioning(partition_count) = projected else {
+            panic!("expected UnknownPartitioning, got {projected:?}");
+        };
+        assert_eq!(partition_count, 2);
+
+        let mismatched_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([0]),
+            vec![int_split_point([10])],
+        ));
+        let projected = mismatched_split.project(&mapping, &fixture.eq_properties);
         let Partitioning::UnknownPartitioning(partition_count) = projected else {
             panic!("expected UnknownPartitioning, got {projected:?}");
         };
