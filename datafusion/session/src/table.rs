@@ -187,7 +187,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
@@ -209,18 +209,26 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
     ///
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
-    async fn scan_with_args<'a>(
-        &self,
-        state: &dyn Session,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814>.
+    fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
         args: ScanArgs<'a>,
-    ) -> Result<ScanResult> {
-        let filters = args.filters().unwrap_or(&[]);
-        let projection = args.projection().map(|p| p.to_vec());
-        let limit = args.limit();
-        let plan = self
-            .scan(state, projection.as_ref(), filters, limit)
-            .await?;
-        Ok(plan.into())
+    ) -> BoxFuture<'async_trait, Result<ScanResult>>
+    where
+        'a: 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        let plan = self.scan(
+            state,
+            args.projection(),
+            args.filters().unwrap_or(&[]),
+            args.limit(),
+        );
+        Box::pin(async move { Ok(plan.await?.into()) })
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -269,7 +277,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// impl TableProvider for TestDataSource {
     /// # fn schema(&self) -> SchemaRef { todo!() }
     /// # fn table_type(&self) -> TableType { todo!() }
-    /// # async fn scan(&self, s: &dyn Session, p: Option<&Vec<usize>>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
+    /// # async fn scan(&self, s: &dyn Session, p: Option<&[usize]>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
     ///         todo!()
     /// # }
     ///     // Override the supports_filters_pushdown to evaluate which expressions

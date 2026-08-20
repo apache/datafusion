@@ -20,6 +20,7 @@
 
 use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, StructArray, new_empty_array};
@@ -214,20 +215,13 @@ impl TrivialNthValueAccumulator {
         })
     }
 
-    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
-    /// None represents all of the new `values` need to be added to the state.
+    /// Updates state with rows in `range` from `values`.
     fn append_new_data(
         &mut self,
         values: &[ArrayRef],
-        fetch: Option<usize>,
+        range: Range<usize>,
     ) -> Result<()> {
-        let n_row = values[0].len();
-        let n_to_add = if let Some(fetch) = fetch {
-            std::cmp::min(fetch, n_row)
-        } else {
-            n_row
-        };
-        for index in 0..n_to_add {
+        for index in range {
             let mut row = get_row_at_idx(values, index)?;
             self.values.push_back(row.swap_remove(0));
             // At index 1, we have n index argument, which is constant.
@@ -246,14 +240,18 @@ impl Accumulator for TrivialNthValueAccumulator {
             if from_start {
                 // direction is from start
                 let n_remaining = n_required.saturating_sub(self.values.len());
-                self.append_new_data(values, Some(n_remaining))?;
+                let batch_len = values[0].len();
+                self.append_new_data(values, 0..n_remaining.min(batch_len))?;
             } else {
                 // direction is from end
-                self.append_new_data(values, None)?;
-                let start_offset = self.values.len().saturating_sub(n_required);
+                let batch_len = values[0].len();
+                let new_count = n_required.min(batch_len);
+                let retain_count = n_required - new_count;
+                let start_offset = self.values.len().saturating_sub(retain_count);
                 if start_offset > 0 {
                     self.values.drain(0..start_offset);
                 }
+                self.append_new_data(values, batch_len - new_count..batch_len)?;
             }
         }
         Ok(())
@@ -387,20 +385,13 @@ impl NthValueAccumulator {
         ))
     }
 
-    /// Updates state, with the `values`. Fetch contains missing number of entries for state to be complete
-    /// None represents all of the new `values` need to be added to the state.
+    /// Updates state with rows in `range` from `values`.
     fn append_new_data(
         &mut self,
         values: &[ArrayRef],
-        fetch: Option<usize>,
+        range: Range<usize>,
     ) -> Result<()> {
-        let n_row = values[0].len();
-        let n_to_add = if let Some(fetch) = fetch {
-            std::cmp::min(fetch, n_row)
-        } else {
-            n_row
-        };
-        for index in 0..n_to_add {
+        for index in range {
             let row = get_row_at_idx(values, index)?;
             self.values.push_back(row[0].clone());
             // At index 1, we have n index argument.
@@ -424,15 +415,19 @@ impl Accumulator for NthValueAccumulator {
         if from_start {
             // direction is from start
             let n_remaining = n_required.saturating_sub(self.values.len());
-            self.append_new_data(values, Some(n_remaining))?;
+            let batch_len = values[0].len();
+            self.append_new_data(values, 0..n_remaining.min(batch_len))?;
         } else {
             // direction is from end
-            self.append_new_data(values, None)?;
-            let start_offset = self.values.len().saturating_sub(n_required);
+            let batch_len = values[0].len();
+            let new_count = n_required.min(batch_len);
+            let retain_count = n_required - new_count;
+            let start_offset = self.values.len().saturating_sub(retain_count);
             if start_offset > 0 {
                 self.values.drain(0..start_offset);
                 self.ordering_values.drain(0..start_offset);
             }
+            self.append_new_data(values, batch_len - new_count..batch_len)?;
         }
 
         Ok(())

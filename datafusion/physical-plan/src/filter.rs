@@ -1236,7 +1236,7 @@ pub fn batch_filter(
 fn filter_and_project(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
@@ -2148,9 +2148,7 @@ mod tests {
             Statistics {
                 num_rows: Precision::Inexact(1000),
                 total_byte_size: Precision::Inexact(4000),
-                column_statistics: vec![ColumnStatistics {
-                    ..Default::default()
-                }],
+                column_statistics: vec![ColumnStatistics::default()],
             },
             schema,
         ));
@@ -2320,15 +2318,9 @@ mod tests {
                         max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
                 ],
             },
             schema,

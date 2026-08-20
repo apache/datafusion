@@ -1970,6 +1970,10 @@ description = "Run query one against CSV data."
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     async fn cli_subgroup_filter_is_used_for_benchmark_replacements() {
         let temp = tempfile::tempdir().unwrap();
 
@@ -1992,6 +1996,10 @@ description = "Run query one against CSV data."
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     async fn benchmark_replacements_use_explicit_data_dir() {
         let temp = tempfile::tempdir().unwrap();
 

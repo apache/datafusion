@@ -113,14 +113,14 @@ impl TableProvider for RecordingTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             Arc::clone(&self.schema),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 
@@ -134,7 +134,7 @@ impl TableProvider for RecordingTable {
         let plan = self
             .scan(
                 state,
-                args.projection().map(|p| p.to_vec()).as_ref(),
+                args.projection(),
                 args.filters().unwrap_or(&[]),
                 args.limit(),
             )
