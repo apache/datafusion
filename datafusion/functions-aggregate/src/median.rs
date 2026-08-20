@@ -16,15 +16,16 @@
 // under the License.
 
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 
 use arrow::datatypes::FieldRef;
 
-use crate::percentile_cont::PercentileCont;
+use crate::percentile_cont::{
+    PercentileCont, create_percentile_accumulator, create_percentile_groups_accumulator,
+};
+use datafusion_common::Result;
 use datafusion_common::types::logical_float64;
-use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
@@ -32,8 +33,6 @@ use datafusion_expr::{
     TypeSignatureClass, Volatility, function::AccumulatorArgs,
 };
 use datafusion_macros::user_doc;
-use datafusion_physical_expr::expressions::lit;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 make_udaf_expr_and_func!(
     Median,
@@ -103,18 +102,6 @@ impl Median {
     }
 }
 
-type PercentileExprsArgs = ([Arc<dyn PhysicalExpr>; 2], [FieldRef; 2]);
-
-/// Build arguments for `percentile_cont` UDF
-fn percentile_exprs_args(args: &AccumulatorArgs) -> Result<PercentileExprsArgs> {
-    let percentile_expr = lit(0.5_f64);
-    let percentile_field = percentile_expr.return_field(args.schema)?;
-    Ok((
-        [Arc::clone(&args.exprs[0]), percentile_expr],
-        [Arc::clone(&args.expr_fields[0]), percentile_field],
-    ))
-}
-
 impl AggregateUDFImpl for Median {
     fn name(&self) -> &str {
         "median"
@@ -133,26 +120,12 @@ impl AggregateUDFImpl for Median {
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let num_args = args.exprs.len();
-        assert_eq_or_internal_err!(
-            num_args,
-            1,
-            "median should only have 1 arg, but found num args:{}",
-            num_args
-        );
-        let (exprs, expr_fields) = percentile_exprs_args(&args)?;
-        let sub_args = AccumulatorArgs {
-            exprs: &exprs,
-            expr_fields: &expr_fields,
-            return_field: Arc::clone(&args.return_field),
-            schema: args.schema,
-            ignore_nulls: args.ignore_nulls,
-            order_bys: args.order_bys,
-            is_reversed: args.is_reversed,
-            name: args.name,
-            is_distinct: args.is_distinct,
-        };
-        self.percentile_cont.accumulator(sub_args)
+        create_percentile_accumulator(
+            self.name(),
+            0.5,
+            args.expr_fields[0].data_type(),
+            args.is_distinct,
+        )
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -163,26 +136,11 @@ impl AggregateUDFImpl for Median {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        let num_args = args.exprs.len();
-        assert_eq_or_internal_err!(
-            num_args,
-            1,
-            "median should only have 1 arg, but found num args:{}",
-            num_args
-        );
-        let (exprs, expr_fields) = percentile_exprs_args(&args)?;
-        let sub_args = AccumulatorArgs {
-            exprs: &exprs,
-            expr_fields: &expr_fields,
-            return_field: Arc::clone(&args.return_field),
-            schema: args.schema,
-            ignore_nulls: args.ignore_nulls,
-            order_bys: args.order_bys,
-            is_reversed: args.is_reversed,
-            name: args.name,
-            is_distinct: args.is_distinct,
-        };
-        self.percentile_cont.create_groups_accumulator(sub_args)
+        create_percentile_groups_accumulator(
+            self.name(),
+            0.5,
+            args.expr_fields[0].data_type(),
+        )
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -45,6 +45,7 @@ use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 
 use crate::min_max::{max_udaf, min_udaf};
+use crate::utils::validate_percentile_expr;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, internal_datafusion_err,
     utils::{SingleRowListArrayBuilder, take_function_args},
@@ -64,8 +65,6 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumu
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
-
-use crate::utils::validate_percentile_expr;
 
 create_func!(PercentileCont, percentile_cont_udaf);
 
@@ -218,46 +217,12 @@ impl AggregateUDFImpl for PercentileCont {
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         // Always verify percentiles
         let percentile = get_percentile(&args)?;
-
-        let input_dt = args.expr_fields[0].data_type();
-        // Null input evaluates to null
-        if input_dt.is_null() {
-            return Ok(Box::new(NoopAccumulator::default()));
-        }
-
-        macro_rules! helper {
-            ($t:ty, $i:ty, $dt:expr) => {
-                if args.is_distinct {
-                    Ok(Box::new(DistinctPercentileContAccumulator::<$t, $i>::new(
-                        percentile,
-                        $dt.clone(),
-                    )))
-                } else {
-                    Ok(Box::new(PercentileContAccumulator::<$t, $i>::new(
-                        percentile,
-                        $dt.clone(),
-                    )))
-                }
-            };
-        }
-        match input_dt {
-            DataType::Float16 => helper!(Float16Type, FloatInterpolator, input_dt),
-            DataType::Float32 => helper!(Float32Type, FloatInterpolator, input_dt),
-            DataType::Float64 => helper!(Float64Type, FloatInterpolator, input_dt),
-            DataType::Decimal32(_, _) => {
-                helper!(Decimal32Type, DecimalInterpolator, input_dt)
-            }
-            DataType::Decimal64(_, _) => {
-                helper!(Decimal64Type, DecimalInterpolator, input_dt)
-            }
-            DataType::Decimal128(_, _) => {
-                helper!(Decimal128Type, DecimalInterpolator, input_dt)
-            }
-            DataType::Decimal256(_, _) => {
-                helper!(Decimal256Type, DecimalInterpolator, input_dt)
-            }
-            dt => internal_err!("Unsupported datatype for {} with {}", args.name, dt),
-        }
+        create_percentile_accumulator(
+            self.name(),
+            percentile,
+            args.expr_fields[0].data_type(),
+            args.is_distinct,
+        )
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -270,35 +235,11 @@ impl AggregateUDFImpl for PercentileCont {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // Always verify percentiles
         let percentile = get_percentile(&args)?;
-
-        let input_dt = args.expr_fields[0].data_type();
-
-        macro_rules! helper {
-            ($t:ty, $i:ty, $dt:expr) => {
-                Ok(Box::new(PercentileContGroupsAccumulator::<$t, $i>::new(
-                    percentile,
-                    $dt.clone(),
-                )))
-            };
-        }
-        match input_dt {
-            DataType::Float16 => helper!(Float16Type, FloatInterpolator, input_dt),
-            DataType::Float32 => helper!(Float32Type, FloatInterpolator, input_dt),
-            DataType::Float64 => helper!(Float64Type, FloatInterpolator, input_dt),
-            DataType::Decimal32(_, _) => {
-                helper!(Decimal32Type, DecimalInterpolator, input_dt)
-            }
-            DataType::Decimal64(_, _) => {
-                helper!(Decimal64Type, DecimalInterpolator, input_dt)
-            }
-            DataType::Decimal128(_, _) => {
-                helper!(Decimal128Type, DecimalInterpolator, input_dt)
-            }
-            DataType::Decimal256(_, _) => {
-                helper!(Decimal256Type, DecimalInterpolator, input_dt)
-            }
-            dt => internal_err!("Unsupported datatype for {} with {}", args.name, dt),
-        }
+        create_percentile_groups_accumulator(
+            self.name(),
+            percentile,
+            args.expr_fields[0].data_type(),
+        )
     }
 
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
@@ -332,6 +273,85 @@ fn get_percentile(args: &AccumulatorArgs) -> Result<f64> {
     };
 
     Ok(percentile)
+}
+
+pub fn create_percentile_accumulator(
+    name: &str,
+    percentile: f64,
+    input_dt: &DataType,
+    is_distinct: bool,
+) -> Result<Box<dyn Accumulator>> {
+    // Null input evaluates to null
+    if input_dt.is_null() {
+        return Ok(Box::new(NoopAccumulator::default()));
+    }
+
+    macro_rules! helper {
+        ($t:ty, $i:ty, $dt:expr) => {
+            if is_distinct {
+                Ok(Box::new(DistinctPercentileContAccumulator::<$t, $i>::new(
+                    percentile,
+                    $dt.clone(),
+                )))
+            } else {
+                Ok(Box::new(PercentileContAccumulator::<$t, $i>::new(
+                    percentile,
+                    $dt.clone(),
+                )))
+            }
+        };
+    }
+    match input_dt {
+        DataType::Float16 => helper!(Float16Type, FloatInterpolator, input_dt),
+        DataType::Float32 => helper!(Float32Type, FloatInterpolator, input_dt),
+        DataType::Float64 => helper!(Float64Type, FloatInterpolator, input_dt),
+        DataType::Decimal32(_, _) => {
+            helper!(Decimal32Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal64(_, _) => {
+            helper!(Decimal64Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal128(_, _) => {
+            helper!(Decimal128Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal256(_, _) => {
+            helper!(Decimal256Type, DecimalInterpolator, input_dt)
+        }
+        dt => internal_err!("Unsupported datatype for {} with {}", name, dt),
+    }
+}
+
+pub fn create_percentile_groups_accumulator(
+    name: &str,
+    percentile: f64,
+    input_dt: &DataType,
+) -> Result<Box<dyn GroupsAccumulator>> {
+    macro_rules! helper {
+        ($t:ty, $i:ty, $dt:expr) => {
+            Ok(Box::new(PercentileContGroupsAccumulator::<$t, $i>::new(
+                percentile,
+                $dt.clone(),
+            )))
+        };
+    }
+    match input_dt {
+        DataType::Float16 => helper!(Float16Type, FloatInterpolator, input_dt),
+        DataType::Float32 => helper!(Float32Type, FloatInterpolator, input_dt),
+        DataType::Float64 => helper!(Float64Type, FloatInterpolator, input_dt),
+        DataType::Decimal32(_, _) => {
+            helper!(Decimal32Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal64(_, _) => {
+            helper!(Decimal64Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal128(_, _) => {
+            helper!(Decimal128Type, DecimalInterpolator, input_dt)
+        }
+        DataType::Decimal256(_, _) => {
+            helper!(Decimal256Type, DecimalInterpolator, input_dt)
+        }
+        dt => internal_err!("Unsupported datatype for {} with {}", name, dt),
+    }
 }
 
 fn simplify_percentile_cont_aggregate(
