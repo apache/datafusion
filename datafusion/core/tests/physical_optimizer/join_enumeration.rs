@@ -194,9 +194,8 @@ fn greater_than_filter(
     ))
 }
 
-/// A three way join in its expensive `FROM` order: the two large tables first
-/// produce a million rows, where either with the tiny table first gives ten
-/// thousand.
+/// A three way join in its expensive `FROM` order: the two large tables first produce a
+/// million rows, where either of them with the tiny table first gives ten thousand.
 fn late_reducer_plan() -> Result<Arc<dyn ExecutionPlan>> {
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
@@ -391,9 +390,8 @@ async fn reordering_returns_the_same_rows_with(prefer_hash_join: bool) -> Result
 fn late_semi_join_plan(anti: bool) -> Result<Arc<dyn ExecutionPlan>> {
     let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
     let other = scan(1_000_000, &[("o_id", 1_000_000)]);
-    // Sized so the reducer keeps one percent either way round: ten of the thousand
-    // types match for the semi join, all but ten for the anti join. A reducer that
-    // kept most of its input would not be worth moving.
+    // Sized so the reducer keeps one percent either way round: ten of the thousand types
+    // match for the semi join, all but ten for the anti join.
     let wanted = if anti {
         scan(990, &[("w_type", 990)])
     } else {

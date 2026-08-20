@@ -1679,13 +1679,13 @@ config_namespace! {
         pub join_enumeration: bool, default = true
 
         /// How much cheaper an enumerated join order must be, in percent, before it
-        /// replaces the order the planner produced. Estimates often cannot tell two
-        /// orders apart, and swapping on one that close is as likely to lose as win.
+        /// replaces the order the planner produced. Estimates are often too close to tell
+        /// two orders apart, so a small gain is not worth acting on.
         pub join_enumeration_min_improvement: u8, default = 10
 
-        /// Maximum inputs in a join subtree for which `join_enumeration` searches,
-        /// at a cost of `O(3^n)`. Larger subtrees keep the planner's order, as do
-        /// subtrees of over 16 inputs whatever this is set to.
+        /// Maximum inputs in a join subtree for which `join_enumeration` searches, at a
+        /// cost of `O(3^n)`. Larger subtrees keep the planner's order, as do subtrees of
+        /// more than 16 inputs regardless of this setting.
         pub join_enumeration_limit: usize, default = 12
 
         /// When set to true, the physical plan optimizer uses the pluggable

@@ -361,9 +361,7 @@ impl FilterExec {
             let null_rejecting_columns = collect_null_rejecting_columns(predicate);
 
             // Estimate one top-level conjunct at a time: interval analysis rejects a whole
-            // predicate if any part is out of reach, and an `IN` list is, since the planner
-            // expands it into `OR`s. TPC-DS estimated `d_dom between 1 and 2 AND d_year IN
-            // (1999, 2000, 2001)` at 20% of `date_dim`, 14,610 rows, where 72 survive.
+            // predicate if any part is out of reach, and an expanded `IN` list is.
             let (supported, rest): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()
                 .partition(|conjunct| check_support(conjunct, schema));
@@ -388,9 +386,7 @@ impl FilterExec {
             }
 
             // Rebuilding re-associates the conjunction and interval propagation is
-            // sensitive to the tree's shape, so pass the predicate through untouched when
-            // nothing was split off. Never pass it through when something was: analysis
-            // errors on the parts it rejected rather than falling back.
+            // shape sensitive, so pass the predicate through untouched if nothing split.
             let analyzable = if split_anything {
                 conjunction_opt(supported.into_iter().cloned())
             } else {
@@ -1004,10 +1000,9 @@ impl EmbeddedProjection for FilterExec {
 ///
 /// Only AND conjunctions are traversed; OR is intentionally skipped
 /// since `a = 1 OR a = 2` does not pin NDV to 1.
-/// Estimates `col IN (a, b, c)`, including the `OR` chain a short list expands
-/// into, as `distinct literals / distinct values` -- the reasoning `col =
-/// literal` gets from `1 / NDV`. Interval arithmetic cannot narrow a column from
-/// a disjunction, so such a conjunct would otherwise only take the default.
+/// Estimates `col IN (a, b, c)`, and the `OR` chain a short list expands into, as
+/// `distinct literals / distinct values`. Interval arithmetic cannot narrow a column
+/// from a disjunction, so such a conjunct would otherwise only take the default.
 ///
 /// `None` when the conjunct is not a list of literals over one column.
 fn in_list_selectivity(
@@ -2870,9 +2865,8 @@ mod tests {
                         Arc::new(Literal::new(ScalarValue::Utf8(Some("b".to_string())))),
                     )),
                 )),
-                // The two listed values are 2 of the column's 50, so 4 of the
-                // 100 input rows are expected and NDV is capped at 4. Still not
-                // collapsed to 1, which is what this case guards.
+                // The two listed values are 2 of the column's 50, so 4 of the 100 rows
+                // are expected and NDV is capped at 4, not collapsed to 1.
                 vec![Precision::Inexact(4)],
             ),
             (

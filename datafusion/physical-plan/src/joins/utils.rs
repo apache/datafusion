@@ -466,9 +466,8 @@ pub(crate) fn estimate_join_statistics(
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
-    // Width of one output row, from the sides this join emits. Without it a join
-    // reports no size, and `hash_join_single_partition_threshold` -- a byte threshold
-    // -- falls back to counting rows, blind to how wide they are.
+    // Width of one output row, from the sides this join emits. Without it a join reports
+    // no size and `hash_join_single_partition_threshold` falls back to counting rows.
     let width = |stats: &Statistics| match (
         stats.total_byte_size.get_value(),
         stats.num_rows.get_value(),

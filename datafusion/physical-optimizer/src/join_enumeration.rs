@@ -17,17 +17,13 @@
 
 //! Cost-based join order enumeration.
 //!
-//! A subtree of joins is flattened into relations plus the predicates between
-//! them, a dynamic program searches the orders (bushy as well as left-deep) under
-//! a `C_out` cost model, and the subtree is rebuilt if the winner is cheaper by a
-//! clear margin. `JoinSelection` then picks each join's build side and partition
-//! mode against the shape chosen here.
+//! A subtree of joins is flattened into relations plus the predicates between them, a
+//! dynamic program searches the orders (bushy as well as left-deep) under a `C_out` cost
+//! model, and the subtree is rebuilt if the winner is clearly cheaper.
 //!
-//! Reordering is sound because a tree of inner joins equals the cross product of
-//! its relations filtered by all its predicates: any tree applying every
-//! predicate exactly once, where the columns it needs are available, computes the
-//! same rows. Semi and anti joins take part as reducers, since they filter their
-//! output side rather than contributing columns of their own.
+//! Reordering is sound because a tree of inner joins equals the cross product of its
+//! relations filtered by all its predicates. Semi and anti joins take part as reducers:
+//! they filter their output side rather than contributing columns.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -121,9 +117,8 @@ impl PhysicalOptimizerRule for JoinEnumeration {
     }
 }
 
-/// Hard upper bound on the relations in one join graph, and on the exhaustive
-/// search, which allocates `2^n` and visits `3^n`. Larger graphs keep the
-/// planner's order however high `join_enumeration_limit` is set.
+/// Hard upper bound on the relations in one join graph. The search allocates `2^n` and
+/// visits `3^n`, so larger graphs keep the planner's order regardless of the limit.
 const MAX_RELATIONS: usize = 16;
 
 /// Computes a plan node's statistics, shared with the rest of `JoinSelection`.
@@ -147,8 +142,8 @@ fn covers(mask: RelSet, required: RelSet) -> bool {
     required & !mask == 0
 }
 
-/// One column of one relation. Reordering moves columns, so plumbing uses these
-/// rather than indices.
+/// One column of one relation, tracked instead of a plain index because reordering
+/// moves columns to other positions.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ColRef {
     rel: usize,
@@ -381,9 +376,8 @@ impl<'a> CostModel<'a> {
         }
     }
 
-    /// Estimated rows from joining every relation in `mask`: the product of the
-    /// relation sizes scaled by the predicates that apply within it. Depending only
-    /// on the *set*, not the tree shape, is what makes the dynamic program valid.
+    /// Estimated rows from joining every relation in `mask`. Depending on the set alone,
+    /// not the tree shape, is what makes the dynamic program valid.
     fn cardinality(&self, mask: RelSet) -> f64 {
         let mut rows = 1.0;
         for rel in iter_rels(mask) {
@@ -421,10 +415,9 @@ impl<'a> CostModel<'a> {
                     .then_some(Combine::Reducer { reducer });
             }
         }
-        // Otherwise both sides must contribute columns, and the operator follows from
-        // the predicates crossing the cut. An unconnected cut is a cross product,
-        // allowed only between whole components: any cut through one is connected, and
-        // a disconnected graph has no other way to be built.
+        // Otherwise both sides must contribute columns. An unconnected cut is a cross
+        // product, allowed only between whole components, which is the only way to join
+        // a disconnected graph.
         if left & !reducers == 0 || right & !reducers == 0 {
             return None;
         }
@@ -435,10 +428,8 @@ impl<'a> CostModel<'a> {
         (self.connected(left, right) || separates_components).then_some(Combine::Inner)
     }
 
-    /// `C_out`: the sum of the internal nodes' cardinalities. Leaves are excluded as
-    /// every candidate reads the same relations.
-    /// The key classes joining `left` to `right`, which is what a partitioned join
-    /// would hash both sides on.
+    /// The key classes joining `left` to `right`, which a partitioned join hashes both
+    /// sides on.
     fn crossing_classes(&self, left: RelSet, right: RelSet) -> PartSet {
         let mut classes = 0;
         for (index, edge) in self.graph.edges.iter().enumerate() {
@@ -450,11 +441,8 @@ impl<'a> CostModel<'a> {
         classes
     }
 
-    /// Whether `JoinSelection` will broadcast this side rather than partition it. It
-    /// compares bytes when an estimate exists and rows otherwise, so this mirrors it.
-    ///
-    /// A sort merge join has no mode that collects one side, so it never broadcasts and
-    /// costing an order as if it could would pick orders it cannot carry out.
+    /// Whether `JoinSelection` will broadcast this side rather than partition it, by the
+    /// same bytes-or-rows test it uses. A sort merge join has no mode that collects.
     fn broadcasts(&self, side: RelSet) -> bool {
         if self.graph.kind() == JoinKind::SortMerge {
             return false;
@@ -472,11 +460,8 @@ impl<'a> CostModel<'a> {
         self.cardinality(side) * width < self.broadcast_bytes
     }
 
-    /// Cost of one join and the partitioning it leaves behind, for each way of
-    /// exchanging its inputs. Collecting a side moves that side; partitioning moves
-    /// whichever sides are not already hashed on the join key -- which is how a shape
-    /// that repartitions the largest relation twice becomes visibly worse than one
-    /// that repartitions it once.
+    /// Cost of one join and the partitioning it leaves behind, for each way of exchanging
+    /// its inputs. A side already hashed on the join key is not moved again.
     fn exchanges(
         &self,
         left: RelSet,
@@ -486,10 +471,8 @@ impl<'a> CostModel<'a> {
         collect_only: Option<RelSet>,
     ) -> Vec<(f64, PartSet, RelSet, PartitionMode)> {
         let classes = self.crossing_classes(left, right);
-        // Without a key every pair has to be examined, and the output cardinality the
-        // rest of the cost is built from does not say that: a filter estimated to keep
-        // few rows still compares all of them. TPC-DS q85 read as cheap and ran 122x
-        // slower once a join became one.
+        // Without a key every pair is examined, which the output cardinality does not
+        // show: a filter estimated to keep few rows still compares all of them.
         let pairs = if classes == 0 {
             self.cardinality(left) * self.cardinality(right)
         } else {
@@ -500,8 +483,7 @@ impl<'a> CostModel<'a> {
             if collect_only.is_some_and(|only| only != build) {
                 continue;
             }
-            // With no key there is nothing to hash on, so a side must be collected
-            // whatever its size.
+            // With no key there is nothing to hash on, so a side must be collected.
             if classes == 0 || self.broadcasts(build) {
                 let cost = pairs + self.cardinality(build);
                 options.push((cost, probe_part, build, PartitionMode::CollectLeft));
@@ -563,10 +545,9 @@ impl<'a> CostModel<'a> {
     }
 }
 
-/// Groups equi-join predicates that share a column into key classes, so two joins
-/// hashing on the same class can reuse one partitioning. Returns each edge's class as
-/// a bit position; classes beyond the bitmask's width collapse into the last, which
-/// costs only precision.
+/// Groups equi-join predicates that share a column into key classes, so two joins hashing
+/// on the same class can reuse one partitioning. Returns each edge's class as a bit
+/// position, with classes past the bitmask's width collapsed into the last.
 fn key_classes(edges: &[Edge]) -> Vec<u32> {
     let mut ids: Vec<usize> = (0..edges.len()).collect();
     let shares = |a: &Edge, b: &Edge| {
@@ -609,13 +590,9 @@ struct Solution {
     cost: f64,
 }
 
-/// Exhaustive dynamic programming over connected relation subsets, each paired with
-/// the partitioning its plan leaves behind.
-///
-/// Carrying the partitioning is what lets a later join reuse an earlier one's hash
-/// exchange instead of paying for another, so the search can tell a shape that
-/// repartitions the largest relation once from one that does it twice. Costing order
-/// alone cannot see that difference, since the exchange belongs to the mode.
+/// Exhaustive dynamic programming over connected relation subsets, each paired with the
+/// partitioning its plan leaves behind. Carrying the partitioning lets a later join reuse
+/// an earlier one's exchange instead of paying for another.
 fn solve_dp(model: &CostModel) -> Option<Solution> {
     let n = model.graph.relations.len();
     let full: RelSet = model.graph.all();
@@ -680,8 +657,7 @@ fn solve_dp(model: &CostModel) -> Option<Solution> {
             continue;
         };
         let other = mask ^ split;
-        // The side that builds goes on the left, which is the side `CollectLeft`
-        // gathers and the side a semi or anti join probes from.
+        // The build side goes on the left: that is the side `CollectLeft` gathers.
         nodes.insert(mask, (build, mode));
         for child in [split, other] {
             let child_part = best[child as usize]
@@ -700,15 +676,12 @@ fn solve_dp(model: &CostModel) -> Option<Solution> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum JoinKind {
     Hash,
-    /// Emits every column, having no built-in projection; the subtree gets one
-    /// projection on top instead.
+    /// Has no built-in projection, so the subtree gets one projection on top instead.
     SortMerge,
 }
 
-/// One join, seen the same way whichever operator implements it.
-///
-/// `kind` and `null_equality` are `None` for operators without equi-join keys,
-/// which express no preference the rebuild must honour.
+/// One join, seen the same way whichever operator implements it. `kind` and
+/// `null_equality` are `None` for operators without equi-join keys.
 struct JoinView<'a> {
     kind: Option<JoinKind>,
     role: JoinRole,
@@ -791,9 +764,8 @@ enum JoinRole {
     },
 }
 
-/// Classifies a join. Outer and mark joins are excluded (not filters on their
-/// inputs, or they add a column), as are `null_aware` anti joins, joins with a
-/// limit, and semi joins whose filter is part of their existential test.
+/// Classifies a join. Outer and mark joins are excluded because they do not just filter
+/// their inputs, and semi and anti joins with a filter because it is part of their test.
 fn join_role(join_type: &JoinType, has_filter: bool) -> Option<JoinRole> {
     let role = match join_type {
         JoinType::Inner => JoinRole::Inner,
@@ -849,16 +821,14 @@ fn extend_required(columns: &mut Vec<ColRef>, wanted: &[ColRef], side: RelSet) {
     }
 }
 
-/// Extracts the maximal reorderable subtree at `plan`. `None` covers every
-/// bail-out: an unmodelled join feature, a key that is not a plain column,
-/// missing row counts, too few or too many relations.
+/// Extracts the maximal reorderable subtree at `plan`. `None` covers every bail-out: an
+/// unmodelled join feature, a non-column key, missing row counts, too few or many inputs.
 fn extract(
     plan: &Arc<dyn ExecutionPlan>,
     stats: &mut StatsFn,
 ) -> Result<Option<JoinGraph>> {
-    // Start at a join, or at the column pruning projection usually sitting above
-    // one: rooting there lets its column list become the top join's projection
-    // instead of stranding a `ProjectionExec` above a wider join.
+    // Start at a join, or at the pruning projection usually above one, so its column list
+    // becomes the top join's projection instead of a `ProjectionExec` above a wider join.
     let is_root = join_view(plan).is_some()
         || plan
             .downcast_ref::<ProjectionExec>()
@@ -941,9 +911,8 @@ impl<'a, 's> Extractor<'a, 's> {
         } else if let Some(projection) = plan.downcast_ref::<ProjectionExec>()
             && all_alias_free_columns(projection.expr())
         {
-            // Looking through pruning projections is what lets the enumerator see a whole
-            // chain, since `ProjectionPushdown` has not folded them into the joins yet.
-            // `all_alias_free_columns` rules out renaming, so dropping them is safe.
+            // Looking through pruning projections lets the enumerator see a whole chain,
+            // since `ProjectionPushdown` has not folded them into the joins yet.
             let Some((child, mask)) = self.visit(projection.input())? else {
                 return Ok(None);
             };
@@ -1158,9 +1127,8 @@ impl Rebuilder<'_> {
             Some(Combine::Reducer { reducer }) => {
                 self.reducing(mask, required, reducer, mode)
             }
-            // The search put the building side on the left and chose the mode along
-            // with the order, so both are emitted as decided rather than left to
-            // `JoinSelection` to pick again.
+            // The search chose the build side and the mode along with the order, so both
+            // are emitted as decided rather than left to `JoinSelection`.
             Some(Combine::Inner) => self.inner(required, left, right, mode),
         }
     }
@@ -1192,8 +1160,8 @@ impl Rebuilder<'_> {
         };
         let keys = on.len();
         if keys == 0 {
-            // No keys: a filter still restricts the pair, which is a nested loop join;
-            // without one it is a cross product.
+            // No keys: with a filter this is a nested loop join, without one a cross
+            // join.
             let projection = projection_for(required, &natural)?;
             return match filter {
                 Some(filter) => {
@@ -1272,8 +1240,8 @@ impl Rebuilder<'_> {
             })
             .collect();
 
-        // Each side emits this join's keys, its filters' columns, and what is asked
-        // for above.
+        // Each side emits this join's keys, its filters' columns, and what is needed
+        // above.
         let child_required = |side: RelSet, take_left: bool| {
             let mut columns: Vec<ColRef> = vec![];
             for (left, right) in &keys {
@@ -1427,9 +1395,8 @@ struct JoinSpec {
     mode: PartitionMode,
 }
 
-/// Rebuilds the non-equi filters applied at one join as one conjunction. A
-/// [`JoinFilter`] addresses an intermediate batch by index, so merging means
-/// concatenating those schemas and shifting all but the first filter's indices.
+/// Rebuilds the non-equi filters applied at one join as one conjunction. A [`JoinFilter`]
+/// addresses its batch by index, so merging shifts all but the first filter's indices.
 fn rebuild_filters(
     filters: &[&Filter],
     left_columns: &[ColRef],
@@ -1470,9 +1437,8 @@ fn rebuild_filters(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Intermediate columns go left side first: a hash join reads them positionally,
-    // but a sort merge join rebuilds the batch as all left then all right columns,
-    // so interleaved sides would evaluate against the wrong columns.
+    // Intermediate columns go left side first: a sort merge join rebuilds the batch as
+    // all left then all right columns, so interleaved sides would read wrong columns.
     let mut order: Vec<usize> = (0..column_indices.len()).collect();
     order.sort_by_key(|i| column_indices[*i].side == JoinSide::Right);
     let mut moved = vec![0; order.len()];
@@ -1528,9 +1494,8 @@ fn rewrite_columns(
 
 type RewrittenRelation = (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>);
 
-/// Substitutes rewritten relations into a subtree, leaving its shape untouched.
-/// The relations are the exact `Arc`s taken from it, so pointer identity finds
-/// them, and a match is not descended into.
+/// Substitutes rewritten relations into a subtree, leaving its shape untouched. The
+/// relations are the exact `Arc`s taken from it, so pointer identity finds them.
 fn replace_relations(
     plan: &Arc<dyn ExecutionPlan>,
     rewritten: &[RewrittenRelation],
@@ -1575,9 +1540,8 @@ pub(crate) fn enumerate_join_order(
         if let Some(reordered) = reorder(&graph, config, stats)? {
             return Ok(Some(reordered));
         }
-        // Rejected, so descend into the relations, not the children: re-extracting here
-        // would re-search costed subsets, and would weigh a gain against a subtree's own
-        // cost rather than the whole graph's, readmitting what the margin rejected.
+        // Rejected, so descend into the relations rather than the children: re-extracting
+        // here would re-search costed subsets and readmit what the margin turned down.
         let mut rewritten: Vec<RewrittenRelation> = vec![];
         for relation in &graph.relations {
             if let Some(new) = enumerate_join_order(&relation.plan, config, stats)? {
@@ -1623,9 +1587,8 @@ fn reorder(
         return Ok(None);
     };
 
-    // Keep the planner's order unless the winner is clearly cheaper. Where estimates
-    // cannot tell orders apart every candidate looks alike and the winner is
-    // arbitrary, which cost TPC-DS q6 37% on an estimated gain under 1%.
+    // Keep the planner's order unless the winner is clearly cheaper: where estimates
+    // cannot tell orders apart, the winner is arbitrary.
     let margin = f64::from(config.optimizer.join_enumeration_min_improvement) / 100.0;
     if solution.cost >= model.tree_cost(&graph.original_nodes) * (1.0 - margin) {
         return Ok(None);

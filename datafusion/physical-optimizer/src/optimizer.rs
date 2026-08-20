@@ -94,8 +94,8 @@ impl PhysicalOptimizer {
             // this information is not lost across different rules during optimization.
             Arc::new(OutputRequirements::new_add_mode()),
             Arc::new(AggregateStatistics::new()),
-            // Chooses the shape of the join tree, so it must run before JoinSelection
-            // decides each join's build side and partition mode.
+            // Must run before JoinSelection, which decides each join's build side and
+            // partition mode.
             Arc::new(JoinEnumeration::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the

@@ -196,15 +196,13 @@ impl PhysicalOptimizerRule for JoinSelection {
     }
 }
 
-/// How far above a join a hash requirement is still attributed to it, enough to reach
-/// through the partial aggregate that a group-by is planned as.
+/// How far above a join a hash requirement still counts as that join's, enough to reach
+/// through the partial aggregate a group-by is planned as.
 const PARTITIONING_LOOKAHEAD: usize = 3;
 
-/// Restores a partitioned join that an operator above needs the partitioning of.
-///
-/// Collecting the build side saves the join its exchanges but discards its hash
-/// partitioning, which then has to be rebuilt above: TPC-H q13's group-by falls back to
-/// a shuffle and a two-phase aggregation and loses 20%, more than collecting saved.
+/// Restores a partitioned join whose partitioning an operator above needs. Collecting the
+/// build side saves its exchanges but discards the partitioning, which is then rebuilt
+/// above, at more than collecting saved.
 fn keep_partitioning_needed_above(
     plan: Arc<dyn ExecutionPlan>,
     registry: Option<&StatisticsRegistry>,
@@ -257,10 +255,8 @@ fn repartition_collected_join(
             {
                 return Ok(None);
             }
-            // The join's output partitioning is not hash partitioned yet, since its
-            // inputs are still single partitions, so compare against the keys it would
-            // be partitioned on. Naming a column of the other side is possible and only
-            // costs the collect this would have done.
+            // The join is not hash partitioned yet, its inputs still being single
+            // partitions, so compare against the keys it would be partitioned on.
             let keys: Vec<_> =
                 join.on().iter().map(|(left, _)| Arc::clone(left)).collect();
             if column_names(&keys).is_none_or(|keys| keys != required) {
@@ -276,8 +272,7 @@ fn repartition_collected_join(
             );
             return Ok(Some(rebuild_above(plan, &node, partitioned, depth)?));
         }
-        // Only a single-input operator asking for nothing itself passes a partitioning
-        // up unchanged.
+        // Only a single-input operator with no requirement of its own passes one up.
         let children = node.children();
         let [child] = children.as_slice() else {
             return Ok(None);
@@ -295,12 +290,8 @@ fn repartition_collected_join(
     Ok(None)
 }
 
-/// Whether partitioning the join moves no more rows than collecting it does.
-///
-/// Both plans move the build side, one to partition it and the other to collect it.
-/// Partitioning then moves the probe side, where collecting instead leaves the shuffle
-/// to the operator above and moves the join's output. Partitioning also aggregates in
-/// one pass rather than two, which settles the tie.
+/// Whether partitioning the join moves no more rows than collecting it does. Both move
+/// the build side; partitioning then moves the probe side, collecting the output above.
 fn worth_partitioning(
     join: &HashJoinExec,
     registry: Option<&StatisticsRegistry>,
