@@ -2022,6 +2022,12 @@ SELECT (SELECT 1 WHERE FALSE) IS NULL;
 ----
 true
 
+# The same holds for the opposite fold direction.
+query B
+SELECT (SELECT 1 WHERE FALSE) IS NOT NULL;
+----
+false
+
 # Scalar subquery returning zero rows in arithmetic → NULL propagation
 query I
 SELECT x + (SELECT v FROM sq_empty) FROM sq_main;
@@ -2361,6 +2367,21 @@ query I
 SELECT (SELECT v FROM sq_empty);
 ----
 NULL
+
+# A zero-row scalar subquery is nullable even when its projected expression is
+# not. The rewrite to a left join already produces a nullable column here, so
+# this pins both paths to the same result.
+query I
+SELECT (SELECT 1 WHERE FALSE);
+----
+NULL
+
+# SimplifyExpressions runs before ScalarSubqueryToJoin, so this fold is still
+# governed by Expr::ScalarSubquery nullability on this path.
+query B
+SELECT (SELECT 1 WHERE FALSE) IS NULL;
+----
+true
 
 # Scalar subquery returning zero rows in arithmetic → NULL propagation
 query I
