@@ -543,9 +543,10 @@ impl FileScanConfigBuilder {
         } = self;
 
         let constraints = constraints.unwrap_or_default();
-        let statistics = statistics.unwrap_or_else(|| {
+        let mut statistics = statistics.unwrap_or_else(|| {
             Statistics::new_unknown(file_source.table_schema().table_schema())
         });
+        add_key_distinct_counts(&constraints, &mut statistics);
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
 
@@ -566,6 +567,30 @@ impl FileScanConfigBuilder {
             statistics,
             output_partitioning,
         }
+    }
+}
+
+/// Records that a key column holds one distinct value per row, which no file format
+/// stores. Single-column keys only, and inexact since constraints are not verified.
+fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistics) {
+    let num_rows = statistics.num_rows.to_inexact();
+    for constraint in constraints.iter() {
+        let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
+        let [index] = indices[..] else {
+            continue;
+        };
+        let Some(column) = statistics.column_statistics.get_mut(index) else {
+            continue;
+        };
+        if column.distinct_count != Precision::Absent {
+            continue;
+        }
+        // A unique column may repeat NULL, which is not a distinct value.
+        let nulls = match column.null_count {
+            Precision::Absent => Precision::Inexact(0),
+            nulls => nulls,
+        };
+        column.distinct_count = num_rows.sub(&nulls);
     }
 }
 
@@ -1268,43 +1293,10 @@ impl FileScanConfig {
     pub fn statistics(&self) -> Statistics {
         let filter_may_change_row_count = self.file_source.filter().is_some()
             && self.statistics.num_rows != Precision::Exact(0);
-        let mut statistics = if filter_may_change_row_count {
+        if filter_may_change_row_count {
             self.statistics.clone().to_inexact()
         } else {
             self.statistics.clone()
-        };
-        self.add_key_distinct_counts(&mut statistics);
-        statistics
-    }
-
-    /// Records that a key column holds one distinct value per row.
-    ///
-    /// No file format stores a distinct count, so without this a join on a key has to
-    /// guess how many rows it produces. Constraints are not verified, hence inexact.
-    /// A composite key says nothing about its columns on their own, so only
-    /// single-column keys are used.
-    fn add_key_distinct_counts(&self, statistics: &mut Statistics) {
-        let num_rows = statistics.num_rows.to_inexact();
-        for constraint in self.constraints.iter() {
-            let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) =
-                constraint;
-            let [index] = indices[..] else {
-                continue;
-            };
-            let Some(column) = statistics.column_statistics.get_mut(index) else {
-                continue;
-            };
-            if column.distinct_count != Precision::Absent {
-                continue;
-            }
-            // A unique column may hold NULL more than once, and a NULL is not a
-            // distinct value. A primary key cannot be null, and an unknown null count
-            // is taken as none.
-            let nulls = match column.null_count {
-                Precision::Absent => Precision::Inexact(0),
-                nulls => nulls,
-            };
-            column.distinct_count = num_rows.sub(&nulls);
         }
     }
 
