@@ -135,10 +135,16 @@ pub struct ParquetFileMetrics {
 /// groups (the footer, the page index and any padding belong to no row group),
 /// and a row group is assigned to a byte range by the offset of its first page,
 /// so a range's row groups do not add up to precisely its length.
+///
+/// The budget is held as a `usize` because [`Count`] is, so the two cannot
+/// disagree: on a 32-bit target a range longer than `usize::MAX` saturates once,
+/// here, rather than letting the remaining-byte arithmetic run ahead of what the
+/// counter can record. [`ParquetFileMetrics::bytes_scanned`] has the same
+/// ceiling.
 #[derive(Debug)]
 pub(crate) struct ByteProgress {
     /// Bytes of the scanned range not yet credited.
-    remaining: u64,
+    remaining: usize,
     bytes_processed: Count,
 }
 
@@ -146,23 +152,30 @@ impl ByteProgress {
     /// Start tracking a range of `total` bytes.
     pub(crate) fn new(total: u64, bytes_processed: Count) -> Self {
         Self {
-            remaining: total,
+            remaining: saturating_usize(total),
             bytes_processed,
         }
     }
 
     /// Record that the scan is finished with `bytes` more of the range.
     pub(crate) fn credit(&mut self, bytes: u64) {
-        let bytes = bytes.min(self.remaining);
+        let bytes = saturating_usize(bytes).min(self.remaining);
         self.remaining -= bytes;
-        self.bytes_processed
-            .add(usize::try_from(bytes).unwrap_or(usize::MAX));
+        self.bytes_processed.add(bytes);
     }
+}
+
+/// Narrow a byte count to the width [`Count`] stores, saturating rather than
+/// wrapping. Lossless on 64-bit targets.
+pub(crate) fn saturating_usize(bytes: u64) -> usize {
+    usize::try_from(bytes).unwrap_or(usize::MAX)
 }
 
 impl Drop for ByteProgress {
     fn drop(&mut self) {
-        self.credit(self.remaining);
+        let remaining = self.remaining;
+        self.remaining = 0;
+        self.bytes_processed.add(remaining);
     }
 }
 

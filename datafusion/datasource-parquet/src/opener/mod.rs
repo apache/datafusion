@@ -25,7 +25,7 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
-use crate::metrics::ByteProgress;
+use crate::metrics::{ByteProgress, saturating_usize};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
@@ -893,10 +893,9 @@ impl PreparedParquetOpen {
                 .add_pruned(1);
             // The scan is done with every byte of this file range without
             // reading any of them.
-            self.file_metrics.bytes_processed.add(
-                usize::try_from(self.partitioned_file.effective_size())
-                    .unwrap_or(usize::MAX),
-            );
+            self.file_metrics
+                .bytes_processed
+                .add(saturating_usize(self.partitioned_file.effective_size()));
             return Ok(None);
         }
 
