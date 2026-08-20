@@ -1641,6 +1641,25 @@ runtime), implement <code class="docutils literal notranslate"><span class="pre"
 following the pattern in <a class="reference external" href="https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs"><code class="docutils literal notranslate"><span class="pre">parquet/examples/object_store.rs</span></code></a></p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/24030">PR #24030</a> for details.</p>
 </section>
+<section id="sortproperties-and-or-replaced-by-and-and-or">
+<h3><code class="docutils literal notranslate"><span class="pre">SortProperties::and_or</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">and</span></code> and <code class="docutils literal notranslate"><span class="pre">or</span></code><a class="headerlink" href="#sortproperties-and-or-replaced-by-and-and-or" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::sort_properties::SortProperties::and_or</span></code> has been
+removed. Call <code class="docutils literal notranslate"><span class="pre">and</span></code> for <code class="docutils literal notranslate"><span class="pre">AND</span></code> and <code class="docutils literal notranslate"><span class="pre">or</span></code> for <code class="docutils literal notranslate"><span class="pre">OR</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before (54.0.0)</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lhs</span><span class="p">.</span><span class="n">and_or</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rhs</span><span class="p">);</span>
+
+<span class="c1">// After (55.0.0)</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lhs</span><span class="p">.</span><span class="n">and</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rhs</span><span class="p">);</span><span class="w"> </span><span class="c1">// for AND</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lhs</span><span class="p">.</span><span class="n">or</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rhs</span><span class="p">);</span><span class="w">  </span><span class="c1">// for OR</span>
+</pre></div>
+</div>
+<p>The two operators do not preserve the same sort orders. <code class="docutils literal notranslate"><span class="pre">AND</span></code> keeps an ordering
+only when nulls sort after <code class="docutils literal notranslate"><span class="pre">true</span></code> (<code class="docutils literal notranslate"><span class="pre">ASC</span> <span class="pre">NULLS</span> <span class="pre">LAST</span></code> or <code class="docutils literal notranslate"><span class="pre">DESC</span> <span class="pre">NULLS</span> <span class="pre">FIRST</span></code>), and
+<code class="docutils literal notranslate"><span class="pre">OR</span></code> only when nulls sort before <code class="docutils literal notranslate"><span class="pre">false</span></code> (<code class="docutils literal notranslate"><span class="pre">ASC</span> <span class="pre">NULLS</span> <span class="pre">FIRST</span></code> or
+<code class="docutils literal notranslate"><span class="pre">DESC</span> <span class="pre">NULLS</span> <span class="pre">LAST</span></code>). <code class="docutils literal notranslate"><span class="pre">and_or</span></code> did not say which operator the caller meant, so it
+could not be right for both.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/24276">PR #24276</a> for details.</p>
+</section>
 <section id="datafusion-proto-parquet-options-conversions-are-fallible">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: parquet options conversions are fallible<a class="headerlink" href="#datafusion-proto-parquet-options-conversions-are-fallible" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">protobuf::ParquetOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">protobuf::TableParquetOptions</span></code> validate
@@ -1792,6 +1811,7 @@ use <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays"><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exprtype-gained-a-sqlsimilartopattern-variant"><code class="docutils literal notranslate"><span class="pre">ExprType</span></code> gained a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sortproperties-and-or-replaced-by-and-and-or"><code class="docutils literal notranslate"><span class="pre">SortProperties::and_or</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">and</span></code> and <code class="docutils literal notranslate"><span class="pre">or</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-parquet-options-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: parquet options conversions are fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-window-frames-with-offsets-now-reject-order-by-types-without-arithmetic">RANGE window frames with offsets now reject ORDER BY types without arithmetic</a></li>
 </ul>
