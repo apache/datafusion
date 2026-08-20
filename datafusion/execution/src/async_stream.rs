@@ -20,7 +20,6 @@ use futures::future::FusedFuture;
 use futures::stream::FusedStream;
 use parking_lot::Mutex;
 use pin_project_lite::pin_project;
-use std::ops::DerefMut;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -181,7 +180,7 @@ impl<T> Emitter<T> {
     /// nothing yields control back to the consumer in between.
     fn set(&mut self, value: T) {
         let mut guard = self.slot.lock();
-        match guard.deref_mut() {
+        match &mut *guard {
             Some(_) => panic!("Misuse: await was not called after calling emit"),
             slot => *slot = Some(value),
         }
@@ -200,7 +199,7 @@ impl<T, E> TryEmitter<T, E> {
     /// Panics if called before the previous emit future has been awaited.
     pub fn emit(&mut self, value: T) -> impl FusedFuture<Output = ()> {
         let mut guard = self.slot.lock();
-        match guard.deref_mut() {
+        match &mut *guard {
             Some(_) => panic!("Misuse: await was not called after calling emit"),
             slot => *slot = Some(Ok::<T, E>(value)),
         }

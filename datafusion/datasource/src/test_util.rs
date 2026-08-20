@@ -91,7 +91,7 @@ impl FileSource for MockSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+        Arc::new(self.clone())
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
