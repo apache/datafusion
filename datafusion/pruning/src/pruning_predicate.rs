@@ -22,6 +22,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::string_in_list::StringInListPruningExpr;
+
 use arrow::array::AsArray;
 use arrow::{
     array::{ArrayRef, BooleanArray, new_null_array},
@@ -441,9 +443,11 @@ impl<'a> PruningPredicateBuilder<'a> {
         self
     }
 
-    /// Cap on the size of `IN (...)` lists that will be rewritten into per-
-    /// value min/max statistics checks. Lists longer than this fall back to
-    /// the unhandled-predicate hook (typically "keep the container").
+    /// Cap on the size of `IN (...)` lists eligible for statistics pruning.
+    /// Positive literal string lists larger than [`MAX_IN_LIST_SIZE`] use a
+    /// compact sorted domain; other eligible lists use per-value checks.
+    /// Lists longer than this cap fall back to the unhandled-predicate hook
+    /// (typically "keep the container").
     ///
     /// Query engines typically pass
     /// `datafusion.execution.parquet.max_in_list_size` here.
@@ -1453,10 +1457,51 @@ fn build_is_null_column_expr(
     }
 }
 
-/// Default maximum number of entries in an `IN (...)` list that will be
-/// rewritten into a chain of per-value min/max checks by
-/// `build_predicate_expression`. Callers threading a [`PredicateRewriter`]
-/// can override this via [`PredicateRewriter::with_max_in_list_size`], and
+/// Keep large literal string domains compact instead of building an OR tree.
+fn build_string_in_list_expr(
+    in_list: &phys_expr::InListExpr,
+    schema: &Schema,
+    required_columns: &mut RequiredColumns,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    if in_list.negated() {
+        return None;
+    }
+    let column = in_list.expr().downcast_ref::<phys_expr::Column>()?;
+    let field = schema.fields().get(column.index())?;
+    let data_type = match field.data_type() {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        data_type => data_type,
+    };
+    if field.name() != column.name() || !data_type.is_string() {
+        return None;
+    }
+    // NULLs must remain unhandled: the inverse predicate is also used to prove
+    // that every row matches, and IN (..., NULL) can evaluate to UNKNOWN.
+    let values = in_list
+        .list()
+        .iter()
+        .map(|expr| extract_string_literal(expr).map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    let min = required_columns
+        .min_column_expr(column, in_list.expr(), field)
+        .ok()?;
+    let max = required_columns
+        .max_column_expr(column, in_list.expr(), field)
+        .ok()?;
+    let non_null =
+        build_is_null_column_expr(in_list.expr(), schema, required_columns, true)?;
+    let intersects = Arc::new(StringInListPruningExpr::new(min, max, values));
+    Some(Arc::new(phys_expr::BinaryExpr::new(
+        non_null,
+        Operator::And,
+        intersects,
+    )))
+}
+
+/// Default maximum number of entries in an `IN (...)` list eligible for
+/// statistics pruning. Eligible positive literal string lists above this
+/// threshold use a compact sorted domain instead of per-value min/max checks.
+/// Callers can raise the cap via [`PredicateRewriter::with_max_in_list_size`], and
 /// query engines can wire it from the
 /// `datafusion.execution.parquet.max_in_list_size` config option.
 pub const MAX_IN_LIST_SIZE: usize = 20;
@@ -1492,14 +1537,15 @@ impl PredicateRewriter {
         self
     }
 
-    /// Set the maximum size of an `IN (...)` list that will be rewritten into a
-    /// chain of per-value statistics checks. Lists longer than this fall back
+    /// Set the maximum size of an `IN (...)` list eligible for statistics
+    /// pruning. Large positive literal string lists use a compact sorted
+    /// domain; other eligible lists use per-value checks. Longer lists fall back
     /// to the unhandled-predicate hook (typically "keep the container"),
     /// effectively skipping container-level pruning for large IN lists.
     ///
     /// The default (see [`MAX_IN_LIST_SIZE`]) preserves the
     /// historical behaviour. Callers wiring config through can override via
-    /// `datafusion.execution.max_in_list_size`.
+    /// `datafusion.execution.parquet.max_in_list_size`.
     pub fn with_max_in_list_size(mut self, max_in_list_size: usize) -> Self {
         self.max_in_list_size = max_in_list_size;
         self
@@ -1539,8 +1585,9 @@ impl PredicateRewriter {
 ///
 /// Returns the pruning predicate as an [`PhysicalExpr`]
 ///
-/// `max_in_list_size` is the largest `IN (...)` list that will be rewritten
-/// into a chain of per-value statistics checks; longer lists fall back to
+/// `max_in_list_size` is the largest `IN (...)` list eligible for statistics
+/// pruning. Large positive literal string lists use a compact sorted domain;
+/// other eligible lists use per-value checks. Longer lists fall back to
 /// `unhandled_hook`.
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
@@ -1582,6 +1629,13 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
+        if in_list.list().len() > MAX_IN_LIST_SIZE
+            && in_list.list().len() <= max_in_list_size
+            && let Some(pruning_expr) =
+                build_string_in_list_expr(in_list, schema, required_columns)
+        {
+            return pruning_expr;
+        }
         if !in_list.list().is_empty() && in_list.list().len() <= max_in_list_size {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
@@ -3571,6 +3625,244 @@ mod tests {
             deprecated.required_columns().schema(),
             builder.required_columns().schema()
         );
+        Ok(())
+    }
+
+    fn large_string_pruning_predicate(
+        expr: PhysicalExprRef,
+        schema: SchemaRef,
+    ) -> Result<PruningPredicate> {
+        PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .with_max_in_list_size(10_000)
+            .try_build(expr)
+    }
+
+    #[test]
+    fn large_string_in_list_prunes_exact_intervals() -> Result<()> {
+        let types = [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        ];
+        for count in [20, 21, 256, 10_000] {
+            for data_type in &types {
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "c1",
+                    data_type.clone(),
+                    true,
+                )]));
+                let values = (0..count)
+                    .map(|i| {
+                        let value = ScalarValue::from(format!("k{:06}", i * 10))
+                            .cast_to(data_type)?;
+                        Ok(Arc::new(phys_expr::Literal::new(value)) as PhysicalExprRef)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let expr = phys_expr::in_list(
+                    Arc::new(phys_expr::Column::new("c1", 0)),
+                    values,
+                    &false,
+                    &schema,
+                )?;
+                let predicate =
+                    large_string_pruning_predicate(Arc::clone(&expr), schema)?;
+                let stats = TestStatistics::new().with(
+                    "c1",
+                    ContainerStats::new_utf8(
+                        [
+                            Some("k000000"),
+                            Some("k000001"),
+                            Some("k000010"),
+                            Some("j"),
+                            Some("z"),
+                            None,
+                            Some("k000020"),
+                            Some("k000005"),
+                        ],
+                        [
+                            Some("k000000"),
+                            Some("k000009"),
+                            Some("k000010"),
+                            Some("j9"),
+                            Some("z9"),
+                            Some("k000010"),
+                            None,
+                            Some("k000015"),
+                        ],
+                    )
+                    .with_null_counts([Some(0); 8])
+                    .with_row_counts([Some(1); 8]),
+                );
+                assert_eq!(
+                    predicate.prune(&stats)?,
+                    [true, false, true, false, false, true, true, true],
+                    "count={count}, type={data_type:?}"
+                );
+                assert!(Arc::ptr_eq(predicate.orig_expr(), &expr));
+                assert_eq!(predicate.literal_guarantees().len(), 1);
+                assert_eq!(predicate.literal_guarantees()[0].literals.len(), count);
+                assert_eq!(
+                    predicate.required_columns().single_column().unwrap().name(),
+                    "c1"
+                );
+                if count > MAX_IN_LIST_SIZE {
+                    // The expression and statistics schema do not grow with the domain.
+                    assert_eq!(predicate.required_columns.columns.len(), 4);
+                    let mut nodes = 0;
+                    predicate.predicate_expr().apply(|_| {
+                        nodes += 1;
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+                    assert_eq!(nodes, 7);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_handles_unicode_and_unknown_bounds() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let mut values = (0..21).map(|i| lit(format!("m{i:03}"))).collect::<Vec<_>>();
+        values.extend([
+            lit(""),
+            lit("az"),
+            lit("aé"),
+            lit("aé"),
+            lit("é"),
+            lit("🦀"),
+        ]);
+        let expr = col("c1").in_list(values, false);
+        let predicate =
+            large_string_pruning_predicate(logical2physical(&expr, &schema), schema)?;
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_utf8(
+                [
+                    Some(""),
+                    Some("az"),
+                    Some("a{"),
+                    Some("aé"),
+                    Some("ê"),
+                    Some("z"),
+                    None,
+                    None,
+                ],
+                [
+                    Some(""),
+                    Some("az"),
+                    Some("aè"),
+                    Some("aé"),
+                    Some("🦀"),
+                    Some("m"),
+                    Some("z"),
+                    None,
+                ],
+            )
+            .with_null_counts([
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(1),
+            ])
+            .with_row_counts([Some(1); 8]),
+        );
+        assert_eq!(
+            predicate.prune(&stats)?,
+            [true, true, false, true, true, true, true, false]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_respects_configured_limit() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let values = (0..21).map(|i| lit(format!("a{i:03}"))).collect::<Vec<_>>();
+        let expr = logical2physical(&col("c1").in_list(values, false), &schema);
+
+        for (limit, compact) in [(0, false), (20, false), (21, true), (32, true)] {
+            let predicate = PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(&schema))
+                .with_max_in_list_size(limit)
+                .try_build(Arc::clone(&expr))?;
+            assert_eq!(
+                predicate
+                    .predicate_expr()
+                    .to_string()
+                    .contains("IN_SET_INTERSECTS"),
+                compact,
+                "limit={limit}"
+            );
+            assert_eq!(is_always_true(predicate.predicate_expr()), !compact);
+        }
+
+        let default = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)?;
+        assert!(is_always_true(default.predicate_expr()));
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_keeps_null_and_not_in_semantics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let values = (0..21).map(|i| lit(format!("a{i:03}"))).collect::<Vec<_>>();
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_utf8(
+                [Some("middle"), Some("other")],
+                [Some("middle"), Some("other")],
+            )
+            .with_null_counts([Some(0); 2])
+            .with_row_counts([Some(1); 2]),
+        );
+        let positive = col("c1").in_list(values.clone(), false);
+        let predicate = large_string_pruning_predicate(
+            logical2physical(&positive.or(col("c1").eq(lit("middle"))), &schema),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(predicate.prune(&stats)?, [true, false]);
+
+        let mut with_null = values.clone();
+        with_null.push(lit(ScalarValue::Utf8(None)));
+        for expr in [
+            col("c1").in_list(values, true),
+            col("c1").in_list(with_null.clone(), false),
+            col("c1").in_list(with_null.clone(), true),
+        ] {
+            let physical = logical2physical(&expr, &schema);
+            let default = PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(&schema))
+                .try_build(Arc::clone(&physical))?;
+            assert!(is_always_true(default.predicate_expr()), "{expr}");
+            assert_eq!(default.prune(&stats)?, [true, true]);
+
+            // Raising the cap retains the existing per-value rewrite for
+            // NOT IN and lists containing NULL; neither uses the new path.
+            let raised = large_string_pruning_predicate(physical, Arc::clone(&schema))?;
+            assert!(
+                !raised
+                    .predicate_expr()
+                    .to_string()
+                    .contains("IN_SET_INTERSECTS"),
+                "{expr}"
+            );
+        }
+
+        // Inverting NOT IN (..., NULL) must not prove a full match and bypass
+        // the original row filter, which returns UNKNOWN for both rows.
+        let not_in = logical2physical(&col("c1").in_list(with_null, true), &schema);
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec!["middle", "other"]))],
+        )?;
+        assert_eq!(not_in.evaluate(&batch)?.into_array(2)?.null_count(), 2);
         Ok(())
     }
 
