@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for functions behind the `` feature.
+//! Benchmarks for functions without a feature gate.
 //!
 //! Each benchmark beside this file is a module rather than its own `[[bench]]`
 //! target: a separate target per benchmark means a separate binary to link,
