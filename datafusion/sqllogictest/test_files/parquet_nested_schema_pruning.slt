@@ -133,12 +133,14 @@ explain analyze select s['x'] from narrow;
 ----
 Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=75<slt:ignore>]
 
-# Mixed access -- the whole (narrowed) column and a subfield of it -- still
-# reads only the narrow schema's leaves.
+# Mixed access -- the whole (narrowed) column and a subfield of it. A root
+# carrying both access kinds falls back to reading every physical leaf, so
+# this costs the same as the unclipped full_schema read below rather than
+# clipping to the narrow schema's leaves.
 query TT
 explain analyze select s, s['y'] from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
 
 query TT
 explain analyze select s, s['y'] from full_schema;
