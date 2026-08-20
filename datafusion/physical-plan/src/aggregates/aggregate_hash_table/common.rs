@@ -27,11 +27,14 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    AggregateArgumentMetrics, GroupByMetrics, GroupValues, new_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
+    evaluate_group_by,
 };
 
 /// Marker for raw rows -> partial state aggregation.
@@ -75,12 +78,19 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
 
+    /// Per-aggregate timing metrics for evaluating aggregate arguments.
+    pub(super) aggregate_argument_metrics: AggregateArgumentMetrics,
+
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
     pub(super) input_schema: SchemaRef,
 
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
+
+    /// Intermediate-state schema used when memory pressure requires the table
+    /// to spill its current state.
+    pub(super) state_schema: SchemaRef,
 
     /// Maximum rows per emitted output batch, from config `batch_size`.
     pub(super) batch_size: usize,
@@ -97,6 +107,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
+        state_schema: SchemaRef,
         batch_size: usize,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
@@ -129,10 +140,20 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
+        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
+            &agg.metrics,
+            partition,
+            agg.aggr_expr
+                .iter()
+                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+        );
+
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
+            aggregate_argument_metrics,
             input_schema,
             output_schema,
+            state_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
@@ -163,7 +184,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .building()
             .accumulators
             .iter()
-            .map(|acc| acc.evaluate_acc_args(batch))
+            .enumerate()
+            .map(|(idx, acc)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_acc_args(batch))
+            })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
 
@@ -285,6 +310,39 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Returns the number of distinct groups accumulated so far.
     pub(in crate::aggregates) fn building_group_count(&self) -> usize {
         self.state.building().group_values.len()
+    }
+
+    /// Takes every intermediate aggregate state and resets the table so it can
+    /// continue accumulating raw input.
+    ///
+    /// Unlike normal single aggregation output, this materializes intermediate
+    /// states rather than final values. The states can therefore be merged after
+    /// spilling without finalizing the same group more than once.
+    pub(in crate::aggregates) fn take_state_batch(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        let state_schema = Arc::clone(&self.state_schema);
+        let state = self.state.building_mut();
+        if state.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let mut output = state.group_values.emit(EmitTo::All)?;
+        for acc in &mut state.accumulators {
+            output.extend(acc.state(EmitTo::All)?);
+        }
+
+        let batch = RecordBatch::try_new(state_schema, output)?;
+        debug_assert!(batch.num_rows() > 0);
+
+        // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
+        // key/index buffers too so the memory reservation can be released
+        // before the batch is sorted for spilling.
+        state.group_values.clear_shrink(0);
+        state.batch_group_indices.clear();
+        state.batch_group_indices.shrink_to_fit();
+
+        Ok(Some(batch))
     }
 
     pub(in crate::aggregates) fn is_building(&self) -> bool {

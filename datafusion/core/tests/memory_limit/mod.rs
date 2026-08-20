@@ -101,7 +101,8 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "for FinalHashAggregateStream[0]",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -114,7 +115,8 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "for PartialHashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -425,7 +427,7 @@ async fn oom_grouped_hash_aggregate() {
         .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
         .with_expected_errors(vec![
             "Failed to allocate additional",
-            "GroupedHashAggregateStream[0] (count(1), sum(t.request_bytes))",
+            "for PartialHashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -939,11 +941,10 @@ impl TestCase {
 
         match df.collect().await {
             Ok(_batches) => {
-                if !expected_success {
-                    panic!(
-                        "Unexpected success when running, expected memory limit failure"
-                    )
-                }
+                assert!(
+                    expected_success,
+                    "Unexpected success when running, expected memory limit failure"
+                );
             }
             Err(e) => {
                 if expected_success {
@@ -1214,14 +1215,14 @@ impl TableProvider for SortedTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mem_conf = MemorySourceConfig::try_new(
             &self.batches,
             self.schema(),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?
         .try_with_sort_information(self.sort_information.clone())?;
 

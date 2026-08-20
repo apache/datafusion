@@ -124,9 +124,14 @@ pub fn reverse_row_selection(
 
 /// Reorder a file list so the most "promising" files are read first,
 /// matching `PreparedAccessPlan::reorder_by_statistics` at the
-/// row-group level: key off the file's `min(col)`, and let the sort
-/// direction follow the request (ASC by `min` for ASC requests, DESC
-/// by `min` for DESC requests).
+/// row-group level: key lexicographically off the file's per-column
+/// `min` for the longest plain-`Column` prefix of the sort order, and
+/// let the leading sort direction follow the request (ASC by `min`
+/// for ASC requests, DESC by `min` for DESC requests).
+///
+/// Secondary sort keys break ties when the leading column's `min` is
+/// equal across files (e.g. `ORDER BY low_cardinality_col, ts LIMIT k`),
+/// mirroring the row-group level lexicographic reorder.
 ///
 /// Keeping both layers consistent matters because they share the same
 /// convergence story for TopK's dynamic filter: file `i`'s `min` is a
@@ -147,51 +152,81 @@ pub(crate) fn reorder_files_by_min_statistics(
     reverse_row_groups: bool,
     table_schema: &Schema,
 ) -> Vec<PartitionedFile> {
-    let Some((col_name, descending)) =
-        extract_topk_sort_info(sort_order, reverse_row_groups)
-    else {
+    let sort_keys = extract_topk_sort_info(sort_order, reverse_row_groups);
+    if sort_keys.is_empty() {
         return files;
-    };
+    }
 
-    let Ok(col_idx) = table_schema.index_of(&col_name) else {
-        return files;
-    };
+    // Resolve names to column indexes; the leading key is required, later
+    // keys are best-effort (stop at the first unresolvable one).
+    let mut keys: Vec<(usize, bool)> = Vec::with_capacity(sort_keys.len());
+    for (col_name, descending) in &sort_keys {
+        match table_schema.index_of(col_name) {
+            Ok(idx) => keys.push((idx, *descending)),
+            Err(_) if keys.is_empty() => return files,
+            Err(_) => break,
+        }
+    }
 
     files.sort_by(|a, b| {
-        let key_a = file_min_value(a, col_idx);
-        let key_b = file_min_value(b, col_idx);
-        match (key_a, key_b) {
-            (Some(va), Some(vb)) => {
-                let cmp = va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
-                if descending { cmp.reverse() } else { cmp }
+        for &(col_idx, descending) in &keys {
+            let key_a = file_min_value(a, col_idx);
+            let key_b = file_min_value(b, col_idx);
+            let ord = match (key_a, key_b) {
+                (Some(va), Some(vb)) => {
+                    let cmp = va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
+                    if descending { cmp.reverse() } else { cmp }
+                }
+                // Missing stats always sort last, regardless of direction.
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            };
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
             }
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
         }
+        std::cmp::Ordering::Equal
     });
 
     log::debug!(
-        "Reordered {} files by min({}) {} for TopK optimization",
+        "Reordered {} files by lexicographic min of {:?} for TopK optimization",
         files.len(),
-        col_name,
-        if descending { "DESC" } else { "ASC" }
+        sort_keys,
     );
 
     files
 }
 
-/// Extract the `(column name, descending)` tuple used by file-level
-/// reordering. Returns `None` when the sort order isn't set or the
-/// leading sort expression isn't a plain `Column`.
+/// Extract the `(column name, descending)` keys used by file-level
+/// reordering: the longest prefix of the sort order made of plain
+/// `Column` expressions. Returns an empty vec when the sort order isn't
+/// set or the leading sort expression isn't a plain `Column`.
+///
+/// The leading key's direction is `reverse_row_groups` (the pushdown's
+/// authoritative flip decision, which may differ from the raw
+/// expression's `descending` in the `reversed_satisfies` case);
+/// subsequent keys apply their direction *relative to the leading
+/// expression* on top of that flag, so a request like
+/// `[a DESC, b ASC]` with `reverse_row_groups=true` sorts by
+/// `(min(a) DESC, min(b) ASC)`.
 fn extract_topk_sort_info(
     sort_order: Option<&LexOrdering>,
     reverse_row_groups: bool,
-) -> Option<(String, bool)> {
-    let sort_order = sort_order?;
-    let first = sort_order.first();
-    let col = first.expr.downcast_ref::<Column>()?;
-    Some((col.name().to_string(), reverse_row_groups))
+) -> Vec<(String, bool)> {
+    let Some(sort_order) = sort_order else {
+        return vec![];
+    };
+    let leading_descending = sort_order.first().options.descending;
+    let mut keys = Vec::new();
+    for sort_expr in sort_order.iter() {
+        let Some(col) = sort_expr.expr.downcast_ref::<Column>() else {
+            break;
+        };
+        let relative_desc = sort_expr.options.descending != leading_descending;
+        keys.push((col.name().to_string(), reverse_row_groups != relative_desc));
+    }
+    keys
 }
 
 /// File's per-column `min` for the reorder key.

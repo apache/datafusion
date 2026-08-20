@@ -27,15 +27,20 @@
 use std::fmt;
 use std::sync::Arc;
 
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
+use crate::{
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
+};
 
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -162,9 +167,10 @@ impl ExecutionPlan for ScalarSubqueryExec {
         children
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // First child is the main input, the rest are subquery plans.
         let input = children.remove(0);
@@ -182,6 +188,16 @@ impl ExecutionPlan for ScalarSubqueryExec {
             subqueries,
             self.results.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -224,6 +240,13 @@ impl ExecutionPlan for ScalarSubqueryExec {
         )))
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         // Only the main input (first child); subquery children don't contribute
         // to ordering.
@@ -253,6 +276,68 @@ impl ExecutionPlan for ScalarSubqueryExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+        // Subquery indices are positional and recovered during decoding.
+        let subqueries =
+            ctx.encode_children(self.subqueries().iter().map(|subquery| &subquery.plan))?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery(Box::new(
+                    protobuf::ScalarSubqueryExecNode {
+                        input: Some(Box::new(input)),
+                        subqueries,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ScalarSubqueryExec {
+    /// Reconstruct a [`ScalarSubqueryExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let scalar_subquery = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery,
+            "ScalarSubqueryExec",
+        );
+        let results = ScalarSubqueryResults::new(scalar_subquery.subqueries.len());
+        let input_node = scalar_subquery.input.as_deref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ScalarSubqueryExec is missing required field 'input'"
+            )
+        })?;
+        // The input's ScalarSubqueryExpr nodes must share this results container.
+        let input =
+            ctx.decode_child_with_scalar_subquery_results(input_node, results.clone())?;
+        let subqueries = scalar_subquery
+            .subqueries
+            .iter()
+            .enumerate()
+            .map(|(index, plan)| {
+                Ok(ScalarSubqueryLink {
+                    plan: ctx.decode_child(plan)?,
+                    index: SubqueryIndex::new(index),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(Self::new(input, subqueries, results)))
     }
 }
 
@@ -381,14 +466,32 @@ mod tests {
             vec![&self.inner]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(Self::new(
                 children.remove(0),
                 Arc::clone(&self.execute_calls),
             )))
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(

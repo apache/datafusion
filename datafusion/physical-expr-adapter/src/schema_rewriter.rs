@@ -1017,8 +1017,8 @@ mod tests {
         // Should be the same expression (no transformation needed)
         // We compare the underlying pointer through the trait object
         assert!(std::ptr::eq(
-            column_expr.as_ref() as *const dyn PhysicalExpr,
-            result.as_ref() as *const dyn PhysicalExpr
+            std::ptr::from_ref::<dyn PhysicalExpr>(column_expr.as_ref()),
+            std::ptr::from_ref::<dyn PhysicalExpr>(result.as_ref())
         ));
 
         Ok(())

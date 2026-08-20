@@ -25,6 +25,7 @@ use std::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
@@ -38,13 +39,15 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
+};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
     StatisticsContext,
@@ -439,6 +442,192 @@ async fn test_join_with_swap_semi() {
         );
         assert_eq!(original_schema, swapped_join.schema());
     }
+}
+
+#[rstest]
+#[case(PartitionMode::CollectLeft)]
+#[case(PartitionMode::Auto)]
+#[case(PartitionMode::Partitioned)]
+#[tokio::test]
+async fn test_null_aware_left_anti_swaps_to_right_anti(
+    #[case] partition_mode: PartitionMode,
+) -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&big),
+        Arc::clone(&small),
+        vec![(
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        partition_mode,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+    let original_schema = join.schema();
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("anti join swap should not require a projection");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(swapped_join.null_aware);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "small_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "big_col");
+    assert_eq!(swapped_join.schema(), original_schema);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_aware_auto_large_inputs_swaps_to_collect_left() -> Result<()> {
+    let bigger: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        bigger_statistics(),
+        Schema::new(vec![Field::new("bigger_col", DataType::Int32, false)]),
+    ));
+    let big: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        big_statistics(),
+        Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
+    ));
+    let join = HashJoinExec::try_new(
+        Arc::clone(&bigger),
+        Arc::clone(&big),
+        vec![(
+            Arc::new(Column::new_with_schema("bigger_col", &bigger.schema())?),
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("anti join swap should not require a projection");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
+    assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(swapped_join.null_aware);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "big_col");
+    assert_eq!(swapped_join.right().schema().field(0).name(), "bigger_col");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_aware_left_anti_does_not_swap_when_left_is_smaller() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&small),
+        Arc::clone(&big),
+        vec![(
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let unswapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("join type should remain unchanged");
+
+    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
+    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(unswapped_join.null_aware);
+    assert_eq!(unswapped_join.left().schema().field(0).name(), "small_col");
+    assert_eq!(unswapped_join.right().schema().field(0).name(), "big_col");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_aware_left_anti_respects_disabled_join_reordering() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&big),
+        Arc::clone(&small),
+        vec![(
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+        )],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+    let mut config = ConfigOptions::new();
+    config.optimizer.join_reordering = false;
+
+    let optimized_join = JoinSelection::new().optimize(Arc::new(join), &config)?;
+    let unswapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("join type should remain unchanged");
+
+    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
+    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(unswapped_join.null_aware);
+    assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
+    assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
+
+    Ok(())
+}
+
+/// A filtered null-aware `LeftAnti` (produced by decorrelating a correlated
+/// `NOT IN`) must not be swapped to `RightAnti`: the swap is only valid for
+/// unfiltered null-aware joins, since a filtered `RightAnti` would apply its
+/// build-side NULL short-circuit before the filter.
+#[tokio::test]
+async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = HashJoinExec::try_new(
+        Arc::clone(&big),
+        Arc::clone(&small),
+        vec![(
+            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+        )],
+        nl_join_filter(),
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let unswapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("filtered null-aware anti join should not swap");
+
+    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
+    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
+    assert!(unswapped_join.null_aware);
+    assert!(unswapped_join.filter().is_some());
+    assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
+    assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -1107,11 +1296,22 @@ impl ExecutionPlan for UnboundedExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -1124,6 +1324,13 @@ impl ExecutionPlan for UnboundedExec {
             count: 0,
             batch: self.batch.clone(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -1204,11 +1411,22 @@ impl ExecutionPlan for StatisticsExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -1229,6 +1447,13 @@ impl ExecutionPlan for StatisticsExec {
         } else {
             self.stats.clone()
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

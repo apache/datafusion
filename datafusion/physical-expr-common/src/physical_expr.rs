@@ -93,12 +93,30 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             self.nullable(input_schema)?,
         )))
     }
-    /// Evaluate an expression against a RecordBatch after first applying a validity array
+    /// Evaluates this expression only for rows where `selection` is `true`.
+    ///
+    /// Rows where `selection` is `false` or null are skipped during evaluation and
+    /// produce `NULL` in the result. Thus, values in those rows cannot trigger
+    /// evaluation errors such as division by zero.
+    ///
+    /// # Example
+    ///
+    /// Given `expr = 4 / val`:
+    ///
+    /// ```text
+    /// val  selection | result
+    ///   0      false |   NULL
+    ///   1       true |      4
+    ///   2       true |      2
+    /// ```
+    ///
+    /// The first row is not evaluated, avoiding division by zero. Its result is
+    /// `NULL`.
     ///
     /// # Errors
     ///
-    /// Returns an `Err` if the expression could not be evaluated or if the length of the
-    /// `selection` validity array and the number of row in `batch` is not equal.
+    /// Returns an `Err` if the expression could not be evaluated or if the length of
+    /// `selection` does not equal the number of rows in `batch`.
     fn evaluate_selection(
         &self,
         batch: &RecordBatch,
@@ -498,8 +516,8 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// <https://github.com/apache/datafusion/issues/21835>.
     ///
     /// The `try_` prefix matches the fallible `try_from_proto` decode
-    /// constructors (and the `TryFromProto` trait in `datafusion-proto`);
-    /// both sides of the round-trip are fallible and named consistently.
+    /// constructors; both sides of the round-trip are fallible and named
+    /// consistently.
     ///
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
     #[cfg(feature = "proto")]

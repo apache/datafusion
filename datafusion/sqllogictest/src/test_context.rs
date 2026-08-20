@@ -182,6 +182,7 @@ impl TestContext {
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx());
+                register_conflicting_metadata_tables(test_ctx.session_ctx())
             }
             "union_function.slt" => {
                 info!("Registering table with union column");
@@ -387,7 +388,7 @@ pub fn register_temp_table(ctx: &SessionContext) {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _: Option<&Vec<usize>>,
+            _: Option<&[usize]>,
             _: &[Expr],
             _: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
@@ -572,14 +573,17 @@ fn register_union_table(ctx: &SessionContext) {
             ],
         )
         .unwrap(),
-        ScalarBuffer::from(vec![3, 1, 3]),
+        ScalarBuffer::from(vec![3, 1, 3, 3, 1, 3]),
         None,
         vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 1, 5, 3])),
             Arc::new(StringArray::from(vec![
                 Some("foo"),
                 Some("bar"),
                 Some("baz"),
+                Some("qux"),
+                Some("bar"),
+                Some("quux"),
             ])),
         ],
     )
@@ -764,4 +768,27 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+fn register_conflicting_metadata_tables(ctx: &SessionContext) {
+    let schema_left =
+        Schema::new(vec![Field::new("a", DataType::Int32, false)]).with_metadata(
+            HashMap::from([(String::from("metadata_key"), String::from("left"))]),
+        );
+    let data_left =
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])) as ArrayRef;
+
+    let batch_left =
+        RecordBatch::try_new(Arc::new(schema_left), vec![Arc::new(data_left)]).unwrap();
+    ctx.register_batch("larger_table", batch_left).unwrap();
+
+    let schema_right =
+        Schema::new(vec![Field::new("b", DataType::Int32, false)]).with_metadata(
+            HashMap::from([(String::from("metadata_key"), String::from("right"))]),
+        );
+    let data_right = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+
+    let batch_right =
+        RecordBatch::try_new(Arc::new(schema_right), vec![Arc::new(data_right)]).unwrap();
+    ctx.register_batch("smaller_table", batch_right).unwrap();
 }

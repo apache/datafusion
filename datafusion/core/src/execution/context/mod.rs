@@ -17,7 +17,6 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -1108,9 +1107,7 @@ impl SessionContext {
     }
 
     fn set_variable(&self, stmt: SetVariable) -> Result<()> {
-        let SetVariable {
-            variable, value, ..
-        } = stmt;
+        let SetVariable { variable, value } = stmt;
 
         // Check if this is a runtime configuration
         if variable.starts_with("datafusion.runtime.") {
@@ -1552,9 +1549,7 @@ impl SessionContext {
     }
 
     fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
-        let Execute {
-            name, parameters, ..
-        } = execute;
+        let Execute { name, parameters } = execute;
         let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
             exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
@@ -2181,16 +2176,9 @@ impl From<SessionContext> for SessionStateBuilder {
     }
 }
 
+// Re-export from this module for backwards compatibility.
 /// A planner used to add extensions to DataFusion logical and physical plans.
-#[async_trait]
-pub trait QueryPlanner: Any + Debug {
-    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-}
+pub use datafusion_session::{QueryPlanner, UnsupportedQueryPlanner};
 
 /// Interface for handling `CREATE FUNCTION` statements and interacting with
 /// [SessionState] to create and register functions ([`ScalarUDF`],
@@ -2390,6 +2378,7 @@ mod tests {
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
+    use datafusion_session::Session;
     use sqlparser::ast;
     use tempfile::TempDir;
 
@@ -2836,7 +2825,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             _logical_plan: &LogicalPlan,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             not_impl_err!("query not supported")
         }
@@ -2845,7 +2834,7 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &DFSchema,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
             _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
@@ -2860,7 +2849,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            session_state: &SessionState,
+            session_state: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let physical_planner = MyPhysicalPlanner {};
             physical_planner
@@ -2966,8 +2955,8 @@ mod tests {
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
-            ("1m", Duration::from_secs(60)),
-            ("1m0s", Duration::from_secs(60)),
+            ("1m", Duration::from_mins(1)),
+            ("1m0s", Duration::from_mins(1)),
             ("1m1s", Duration::from_secs(61)),
         ] {
             let have =
@@ -2992,6 +2981,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
+    )]
     fn test_parse_duration_with_overflow_check() {
         const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
 
@@ -3003,7 +2996,7 @@ mod tests {
             ),
             (
                 "307445734561825860m",
-                Duration::from_secs(307445734561825860 * 60),
+                Duration::from_mins(307445734561825860),
             ),
             (
                 "307445734561825860m10s",
