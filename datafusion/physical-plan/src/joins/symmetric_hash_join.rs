@@ -1455,6 +1455,10 @@ impl OneSideHashJoiner {
         size += size_of_val(&self.deleted_offset);
         size
     }
+
+    fn size_without_input_buffer(&self) -> usize {
+        self.size() - self.input_buffer.get_array_memory_size()
+    }
     pub fn new(
         build_side: JoinSide,
         on: Vec<PhysicalExprRef>,
@@ -1942,8 +1946,8 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         size += size_of_val(&self.schema);
         size += size_of_val(&self.filter);
         size += size_of_val(&self.join_type);
-        size += self.left.size() - self.left.input_buffer.get_array_memory_size();
-        size += self.right.size() - self.right.input_buffer.get_array_memory_size();
+        size += self.left.size_without_input_buffer();
+        size += self.right.size_without_input_buffer();
         size += size_of_val(&self.column_indices);
         size += self.graph.as_ref().map(|g| g.size()).unwrap_or(0);
         size += size_of_val(&self.left_sorted_filter_expr);
@@ -1957,8 +1961,8 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
     /// Resizes the stream reservation to match all memory retained by the stream.
     fn update_reservation(&mut self) -> Result<()> {
         let capacity = self.size();
-        self.metrics.stream_memory_usage.set(capacity);
         self.reservation.try_resize(capacity)?;
+        self.metrics.stream_memory_usage.set(capacity);
         Ok(())
     }
 
@@ -2280,12 +2284,14 @@ mod tests {
             create_stream_with_context(batch_transformer, batch.schema(), &context);
 
         stream.update_reservation()?;
+        let reserved_size = stream.reservation.size();
         stream.batch_transformer.set_batch(batch);
         let error = stream.update_reservation().unwrap_err();
         assert!(
             matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),
             "expected a memory-pool error, got: {error}"
         );
+        assert_eq!(stream.metrics.stream_memory_usage.value(), reserved_size);
         Ok(())
     }
 

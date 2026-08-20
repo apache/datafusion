@@ -412,14 +412,6 @@ fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
             let map = array.as_map();
             vec![map.keys(), map.values()]
         }
-        DataType::Union(_, _) => {
-            let union = array.as_union();
-            union
-                .fields()
-                .iter()
-                .map(|(type_id, _)| union.child(type_id))
-                .collect()
-        }
         DataType::Dictionary(key_type, _) => match key_type.as_ref() {
             DataType::Int8 => vec![array.as_dictionary::<Int8Type>().values()],
             DataType::Int16 => vec![array.as_dictionary::<Int16Type>().values()],
@@ -430,30 +422,6 @@ fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
             DataType::UInt32 => vec![array.as_dictionary::<UInt32Type>().values()],
             DataType::UInt64 => vec![array.as_dictionary::<UInt64Type>().values()],
             _ => unreachable!("invalid dictionary key type: {key_type}"),
-        },
-        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-            DataType::Int16 => vec![
-                array
-                    .as_any()
-                    .downcast_ref::<RunArray<Int16Type>>()
-                    .expect("run-end array data type must match its run-end field")
-                    .values(),
-            ],
-            DataType::Int32 => vec![
-                array
-                    .as_any()
-                    .downcast_ref::<RunArray<Int32Type>>()
-                    .expect("run-end array data type must match its run-end field")
-                    .values(),
-            ],
-            DataType::Int64 => vec![
-                array
-                    .as_any()
-                    .downcast_ref::<RunArray<Int64Type>>()
-                    .expect("run-end array data type must match its run-end field")
-                    .values(),
-            ],
-            _ => unreachable!("invalid run-end type: {run_ends}"),
         },
         _ => vec![],
     }
@@ -542,7 +510,7 @@ mod record_batch_tests {
     use arrow::array::{
         ArrayData, ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, Int16Array,
         Int32Array, Int64Array, LargeListViewArray, ListArray, ListViewArray, MapArray,
-        RunArray, StringArray, StringViewArray, StructArray, UnionArray, new_null_array,
+        RunArray, StringArray, StringViewArray, StructArray, new_null_array,
     };
     use arrow::buffer::OffsetBuffer;
     use arrow::datatypes::{
@@ -817,33 +785,6 @@ mod record_batch_tests {
     }
 
     #[test]
-    fn test_record_batch_memory_counter_deduplicates_shared_union_child() {
-        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let fields: UnionFields =
-            [(0, Arc::new(Field::new("value", DataType::Int32, false)))]
-                .into_iter()
-                .collect();
-        let make_union = || {
-            Arc::new(
-                UnionArray::try_new(
-                    fields.clone(),
-                    vec![0, 0, 0].into(),
-                    None,
-                    vec![Arc::clone(&shared_child)],
-                )
-                .unwrap(),
-            ) as ArrayRef
-        };
-
-        assert_recursive_shared_child_memory(
-            "union",
-            make_union(),
-            make_union(),
-            shared_child.get_buffer_memory_size(),
-        );
-    }
-
-    #[test]
     fn test_record_batch_memory_counter_deduplicates_shared_dictionary_child() {
         let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let make_dictionary = || {
@@ -861,27 +802,6 @@ mod record_batch_tests {
             make_dictionary(),
             make_dictionary(),
             shared_child.get_array_memory_size(),
-        );
-    }
-
-    #[test]
-    fn test_record_batch_memory_counter_deduplicates_shared_run_end_encoded_child() {
-        let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let make_run_array = || {
-            Arc::new(
-                RunArray::<Int32Type>::try_new(
-                    &Int32Array::from(vec![1, 2, 3]),
-                    shared_child.as_ref(),
-                )
-                .unwrap(),
-            ) as ArrayRef
-        };
-
-        assert_recursive_shared_child_memory(
-            "run_end_encoded",
-            make_run_array(),
-            make_run_array(),
-            shared_child.get_buffer_memory_size(),
         );
     }
 
