@@ -296,21 +296,21 @@ fn range_batch(schema: SchemaRef, rows: &[(i32, i32, i32)]) -> RecordBatch {
 }
 
 // ==============================================================================
-// Metrics table: range-partitioned on timestamp, sorted on (key, timestamp)
+// Time-bin table: range-partitioned on timestamp, sorted on (key, timestamp)
 // ==============================================================================
 
 /// Unix nanoseconds for `2024-01-01 00:00:00 UTC`.
-const METRICS_EPOCH_NS: i64 = 1_704_067_200_000_000_000;
+const TIME_BIN_EPOCH_NS: i64 = 1_704_067_200_000_000_000;
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 
 /// Timestamp helper: minutes and seconds after `2024-01-01 00:00:00 UTC`.
-fn metrics_ts(minutes: i64, seconds: i64) -> i64 {
-    METRICS_EPOCH_NS + minutes * NANOS_PER_MINUTE + seconds * NANOS_PER_SECOND
+fn time_bin_ts(minutes: i64, seconds: i64) -> i64 {
+    TIME_BIN_EPOCH_NS + minutes * NANOS_PER_MINUTE + seconds * NANOS_PER_SECOND
 }
 
-/// Row: (key, zone, host, pod, service, timestamp_ns, value)
-type MetricsRow = (
+/// Row: (key, col1, col2, col3, col4, timestamp_ns, value)
+type TimeBinRow = (
     &'static str,
     &'static str,
     &'static str,
@@ -320,7 +320,7 @@ type MetricsRow = (
     i64,
 );
 
-/// Registers `metrics_range_sorted` for time-bin aggregation plan tests.
+/// Registers `range_sorted_time_bin` for time-bin aggregation plan tests.
 ///
 /// Two file groups, each covering a 60-minute timestamp range:
 /// - partition 0: `[2024-01-01 00:00, 01:00)`
@@ -330,13 +330,13 @@ type MetricsRow = (
 /// Because `date_bin(60 seconds, timestamp)` does not straddle the hour split,
 /// grouping by `(key, time_bin)` is partition-disjoint. Today's planner still
 /// inserts a hash shuffle; the test pins that plan so a follow-up can remove it.
-pub(super) fn register_metrics_range_sorted_table(ctx: &SessionContext) {
+pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Utf8, false),
-        Field::new("zone", DataType::Utf8, false),
-        Field::new("host", DataType::Utf8, false),
-        Field::new("pod", DataType::Utf8, false),
-        Field::new("service", DataType::Utf8, false),
+        Field::new("col1", DataType::Utf8, false),
+        Field::new("col2", DataType::Utf8, false),
+        Field::new("col3", DataType::Utf8, false),
+        Field::new("col4", DataType::Utf8, false),
         Field::new(
             "timestamp",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -347,7 +347,7 @@ pub(super) fn register_metrics_range_sorted_table(ctx: &SessionContext) {
 
     // Each partition covers 60 minutes. The split is aligned to the 60-second
     // `date_bin` used by the test query, so time bins do not straddle files.
-    let hour_split = metrics_ts(60, 0);
+    let hour_split = time_bin_ts(60, 0);
     let output_partitioning = Partitioning::Range(
         RangePartitioning::try_new(
             vec![col("timestamp").sort(true, true)],
@@ -356,31 +356,31 @@ pub(super) fn register_metrics_range_sorted_table(ctx: &SessionContext) {
                 None,
             )])],
         )
-        .expect("metrics range partitioning should be valid"),
+        .expect("time-bin range partitioning should be valid"),
     );
 
     // Within each 60-minute file, rows are sorted by (key, timestamp).
     let partitions = vec![
         vec![
-            ("k1", "z1", "h1", "p1", "a", metrics_ts(0, 10), 1),
-            ("k1", "z1", "h1", "p1", "a", metrics_ts(0, 40), 2),
-            ("k1", "z1", "h1", "p1", "b", metrics_ts(1, 10), 99),
-            ("k2", "z1", "h1", "p1", "a", metrics_ts(30, 0), 3),
-            ("k2", "z1", "h1", "p1", "a", metrics_ts(30, 30), 4),
+            ("k1", "x", "y", "z", "a", time_bin_ts(0, 10), 1),
+            ("k1", "x", "y", "z", "a", time_bin_ts(0, 40), 2),
+            ("k1", "x", "y", "z", "b", time_bin_ts(1, 10), 99),
+            ("k2", "x", "y", "z", "a", time_bin_ts(30, 0), 3),
+            ("k2", "x", "y", "z", "a", time_bin_ts(30, 30), 4),
         ],
         vec![
-            ("k1", "z1", "h1", "p1", "a", metrics_ts(60, 10), 10),
-            ("k1", "z1", "h1", "p1", "a", metrics_ts(60, 40), 20),
-            ("k2", "z1", "h1", "p1", "a", metrics_ts(90, 0), 30),
-            ("k2", "z1", "h1", "p1", "a", metrics_ts(105, 0), 5),
+            ("k1", "x", "y", "z", "a", time_bin_ts(60, 10), 10),
+            ("k1", "x", "y", "z", "a", time_bin_ts(60, 40), 20),
+            ("k2", "x", "y", "z", "a", time_bin_ts(90, 0), 30),
+            ("k2", "x", "y", "z", "a", time_bin_ts(105, 0), 5),
         ],
     ];
 
     let table_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("test_files/scratch_range_partitioning/metrics_range_sorted");
-    register_metrics_listing_table(
+        .join("test_files/scratch_range_partitioning/range_sorted_time_bin");
+    register_time_bin_listing_table(
         ctx,
-        "metrics_range_sorted",
+        "range_sorted_time_bin",
         &table_dir,
         Arc::clone(&schema),
         partitions,
@@ -392,12 +392,12 @@ pub(super) fn register_metrics_range_sorted_table(ctx: &SessionContext) {
     );
 }
 
-fn register_metrics_listing_table(
+fn register_time_bin_listing_table(
     ctx: &SessionContext,
     name: &str,
     table_dir: impl AsRef<Path>,
     schema: SchemaRef,
-    partitions: Vec<Vec<MetricsRow>>,
+    partitions: Vec<Vec<TimeBinRow>>,
     output_partitioning: Partitioning,
     file_sort_order: Vec<Vec<SortExpr>>,
 ) {
@@ -407,7 +407,7 @@ fn register_metrics_listing_table(
     }
     create_dir_all(table_dir).expect("test table dir should be created");
     for (idx, rows) in partitions.into_iter().enumerate() {
-        let batch = metrics_batch(Arc::clone(&schema), &rows);
+        let batch = time_bin_batch(Arc::clone(&schema), &rows);
         let file = File::create(table_dir.join(format!("part-{idx}.parquet")))
             .expect("test table parquet partition should be created");
         let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None)
@@ -441,7 +441,7 @@ fn register_metrics_listing_table(
         .expect("test listing table registration should succeed");
 }
 
-fn metrics_batch(schema: SchemaRef, rows: &[MetricsRow]) -> RecordBatch {
+fn time_bin_batch(schema: SchemaRef, rows: &[TimeBinRow]) -> RecordBatch {
     RecordBatch::try_new(
         schema,
         vec![
@@ -462,5 +462,5 @@ fn metrics_batch(schema: SchemaRef, rows: &[MetricsRow]) -> RecordBatch {
                 as ArrayRef,
         ],
     )
-    .expect("metrics batch should be valid")
+    .expect("time-bin batch should be valid")
 }

@@ -21,8 +21,8 @@
 #
 # Query:
 #   SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
-#   FROM metrics_range_sorted
-#   WHERE service = 'a'
+#   FROM range_sorted_time_bin
+#   WHERE col4 = 'a'
 #   GROUP BY key, time_bin
 #
 # Scan metadata already advertises:
@@ -75,9 +75,9 @@ set datafusion.execution.parquet.pushdown_filters = false;
 ##########
 
 query TT
-EXPLAIN SELECT key, timestamp, value FROM metrics_range_sorted;
+EXPLAIN SELECT key, timestamp, value FROM range_sorted_time_bin;
 ----
-physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/metrics_range_sorted/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/metrics_range_sorted/part-1.parquet]]}, projection=[key, timestamp, value], output_ordering=[key@0 ASC, timestamp@1 ASC], output_partitioning=Range([timestamp@1 ASC], [(1704070800000000000)], 2), file_type=parquet
+physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-1.parquet]]}, projection=[key, timestamp, value], output_ordering=[key@0 ASC, timestamp@1 ASC], output_partitioning=Range([timestamp@1 ASC], [(1704070800000000000)], 2), file_type=parquet
 
 ##########
 # TEST 2: Filtered time-bin aggregation.
@@ -91,22 +91,22 @@ physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion
 
 query TT
 EXPLAIN SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
-FROM metrics_range_sorted
-WHERE service = 'a'
+FROM range_sorted_time_bin
+WHERE col4 = 'a'
 GROUP BY key, time_bin;
 ----
 physical_plan
-01)ProjectionExec: expr=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1 as time_bin, sum(metrics_range_sorted.value)@2 as sum(metrics_range_sorted.value)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)], aggr=[sum(metrics_range_sorted.value)], ordering_mode=Sorted
-03)----RepartitionExec: partitioning=Hash([key@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1], 2), input_partitions=2, preserve_order=true, sort_exprs=key@0 ASC, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1 ASC
-04)------AggregateExec: mode=Partial, gby=[key@0 as key, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)], aggr=[sum(metrics_range_sorted.value)], ordering_mode=Sorted
-05)--------FilterExec: service@1 = a, projection=[key@0, timestamp@2, value@3]
-06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/metrics_range_sorted/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/metrics_range_sorted/part-1.parquet]]}, projection=[key, service, timestamp, value], output_ordering=[key@0 ASC, timestamp@2 ASC], output_partitioning=Range([timestamp@2 ASC], [(1704070800000000000)], 2), file_type=parquet, predicate=service@4 = a, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= a AND a <= service_max@1, required_guarantees=[service in (a)]
+01)ProjectionExec: expr=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as time_bin, sum(range_sorted_time_bin.value)@2 as sum(range_sorted_time_bin.value)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+03)----RepartitionExec: partitioning=Hash([key@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1], 2), input_partitions=2, preserve_order=true, sort_exprs=key@0 ASC, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 ASC
+04)------AggregateExec: mode=Partial, gby=[key@0 as key, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+05)--------FilterExec: col4@1 = a, projection=[key@0, timestamp@2, value@3]
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-1.parquet]]}, projection=[key, col4, timestamp, value], output_ordering=[key@0 ASC, timestamp@2 ASC], output_partitioning=Range([timestamp@2 ASC], [(1704070800000000000)], 2), file_type=parquet, predicate=col4@4 = a, pruning_predicate=col4_null_count@2 != row_count@3 AND col4_min@0 <= a AND a <= col4_max@1, required_guarantees=[col4 in (a)]
 
 query TPI
 SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
-FROM metrics_range_sorted
-WHERE service = 'a'
+FROM range_sorted_time_bin
+WHERE col4 = 'a'
 GROUP BY key, time_bin
 ORDER BY key, time_bin;
 ----
@@ -117,25 +117,25 @@ k2 2024-01-01T01:30:00 30
 k2 2024-01-01T01:45:00 5
 
 ##########
-# TEST 3: Same aggregation without the service filter. The scan still has two
+# TEST 3: Same aggregation without the col4 filter. The scan still has two
 # 60-minute file groups, and today's plan still hash-repartitions.
 ##########
 
 query TT
 EXPLAIN SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
-FROM metrics_range_sorted
+FROM range_sorted_time_bin
 GROUP BY key, time_bin;
 ----
 physical_plan
-01)ProjectionExec: expr=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1 as time_bin, sum(metrics_range_sorted.value)@2 as sum(metrics_range_sorted.value)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)], aggr=[sum(metrics_range_sorted.value)], ordering_mode=Sorted
-03)----RepartitionExec: partitioning=Hash([key@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1], 2), input_partitions=2, preserve_order=true, sort_exprs=key@0 ASC, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)@1 ASC
-04)------AggregateExec: mode=Partial, gby=[key@0 as key, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),metrics_range_sorted.timestamp)], aggr=[sum(metrics_range_sorted.value)], ordering_mode=Sorted
-05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/metrics_range_sorted/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/metrics_range_sorted/part-1.parquet]]}, projection=[key, timestamp, value], output_ordering=[key@0 ASC, timestamp@1 ASC], output_partitioning=Range([timestamp@1 ASC], [(1704070800000000000)], 2), file_type=parquet
+01)ProjectionExec: expr=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as time_bin, sum(range_sorted_time_bin.value)@2 as sum(range_sorted_time_bin.value)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[key@0 as key, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+03)----RepartitionExec: partitioning=Hash([key@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1], 2), input_partitions=2, preserve_order=true, sort_exprs=key@0 ASC, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)@1 ASC
+04)------AggregateExec: mode=Partial, gby=[key@0 as key, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"),range_sorted_time_bin.timestamp)], aggr=[sum(range_sorted_time_bin.value)], ordering_mode=Sorted
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_sorted_time_bin/part-1.parquet]]}, projection=[key, timestamp, value], output_ordering=[key@0 ASC, timestamp@1 ASC], output_partitioning=Range([timestamp@1 ASC], [(1704070800000000000)], 2), file_type=parquet
 
 query TPI
 SELECT key, date_bin(INTERVAL '60 seconds', timestamp) AS time_bin, sum(value)
-FROM metrics_range_sorted
+FROM range_sorted_time_bin
 GROUP BY key, time_bin
 ORDER BY key, time_bin;
 ----
