@@ -395,7 +395,7 @@ fn evaluate_expr_on_key(
     }
 }
 
-/// Range([x]) satisfies grouping by `(..., f(x), ...)` when `f` is monotonic in
+/// `Range([x])` satisfies grouping by `(..., f(x), ...)` when `f` is monotonic in
 /// `x` and adjacent partitions do not share `f` values (bins do not straddle
 /// split points). That makes `(key, date_bin(timestamp))` and
 /// `(key, date_trunc(timestamp))` partition-disjoint when the table is
