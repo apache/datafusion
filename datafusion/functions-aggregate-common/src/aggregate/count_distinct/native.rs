@@ -72,7 +72,7 @@ where
 {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let arr = Arc::new(
-            PrimitiveArray::<T>::from_iter_values(self.values.iter().cloned())
+            PrimitiveArray::<T>::from_iter_values(self.values.iter().copied())
                 .with_data_type(self.data_type.clone()),
         );
         Ok(vec![

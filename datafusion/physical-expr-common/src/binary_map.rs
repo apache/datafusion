@@ -942,7 +942,7 @@ mod tests {
             // update self with new values, keeping track of newly added values
             for str in strings {
                 let str = str.map(|s| s.to_string());
-                let index = self.indexes.get(&str).cloned().unwrap_or_else(|| {
+                let index = self.indexes.get(&str).copied().unwrap_or_else(|| {
                     actual_new_strings.push(str.clone());
                     let index = self.strings.len();
                     self.strings.push(str.clone());

@@ -753,7 +753,7 @@ fn bench_dict_int32(
     let mut rng = StdRng::seed_from_u64(seed);
 
     let dict_values: Vec<i32> = (0..dict_size).map(|_| rng.random()).collect();
-    let haystack: Vec<i32> = dict_values.iter().take(list_size).cloned().collect();
+    let haystack: Vec<i32> = dict_values.iter().take(list_size).copied().collect();
 
     let indices: Vec<i32> = (0..ARRAY_SIZE)
         .map(|_| rng.random_range(0..dict_size as i32))

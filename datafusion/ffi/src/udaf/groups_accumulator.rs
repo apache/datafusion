@@ -311,7 +311,7 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
                 .iter()
                 .map(WrappedArray::try_from)
                 .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
-            let group_indices = group_indices.iter().cloned().collect();
+            let group_indices = group_indices.iter().copied().collect();
             let opt_filter = opt_filter
                 .map(|bool_array| to_ffi(&bool_array.to_data()))
                 .transpose()?
@@ -373,7 +373,7 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
                 .iter()
                 .map(WrappedArray::try_from)
                 .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
-            let group_indices = group_indices.iter().cloned().collect();
+            let group_indices = group_indices.iter().copied().collect();
 
             df_result!((self.accumulator.merge_batch)(
                 &mut self.accumulator,

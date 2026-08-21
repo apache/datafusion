@@ -648,7 +648,7 @@ impl InferredPredicates {
             || matches!(
                 is_restrict_null_predicate(
                     predicate.clone(),
-                    replace_map.keys().cloned()
+                    replace_map.keys().copied()
                 ),
                 Ok(true)
             )

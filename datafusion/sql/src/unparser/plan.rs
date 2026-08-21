@@ -2212,7 +2212,7 @@ impl Unparser<'_> {
                     } else {
                         let project_columns = project_vec
                             .iter()
-                            .cloned()
+                            .copied()
                             .map(|i| {
                                 let schema = table_scan.source.schema();
                                 let field = schema.field(i);
