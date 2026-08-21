@@ -7014,3 +7014,86 @@ ORDER BY x
 false 3
 true 2
 true 2
+
+# RANGE window frame over a Time64 ORDER BY key. The default frame for an
+# ORDER BY without an explicit frame is RANGE BETWEEN UNBOUNDED PRECEDING AND
+# CURRENT ROW, which used to fail with
+# "Internal error: Cannot run range queries on datatype: Time64(Microsecond)".
+# Time is orderable, so peer/range comparison is well defined just like Utf8.
+query TI
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+query TI
+SELECT x, COUNT(*) OVER (ORDER BY x DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast('03:00:00', 'Time32(Second)')),
+             (arrow_cast('04:00:00', 'Time32(Second)')),
+             (arrow_cast('04:00:00', 'Time32(Second)'))) t(x)
+ORDER BY x
+----
+03:00:00 3
+04:00:00 2
+04:00:00 2
+
+query TI
+SELECT x, COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES (arrow_cast('01:00:00', 'Time32(Millisecond)')),
+             (arrow_cast('02:00:00', 'Time32(Millisecond)')),
+             (arrow_cast('02:00:00', 'Time32(Millisecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 3
+02:00:00 2
+02:00:00 2
+
+# A non-aggregate window function over a Time64 ORDER BY key.
+query TI
+SELECT x, RANK() OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 2
+02:00:00 2
+
+# A Time64 order key nested in a dictionary resolves through the same arm.
+query TI
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast(arrow_cast('01:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
+             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
+             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond)))'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+# Unsupported RANGE ORDER BY types still propagate the type-coercion error.
+query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)
+SELECT COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (struct(1))) t(x)
+
+# A finite offset such as `1 HOUR PRECEDING` cannot be supported for time order
+# keys because time/interval arithmetic wraps around the 24-hour clock. It must
+# be a planning error, not an internal error.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(Microsecond\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN INTERVAL '1' HOUR PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)')) ) t(x)
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time32\(Second\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '15' MINUTE FOLLOWING)
+FROM (VALUES (arrow_cast('01:00:00', 'Time32(Second)')) ) t(x)
+
+# Dictionary-wrapped time is unwrapped before checking offset arithmetic.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(Microsecond\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN INTERVAL '1' HOUR PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast(arrow_cast('01:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))'))) t(x)
