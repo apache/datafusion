@@ -1088,6 +1088,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
         Ok(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
+    } else if let DataType::RunEndEncoded(_, value_type) = col_type {
+        extract_window_frame_target_type(value_type.data_type())
     } else {
         internal_err!("Cannot run range queries on datatype: {col_type}")
     }
