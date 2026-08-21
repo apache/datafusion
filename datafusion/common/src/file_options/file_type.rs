@@ -22,6 +22,8 @@ use std::fmt::Display;
 
 /// The default file extension of arrow files
 pub const DEFAULT_ARROW_EXTENSION: &str = ".arrow";
+/// The default file extension of arrow stream files
+pub const DEFAULT_ARROW_STREAM_EXTENSION: &str = ".arrows";
 /// The default file extension of avro files
 pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
 /// The default file extension of csv files
