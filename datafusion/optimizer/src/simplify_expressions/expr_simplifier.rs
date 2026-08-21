@@ -182,23 +182,6 @@ impl ExprSimplifier {
     /// representing the number of simplification cycles performed, which can be useful for testing
     /// optimizations.
     ///
-    /// See [Self::simplify] for details and usage examples.
-    #[deprecated(
-        since = "48.0.0",
-        note = "Use `simplify_with_cycle_count_transformed` instead"
-    )]
-    #[expect(unused_mut)]
-    pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
-        let (transformed, cycle_count) =
-            self.simplify_with_cycle_count_transformed(expr)?;
-        Ok((transformed.data, cycle_count))
-    }
-
-    /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
-    /// constants and applying algebraic simplifications. Additionally returns a `u32`
-    /// representing the number of simplification cycles performed, which can be useful for testing
-    /// optimizations.
-    ///
     /// # Returns
     ///
     /// A tuple containing:
