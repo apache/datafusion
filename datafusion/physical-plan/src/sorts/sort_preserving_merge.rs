@@ -198,14 +198,14 @@ impl DisplayAs for SortPreservingMergeExec {
                 write!(f, "SortPreservingMergeExec: [{}]", self.expr)?;
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
-                };
+                }
 
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(fetch) = self.fetch {
                     writeln!(f, "limit={fetch}")?;
-                };
+                }
 
                 for (i, e) in self.expr().iter().enumerate() {
                     e.fmt_sql(f)?;
@@ -1927,7 +1927,7 @@ mod tests {
         fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "CongestedExec",).unwrap()
+                    write!(f, "CongestedExec").unwrap()
                 }
                 DisplayFormatType::TreeRender => {
                     // TODO: collect info

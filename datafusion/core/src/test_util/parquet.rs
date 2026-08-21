@@ -114,7 +114,7 @@ impl TestParquetFile {
                 .strip_prefix("//?/")
                 .unwrap()
                 .into();
-        };
+        }
 
         let object_store_url =
             ListingTableUrl::parse(canonical_path.to_str().unwrap_or_default())?

@@ -256,7 +256,7 @@ impl ClassicPWMJStream {
                 );
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
-        };
+        }
 
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
@@ -532,7 +532,7 @@ fn resolve_classic_join(
                         operator
                     );
                 }
-            };
+            }
 
             // Increment buffer_idx after every row
             buffer_idx += 1;

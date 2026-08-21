@@ -532,7 +532,7 @@ mod tests {
                 // utf8
                 let v_sv = ScalarValue::Utf8(Some(v.to_string()));
                 let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
-                let expected = expected.get(pos).cloned();
+                let expected = expected.get(pos).copied();
                 let re = regexp_instr_with_scalar_values(&[v_sv, regex_sv]);
                 // let res_exp = re.unwrap();
                 match re {
@@ -579,7 +579,7 @@ mod tests {
                 let v_sv = ScalarValue::Utf8(Some(v.to_string()));
                 let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
                 let start_sv = ScalarValue::Int64(Some(s));
-                let expected = expected.get(pos).cloned();
+                let expected = expected.get(pos).copied();
                 let re =
                     regexp_instr_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
                 match re {
@@ -632,7 +632,7 @@ mod tests {
                 let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
                 let start_sv = ScalarValue::Int64(Some(s));
                 let nth_sv = ScalarValue::Int64(Some(n));
-                let expected = expected.get(pos).cloned();
+                let expected = expected.get(pos).copied();
                 let re = regexp_instr_with_scalar_values(&[
                     v_sv,
                     regex_sv,
@@ -710,7 +710,7 @@ mod tests {
             let nth_sv = ScalarValue::Int64(Some(n));
             let flags_sv = ScalarValue::Utf8(Some(flag.to_string()));
             let subexp_sv = ScalarValue::Int64(Some(subexp));
-            let expected = expected.get(pos).cloned();
+            let expected = expected.get(pos).copied();
             let re = regexp_instr_with_scalar_values(&[
                 v_sv,
                 regex_sv,

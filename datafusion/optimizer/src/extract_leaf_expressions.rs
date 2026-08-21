@@ -1679,8 +1679,8 @@ mod tests {
     }
 
     /// Test: Projection with different field than Filter
-    /// SELECT id, s['label'] FROM t WHERE s['value'] > 150
-    /// Both s['label'] and s['value'] should be in a single extraction projection.
+    /// `SELECT id, s['label'] FROM t WHERE s['value'] > 150`
+    /// Both `s['label']` and `s['value']` should be in a single extraction projection.
     #[test]
     fn test_projection_different_field_from_filter() -> Result<()> {
         let table_scan = test_table_scan_with_struct()?;

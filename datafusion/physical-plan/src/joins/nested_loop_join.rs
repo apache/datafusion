@@ -1260,9 +1260,9 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) left_data: OnceFut<JoinLeftData>,
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
-    /// - output_schema: ['a', 'c']
-    /// - left_schema: ['a', 'b']
-    /// - right_schema: ['c']
+    /// - output_schema: `['a', 'c']`
+    /// - left_schema: `['a', 'b']`
+    /// - right_schema: `['c']`
     ///
     /// The column indices would be [(left, 0), (right, 0)] -- taking the left
     /// 0th column and right 0th column can construct the output schema.
@@ -1408,7 +1408,7 @@ impl Stream for NestedLoopJoinStream {
                     let _build_timer = build_metric.timer();
 
                     match self.handle_buffering_left(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => return poll,
                     }
                 }
@@ -1443,7 +1443,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_fetching_right(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => return poll,
                     }
                 }
@@ -1470,7 +1470,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_probe_right() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1491,7 +1491,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_right_unmatched() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1513,7 +1513,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_probe_end() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1543,7 +1543,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_left_unmatched() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1562,7 +1562,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_global_right_unmatched(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }

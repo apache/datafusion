@@ -559,7 +559,7 @@ impl<'a> TestCase<'a> {
                     self.name
                 );
             }
-        };
+        }
 
         let (page_index_rows_pruned, page_index_rows_matched) =
             get_pruning_metrics(&metrics, "page_index_rows_pruned");
@@ -584,7 +584,7 @@ impl<'a> TestCase<'a> {
                     "Expected to filter rows via page index but none were",
                 );
             }
-        };
+        }
 
         batch
     }

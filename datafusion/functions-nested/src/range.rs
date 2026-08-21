@@ -338,7 +338,7 @@ impl Range {
                     offsets.push(values.len() as i32);
                     valid.append_null();
                 }
-            };
+            }
         }
         let arr = Arc::new(ListArray::try_new(
             Arc::new(Field::new_list_field(DataType::Int64, true)),

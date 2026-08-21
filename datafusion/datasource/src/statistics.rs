@@ -443,7 +443,7 @@ pub async fn get_statistics_with_limit(
                 }
             }
         }
-    };
+    }
 
     let mut statistics = summary_statistics;
     if all_files.next().await.is_some() {
