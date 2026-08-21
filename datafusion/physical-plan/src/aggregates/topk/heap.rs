@@ -404,6 +404,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         }
     }
 
+    #[inline]
     fn swap(&mut self, a_idx: usize, b_idx: usize, mapper: &mut Vec<(usize, usize)>) {
         self.heap.swap(a_idx, b_idx);
 
