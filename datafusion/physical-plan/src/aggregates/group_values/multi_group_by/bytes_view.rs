@@ -475,7 +475,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             self.flush_in_progress();
         }
         self.completed
-            .drain(0..last_remaining_buffer_index + 1)
+            .drain(0..=last_remaining_buffer_index)
             .collect()
     }
 

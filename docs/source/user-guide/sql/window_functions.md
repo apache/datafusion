@@ -498,7 +498,7 @@ nth_value(expression, n)
 #### Arguments
 
 - **expression**: The column from which to retrieve the nth value.
-- **n**: Integer. Specifies the row number (starting from 1) in the window frame.
+- **n**: Integer position in the window frame. Positive values count from the first row, starting at 1; negative values count backward from the last row, where -1 returns the last row.
 
 #### Example
 

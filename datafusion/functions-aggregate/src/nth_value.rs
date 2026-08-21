@@ -85,7 +85,9 @@ pub fn nth_value(
     ),
     argument(
         name = "n",
-        description = "The position (nth) of the value to retrieve, based on the ordering."
+        description = "The position of the value to retrieve. Positive values count from the first \
+            value, starting at 1; negative values count backward from the last value, where -1 \
+            returns the last value."
     )
 )]
 /// Expression for a `NTH_VALUE(..., ... ORDER BY ...)` aggregation. In a multi

@@ -599,10 +599,8 @@ impl Accumulator for RegrAccumulator {
 
         for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let (value_y, value_x) = match (value_y, value_x) {
-                (Some(y), Some(x)) => (y, x),
-                // skip either x or y is NULL
-                _ => continue,
+            let (Some(value_y), Some(value_x)) = (value_y, value_x) else {
+                continue;
             };
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
@@ -631,10 +629,8 @@ impl Accumulator for RegrAccumulator {
 
         for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let (value_y, value_x) = match (value_y, value_x) {
-                (Some(y), Some(x)) => (y, x),
-                // skip either x or y is NULL
-                _ => continue,
+            let (Some(value_y), Some(value_x)) = (value_y, value_x) else {
+                continue;
             };
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
