@@ -101,6 +101,30 @@ fn test_pushdown_into_scan() {
 }
 
 #[test]
+fn test_inexact_pushdown_retains_filter_exec() {
+    let scan = TestScanBuilder::new(schema())
+        .with_support(true)
+        .with_inexact_pushdown(true)
+        .build();
+    let predicate = col_lit_predicate("a", "foo", &schema());
+    let plan = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: a@0 = foo
+        -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: a@0 = foo
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+    "
+    );
+}
+
+#[test]
 fn test_pushdown_volatile_functions_not_allowed() {
     // Test that we do not push down filters with volatile functions
     // Use random() as an example of a volatile function
@@ -2051,6 +2075,57 @@ fn test_aggregate_dynamic_filter_not_created_for_single_mode() {
 }
 
 #[test]
+fn test_aggregate_dynamic_filter_pushdown_consumer_acknowledgement() {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+    for (supports_pushdown, inexact, expose_expressions, expected_consumer) in [
+        (false, false, true, false),
+        (true, false, true, true),
+        (true, true, true, true),
+        (true, false, false, true),
+    ] {
+        let scan = TestScanBuilder::new(Arc::clone(&schema))
+            .with_support(supports_pushdown)
+            .with_inexact_pushdown(inexact)
+            .with_expose_expressions(expose_expressions)
+            .build();
+        let min_expr =
+            AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
+                .schema(Arc::clone(&schema))
+                .alias("min_a")
+                .build()
+                .unwrap();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                PhysicalGroupBy::new_single(vec![]),
+                vec![min_expr.into()],
+                vec![None],
+                scan,
+                Arc::clone(&schema),
+            )
+            .unwrap(),
+        );
+
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.optimizer.enable_dynamic_filter_pushdown = true;
+        let optimized = FilterPushdown::new_post_optimization()
+            .optimize(plan, &config)
+            .unwrap();
+        let aggregate = optimized
+            .downcast_ref::<AggregateExec>()
+            .expect("plan should be AggregateExec");
+
+        assert_eq!(
+            !aggregate.dynamic_expressions_produced().is_empty(),
+            expected_consumer,
+            "producer state should reflect the input's planning result"
+        );
+    }
+}
+
+#[test]
 fn test_pushdown_filter_on_non_first_grouping_column() {
     // Test that filters on non-first grouping columns are still pushed down
     // SELECT a, b, count(*) as cnt FROM table GROUP BY a, b HAVING b = 'bar'
@@ -2964,11 +3039,10 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     );
 }
 
-// Not portable to sqllogictest: verifies whether the optimized probe-side plan
-// retains the HashJoinExec's dynamic filter expression. The with_support(false)
-// branch has no SQL analog because parquet supports filter pushdown.
+// Not portable to sqllogictest: verifies the planning-time acknowledgement for
+// a dynamic filter, including a consumer hidden behind an opaque plan boundary.
 #[test]
-fn test_hashjoin_dynamic_filter_pushdown_is_used() {
+fn test_hashjoin_dynamic_filter_pushdown_consumer_acknowledgement() {
     fn contains_expression_id(plan: &Arc<dyn ExecutionPlan>, expression_id: u64) -> bool {
         let mut found = false;
         plan.apply(|node| {
@@ -2987,7 +3061,12 @@ fn test_hashjoin_dynamic_filter_pushdown_is_used() {
         found
     }
 
-    for (probe_supports_pushdown, expected_consumer) in [(false, false), (true, true)] {
+    for (probe_supports_pushdown, inexact, expose_expressions, expected_consumer) in [
+        (false, false, true, false),
+        (true, false, true, true),
+        (true, true, true, true),
+        (true, false, false, true),
+    ] {
         let build_side_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
@@ -3006,6 +3085,8 @@ fn test_hashjoin_dynamic_filter_pushdown_is_used() {
         ]));
         let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
             .with_support(probe_supports_pushdown)
+            .with_inexact_pushdown(inexact)
+            .with_expose_expressions(expose_expressions)
             .with_batches(vec![
                 record_batch!(
                     ("a", Utf8, ["aa", "ab", "ac", "ad"]),
@@ -3050,17 +3131,22 @@ fn test_hashjoin_dynamic_filter_pushdown_is_used() {
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
         let dynamic_filters = hash_join.dynamic_expressions_produced();
-        let expression_id = dynamic_filters
-            .first()
-            .expect("Dynamic filter should be created")
-            .expression_id()
-            .expect("Dynamic filters always have an expression ID");
-
         assert_eq!(
-            contains_expression_id(hash_join.right(), expression_id),
+            !dynamic_filters.is_empty(),
             expected_consumer,
-            "probe consumer should be {expected_consumer} when pushdown support is {probe_supports_pushdown}"
+            "producer state should reflect the probe's planning result"
         );
+
+        if let Some(dynamic_filter) = dynamic_filters.first() {
+            let expression_id = dynamic_filter
+                .expression_id()
+                .expect("dynamic filters always have an expression ID");
+            assert_eq!(
+                contains_expression_id(hash_join.right(), expression_id),
+                expose_expressions,
+                "expression visibility should follow the test source setting"
+            );
+        }
     }
 }
 

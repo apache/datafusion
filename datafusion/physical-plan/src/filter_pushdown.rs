@@ -24,7 +24,7 @@
 //! 2. **Optimizer Executes Pushdown**: The optimizer recursively pushes down filters for each child,
 //!    passing the appropriate filters (`Vec<Arc<dyn PhysicalExpr>>`) for that child.
 //! 3. **Optimizer Gathers Results**: The optimizer collects [`FilterPushdownPropagation`] results from children,
-//!    containing information about which filters were successfully pushed down vs. unsupported.
+//!    distinguishing exact filtering, inexact use, and unsupported predicates.
 //! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
 //!    passing a [`ChildPushdownResult`] containing the aggregated pushdown outcomes. The parent decides
 //!    how to handle filters that couldn't be pushed down (e.g., keep them as FilterExec nodes).
@@ -99,15 +99,30 @@ pub struct PushedDownPredicate {
 }
 
 impl PushedDownPredicate {
-    /// Return the wrapped [`PhysicalExpr`], discarding whether it is supported or unsupported.
+    /// Return the wrapped [`PhysicalExpr`], discarding its pushdown result.
     pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
         self.predicate
     }
 
-    /// Create a new [`PushedDownPredicate`] with supported pushdown.
-    pub fn supported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+    /// Create a new [`PushedDownPredicate`] with exact pushdown.
+    pub fn exact(predicate: Arc<dyn PhysicalExpr>) -> Self {
         Self {
-            discriminant: PushedDown::Yes,
+            discriminant: PushedDown::Exact,
+            predicate,
+        }
+    }
+
+    /// Create a new [`PushedDownPredicate`] with exact pushdown.
+    ///
+    /// This is an alias for [`Self::exact`] retained for compatibility.
+    pub fn supported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+        Self::exact(predicate)
+    }
+
+    /// Create a new [`PushedDownPredicate`] with inexact pushdown.
+    pub fn inexact(predicate: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            discriminant: PushedDown::Inexact,
             predicate,
         }
     }
@@ -115,35 +130,46 @@ impl PushedDownPredicate {
     /// Create a new [`PushedDownPredicate`] with unsupported pushdown.
     pub fn unsupported(predicate: Arc<dyn PhysicalExpr>) -> Self {
         Self {
-            discriminant: PushedDown::No,
+            discriminant: PushedDown::Unsupported,
             predicate,
         }
     }
 }
 
 /// Discriminant for the result of pushing down a filter into a child node.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushedDown {
-    /// The predicate was successfully pushed down into the child node.
-    Yes,
-    /// The predicate could not be pushed down into the child node.
-    No,
+    /// The predicate is retained and applied exactly as a [`FilterExec`] would
+    /// apply it, so an ancestor can safely stop evaluating the predicate.
+    ///
+    /// [`FilterExec`]: crate::filter::FilterExec
+    Exact,
+    /// The predicate is retained and used, but is not applied exactly. For
+    /// example, a data source may use it only for statistics-based pruning.
+    /// An ancestor must still evaluate the predicate for correctness.
+    Inexact,
+    /// The predicate is not retained or used by the child node.
+    Unsupported,
 }
 
 impl PushedDown {
-    /// Logical AND operation: returns `Yes` only if both operands are `Yes`.
+    /// Logical AND operation, returning the least capable result.
     pub fn and(self, other: PushedDown) -> PushedDown {
         match (self, other) {
-            (PushedDown::Yes, PushedDown::Yes) => PushedDown::Yes,
-            _ => PushedDown::No,
+            (PushedDown::Exact, PushedDown::Exact) => PushedDown::Exact,
+            (PushedDown::Unsupported, _) | (_, PushedDown::Unsupported) => {
+                PushedDown::Unsupported
+            }
+            _ => PushedDown::Inexact,
         }
     }
 
-    /// Logical OR operation: returns `Yes` if either operand is `Yes`.
+    /// Logical OR operation, returning the most capable result.
     pub fn or(self, other: PushedDown) -> PushedDown {
         match (self, other) {
-            (PushedDown::Yes, _) | (_, PushedDown::Yes) => PushedDown::Yes,
-            (PushedDown::No, PushedDown::No) => PushedDown::No,
+            (PushedDown::Exact, _) | (_, PushedDown::Exact) => PushedDown::Exact,
+            (PushedDown::Inexact, _) | (_, PushedDown::Inexact) => PushedDown::Inexact,
+            (PushedDown::Unsupported, PushedDown::Unsupported) => PushedDown::Unsupported,
         }
     }
 
@@ -165,30 +191,28 @@ pub struct ChildFilterPushdownResult {
 
 impl ChildFilterPushdownResult {
     /// Combine all child results using OR logic.
-    /// Returns `Yes` if **any** child supports the filter.
-    /// Returns `No` if **all** children reject the filter or if there are no children.
+    /// Returns the most capable result reported by any child, or
+    /// [`PushedDown::Unsupported`] if there are no children.
     pub fn any(&self) -> PushedDown {
         if self.child_results.is_empty() {
-            // If there are no children, filters cannot be supported
-            PushedDown::No
+            PushedDown::Unsupported
         } else {
             self.child_results
                 .iter()
-                .fold(PushedDown::No, |acc, result| acc.or(*result))
+                .fold(PushedDown::Unsupported, |acc, result| acc.or(*result))
         }
     }
 
     /// Combine all child results using AND logic.
-    /// Returns `Yes` if **all** children support the filter.
-    /// Returns `No` if **any** child rejects the filter or if there are no children.
+    /// Returns the least capable result reported by any child, or
+    /// [`PushedDown::Unsupported`] if there are no children.
     pub fn all(&self) -> PushedDown {
         if self.child_results.is_empty() {
-            // If there are no children, filters cannot be supported
-            PushedDown::No
+            PushedDown::Unsupported
         } else {
             self.child_results
                 .iter()
-                .fold(PushedDown::Yes, |acc, result| acc.and(*result))
+                .fold(PushedDown::Exact, |acc, result| acc.and(*result))
         }
     }
 }
@@ -205,7 +229,7 @@ pub struct ChildPushdownResult {
     /// The parent filters that were pushed down as received by the current node when [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result) was called.
     /// Note that this may *not* be the same as the filters that were passed to the children as the current node may have modified them
     /// (e.g. by reassigning column indices) when it returned them from [`ExecutionPlan::gather_filters_for_pushdown`](crate::ExecutionPlan::handle_child_pushdown_result) in a [`FilterDescription`].
-    /// Attached to each filter is a [`PushedDown`] *per child* that indicates whether the filter was supported or unsupported by each child.
+    /// Attached to each filter is a [`PushedDown`] *per child* that indicates whether the filter was applied exactly, retained for inexact use, or unsupported by each child.
     /// To get combined results see [`ChildFilterPushdownResult::any`] and [`ChildFilterPushdownResult::all`].
     pub parent_filters: Vec<ChildFilterPushdownResult>,
     /// The result of pushing down each filter this node provided into each of it's children.
@@ -266,7 +290,7 @@ impl<T> FilterPushdownPropagation<T> {
         let filters = child_pushdown_result
             .parent_filters
             .into_iter()
-            .map(|_| PushedDown::No)
+            .map(|_| PushedDown::Unsupported)
             .collect();
         Self {
             filters,
@@ -295,7 +319,7 @@ impl<T> FilterPushdownPropagation<T> {
 /// Describes filter pushdown for a single child node.
 ///
 /// This structure contains two types of filters:
-/// - **Parent filters**: Filters received from the parent node, marked as supported or unsupported
+/// - **Parent filters**: Filters received from the parent node, marked as exact, inexact, or unsupported
 /// - **Self filters**: Filters generated by the current node to be pushed down to this child
 #[derive(Debug, Clone)]
 pub struct ChildFilterDescription {
@@ -554,5 +578,50 @@ impl FilterDescription {
             .map(|d| &d.self_filters)
             .cloned()
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_physical_expr::expressions::lit;
+
+    #[test]
+    fn pushed_down_and_or_truth_tables() {
+        use PushedDown::{Exact, Inexact, Unsupported};
+
+        let cases = [
+            (Exact, Exact, Exact, Exact),
+            (Exact, Inexact, Inexact, Exact),
+            (Exact, Unsupported, Unsupported, Exact),
+            (Inexact, Exact, Inexact, Exact),
+            (Inexact, Inexact, Inexact, Inexact),
+            (Inexact, Unsupported, Unsupported, Inexact),
+            (Unsupported, Exact, Unsupported, Exact),
+            (Unsupported, Inexact, Unsupported, Inexact),
+            (Unsupported, Unsupported, Unsupported, Unsupported),
+        ];
+
+        for (left, right, expected_and, expected_or) in cases {
+            assert_eq!(left.and(right), expected_and);
+            assert_eq!(left.or(right), expected_or);
+        }
+    }
+
+    #[test]
+    fn child_results_combine_and_handle_empty_children() {
+        use PushedDown::{Exact, Inexact, Unsupported};
+
+        let result = |child_results| ChildFilterPushdownResult {
+            filter: lit(true),
+            child_results,
+        };
+
+        assert_eq!(result(vec![]).all(), Unsupported);
+        assert_eq!(result(vec![]).any(), Unsupported);
+        assert_eq!(result(vec![Exact, Inexact]).all(), Inexact);
+        assert_eq!(result(vec![Exact, Inexact]).any(), Exact);
+        assert_eq!(result(vec![Inexact, Unsupported]).all(), Unsupported);
+        assert_eq!(result(vec![Inexact, Unsupported]).any(), Inexact);
     }
 }

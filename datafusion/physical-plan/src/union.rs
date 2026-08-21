@@ -527,7 +527,7 @@ impl ExecutionPlan for UnionExec {
             for (child_idx, &child_result) in
                 parent_filter_result.child_results.iter().enumerate()
             {
-                if matches!(child_result, PushedDown::No) {
+                if !matches!(child_result, PushedDown::Exact) {
                     unsupported_filters_per_child[child_idx]
                         .push(Arc::clone(&parent_filter_result.filter));
                 }
@@ -555,7 +555,7 @@ impl ExecutionPlan for UnionExec {
             .any(|(new, old)| !Arc::ptr_eq(new, old));
 
         let all_filters_pushed =
-            vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()];
+            vec![PushedDown::Exact; child_pushdown_result.parent_filters.len()];
         let propagation = if children_modified {
             let updated_node = UnionExec::try_new(new_children)?;
             FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)

@@ -103,6 +103,8 @@ impl FileOpener for TestOpener {
 #[derive(Clone)]
 pub struct TestSource {
     support: bool,
+    inexact: bool,
+    expose_expressions: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
@@ -116,6 +118,8 @@ impl TestSource {
         let table_schema = datafusion_datasource::TableSchema::from(schema);
         Self {
             support,
+            inexact: false,
+            expose_expressions: true,
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
             predicate: None,
@@ -198,13 +202,18 @@ impl FileSource for TestSource {
                 ),
                 ..self.clone()
             });
-            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::Yes; filters.len()],
-            )
+            Ok(FilterPushdownPropagation::with_parent_pushdown_result(vec![
+                if self.inexact {
+                    PushedDown::Inexact
+                } else {
+                    PushedDown::Exact
+                };
+                filters.len()
+            ])
             .with_updated_node(new_node))
         } else {
             Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
+                vec![PushedDown::Unsupported; filters.len()],
             ))
         }
     }
@@ -241,6 +250,9 @@ impl FileSource for TestSource {
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
+        if !self.expose_expressions {
+            return Ok(TreeNodeRecursion::Continue);
+        }
         datafusion_physical_plan::apply_expression_roots(
             self.predicate.iter().chain(
                 self.projection
@@ -256,6 +268,8 @@ impl FileSource for TestSource {
 #[derive(Debug, Clone)]
 pub struct TestScanBuilder {
     support: bool,
+    inexact: bool,
+    expose_expressions: bool,
     batches: Vec<RecordBatch>,
     schema: SchemaRef,
 }
@@ -264,6 +278,8 @@ impl TestScanBuilder {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             support: false,
+            inexact: false,
+            expose_expressions: true,
             batches: vec![],
             schema,
         }
@@ -274,17 +290,30 @@ impl TestScanBuilder {
         self
     }
 
+    /// Have a supporting source report retained predicates as inexact.
+    pub fn with_inexact_pushdown(mut self, inexact: bool) -> Self {
+        self.inexact = inexact;
+        self
+    }
+
+    /// Control whether the test source exposes retained expressions through
+    /// `apply_expressions`, allowing tests to model an opaque remote boundary.
+    pub fn with_expose_expressions(mut self, expose_expressions: bool) -> Self {
+        self.expose_expressions = expose_expressions;
+        self
+    }
+
     pub fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
         self.batches = batches;
         self
     }
 
     pub fn build(self) -> Arc<dyn ExecutionPlan> {
-        let source = Arc::new(TestSource::new(
-            Arc::clone(&self.schema),
-            self.support,
-            self.batches,
-        ));
+        let mut source =
+            TestSource::new(Arc::clone(&self.schema), self.support, self.batches);
+        source.inexact = self.inexact;
+        source.expose_expressions = self.expose_expressions;
+        let source = Arc::new(source);
         let base_config =
             FileScanConfigBuilder::new(ObjectStoreUrl::parse("test://").unwrap(), source)
                 .with_file(PartitionedFile::new("test.parquet", 123))
@@ -554,8 +583,8 @@ impl ExecutionPlan for TestNode {
             let first_pushdown_result = self_pushdown_result[0].clone();
 
             match &first_pushdown_result.discriminant {
-                PushedDown::No => {
-                    // We have a filter to push down
+                PushedDown::Inexact | PushedDown::Unsupported => {
+                    // The filter was not applied exactly, so we still apply it.
                     let new_child = FilterExec::try_new(
                         Arc::clone(&first_pushdown_result.predicate),
                         Arc::clone(&self.input),
@@ -567,7 +596,7 @@ impl ExecutionPlan for TestNode {
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
-                PushedDown::Yes => {
+                PushedDown::Exact => {
                     let res = FilterPushdownPropagation::if_all(child_pushdown_result);
                     Ok(res)
                 }

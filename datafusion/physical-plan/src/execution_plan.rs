@@ -884,8 +884,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// - A `FilterExec` may absorb any filters its children could not handle,
     ///   combining them with its own predicate. If no filters remain (i.e., the
     ///   predicate becomes trivially true), it may remove itself from the plan
-    ///   altogether. It typically marks parent filters as supported, indicating
-    ///   they have been handled.
+    ///   altogether. It typically marks parent filters as exact, indicating
+    ///   they have been fully handled.
     /// - A `HashJoinExec` might ignore the pushdown result if filters need to
     ///   be applied during the join operation. It passes the parent filters back
     ///   up wrapped in [`FilterPushdownPropagation::if_any`], discarding
@@ -907,7 +907,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///    remaining filters during the join, and passes unhandled filters back
     ///    up to `FilterExec`. `FilterExec` absorbs any unhandled filters,
     ///    updates its predicate if necessary, or removes itself if the predicate
-    ///    becomes trivial (e.g., `lit(true)`), and marks filters as supported
+    ///    becomes trivial (e.g., `lit(true)`), and marks filters as exact
     ///    for its parent.
     ///
     /// The default implementation is a no-op that passes the result of pushdown
@@ -1116,36 +1116,6 @@ where
         }
     }
     Ok(TreeNodeRecursion::Continue)
-}
-
-/// Returns whether `plan` contains a physical expression with `expression_id`.
-///
-/// This traverses both the execution plan and the children of each expression root
-/// reported by [`ExecutionPlan::apply_expressions`].
-pub(crate) fn plan_contains_expression_id(
-    plan: &Arc<dyn ExecutionPlan>,
-    expression_id: u64,
-) -> Result<bool> {
-    let mut found = false;
-    plan.apply(|node| {
-        node.apply_expressions(&mut |root| {
-            root.apply(|expr| {
-                if expr.expression_id() == Some(expression_id) {
-                    found = true;
-                    Ok(TreeNodeRecursion::Stop)
-                } else {
-                    Ok(TreeNodeRecursion::Continue)
-                }
-            })
-        })?;
-
-        Ok(if found {
-            TreeNodeRecursion::Stop
-        } else {
-            TreeNodeRecursion::Continue
-        })
-    })?;
-    Ok(found)
 }
 
 impl dyn ExecutionPlan {

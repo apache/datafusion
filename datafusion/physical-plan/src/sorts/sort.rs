@@ -1571,7 +1571,7 @@ impl ExecutionPlan for SortExec {
         let unsupported_filters: Vec<Arc<dyn PhysicalExpr>> = child_pushdown_result
             .parent_filters
             .iter()
-            .filter(|&f| matches!(f.all(), PushedDown::No))
+            .filter(|&f| !matches!(f.all(), PushedDown::Exact))
             .map(|f| Arc::clone(&f.filter))
             .collect();
 
@@ -1593,7 +1593,7 @@ impl ExecutionPlan for SortExec {
         ) as Arc<dyn ExecutionPlan>;
 
         Ok(FilterPushdownPropagation {
-            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
+            filters: vec![PushedDown::Exact; child_pushdown_result.parent_filters.len()],
             updated_node: Some(new_sort),
         })
     }
@@ -3905,7 +3905,7 @@ mod tests {
         // Sort with fetch (TopK) must not allow filters to be pushed below it.
         assert!(matches!(
             desc.parent_filters()[0][0].discriminant,
-            PushedDown::No
+            PushedDown::Unsupported
         ));
         Ok(())
     }
@@ -3921,7 +3921,7 @@ mod tests {
         // Plain sort (no fetch) is filter-commutative.
         assert!(matches!(
             desc.parent_filters()[0][0].discriminant,
-            PushedDown::Yes
+            PushedDown::Exact
         ));
         Ok(())
     }
@@ -3941,7 +3941,7 @@ mod tests {
         // Parent filters are still blocked in the Post phase.
         assert!(matches!(
             desc.parent_filters()[0][0].discriminant,
-            PushedDown::No
+            PushedDown::Unsupported
         ));
         // But the TopK self-filter should be pushed down.
         assert_eq!(desc.self_filters()[0].len(), 1);

@@ -190,6 +190,11 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// [`Self::eq_properties`] and output of any projections pushed into the
     /// source), not the original table schema.
     ///
+    /// Return [`PushedDown::Exact`] for predicates applied as row filters,
+    /// [`PushedDown::Inexact`] for predicates retained only for uses such as
+    /// statistics pruning, and [`PushedDown::Unsupported`] for predicates that
+    /// are not retained at all.
+    ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
     /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
@@ -199,7 +204,7 @@ pub trait DataSource: Any + Send + Sync + Debug {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            vec![PushedDown::No; filters.len()],
+            vec![PushedDown::Unsupported; filters.len()],
         ))
     }
 

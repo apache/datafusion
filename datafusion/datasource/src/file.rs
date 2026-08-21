@@ -187,13 +187,15 @@ pub trait FileSource: Any + Send + Sync {
     /// plus partition columns), before any projection is applied.
     ///
     /// Any filters that this FileSource chooses to evaluate itself should be
-    /// returned as `PushedDown::Yes` in the result, along with a FileSource
+    /// returned as `PushedDown::Exact` in the result, along with a FileSource
     /// instance that incorporates those filters. Such filters are logically
     /// applied "during" the file scan, meaning they may refer to columns not
     /// included in the final output projection.
     ///
-    /// Filters that cannot be pushed down should be marked as `PushedDown::No`,
-    /// and will be evaluated by an execution plan after the file source.
+    /// Filters retained only for pruning should be marked as
+    /// `PushedDown::Inexact`. Filters that are not retained at all should be
+    /// marked as `PushedDown::Unsupported`. Both will be evaluated by an
+    /// execution plan after the file source.
     ///
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
     ///
@@ -204,7 +206,7 @@ pub trait FileSource: Any + Send + Sync {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            vec![PushedDown::No; filters.len()],
+            vec![PushedDown::Unsupported; filters.len()],
         ))
     }
 

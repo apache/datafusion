@@ -1892,7 +1892,7 @@ mod tests {
             format!("{}", expected_filter)
         );
         // Verify the predicate was actually pushed down
-        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Exact));
 
         Ok(())
     }
@@ -1971,8 +1971,8 @@ mod tests {
             format!("{}", expected_filter2)
         );
         // Verify the predicates were actually pushed down
-        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
-        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Exact));
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Exact));
 
         Ok(())
     }
@@ -2037,8 +2037,8 @@ mod tests {
         assert_eq!(format!("{}", pushed_filters[0].predicate), expected_filter1);
         assert_eq!(format!("{}", pushed_filters[1].predicate), expected_filter2);
         // Verify the predicates were actually pushed down
-        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
-        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Exact));
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Exact));
 
         Ok(())
     }
@@ -2102,8 +2102,8 @@ mod tests {
         assert_eq!(format!("{}", pushed_filters[0].predicate), expected_filter1);
         assert_eq!(format!("{}", pushed_filters[1].predicate), expected_filter2);
         // Verify the predicates were actually pushed down
-        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
-        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Exact));
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Exact));
 
         Ok(())
     }
@@ -2147,7 +2147,7 @@ mod tests {
 
         // expand to `a + 1 > 10`
         let pushed_filters = &description.parent_filters()[0];
-        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Exact));
         assert_eq!(format!("{}", pushed_filters[0].predicate), "a@0 + 1 > 10");
 
         Ok(())
@@ -2188,7 +2188,10 @@ mod tests {
         )?;
 
         let pushed_filters = &description.parent_filters()[0];
-        assert!(matches!(pushed_filters[0].discriminant, PushedDown::No));
+        assert!(matches!(
+            pushed_filters[0].discriminant,
+            PushedDown::Unsupported
+        ));
         // The column shouldn't be found in the alias map, so it remains unchanged with its index
         assert_eq!(
             format!("{}", pushed_filters[0].predicate),

@@ -152,7 +152,7 @@ impl VirtualColumnsState {
 ///   the predicate references a virtual column. The contract is that callers
 ///   route filters through
 ///   [`ParquetSource::try_pushdown_filters`](crate::source::ParquetSource),
-///   which classifies virtual-col filters as `PushedDown::No`. Erroring here
+///   which classifies virtual-col filters as `PushedDown::Unsupported`. Erroring here
 ///   prevents silent wrong results for callers that bypass that path and set
 ///   the predicate directly on `ParquetSource`.
 ///
