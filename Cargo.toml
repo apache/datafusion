@@ -275,7 +275,6 @@ cast_possible_truncation = "allow"            # 911 hits
 cast_possible_wrap = "allow"                  # 493 hits
 cast_precision_loss = "allow"                 # 266 hits
 cast_sign_loss = "allow"                      # 440 hits
-cloned_instead_of_copied = "allow"            # 38 hits
 default_trait_access = "allow"                # 221 hits
 doc_comment_double_space_linebreaks = "allow" # 6 hits
 doc_markdown = "allow"                        # 4933 hits; needs a long `doc-valid-idents` list in `clippy.toml`
