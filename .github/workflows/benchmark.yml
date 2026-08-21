@@ -93,7 +93,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
       - name: Install tpchgen-cli
-        run: cargo install tpchgen-cli --locked
+        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        with:
+          # pinned, so the generated data does not change under the benchmark
+          tool: tpchgen-cli@3.0.0
       - name: Resolve base commit
         id: base
         env:
