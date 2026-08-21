@@ -567,7 +567,7 @@ pub fn is_supported_heap_type(vt: &DataType) -> bool {
 pub fn new_heap(
     limit: usize,
     desc: bool,
-    vt: DataType,
+    vt: &DataType,
 ) -> Result<Box<dyn ArrowHeap + Send>> {
     macro_rules! downcast_helper {
         ($vt:ty, $d:ident) => {
