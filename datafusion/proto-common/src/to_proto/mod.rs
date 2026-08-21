@@ -933,6 +933,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
+            enable_rle_to_dictionary: value.enable_rle_to_dictionary,
         })
     }
 }
