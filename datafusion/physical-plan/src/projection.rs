@@ -187,7 +187,7 @@ impl ProjectionExec {
     /// letting [`EquivalenceProperties::project_reusing`] skip reprojecting a
     /// group that has not changed.
     ///
-    /// [`EquivalenceGroup::project`] is a pure function of the group and the
+    /// Projecting an equivalence group is a pure function of the group and the
     /// mapping, so reuse is sound exactly when both are unchanged.
     ///
     /// The caller establishes the first by comparing the old and new child
