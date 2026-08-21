@@ -867,9 +867,9 @@ impl ExecutionPlan for FilterExec {
         } = self;
         let input_node = ctx.encode_child(input)?;
         let expr = ctx.encode_expr(predicate)?;
-        // Preserve the exact wire format: `None` (full projection) is serialized
-        // as the identity projection `[0, 1, ..., num_fields - 1]` so that it is
-        // distinguishable from an explicit projection on decode.
+        // The identity projection `[0, 1, ..., num_fields - 1]` is the
+        // canonical wire representation of a full projection, so `None` is
+        // encoded that way (and decodes back to `None`).
         let projection = if let Some(v) = projection {
             v.iter().map(|x| *x as u32).collect()
         } else {
