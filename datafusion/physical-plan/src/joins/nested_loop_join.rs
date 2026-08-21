@@ -1652,19 +1652,14 @@ impl NestedLoopJoinStream {
     /// it to disk. Other partitions share the same spill file.
     fn initiate_fallback(&mut self) -> Result<()> {
         // Take ownership of Pending state
-        let (left_plan, context, left_spill_data) =
-            match std::mem::replace(&mut self.spill_state, SpillState::Disabled) {
-                SpillState::Pending {
-                    left_plan,
-                    task_context,
-                    left_spill_data,
-                } => (left_plan, task_context, left_spill_data),
-                _ => {
-                    return internal_err!(
-                        "initiate_fallback called in non-Pending spill state"
-                    );
-                }
-            };
+        let SpillState::Pending {
+            left_plan,
+            task_context: context,
+            left_spill_data,
+        } = std::mem::replace(&mut self.spill_state, SpillState::Disabled)
+        else {
+            return internal_err!("initiate_fallback called in non-Pending spill state");
+        };
 
         // Use OnceAsync to ensure only the first partition spills the left
         // side. Other partitions will get the same OnceFut that resolves
@@ -2985,7 +2980,7 @@ fn build_row_join_batch(
     // in `col_indices`
     build_side: JoinSide,
 ) -> Result<Option<RecordBatch>> {
-    debug_assert!(build_side != JoinSide::None);
+    debug_assert_ne!(build_side, JoinSide::None);
 
     // TODO(perf): since the output might be projection of right batch, this
     // filtering step is more efficient to be done inside the column_index loop
@@ -3242,7 +3237,7 @@ fn build_unmatched_batch(
                 Vec::with_capacity(output_schema.fields().len());
 
             for column_index in col_indices {
-                debug_assert!(column_index.side == batch_side);
+                debug_assert_eq!(column_index.side, batch_side);
 
                 let col = batch.column(column_index.index);
                 let filtered_col = filter(col, &bitmap)?;

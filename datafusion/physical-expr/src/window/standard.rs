@@ -184,9 +184,8 @@ impl WindowExpr for StandardWindowExpr {
             if window_state.state.is_input_unchanged(partition_batch_state) {
                 continue;
             }
-            let evaluator = match &mut window_state.window_fn {
-                WindowFn::Builtin(evaluator) => evaluator,
-                _ => unreachable!(),
+            let WindowFn::Builtin(evaluator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
 

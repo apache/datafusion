@@ -3790,17 +3790,25 @@ mod tests {
 
     #[test]
     fn simplify_scalar_subquery_is_null() {
-        let subquery = LogicalPlanBuilder::empty(false)
+        let possibly_empty = LogicalPlanBuilder::empty(false)
             .project(vec![lit(1)])
             .unwrap()
             .build()
             .unwrap();
-        let scalar_subquery = scalar_subquery(Arc::new(subquery));
+        let possibly_empty = scalar_subquery(Arc::new(possibly_empty));
 
         assert_eq!(
-            simplify(scalar_subquery.clone().is_null()),
-            scalar_subquery.is_null()
+            simplify(possibly_empty.clone().is_null()),
+            possibly_empty.is_null()
         );
+
+        let always_one = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let always_one = scalar_subquery(Arc::new(always_one));
+        assert_eq!(simplify(always_one.is_null()), lit(false));
     }
 
     #[test]
