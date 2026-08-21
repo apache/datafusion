@@ -30,7 +30,6 @@ pub struct PriorityMap {
     heap: Box<dyn ArrowHeap + Send>,
     capacity: usize,
     mapper: Vec<(usize, usize)>,
-    val_type: DataType,
     /// Mirror of the map's all-NULL group count, kept as a plain field so the
     /// per-row `insert` path can check it without a `dyn` call (measured to
     /// regress the topk_aggregate benchmarks when read through the trait)
@@ -46,10 +45,9 @@ impl PriorityMap {
     ) -> Result<Self> {
         Ok(Self {
             map: new_hash_table(capacity, key_type)?,
-            heap: new_heap(capacity, descending, &val_type)?,
+            heap: new_heap(capacity, descending, val_type)?,
             capacity,
             mapper: Vec::with_capacity(capacity),
-            val_type,
             null_count: 0,
         })
     }
@@ -140,7 +138,7 @@ impl PriorityMap {
             vals
         } else {
             map_idxs.extend(null_idxs.iter().copied());
-            let nulls = new_null_array(&self.val_type, null_idxs.len());
+            let nulls = new_null_array(self.heap.value_type(), null_idxs.len());
             concat(&[vals.as_ref(), nulls.as_ref()])?
         };
         let ids = self.map.take_all(map_idxs);

@@ -75,6 +75,7 @@ struct TopKHeap<VAL: ValueType> {
 
 /// An interface to hide the generic type signature of TopKHeap behind arrow arrays
 pub trait ArrowHeap {
+    fn value_type(&self) -> &DataType;
     fn set_batch(&mut self, vals: ArrayRef);
     fn is_worse(&self, idx: usize) -> bool;
     fn worst_map_idx(&self) -> usize;
@@ -96,18 +97,19 @@ where
     batch: PrimitiveArray<VAL>,
     heap: TopKHeap<VAL::Native>,
     desc: bool,
+    value_type: DataType,
 }
 
 impl<VAL: ArrowPrimitiveType> PrimitiveHeap<VAL>
 where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
-    pub fn new(limit: usize, desc: bool) -> Self {
-        let batch = PrimitiveArray::<VAL>::new_null(0);
+    pub fn new(limit: usize, desc: bool, value_type: DataType) -> Self {
         Self {
-            batch,
+            batch: PrimitiveArray::<VAL>::new_null(0).with_data_type(value_type.clone()),
             heap: TopKHeap::new(limit, desc),
             desc,
+            value_type,
         }
     }
 }
@@ -116,6 +118,10 @@ impl<VAL: ArrowPrimitiveType> ArrowHeap for PrimitiveHeap<VAL>
 where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
+    fn value_type(&self) -> &DataType {
+        &self.value_type
+    }
+
     fn set_batch(&mut self, vals: ArrayRef) {
         self.batch = vals.as_primitive().clone();
     }
@@ -152,7 +158,7 @@ where
         let nulls = None;
         let (vals, map_idxs) = self.heap.drain();
         let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
-            .with_data_type(self.batch.data_type().clone());
+            .with_data_type(self.value_type.clone());
         (Arc::new(arr), map_idxs)
     }
 }
@@ -193,6 +199,11 @@ where
     S: Array + Clone + From<Vec<Option<String>>> + 'static,
     for<'a> &'a S: StringArrayType<'a>,
 {
+    fn value_type(&self) -> &DataType {
+        // Strings don't store any metadata.
+        self.batch.data_type()
+    }
+
     fn set_batch(&mut self, vals: ArrayRef) {
         self.batch = vals
             .as_any()
@@ -567,11 +578,11 @@ pub fn is_supported_heap_type(vt: &DataType) -> bool {
 pub fn new_heap(
     limit: usize,
     desc: bool,
-    vt: &DataType,
+    vt: DataType,
 ) -> Result<Box<dyn ArrowHeap + Send>> {
     macro_rules! downcast_helper {
         ($vt:ty, $d:ident) => {
-            return Ok(Box::new(PrimitiveHeap::<$vt>::new(limit, desc)))
+            return Ok(Box::new(PrimitiveHeap::<$vt>::new(limit, desc, vt)))
         };
     }
 
