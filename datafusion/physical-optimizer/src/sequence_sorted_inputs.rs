@@ -66,11 +66,12 @@ impl PhysicalOptimizerRule for SequenceSortedInputs {
             else {
                 return Ok(Transformed::no(plan));
             };
+            let input = preserve_input_order(Arc::clone(input))?;
             let ordered_input =
                 if permutation.iter().enumerate().all(|(idx, &src)| idx == src) {
-                    Arc::clone(input)
+                    input
                 } else {
-                    Arc::new(ReorderPartitionsExec::new(Arc::clone(input), permutation))
+                    Arc::new(ReorderPartitionsExec::new(input, permutation))
                         as Arc<dyn ExecutionPlan>
                 };
             let replacement = ProgressiveEvalExec::new(ordered_input, merge.fetch());
@@ -86,6 +87,17 @@ impl PhysicalOptimizerRule for SequenceSortedInputs {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Mark every node in `plan` as order-sensitive, so data sources keep their
+/// partition-to-data mapping.
+/// Otherwise, work stealing can modify which files end up being read in a given partition.
+fn preserve_input_order(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_down(|plan| match plan.with_preserve_order(true) {
+        Some(pinned) => Ok(Transformed::yes(pinned)),
+        None => Ok(Transformed::no(plan)),
+    })
+    .data()
 }
 
 /// Per-partition ordering statistics: the (start, end) value of each sort
