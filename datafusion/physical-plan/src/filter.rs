@@ -850,15 +850,30 @@ impl ExecutionPlan for FilterExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = ctx.encode_expr(self.predicate())?;
-        // Preserve the exact wire format: `None` (full projection) is serialized
-        // as the identity projection `[0, 1, ..., num_fields - 1]` so that it is
-        // distinguishable from an explicit projection on decode.
-        let projection = if let Some(v) = self.projection() {
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `FilterExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            predicate,
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            default_selectivity,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            projection,
+            batch_size,
+            fetch,
+        } = self;
+        let input_node = ctx.encode_child(input)?;
+        let expr = ctx.encode_expr(predicate)?;
+        // The identity projection `[0, 1, ..., num_fields - 1]` is the
+        // canonical wire representation of a full projection, so `None` is
+        // encoded that way (and decodes back to `None`).
+        let projection = if let Some(v) = projection {
             v.iter().map(|x| *x as u32).collect()
         } else {
-            (0..self.input().schema().fields().len())
+            (0..input.schema().fields().len())
                 .map(|i| i as u32)
                 .collect()
         };
@@ -866,12 +881,12 @@ impl ExecutionPlan for FilterExec {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Filter(Box::new(
                     protobuf::FilterExecNode {
-                        input: Some(Box::new(input)),
+                        input: Some(Box::new(input_node)),
                         expr: Some(expr),
-                        default_filter_selectivity: self.default_selectivity() as u32,
+                        default_filter_selectivity: *default_selectivity as u32,
                         projection,
-                        batch_size: self.batch_size() as u32,
-                        fetch: self.fetch().map(|f| f as u32),
+                        batch_size: *batch_size as u32,
+                        fetch: fetch.map(|f| f as u32),
                     },
                 )),
             ),
@@ -893,28 +908,37 @@ impl FilterExec {
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion_proto_models::protobuf;
-        let filter = crate::expect_plan_variant!(
+        let filter_node = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Filter,
             "FilterExec",
         );
-        let input =
-            ctx.decode_required_child(filter.input.as_deref(), "FilterExec", "input")?;
+        // Destructure exhaustively so that a new field on `FilterExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::FilterExecNode {
+            input,
+            expr,
+            default_filter_selectivity,
+            projection,
+            batch_size,
+            fetch,
+        } = &**filter_node;
+        let input = ctx.decode_required_child(input.as_deref(), "FilterExec", "input")?;
         let predicate = ctx.decode_required_expr(
-            filter.expr.as_ref(),
+            expr.as_ref(),
             input.schema().as_ref(),
             "FilterExec",
             "expr",
         )?;
-        let filter_selectivity = filter.default_filter_selectivity.try_into();
+        let filter_selectivity = (*default_filter_selectivity).try_into();
 
         // `None` is encoded as the full identity projection. Reconstruct it only
         // when all input columns are present in order, leaving an empty list as
         // `Some(vec![])`.
         let num_fields = input.schema().fields().len();
-        let mut is_full_projection = filter.projection.len() == num_fields;
-        let mut projection_vec: Vec<usize> = Vec::with_capacity(filter.projection.len());
-        for (i, idx) in filter.projection.iter().enumerate() {
+        let mut is_full_projection = projection.len() == num_fields;
+        let mut projection_vec: Vec<usize> = Vec::with_capacity(projection.len());
+        for (i, idx) in projection.iter().enumerate() {
             let idx = *idx as usize;
             is_full_projection &= idx == i;
             projection_vec.push(idx);
@@ -926,8 +950,8 @@ impl FilterExec {
         };
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
-            .with_batch_size(filter.batch_size as usize)
-            .with_fetch(filter.fetch.map(|f| f as usize))
+            .with_batch_size(*batch_size as usize)
+            .with_fetch(fetch.map(|f| f as usize))
             .build()?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
