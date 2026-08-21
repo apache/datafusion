@@ -7070,7 +7070,7 @@ query TI
 SELECT x, COUNT(*) OVER (ORDER BY x)
 FROM (VALUES (arrow_cast(arrow_cast('01:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
              (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
-             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond)))'))) t(x)
+             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))'))) t(x)
 ORDER BY x
 ----
 01:00:00 1
