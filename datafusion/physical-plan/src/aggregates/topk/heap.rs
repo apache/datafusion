@@ -25,8 +25,7 @@
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, LargeStringArray, PrimitiveArray,
-    StringArray, StringArrayType, StringViewArray, downcast_primitive,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, AsArray, LargeStringArray, PrimitiveArray, StringArray, StringArrayType, StringViewArray, downcast_primitive,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, i256};
@@ -103,7 +102,7 @@ where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
     pub fn new(limit: usize, desc: bool) -> Self {
-        let batch = PrimitiveArray::<VAL>::builder(0).finish();
+        let batch = PrimitiveArray::<VAL>::new_null(0);
         Self {
             batch,
             heap: TopKHeap::new(limit, desc),
@@ -117,7 +116,7 @@ where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
     fn set_batch(&mut self, vals: ArrayRef) {
-        self.batch = PrimitiveArray::from(vals.to_data());
+        self.batch = vals.as_primitive().clone();
     }
 
     fn is_worse(&self, row_idx: usize) -> bool {
