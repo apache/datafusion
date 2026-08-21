@@ -15,10 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Catches performance regressions by running TPC-H SF1 twice on the same
-# machine: once for the base branch, once for the PR merged into it. Only the
-# ratio between the two runs is used, so the (shared, virtualized) runner does
-# not have to be fast -- just consistent for the duration of the job.
+# Catches performance regressions by running TPC-H SF1 for the base branch and
+# for the PR merged into it, then failing when the PR is slower than the
+# configured limits allow.
+#
+# The two binaries are built by two jobs, on a runner each, and both are then
+# measured by a third job on one machine: building is embarrassingly parallel,
+# while comparing timings taken on different machines is meaningless.
 
 name: Benchmarks
 
@@ -26,9 +29,9 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# Two release builds plus two benchmark runs take about an hour, and benchmarks
-# on shared runners are noisy, so this is opt-in: add the `performance` label to
-# a PR, or start it by hand from the Actions tab.
+# The builds and the benchmark runs add up to roughly half an hour of runner
+# time, and benchmarks on shared runners are noisy, so this is opt-in: add the
+# `performance` label to a PR, or start it by hand from the Actions tab.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -57,60 +60,44 @@ on:
 permissions:
   contents: read
 
+env:
+  # `release-nonlto` is `release` with `lto = false` and 16 codegen units. Fat
+  # LTO with a single codegen unit roughly doubles the build, and both sides are
+  # built identically, so the ratio the gate looks at still holds. Dispatch with
+  # `release` when a change is expected to interact with cross-crate inlining,
+  # or to get numbers comparable with locally posted `bench.sh` results.
+  CARGO_PROFILE: ${{ inputs.profile || 'release-nonlto' }}
+  ITERATIONS: ${{ inputs.iterations || '5' }}
+  QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
+  TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
+  # `benchmark_runner` finds `sql_benchmarks` through the CARGO_MANIFEST_DIR
+  # baked into it at compile time, so a binary built in one job only works in
+  # another if its tree sits at the same absolute path there. Every job below
+  # puts the two trees under this root, which is why it is a fixed path rather
+  # than something derived from the workspace or the runner.
+  BENCH_ROOT: /tmp/df-bench
+  # Same cargo network settings as .github/actions/setup-rust-runtime, without
+  # its RUSTFLAGS: benchmark binaries are built with the defaults.
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_RETRY: "10"
+
 jobs:
-  tpch-sf1:
-    name: TPC-H SF1 (PR vs base)
+  # Resolved once, so the three jobs below cannot disagree about what "base" is.
+  resolve:
+    name: resolve base commit
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'performance')
-    # A single job, so both binaries are measured on the same machine.
-    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
-    # note: no rust container, so both binaries are built the way a
-    # developer's `benchmarks/bench.sh` run builds them
-    timeout-minutes: 150
-    env:
-      # `release-nonlto` is `release` with `lto = false` and 16 codegen units.
-      # Building is what dominates this job, and fat LTO with one codegen unit
-      # roughly doubles it; both sides are built identically, so the ratio the
-      # gate looks at still holds. Dispatch with `release` when a change is
-      # expected to interact with cross-crate inlining, or to get numbers
-      # comparable with locally posted `bench.sh` results.
-      CARGO_PROFILE: ${{ inputs.profile || 'release-nonlto' }}
-      ITERATIONS: ${{ inputs.iterations || '5' }}
-      QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
-      TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
-      # Same cargo network settings as .github/actions/setup-rust-runtime,
-      # without its RUSTFLAGS: benchmark binaries are built with the defaults.
-      CARGO_HTTP_MULTIPLEXING: "false"
-      CARGO_NET_RETRY: "10"
-      CARGO_HTTP_RETRY: "10"
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=2,image=ubuntu24-full-x64,extras=s3-cache,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    outputs:
+      base_sha: ${{ steps.base.outputs.sha }}
     steps:
       - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # For `pull_request` this is the PR already merged into the base
-          # branch. Full history so the base commit can be built as well.
-          fetch-depth: 0
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
-      - name: Configure paths
-        run: |
-          echo "DATA_DIR=$RUNNER_TEMP/bench-data" >> "$GITHUB_ENV"
-          echo "RESULTS_DIR=$RUNNER_TEMP/results" >> "$GITHUB_ENV"
-      - name: Install Rust
-        run: |
-          if ! command -v rustup > /dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-            export PATH="$HOME/.cargo/bin:$PATH"
-          fi
-          # installs the channel pinned by rust-toolchain.toml
-          rustup toolchain install
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-      - name: Install tpchgen-cli
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
-        with:
-          # pinned, so the generated data does not change under the benchmark
-          tool: tpchgen-cli@3.0.0
+          # branch; depth 2 is enough to also reach the merge's first parent.
+          fetch-depth: 2
       - name: Resolve base commit
         id: base
         env:
@@ -124,15 +111,130 @@ jobs:
             base_sha=$(git rev-parse "HEAD^1")
           else
             # Manual run on a branch: compare it as-is against the base tip.
-            git fetch --no-tags origin "$BASE_REF"
+            git fetch --no-tags --depth 1 origin "$BASE_REF"
             base_sha=$(git rev-parse FETCH_HEAD)
             echo "HEAD is not a merge commit, comparing it as-is against $BASE_REF"
           fi
           echo "sha=${base_sha}" >> "$GITHUB_OUTPUT"
           echo "base:      ${base_sha} $(git log -1 --format=%s "${base_sha}")"
           echo "candidate: $(git rev-parse HEAD) $(git log -1 --format=%s HEAD)"
-      - name: Check out base commit
-        run: git worktree add --detach "$RUNNER_TEMP/base" "${{ steps.base.outputs.sha }}"
+
+  # One runner per side, so the two builds really do run at the same time.
+  build:
+    name: build ${{ matrix.side }} runner
+    needs: resolve
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    strategy:
+      # No point in building one side if the other one is broken.
+      fail-fast: true
+      matrix:
+        side: [base, pr]
+    steps:
+      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+      - name: Install Rust
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          # installs the channel pinned by rust-toolchain.toml
+          rustup toolchain install
+      - name: Check out the ${{ matrix.side }} tree
+        env:
+          SIDE: ${{ matrix.side }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+        run: |
+          if [ "$SIDE" = "base" ]; then
+            git worktree add --detach "$BENCH_ROOT/$SIDE" "$BASE_SHA"
+          else
+            git worktree add --detach "$BENCH_ROOT/$SIDE" HEAD
+          fi
+      - name: Build benchmark_runner
+        env:
+          SIDE: ${{ matrix.side }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target
+        run: |
+          cd "$BENCH_ROOT/$SIDE"
+          cargo build --profile "$CARGO_PROFILE" -p datafusion-benchmarks --bin benchmark_runner
+          cp "$CARGO_TARGET_DIR/$CARGO_PROFILE/benchmark_runner" "$RUNNER_TEMP/benchmark_runner"
+      - name: Upload benchmark_runner
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: benchmark_runner-${{ matrix.side }}
+          path: ${{ runner.temp }}/benchmark_runner
+          retention-days: 1
+
+  # Both sides are measured here, on this one machine, back to back.
+  benchmark:
+    name: TPC-H SF1 (PR vs base)
+    needs: [resolve, build]
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    steps:
+      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Configure paths
+        run: |
+          echo "DATA_DIR=$RUNNER_TEMP/bench-data" >> "$GITHUB_ENV"
+          echo "RESULTS_DIR=$RUNNER_TEMP/results" >> "$GITHUB_ENV"
+      - name: Check out both trees
+        env:
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+        run: |
+          # The same paths the build jobs used, so each binary finds the
+          # `sql_benchmarks` directory of the tree it was built from.
+          git worktree add --detach "$BENCH_ROOT/base" "$BASE_SHA"
+          git worktree add --detach "$BENCH_ROOT/pr" HEAD
+      - name: Download base benchmark_runner
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: benchmark_runner-base
+          path: ${{ runner.temp }}/bin/base
+      - name: Download PR benchmark_runner
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: benchmark_runner-pr
+          path: ${{ runner.temp }}/bin/pr
+      - name: Check both runners see their queries
+        run: |
+          # Artifacts do not carry the executable bit, and a binary whose tree
+          # is missing at the path baked into it would discover no benchmark at
+          # all -- fail here rather than three steps later.
+          for side in base pr; do
+            binary="$RUNNER_TEMP/bin/$side/benchmark_runner"
+            chmod +x "$binary"
+            if ! "$binary" --list | grep -qE '^[[:space:]]+tpch[[:space:]]'; then
+              echo "::error::the $side runner does not see the tpch suite at $BENCH_ROOT/$side/benchmarks"
+              "$binary" --list
+              exit 1
+            fi
+          done
+      - name: Install Rust
+        # Only so tpchgen-cli can be built from source if no prebuilt binary
+        # matches this runner; nothing here is compiled otherwise.
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+      - name: Install tpchgen-cli
+        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        with:
+          # pinned, so the generated data does not change under the benchmark
+          tool: tpchgen-cli@3.0.0
       - name: Generate TPC-H SF1 data
         # Same generator settings as `bench.sh data tpch`, inlined because that
         # path also downloads the expected answers through `docker run -it`,
@@ -145,52 +247,20 @@ jobs:
             --parquet-compression 'ZSTD(1)' \
             --parts=1 \
             --output-dir "$DATA_DIR/tpch_sf1"
-      - name: Build both benchmark runners
-        # Concurrently, since neither build keeps every core busy on its own.
-        # They need a target directory each: cargo locks one exclusively, so
-        # sharing it would serialize the two.
-        run: |
-          build() {
-            (cd "$1" && CARGO_TARGET_DIR="$2" cargo build \
-              --profile "$CARGO_PROFILE" \
-              -p datafusion-benchmarks \
-              --bin benchmark_runner) > "$3" 2>&1
-          }
-          build "$RUNNER_TEMP/base" "$RUNNER_TEMP/target-base" "$RUNNER_TEMP/build-base.log" &
-          base_pid=$!
-          build "$GITHUB_WORKSPACE" "$RUNNER_TEMP/target-pr" "$RUNNER_TEMP/build-pr.log" &
-          pr_pid=$!
-          base_status=0
-          wait "$base_pid" || base_status=$?
-          pr_status=0
-          wait "$pr_pid" || pr_status=$?
-          # The two logs would be interleaved line by line without this.
-          echo "::group::base build"
-          cat "$RUNNER_TEMP/build-base.log"
-          echo "::endgroup::"
-          echo "::group::PR build"
-          cat "$RUNNER_TEMP/build-pr.log"
-          echo "::endgroup::"
-          if [ "$base_status" -ne 0 ] || [ "$pr_status" -ne 0 ]; then
-            echo "::error::benchmark_runner did not build (base: $base_status, PR: $pr_status)"
-            exit 1
-          fi
-      # Each runner reads the queries of the tree it was built from (they are
-      # resolved relative to its own `benchmarks` directory), and both read the
-      # one generated dataset.
+      # Each side runs from its own tree and reads the one generated dataset.
       - name: Benchmark base
-        working-directory: ${{ runner.temp }}/base/benchmarks
         run: |
-          "$RUNNER_TEMP/target-base/$CARGO_PROFILE/benchmark_runner" tpch \
+          cd "$BENCH_ROOT/base/benchmarks"
+          "$RUNNER_TEMP/bin/base/benchmark_runner" tpch \
             --scale-factor 1 \
             --format parquet \
             --iterations "$ITERATIONS" \
             --path "$DATA_DIR" \
             --output "$RESULTS_DIR/base/tpch_sf1.json"
       - name: Benchmark PR
-        working-directory: benchmarks
         run: |
-          "$RUNNER_TEMP/target-pr/$CARGO_PROFILE/benchmark_runner" tpch \
+          cd "$BENCH_ROOT/pr/benchmarks"
+          "$RUNNER_TEMP/bin/pr/benchmark_runner" tpch \
             --scale-factor 1 \
             --format parquet \
             --iterations "$ITERATIONS" \
@@ -208,7 +278,7 @@ jobs:
             > "$RESULTS_DIR/comparison.txt" 2>&1 || status=$?
           cat "$RESULTS_DIR/comparison.txt"
           {
-            echo "### TPC-H SF1: base (${{ steps.base.outputs.sha }}) vs PR"
+            echo "### TPC-H SF1: base (${{ needs.resolve.outputs.base_sha }}) vs PR"
             echo
             echo "\`$ITERATIONS\` iterations per query; the fastest of each is compared, to keep runner noise out of the ratio."
             echo "Fails above \`${QUERY_REGRESSION}x\` for a single query or \`${TOTAL_REGRESSION}x\` in total."

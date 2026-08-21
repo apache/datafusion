@@ -268,13 +268,26 @@ opt-in, because two builds plus two benchmark runs still take a good half hour:
 - start it from the Actions tab (`workflow_dispatch`), where the iteration
   count, both regression limits, and the cargo profile can be overridden
 
-The two binaries are built concurrently, with the `release-nonlto` profile
-(`release`, but with `lto = false` and 16 codegen units), which is what makes
-that half hour possible -- fat LTO with a single codegen unit roughly doubles
-the build. Both sides are built identically, so the ratio the gate looks at
-still holds. Dispatch the workflow with the `release` profile when a change is
-expected to interact with cross-crate inlining, or when the absolute numbers
+The workflow is three jobs: one resolves the base commit, two build a
+`benchmark_runner` each (one runner per side, so the builds really are
+simultaneous), and the last one measures both binaries back to back on a single
+machine, because timings taken on two different machines cannot be compared.
+
+Both sides are built with the `release-nonlto` profile (`release`, but with
+`lto = false` and 16 codegen units), which together with the split is what
+keeps this to half an hour -- fat LTO with a single codegen unit roughly
+doubles a build. Both sides are built identically, so the ratio the gate looks
+at still holds. Dispatch the workflow with the `release` profile when a change
+is expected to interact with cross-crate inlining, or when the absolute numbers
 should line up with locally posted `bench.sh` results.
+
+Shipping a binary between jobs has one catch worth knowing about if you edit
+the workflow: `benchmark_runner` locates `sql_benchmarks` through the
+`CARGO_MANIFEST_DIR` baked into it at compile time, so each side's checkout has
+to sit at the same absolute path in the job that builds it and in the job that
+runs it. The workflow puts both under a fixed `/tmp` root for that reason, and
+checks that each binary can still see the `tpch` suite before it starts
+measuring.
 
 The comparison table is written to the job summary, and the two result JSON
 files plus the table are uploaded as the `tpch-sf1-comparison` artifact.
