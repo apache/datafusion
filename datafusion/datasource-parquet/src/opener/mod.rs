@@ -1630,8 +1630,8 @@ impl RowGroupsPrunedParquetOpen {
     }
 }
 
-/// The on-disk size of a row group, as credited to
-/// [`ParquetFileMetrics::bytes_processed`].
+/// The on-disk size of a row group, as credited to the `bytes_processed` metric documented on
+/// [`ParquetFileMetrics`].
 fn row_group_bytes(rg_meta: &RowGroupMetaData) -> u64 {
     u64::try_from(rg_meta.compressed_size()).unwrap_or(0)
 }

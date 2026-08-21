@@ -110,10 +110,10 @@ impl DecoderBuilderConfig<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
     pub(crate) rg_index: usize,
-    /// On-disk size of this row group, credited to
-    /// [`ParquetFileMetrics::bytes_processed`] once the scan is done with it.
+    /// On-disk size of this row group, credited to the `bytes_processed` metric documented on
+    /// [`ParquetFileMetrics`] once the scan is done with it.
     ///
-    /// [`ParquetFileMetrics::bytes_processed`]: crate::ParquetFileMetrics::bytes_processed
+    /// [`ParquetFileMetrics`]: crate::ParquetFileMetrics
     pub(crate) bytes: u64,
 }
 

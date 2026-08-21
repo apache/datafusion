@@ -27,6 +27,31 @@ use datafusion_physical_plan::metrics::{
 /// This component is a subject to **change** in near future and is exposed for low level integrations
 /// through [`ParquetFileReaderFactory`].
 ///
+/// # The `bytes_processed` metric
+///
+/// Not every metric the parquet scan reports is a field on this struct. `bytes_processed` — the
+/// number of bytes the scan is finished with, whether it read them or proved by pruning that it
+/// did not need them — is registered straight onto the plan's metrics set, because only the
+/// internal progress guard ever touches it and a public field here would make every future
+/// metric a breaking change for anyone building this struct with a literal.
+///
+/// Read it the way `EXPLAIN ANALYZE` does, by name off the plan's metrics:
+///
+/// ```no_run
+/// # use datafusion_physical_plan::ExecutionPlan;
+/// # fn completion_fraction(plan: &dyn ExecutionPlan, total_file_bytes: u64) -> Option<f64> {
+/// let processed = plan.metrics()?.sum_by_name("bytes_processed")?.as_usize();
+/// Some(processed as f64 / total_file_bytes as f64)
+/// # }
+/// ```
+///
+/// Over the life of a file — or of one byte range of a file split for parallelism — it advances
+/// by exactly that file's size, which is what makes the ratio above a completion fraction rather
+/// than just another counter. Note that it measures work *resolved*, not time spent: bytes that
+/// pruning removes are credited the moment they are proved unnecessary, and proving that is
+/// nearly free. It is the right numerator for a progress bar, and only a rough one for
+/// predicting how much longer a query will take.
+///
 /// [`ParquetFileReaderFactory`]: super::ParquetFileReaderFactory
 #[derive(Debug, Clone)]
 pub struct ParquetFileMetrics {
@@ -104,7 +129,7 @@ pub struct ParquetFileMetrics {
 }
 
 /// Tracks how much of one file — or one byte range of a file — a scan has
-/// finished with, crediting [`ParquetFileMetrics::bytes_processed`] as it goes.
+/// finished with, crediting [`ParquetFileMetrics`]'s `bytes_processed` as it goes.
 ///
 /// Every credit is clamped to the bytes left in the budget, and whatever is
 /// left over is credited on drop. The counter therefore advances by exactly the
