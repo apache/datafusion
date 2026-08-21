@@ -970,14 +970,13 @@ async fn run_roundtrip_tests<F, Fut>(
             println!("\x1b[32m✓\x1b[0m {} query: {}", suite_name, sql.name);
         }
     }
-    if !errors.is_empty() {
-        panic!(
-            "{} {} test(s) failed:\n\n{}",
-            errors.len(),
-            suite_name,
-            errors.join("\n\n---\n\n")
-        );
-    }
+    assert!(
+        errors.is_empty(),
+        "{} {} test(s) failed:\n\n{}",
+        errors.len(),
+        suite_name,
+        errors.join("\n\n---\n\n")
+    )
 }
 
 #[tokio::test]

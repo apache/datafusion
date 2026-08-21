@@ -630,7 +630,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             inputs: &[Arc<dyn PhysicalExpr>],
             _ctx: &PhysicalExprDecodeCtx<'_>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
-            if buf == "CustomPredicateExpr".as_bytes() {
+            if buf == b"CustomPredicateExpr" {
                 Ok(Arc::new(CustomPredicateExpr {
                     inner: inputs[0].clone(),
                 }))
@@ -646,7 +646,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _ctx: &PhysicalExprEncodeCtx<'_>,
         ) -> Result<()> {
             if node.downcast_ref::<CustomPredicateExpr>().is_some() {
-                buf.extend_from_slice("CustomPredicateExpr".as_bytes());
+                buf.extend_from_slice(b"CustomPredicateExpr");
                 Ok(())
             } else {
                 internal_err!("Not supported")

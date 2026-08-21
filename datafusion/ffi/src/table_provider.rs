@@ -689,14 +689,11 @@ impl TableProvider for ForeignTableProvider {
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         unsafe {
-            let pushdown_fn = match self.0.supports_filters_pushdown {
-                Some(func) => func,
-                None => {
-                    return Ok(vec![
-                        TableProviderFilterPushDown::Unsupported;
-                        filters.len()
-                    ]);
-                }
+            let Some(pushdown_fn) = self.0.supports_filters_pushdown else {
+                return Ok(vec![
+                    TableProviderFilterPushDown::Unsupported;
+                    filters.len()
+                ]);
             };
 
             let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
@@ -1061,11 +1058,10 @@ mod tests {
 
         let session =
             FFI_SessionRef::new(&state, None, ffi_provider.logical_codec.clone());
-        let assignments = [FFI_TableProviderUpdateAssignment {
+        let assignments = std::iter::once(FFI_TableProviderUpdateAssignment {
             column: SString::from("b"),
             expr_serialized: SVec::new(),
-        }]
-        .into_iter()
+        })
         .collect();
         let result = unsafe {
             (ffi_provider.update)(&ffi_provider, session, assignments, SVec::new()).await

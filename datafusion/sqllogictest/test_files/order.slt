@@ -1591,6 +1591,77 @@ physical_plan
 statement ok
 DROP TABLE mixed_null_placement;
 
+# ASC NULLS FIRST survives OR but not AND. The per-operator rules are
+# unit-tested in sort_properties.rs; this checks the planner uses them.
+query I
+COPY (VALUES
+  (CAST(NULL AS BOOLEAN), false),
+  (CAST(NULL AS BOOLEAN), true),
+  (false,                 true),
+  (true,                  true))
+TO 'test_files/scratch/order/kleene_nulls_first.csv'
+OPTIONS ('format.has_header' 'true');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE kleene_nulls_first (a BOOLEAN, b BOOLEAN)
+STORED AS CSV
+WITH ORDER (a ASC NULLS FIRST)
+WITH ORDER (b ASC NULLS FIRST)
+LOCATION 'test_files/scratch/order/kleene_nulls_first.csv'
+OPTIONS ('format.has_header' 'true');
+
+# a AND b is (false, NULL, false, true) in scan order, so it needs sorting.
+query B
+SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+NULL
+false
+false
+true
+
+# AND must not claim ASC NULLS FIRST.
+query TT
+EXPLAIN SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: c ASC NULLS FIRST
+02)--Projection: kleene_nulls_first.a AND kleene_nulls_first.b AS c
+03)----TableScan: kleene_nulls_first projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC]
+02)--SortExec: expr=[c@0 ASC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[a@0 AND b@1 as c]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/kleene_nulls_first.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC]], file_type=csv, has_header=true
+
+# a OR b is (NULL, true, true, true) in scan order, already ASC NULLS FIRST,
+# so no SortExec.
+query B
+SELECT a OR b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+NULL
+true
+true
+true
+
+query TT
+EXPLAIN SELECT a OR b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: c ASC NULLS FIRST
+02)--Projection: kleene_nulls_first.a OR kleene_nulls_first.b AS c
+03)----TableScan: kleene_nulls_first projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC]
+02)--ProjectionExec: expr=[a@0 OR b@1 as c]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/kleene_nulls_first.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC]], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE kleene_nulls_first;
+
 # Union a query with the actual data and one with a constant
 query I
 SELECT (SELECT c from ordered_table ORDER BY c LIMIT 1) UNION ALL (SELECT 23 as c from ordered_table ORDER BY c LIMIT 1) ORDER BY c;

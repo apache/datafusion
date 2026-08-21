@@ -1370,7 +1370,7 @@ fn collect_columns_from_predicate_inner(
     let mut ne_predicate_columns = Vec::<PhysicalExprPairRef>::new();
 
     let predicates = split_conjunction(predicate);
-    predicates.into_iter().for_each(|p| {
+    for p in predicates {
         if let Some(binary) = p.downcast_ref::<BinaryExpr>() {
             // Only extract pairs where at least one side is a Column reference.
             // Pairs like `complex_expr = literal` should not create equivalence
@@ -1383,7 +1383,7 @@ fn collect_columns_from_predicate_inner(
                 binary.left().downcast_ref::<Column>().is_some()
                     || binary.right().downcast_ref::<Column>().is_some();
             if !has_direct_column_operand {
-                return;
+                continue;
             }
             match binary.op() {
                 Operator::Eq => {
@@ -1395,7 +1395,7 @@ fn collect_columns_from_predicate_inner(
                 _ => {}
             }
         }
-    });
+    }
 
     (eq_predicate_columns, ne_predicate_columns)
 }
@@ -2148,9 +2148,7 @@ mod tests {
             Statistics {
                 num_rows: Precision::Inexact(1000),
                 total_byte_size: Precision::Inexact(4000),
-                column_statistics: vec![ColumnStatistics {
-                    ..Default::default()
-                }],
+                column_statistics: vec![ColumnStatistics::default()],
             },
             schema,
         ));
@@ -2320,15 +2318,9 @@ mod tests {
                         max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
                 ],
             },
             schema,

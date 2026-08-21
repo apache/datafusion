@@ -53,7 +53,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT stddev(column_name) FROM table_name;
 +----------------------+
-| stddev(column_name)   |
+| stddev(column_name)  |
 +----------------------+
 | 12.34                |
 +----------------------+
@@ -157,7 +157,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT stddev_pop(column_name) FROM table_name;
 +--------------------------+
-| stddev_pop(column_name)   |
+| stddev_pop(column_name)  |
 +--------------------------+
 | 10.56                    |
 +--------------------------+
@@ -337,7 +337,9 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
 
     fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
         let (mut variances, nulls) = self.variance.variance(emit_to);
-        variances.iter_mut().for_each(|v| *v = v.sqrt());
+        for v in &mut variances {
+            *v = v.sqrt();
+        }
         Ok(Arc::new(Float64Array::new(variances.into(), Some(nulls))))
     }
 

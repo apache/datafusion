@@ -401,7 +401,7 @@ physical_plan
 09)│    --------------------   │
 10)│         bytes: 160        │
 11)│       format: memory      │
-12)│          rows: 1          │
+12)│          rows: 10         │
 13)└───────────────────────────┘
 
 # generate BIGINT data from 1 to 1000 in multiple partitions
