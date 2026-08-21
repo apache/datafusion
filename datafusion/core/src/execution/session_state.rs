@@ -262,10 +262,7 @@ impl Debug for SessionState {
             .field("physical_optimizers", &self.inner.physical_optimizers)
             .field("table_functions", &self.inner.table_functions)
             .field("scalar_functions", &self.inner.scalar_functions)
-            .field(
-                "higher_order_functions",
-                &self.inner.higher_order_functions,
-            )
+            .field("higher_order_functions", &self.inner.higher_order_functions)
             .field("aggregate_functions", &self.inner.aggregate_functions)
             .field("window_functions", &self.inner.window_functions)
             .field("prepared_plans", &self.inner.prepared_plans)
@@ -1069,9 +1066,7 @@ impl SessionState {
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
-        let udtf = Arc::make_mut(&mut self.inner)
-            .table_functions
-            .remove(name);
+        let udtf = Arc::make_mut(&mut self.inner).table_functions.remove(name);
         Ok(udtf.map(|x| Arc::clone(x.function())))
     }
 
@@ -2262,8 +2257,7 @@ impl FunctionRegistry for SessionState {
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
-        let aggregate_functions =
-            &mut Arc::make_mut(&mut self.inner).aggregate_functions;
+        let aggregate_functions = &mut Arc::make_mut(&mut self.inner).aggregate_functions;
         udaf.aliases().iter().for_each(|alias| {
             aggregate_functions.insert(alias.clone(), Arc::clone(&udaf));
         });
@@ -2314,8 +2308,7 @@ impl FunctionRegistry for SessionState {
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
-        let aggregate_functions =
-            &mut Arc::make_mut(&mut self.inner).aggregate_functions;
+        let aggregate_functions = &mut Arc::make_mut(&mut self.inner).aggregate_functions;
         let udaf = aggregate_functions.remove(name);
         if let Some(udaf) = &udaf {
             for alias in udaf.aliases() {
@@ -2364,11 +2357,7 @@ impl FunctionRegistry for SessionState {
     }
 
     fn higher_order_function_names(&self) -> HashSet<String> {
-        self.inner
-            .higher_order_functions
-            .keys()
-            .cloned()
-            .collect()
+        self.inner.higher_order_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {
