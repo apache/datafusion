@@ -1254,6 +1254,7 @@ message PartitionedFile {
   repeated datafusion_common.ScalarValue partition_values = 4;
   FileRange range = 5;
   datafusion_common.Statistics statistics = 6;
+  optional uint64 metadata_size_hint = 7;
 }
 
 message FileRange {

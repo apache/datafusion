@@ -1879,6 +1879,8 @@ pub struct PartitionedFile {
     pub range: ::core::option::Option<FileRange>,
     #[prost(message, optional, tag = "6")]
     pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
+    #[prost(uint64, optional, tag = "7")]
+    pub metadata_size_hint: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct FileRange {

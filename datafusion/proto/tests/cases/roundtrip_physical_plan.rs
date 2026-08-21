@@ -50,6 +50,7 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
     FileSinkConfig, ParquetSource,
 };
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
@@ -680,6 +681,53 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
         SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema)))
             .with_preserve_partitioning(true),
     ))
+}
+
+#[test]
+fn roundtrip_partitioned_file_metadata_size_hint() -> Result<()> {
+    let mut file_group =
+        PartitionedFile::new("/path/to/part=0/file.parquet".to_string(), 1024)
+            .with_metadata_size_hint(123);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+    let source = Arc::new(ParquetSource::default());
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![vec![file_group]],
+        constraints: Constraints::empty(),
+        statistics: Statistics::new_unknown(&schema),
+        file_schema: schema,
+        projection: Some(vec![0, 1]),
+        limit: None,
+        table_partition_cols: vec![Field::new(
+            "part".to_string(),
+            wrap_partition_type_in_dict(DataType::Int16),
+            false,
+        )],
+        output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        source,
+    };
+
+    let ctx = SessionContext::new();
+    let reconstructed_plan = roundtrip_test_and_return(
+        scan_config.build(),
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+    let exec = reconstructed_plan
+        .as_any()
+        .downcast_ref::<DataSourceExec>()
+        .expect("DataSourceExec not found");
+    let scan_config = exec
+        .source()
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .expect("FileScanConfig not found");
+    assert_eq!(scan_config.file_groups[0][0].metadata_size_hint, Some(123));
+    Ok(())
 }
 
 #[test]

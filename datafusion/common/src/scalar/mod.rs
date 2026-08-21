@@ -37,7 +37,7 @@ use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array,
 };
-use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
+use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
 use arrow::array::{
