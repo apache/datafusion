@@ -21,7 +21,7 @@ use arrow_ipc::CompressionType;
 
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
-use crate::error::{_config_datafusion_err, _config_err};
+use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
@@ -33,7 +33,6 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
-use std::num::NonZeroUsize;
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
@@ -583,19 +582,111 @@ impl Display for SpillCompression {
     }
 }
 
+/// A reusable bounded `usize` configuration value.
+///
+/// This stores the configured value together with its inclusive lower bound and
+/// optional inclusive upper bound so wrapper types such as
+/// [`ConfigNonZeroUsize`] and [`ConfigMinTwoUsize`] can share the same range
+/// validation logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigRangeUsize {
+    value: usize,
+    inclusive_min: usize,
+    /// `None` if there is no maximum limit.
+    inclusive_max: Option<usize>,
+}
+
+impl ConfigRangeUsize {
+    const fn in_range(
+        value: usize,
+        inclusive_min: usize,
+        inclusive_max: Option<usize>,
+    ) -> bool {
+        if value < inclusive_min {
+            return false;
+        }
+
+        match inclusive_max {
+            Some(inclusive_max) => value <= inclusive_max,
+            None => true,
+        }
+    }
+
+    const fn new_for_default(
+        value: usize,
+        inclusive_min: usize,
+        inclusive_max: Option<usize>,
+    ) -> Self {
+        if Self::in_range(value, inclusive_min, inclusive_max) {
+            Self {
+                value,
+                inclusive_min,
+                inclusive_max,
+            }
+        } else {
+            panic!("value out of allowed range")
+        }
+    }
+
+    /// Creates a [`ConfigRangeUsize`], returning a configuration error if the
+    /// value falls outside the provided inclusive bounds.
+    pub fn try_new(
+        value: usize,
+        inclusive_min: usize,
+        inclusive_max: Option<usize>,
+    ) -> Result<Self> {
+        if Self::in_range(value, inclusive_min, inclusive_max) {
+            Ok(Self {
+                value,
+                inclusive_min,
+                inclusive_max,
+            })
+        } else {
+            match inclusive_max {
+                Some(inclusive_max) => _config_err!(
+                    "value must be between {inclusive_min} and {inclusive_max}, got {value}"
+                ),
+                None => _config_err!("value must be at least {inclusive_min}"),
+            }
+        }
+    }
+
+    /// Returns the configured value.
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    /// Returns the inclusive minimum bound.
+    pub const fn inclusive_min(self) -> usize {
+        self.inclusive_min
+    }
+
+    /// Returns the inclusive maximum bound, if any.
+    pub const fn inclusive_max(self) -> Option<usize> {
+        self.inclusive_max
+    }
+}
+
+impl Display for ConfigRangeUsize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// A `usize` configuration value that rejects zero when set from strings.
 ///
 /// Use this for options where zero is never a meaningful runtime value.
 /// Invalid values return a configuration error through [`ConfigField`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConfigNonZeroUsize(NonZeroUsize);
+pub struct ConfigNonZeroUsize(ConfigRangeUsize);
 
 /// Private helper for hard-coded defaults in `config_namespace!`, which cannot
 /// use `?`. All external construction should use [`ConfigNonZeroUsize::try_new`].
 const fn non_zero_usize_default(value: usize) -> ConfigNonZeroUsize {
-    match NonZeroUsize::new(value) {
-        Some(value) => ConfigNonZeroUsize(value),
-        None => panic!("value must be greater than 0"),
+    if value > 0 {
+        ConfigNonZeroUsize(ConfigRangeUsize::new_for_default(value, 1, None))
+    } else {
+        panic!("value must be greater than 0")
     }
 }
 
@@ -603,9 +694,11 @@ impl ConfigNonZeroUsize {
     /// Creates a [`ConfigNonZeroUsize`], returning a configuration error if
     /// `value` is zero.
     pub fn try_new(value: usize) -> Result<Self> {
-        NonZeroUsize::new(value)
-            .map(Self)
-            .ok_or_else(|| _config_datafusion_err!("value must be greater than 0"))
+        if value > 0 {
+            Ok(Self(ConfigRangeUsize::new_for_default(value, 1, None)))
+        } else {
+            _config_err!("value must be greater than 0")
+        }
     }
 
     /// Returns the wrapped `usize`.
@@ -670,13 +763,13 @@ impl Display for ConfigNonZeroUsize {
 /// round down to a zero-capacity buffer and panic. Invalid values return a
 /// configuration error through [`ConfigField`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConfigMinTwoUsize(usize);
+pub struct ConfigMinTwoUsize(ConfigRangeUsize);
 
 /// Private helper for hard-coded defaults in `config_namespace!`, which cannot
 /// use `?`. All external construction should use [`ConfigMinTwoUsize::try_new`].
 const fn min_two_usize_default(value: usize) -> ConfigMinTwoUsize {
     if value >= 2 {
-        ConfigMinTwoUsize(value)
+        ConfigMinTwoUsize(ConfigRangeUsize::new_for_default(value, 2, None))
     } else {
         panic!("value must be at least 2")
     }
@@ -687,7 +780,7 @@ impl ConfigMinTwoUsize {
     /// `value` is less than 2.
     pub fn try_new(value: usize) -> Result<Self> {
         if value >= 2 {
-            Ok(Self(value))
+            Ok(Self(ConfigRangeUsize::new_for_default(value, 2, None)))
         } else {
             _config_err!("value must be at least 2")
         }
@@ -695,7 +788,7 @@ impl ConfigMinTwoUsize {
 
     /// Returns the wrapped `usize`.
     pub const fn get(self) -> usize {
-        self.0
+        self.0.get()
     }
 }
 
