@@ -179,9 +179,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         let timer = self.group_by_metrics.aggregate_arguments_time.timer();
         // The evaluated args for each accumulator
-        let accumulator_args = self
-            .state
-            .building()
+        let accumulator_args = state
             .accumulators
             .iter()
             .enumerate()
@@ -562,23 +560,16 @@ impl HashAggregateAccumulator {
 
     /// Evaluate aggregate arguments and filter for one input batch.
     ///
-    /// For example, `AVG(x + 1) FILTER (WHERE x > 0)` evaluates both `x + 1`
-    /// and `x > 0`.
+    /// For example, `AVG(2 / x) FILTER (WHERE x > 0)` evaluates `x > 0`
+    /// first, then evaluates `2 / x` only for selected rows.
+    /// Filtered rows will be evaluated to `NULL`, and won't trigger errors
+    /// such as divide by zero.
     ///
     /// These arrays can be passed directly to [`GroupsAccumulator`] next.
     pub(super) fn evaluate_acc_args(
         &self,
         batch: &RecordBatch,
     ) -> Result<EvaluatedAccumulatorArgs> {
-        let arguments = self
-            .arguments
-            .iter()
-            .map(|expr| {
-                expr.evaluate(batch)
-                    .and_then(|value| value.into_array(batch.num_rows()))
-            })
-            .collect::<Result<_>>()?;
-
         let filter = self
             .filter
             .as_ref()
@@ -588,6 +579,19 @@ impl HashAggregateAccumulator {
                     .and_then(|value| value.into_array(batch.num_rows()))
             })
             .transpose()?;
+        let selection = filter.as_ref().map(|filter| filter.as_boolean());
+        let arguments = self
+            .arguments
+            .iter()
+            .map(|expr| {
+                selection
+                    .map_or_else(
+                        || expr.evaluate(batch),
+                        |selection| expr.evaluate_selection(batch, selection),
+                    )
+                    .and_then(|value| value.into_array(batch.num_rows()))
+            })
+            .collect::<Result<_>>()?;
 
         Ok(EvaluatedAccumulatorArgs { arguments, filter })
     }
