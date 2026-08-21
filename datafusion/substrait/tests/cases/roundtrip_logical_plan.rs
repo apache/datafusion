@@ -2401,10 +2401,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::Set(set)) => {
             for input in &set.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2413,10 +2410,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::ExtensionMulti(ext)) => {
             for input in &ext.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2432,15 +2426,9 @@ fn verify_post_join_filter_value(proto: &Plan) -> Result<()> {
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
-                plan_rel::RelType::Rel(rel) => match check_post_join_filters(rel) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                },
+                plan_rel::RelType::Rel(rel) => check_post_join_filters(rel)?,
                 plan_rel::RelType::Root(root) => {
-                    match check_post_join_filters(root.input.as_ref().unwrap()) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    check_post_join_filters(root.input.as_ref().unwrap())?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),
@@ -2473,19 +2461,10 @@ fn assert_read_filter_count(proto: &Plan, expected_filter_count: u32) -> Result<
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
                 plan_rel::RelType::Rel(rel) => {
-                    match count_read_filters(rel, &mut filter_count) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(rel, &mut filter_count)?
                 }
                 plan_rel::RelType::Root(root) => {
-                    match count_read_filters(
-                        root.input.as_ref().unwrap(),
-                        &mut filter_count,
-                    ) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(root.input.as_ref().unwrap(), &mut filter_count)?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),

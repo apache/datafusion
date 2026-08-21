@@ -379,7 +379,8 @@ impl StatisticsRegistry {
         for provider in &self.providers {
             match provider.compute_statistics(plan, &child_stats)? {
                 StatisticsResult::Computed(stats) => return Ok(stats),
-                StatisticsResult::Delegate => continue,
+                // Try the next provider
+                StatisticsResult::Delegate => {}
             }
         }
         // Fallback: use plan's built-in stats
