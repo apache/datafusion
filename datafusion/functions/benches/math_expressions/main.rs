@@ -18,7 +18,7 @@
 //! Benchmarks for functions behind the `math_expressions` feature.
 //!
 //! Each benchmark beside this file is a module rather than its own `[[bench]]`
-//! target to reduce compile times / size.
+//! target to reduce compile times and output size.
 //!
 //! Run one of them with `cargo bench --bench math_expressions -- <filter>`.
 
