@@ -46,7 +46,9 @@ class QueryResult:
 
 @dataclass
 class QueryRun:
-    query: int
+    # A number for benchmarks that identify queries by index, a name such as
+    # "tpch/Q01/sf1" for the ones run by `benchmark_runner`
+    query: int | str
     iterations: List[QueryResult]
     start_time: int
     success: bool = True
@@ -59,6 +61,13 @@ class QueryRun:
             start_time=data["start_time"],
             success=data.get("success", True),
         )
+
+    @property
+    def label(self) -> str:
+        """Row label: "Q3" for numeric query ids, the id itself for named ones."""
+        query = str(self.query)
+
+        return f"Q{query}" if query.isdigit() else query
 
     @property
     def min_execution_time(self) -> float:
@@ -150,7 +159,14 @@ def compare(
     comparison_path: Path,
     noise_threshold: float,
     detailed: bool,
-) -> None:
+    fail_threshold: float | None = None,
+    fail_total_threshold: float | None = None,
+) -> int:
+    """Print the comparison and return the process exit code.
+
+    The exit code is non-zero only when a `fail_*_threshold` is given and the
+    comparison run is slower than it allows.
+    """
     baseline = BenchmarkRun.load_from_file(baseline_path)
     comparison = BenchmarkRun.load_from_file(comparison_path)
 
@@ -172,6 +188,10 @@ def compare(
     failure_count = 0
     total_baseline_time = 0
     total_comparison_time = 0
+    # (label, comparison / baseline) for every query that ran on both sides,
+    # and the labels of queries that only the comparison run failed
+    changes: List[tuple[str, float]] = []
+    new_failures: List[str] = []
 
     for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
         assert baseline_result.query == comparison_result.query
@@ -182,8 +202,10 @@ def compare(
         if base_failed or comp_failed:
             change_text = "incomparable"
             failure_count += 1
+            if comp_failed and not base_failed:
+                new_failures.append(baseline_result.label)
             table.add_row(
-                f"Q{baseline_result.query}",
+                baseline_result.label,
                 "FAIL" if base_failed else baseline_result.execution_time_report(detailed)[1],
                 "FAIL" if comp_failed else comparison_result.execution_time_report(detailed)[1],
                 change_text,
@@ -197,6 +219,7 @@ def compare(
         total_comparison_time += comparison_value
 
         change = comparison_value / baseline_value
+        changes.append((baseline_result.label, change))
 
         if (1.0 - noise_threshold) <= change <= (1.0 + noise_threshold):
             change_text = "no change"
@@ -209,7 +232,7 @@ def compare(
             slower_count += 1
 
         table.add_row(
-            f"Q{baseline_result.query}",
+            baseline_result.label,
             baseline_text,
             comparison_text,
             change_text,
@@ -225,6 +248,10 @@ def compare(
     if len(comparison.queries) - failure_count > 0:
         avg_comparison_time = total_comparison_time / (len(comparison.queries) - failure_count)
 
+    total_change = (
+        total_comparison_time / total_baseline_time if total_baseline_time else 1.0
+    )
+
     # Summary table
     summary_table = Table(show_header=True, header_style="bold magenta")
     summary_table.add_column("Benchmark Summary", justify="left", style="dim")
@@ -234,12 +261,75 @@ def compare(
     summary_table.add_row(f"Total Time ({comparison_header})", f"{total_comparison_time:.2f}ms")
     summary_table.add_row(f"Average Time ({baseline_header})", f"{avg_baseline_time:.2f}ms")
     summary_table.add_row(f"Average Time ({comparison_header})", f"{avg_comparison_time:.2f}ms")
+    summary_table.add_row("Total Change", f"{total_change:.2f}x")
     summary_table.add_row("Queries Faster", str(faster_count))
     summary_table.add_row("Queries Slower", str(slower_count))
     summary_table.add_row("Queries with No Change", str(no_change_count))
     summary_table.add_row("Queries with Failure", str(failure_count))
 
     console.print(summary_table)
+
+    return report_regressions(
+        console,
+        baseline_header,
+        comparison_header,
+        changes,
+        new_failures,
+        total_change,
+        fail_threshold,
+        fail_total_threshold,
+    )
+
+
+def report_regressions(
+    console: Console,
+    baseline_header: str,
+    comparison_header: str,
+    changes: List[tuple[str, float]],
+    new_failures: List[str],
+    total_change: float,
+    fail_threshold: float | None,
+    fail_total_threshold: float | None,
+) -> int:
+    """Report against the configured limits, returning the process exit code."""
+    if fail_threshold is None and fail_total_threshold is None:
+        return 0
+
+    problems: List[str] = []
+
+    if fail_threshold is not None:
+        problems.extend(
+            f"{label} is {change:.2f}x slower (limit {fail_threshold:.2f}x)"
+            for label, change in changes
+            if change > fail_threshold
+        )
+
+    if fail_total_threshold is not None and total_change > fail_total_threshold:
+        problems.append(
+            f"total time is {total_change:.2f}x slower "
+            f"(limit {fail_total_threshold:.2f}x)"
+        )
+
+    # A query that only fails on one side is excluded from the timings above,
+    # so it would otherwise pass the gate unnoticed.
+    problems.extend(
+        f"{label} failed in {comparison_header} but not in {baseline_header}"
+        for label in new_failures
+    )
+
+    if not problems:
+        console.print(
+            f"No regression: {comparison_header} is within the configured limits "
+            f"of {baseline_header}."
+        )
+        return 0
+
+    console.print(f"Regression: {comparison_header} is slower than {baseline_header}")
+    for problem in problems:
+        console.print(f"  - {problem}")
+
+    return 1
+
 
 def main() -> None:
     parser = ArgumentParser()
@@ -261,6 +351,20 @@ def main() -> None:
         help="The threshold for statistically insignificant results (+/- %5).",
     )
     compare_parser.add_argument(
+        "--fail-threshold",
+        type=float,
+        default=None,
+        help="Exit non-zero if any single query is slower than this ratio "
+        "(e.g. 1.2 for 20%% slower). Off by default.",
+    )
+    compare_parser.add_argument(
+        "--fail-total-threshold",
+        type=float,
+        default=None,
+        help="Exit non-zero if the total time is slower than this ratio "
+        "(e.g. 1.05 for 5%% slower). Off by default.",
+    )
+    compare_parser.add_argument(
         "--detailed",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -269,7 +373,16 @@ def main() -> None:
 
     options = parser.parse_args()
 
-    compare(options.baseline_path, options.comparison_path, options.noise_threshold, options.detailed)
+    raise SystemExit(
+        compare(
+            options.baseline_path,
+            options.comparison_path,
+            options.noise_threshold,
+            options.detailed,
+            options.fail_threshold,
+            options.fail_total_threshold,
+        )
+    )
 
 
 

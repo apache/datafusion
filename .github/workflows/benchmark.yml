@@ -1,0 +1,194 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Catches performance regressions by running TPC-H SF1 twice on the same
+# machine: once for the base branch, once for the PR merged into it. Only the
+# ratio between the two runs is used, so the (shared, virtualized) runner does
+# not have to be fast -- just consistent for the duration of the job.
+
+name: Benchmarks
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+# Two release builds plus two benchmark runs take about an hour, and benchmarks
+# on shared runners are noisy, so this is opt-in: add the `performance` label to
+# a PR, or start it by hand from the Actions tab.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Iterations per query (the fastest one is compared)'
+        type: string
+        default: '5'
+      query_regression:
+        description: 'Fail if a single query is more than this much slower'
+        type: string
+        default: '1.20'
+      total_regression:
+        description: 'Fail if the total time is more than this much slower'
+        type: string
+        default: '1.05'
+
+permissions:
+  contents: read
+
+jobs:
+  tpch-sf1:
+    name: TPC-H SF1 (PR vs base)
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'performance')
+    # A single job, so both binaries are measured on the same machine.
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    # note: no rust container, so the two builds get plain `--release`
+    # binaries, comparable with what `benchmarks/bench.sh` produces locally
+    timeout-minutes: 150
+    env:
+      ITERATIONS: ${{ inputs.iterations || '5' }}
+      QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
+      TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
+      # Same cargo network settings as .github/actions/setup-rust-runtime,
+      # without its RUSTFLAGS: benchmark binaries are built with the defaults.
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "10"
+      CARGO_HTTP_RETRY: "10"
+    steps:
+      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # For `pull_request` this is the PR already merged into the base
+          # branch. Full history so the base commit can be built as well.
+          fetch-depth: 0
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+      - name: Configure paths
+        run: |
+          echo "DATA_DIR=$RUNNER_TEMP/bench-data" >> "$GITHUB_ENV"
+          echo "RESULTS_DIR=$RUNNER_TEMP/results" >> "$GITHUB_ENV"
+      - name: Install Rust
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          # installs the channel pinned by rust-toolchain.toml
+          rustup toolchain install
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+      - name: Install tpchgen-cli
+        run: cargo install tpchgen-cli --locked
+      - name: Resolve base commit
+        id: base
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
+            # HEAD is the PR merged into the base branch, so its first parent
+            # is the base branch tip that the merge used -- the commit this PR
+            # would actually land on.
+            base_sha=$(git rev-parse "HEAD^1")
+          else
+            # Manual run on a branch: compare it as-is against the base tip.
+            git fetch --no-tags origin "$BASE_REF"
+            base_sha=$(git rev-parse FETCH_HEAD)
+            echo "HEAD is not a merge commit, comparing it as-is against $BASE_REF"
+          fi
+          echo "sha=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "base:      ${base_sha} $(git log -1 --format=%s "${base_sha}")"
+          echo "candidate: $(git rev-parse HEAD) $(git log -1 --format=%s HEAD)"
+      - name: Check out base commit
+        run: git worktree add --detach "$RUNNER_TEMP/base" "${{ steps.base.outputs.sha }}"
+      - name: Generate TPC-H SF1 data
+        # Same generator settings as `bench.sh data tpch`, inlined because that
+        # path also downloads the expected answers through `docker run -it`,
+        # which needs a TTY and is only used for result validation.
+        run: |
+          mkdir -p "$DATA_DIR/tpch_sf1" "$RESULTS_DIR/base" "$RESULTS_DIR/pr"
+          tpchgen-cli \
+            --scale-factor 1 \
+            --format parquet \
+            --parquet-compression 'ZSTD(1)' \
+            --parts=1 \
+            --output-dir "$DATA_DIR/tpch_sf1"
+      # Separate target directories: the two source trees share crate names and
+      # versions, so one target directory would make each build evict the other.
+      - name: Build base benchmark runner
+        working-directory: ${{ runner.temp }}/base
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target-base
+        run: cargo build --release -p datafusion-benchmarks --bin benchmark_runner
+      - name: Build PR benchmark runner
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target-pr
+        run: cargo build --release -p datafusion-benchmarks --bin benchmark_runner
+      # Each runner reads the queries of the tree it was built from (they are
+      # resolved relative to its own `benchmarks` directory), and both read the
+      # one generated dataset.
+      - name: Benchmark base
+        working-directory: ${{ runner.temp }}/base/benchmarks
+        run: |
+          "$RUNNER_TEMP/target-base/release/benchmark_runner" tpch \
+            --scale-factor 1 \
+            --format parquet \
+            --iterations "$ITERATIONS" \
+            --path "$DATA_DIR" \
+            --output "$RESULTS_DIR/base/tpch_sf1.json"
+      - name: Benchmark PR
+        working-directory: benchmarks
+        run: |
+          "$RUNNER_TEMP/target-pr/release/benchmark_runner" tpch \
+            --scale-factor 1 \
+            --format parquet \
+            --iterations "$ITERATIONS" \
+            --path "$DATA_DIR" \
+            --output "$RESULTS_DIR/pr/tpch_sf1.json"
+      - name: Compare
+        run: |
+          set -uo pipefail
+          status=0
+          uv run --no-project --with rich python3 benchmarks/compare.py \
+            "$RESULTS_DIR/base/tpch_sf1.json" \
+            "$RESULTS_DIR/pr/tpch_sf1.json" \
+            --fail-threshold "$QUERY_REGRESSION" \
+            --fail-total-threshold "$TOTAL_REGRESSION" \
+            > "$RESULTS_DIR/comparison.txt" 2>&1 || status=$?
+          cat "$RESULTS_DIR/comparison.txt"
+          {
+            echo "### TPC-H SF1: base (${{ steps.base.outputs.sha }}) vs PR"
+            echo
+            echo "\`$ITERATIONS\` iterations per query; the fastest of each is compared, to keep runner noise out of the ratio."
+            echo "Fails above \`${QUERY_REGRESSION}x\` for a single query or \`${TOTAL_REGRESSION}x\` in total."
+            echo
+            echo '```'
+            cat "$RESULTS_DIR/comparison.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::TPC-H SF1 got slower than the configured limits allow, see the job summary"
+          fi
+          exit "$status"
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: tpch-sf1-comparison
+          path: ${{ runner.temp }}/results
+          retention-days: 7

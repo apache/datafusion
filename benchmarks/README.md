@@ -257,6 +257,27 @@ git pull
 
 Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead of `git fetch upstream pull/$PR_NUMBER/head:pr-$PR_NUMBER`
 
+### In CI
+
+The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs TPC-H SF1
+against the base branch and against the PR merged into it, both on the same
+runner, and fails when the PR is slower than the configured limits allow. It is
+opt-in, because two release builds plus two benchmark runs take about an hour:
+
+- add the `performance` label to a PR, or
+- start it from the Actions tab (`workflow_dispatch`), where the iteration
+  count and both regression limits can be overridden
+
+The comparison table is written to the job summary, and the two result JSON
+files plus the table are uploaded as the `tpch-sf1-comparison` artifact.
+
+Runners are shared machines, so treat the numbers as a signal rather than a
+measurement: the defaults (fail above `1.20x` for a single query or `1.05x` in
+total, fastest of 5 iterations) are set to catch clear regressions without
+flagging noise. Local runs on quiet hardware remain the way to confirm a
+result, and a PR that changes the TPC-H benchmark files themselves is measured
+against its own queries, which makes the comparison advisory.
+
 ### Running Benchmarks Manually
 
 Assuming data is in the `data` directory, the `tpch` benchmark can be run with a command like this:
@@ -295,6 +316,17 @@ $ git checkout my_branch
 $ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
 ./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
+```
+
+To use `compare.py` as a pass/fail gate (this is what CI does), pass one or both
+of the regression limits. Without them it only prints the comparison and always
+exits successfully.
+
+```shell
+# exit non-zero if a single query is more than 20% slower, or if the total
+# time is more than 5% slower
+./compare.py /tmp/output_main/tpch.json /tmp/output_branch/tpch.json \
+  --fail-threshold 1.20 --fail-total-threshold 1.05
 ```
 
 This will produce output like:
