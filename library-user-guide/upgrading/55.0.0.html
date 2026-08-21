@@ -455,6 +455,23 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">55.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="map-casts-with-nested-structs-use-schema-evolution-rules">
+<h3>Map casts with nested Structs use schema-evolution rules<a class="headerlink" href="#map-casts-with-nested-structs-use-schema-evolution-rules" title="Link to this heading">#</a></h3>
+<p>Casts of a <code class="docutils literal notranslate"><span class="pre">Map</span></code> whose key or value recursively contains a <code class="docutils literal notranslate"><span class="pre">Struct</span></code> now adapt
+nested Struct fields by case-sensitive name. Nullable fields added to the target
+Struct are filled with <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, and source-only fields are omitted. Missing
+non-nullable target fields, nullable-to-non-nullable changes, and incompatible
+nested types are rejected.</p>
+<p>Map keys define map identity. During this nested-Struct adaptation, key Struct
+fields cannot be removed and primitive key type changes must preserve every
+source value (for example, <code class="docutils literal notranslate"><span class="pre">Int32</span></code> to <code class="docutils literal notranslate"><span class="pre">Int64</span></code> is allowed, while <code class="docutils literal notranslate"><span class="pre">Int64</span></code> to
+<code class="docutils literal notranslate"><span class="pre">Int32</span></code> is rejected). Sorted Maps also require an unchanged key type and the
+same sorted flag.</p>
+<p><strong>Migration guide:</strong> Schemas that relied on positional Struct-field matching,
+key-field removal, or narrowing Map-key casts must be updated to retain
+case-sensitive field names and key identity. Ordinary Maps without semantic
+Struct children continue to use Arrow’s normal Map cast behavior.</p>
+</section>
 <section id="tableprovider-scan-takes-option-usize-for-the-projection">
 <h3><code class="docutils literal notranslate"><span class="pre">TableProvider::scan</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;[usize]&gt;</span></code> for the projection<a class="headerlink" href="#tableprovider-scan-takes-option-usize-for-the-projection" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">TableProvider::scan</span></code> and the related APIs listed below previously took the
@@ -1773,6 +1790,7 @@ use <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-55-0-0">DataFusion 55.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-casts-with-nested-structs-use-schema-evolution-rules">Map casts with nested Structs use schema-evolution rules</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-takes-option-usize-for-the-projection"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;[usize]&gt;</span></code> for the projection</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-fill-null-now-borrows-its-arguments"><code class="docutils literal notranslate"><span class="pre">DataFrame::fill_null</span></code> now borrows its arguments</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filescanconfig-partitioned-by-file-group-removed"><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> removed</a></li>
