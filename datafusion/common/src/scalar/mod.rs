@@ -1115,14 +1115,18 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
 /// Useful for wrapping arrays in dictionary form.
 ///
 /// # Input
+/// ```text
 /// ["alice", "bob", "alice", null, "carol"]
+/// ```
 ///
 /// # Output
 /// `DictionaryArray<Int32>`
+/// ```text
 /// {
 ///   keys:   [0, 1, 2, 3, 4],
 ///   values: ["alice", "bob", "alice", null, "carol"]
 /// }
+/// ```
 pub fn dict_from_values<K: ArrowDictionaryKeyType>(
     values_array: ArrayRef,
 ) -> Result<ArrayRef> {

@@ -619,7 +619,7 @@ fn try_reorder(
 }
 
 /// Return the expected expressions positions.
-/// For example, the current expressions are ['c', 'a', 'a', b'], the expected expressions are ['b', 'c', 'a', 'a'],
+/// For example, the current expressions are `['c', 'a', 'a', 'b']`, the expected expressions are `['b', 'c', 'a', 'a']`,
 ///
 /// This method will return a Vec [3, 0, 1, 2]
 fn expected_expr_positions(
