@@ -21,6 +21,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::{Column, Literal};
 
 use arrow::array::BooleanArray;
 use arrow::array::{Array, ArrayRef, new_empty_array};
@@ -182,6 +183,26 @@ pub struct WindowPhysicalExpressions {
     pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
+#[inline]
+fn can_evaluate_window_arg_unfiltered(expr: &dyn PhysicalExpr) -> bool {
+    expr.is::<Column>() || expr.is::<Literal>()
+}
+
+/// Evaluates safe arguments on the original batch and all other arguments
+/// using `selection`.
+fn evaluate_window_arg(
+    expr: &dyn PhysicalExpr,
+    record_batch: &RecordBatch,
+    selection: &BooleanArray,
+) -> Result<ArrayRef> {
+    let value = if can_evaluate_window_arg_unfiltered(expr) {
+        expr.evaluate(record_batch)?
+    } else {
+        expr.evaluate_selection(record_batch, selection)?
+    };
+    value.into_array_of_size(record_batch.num_rows())
+}
+
 /// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
 pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
@@ -329,16 +350,14 @@ pub trait AggregateWindowExpr: WindowExpr {
             None => None,
         };
 
-        // Evaluate arguments only for rows that pass the FILTER. The selected
-        // results are scattered back to preserve the window frame's row indices.
+        // Columns and literals keep their original alignment. Other arguments are
+        // evaluated only on selected rows and scattered back to the row indices used
+        // by window frames.
         let values = match filter_mask {
             Some(mask) => self
                 .expressions()
                 .iter()
-                .map(|expr| {
-                    expr.evaluate_selection(record_batch, mask)?
-                        .into_array_of_size(record_batch.num_rows())
-                })
+                .map(|expr| evaluate_window_arg(expr.as_ref(), record_batch, mask))
                 .collect::<Result<Vec<_>>>()?,
             None => self.evaluate_args(record_batch)?,
         };
