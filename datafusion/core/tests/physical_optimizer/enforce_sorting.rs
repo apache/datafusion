@@ -200,7 +200,7 @@ impl EnforceSortingTest {
             .to_string();
 
         if input_plan_string == optimized_plan_string {
-            format!("Input / Optimized Plan:\n{input_plan_string}",)
+            format!("Input / Optimized Plan:\n{input_plan_string}")
         } else {
             format!(
                 "Input Plan:\n{input_plan_string}\nOptimized Plan:\n{optimized_plan_string}",
@@ -2888,7 +2888,7 @@ async fn test_partial_sort_with_homogeneous_batches() -> Result<()> {
             .downcast_ref::<Int32Array>()
             .unwrap();
         let actual = c_array.values().iter().copied().collect::<Vec<i32>>();
-        assert_eq!(actual, expected_values[i], "Batch {i} not sorted correctly",);
+        assert_eq!(actual, expected_values[i], "Batch {i} not sorted correctly");
     }
 
     assert_eq!(
