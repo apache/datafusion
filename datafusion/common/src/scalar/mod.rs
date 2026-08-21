@@ -8558,7 +8558,7 @@ mod tests {
             let array = array.downcast::<Int64Array>().unwrap();
             assert_eq!(
                 array.into_iter().collect::<Vec<_>>(),
-                expected_values[i..i + 1]
+                expected_values[i..=i]
             );
         }
     }

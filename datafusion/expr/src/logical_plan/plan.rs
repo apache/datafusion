@@ -428,11 +428,11 @@ impl LogicalPlan {
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.apply_expressions(|e| {
-            find_out_reference_exprs(e).into_iter().for_each(|e| {
+            for e in find_out_reference_exprs(e) {
                 if !exprs.contains(&e) {
                     exprs.push(e)
                 }
-            });
+            }
             Ok(TreeNodeRecursion::Continue)
         })
         // closure always returns OK
@@ -4080,7 +4080,7 @@ impl Aggregate {
             exprs.push(&INTERNAL_ID_EXPR);
         }
         exprs.extend(self.aggr_expr.iter());
-        debug_assert!(exprs.len() == self.schema.fields().len());
+        debug_assert_eq!(exprs.len(), self.schema.fields().len());
         Ok(exprs)
     }
 
@@ -4387,9 +4387,8 @@ impl Join {
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
     ) -> Result<(Self, bool)> {
-        let original_join = match original {
-            LogicalPlan::Join(join) => join,
-            _ => return plan_err!("Could not create join with project input"),
+        let LogicalPlan::Join(original_join) = original else {
+            return plan_err!("Could not create join with project input");
         };
 
         let mut left_sch = LogicalPlanBuilder::from(Arc::clone(&left));

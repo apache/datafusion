@@ -772,7 +772,7 @@ mod tests {
 
         let initial_capacity = acc.counts.capacity();
         let additional_values: ArrayRef =
-            Arc::new(Int64Array::from_iter(4..4 + initial_capacity as i64 + 1));
+            Arc::new(Int64Array::from_iter(4..=(4 + initial_capacity as i64)));
         acc.update_batch(&[Arc::clone(&additional_values)])?;
 
         let grown_size = expected_sliding_distinct_sum_size(&acc);

@@ -1723,21 +1723,21 @@ impl SessionStateBuilder {
         }
 
         if let Some(aggregate_functions) = aggregate_functions {
-            aggregate_functions.into_iter().for_each(|udaf| {
+            for udaf in aggregate_functions {
                 let existing_udf = state.register_udaf(udaf);
                 if let Ok(Some(existing_udf)) = existing_udf {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
-            });
+            }
         }
 
         if let Some(window_functions) = window_functions {
-            window_functions.into_iter().for_each(|udwf| {
+            for udwf in window_functions {
                 let existing_udf = state.register_udwf(udwf);
                 if let Ok(Some(existing_udf)) = existing_udf {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
-            });
+            }
         }
 
         if let Some(extension_types) = extension_types {
