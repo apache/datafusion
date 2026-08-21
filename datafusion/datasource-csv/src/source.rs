@@ -356,10 +356,7 @@ impl FileSource for CsvSource {
                 .transpose()?,
             newlines_in_values: self.newlines_in_values(),
             truncate_rows: self.truncate_rows(),
-            terminator: self
-                .terminator()
-                .map(|terminator| proto_byte_to_string(terminator, "terminator"))
-                .transpose()?,
+            terminator: self.terminator().map(|terminator| vec![terminator]),
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::CsvScan(node)),
@@ -581,6 +578,17 @@ fn proto_str_to_byte(s: &str, description: &str) -> Result<u8> {
 }
 
 #[cfg(feature = "proto")]
+fn proto_bytes_to_byte(bytes: &[u8], description: &str) -> Result<u8> {
+    let [byte] = bytes else {
+        return datafusion_common::internal_err!(
+            "Invalid CSV {description}: expected exactly one byte, got {}",
+            bytes.len()
+        );
+    };
+    Ok(*byte)
+}
+
+#[cfg(feature = "proto")]
 impl CsvSource {
     /// Reconstructs a `DataSourceExec` from a protobuf `CsvScan`.
     ///
@@ -624,7 +632,7 @@ impl CsvSource {
         let terminator = scan
             .terminator
             .as_deref()
-            .map(|terminator| proto_str_to_byte(terminator, "terminator"))
+            .map(|terminator| proto_bytes_to_byte(terminator, "terminator"))
             .transpose()?;
 
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;

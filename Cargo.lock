@@ -2552,11 +2552,13 @@ dependencies = [
  "datafusion-proto-common",
  "datafusion-proto-models",
  "doc-comment",
+ "flate2",
  "object_store",
  "pretty_assertions",
  "prost",
  "recursive",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

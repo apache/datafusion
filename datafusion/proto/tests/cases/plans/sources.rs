@@ -346,6 +346,56 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_compressed_json_array_scan_executes() -> Result<()> {
+    use datafusion::prelude::JsonReadOptions;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    let tmp_dir = tempfile::TempDir::new()?;
+    let path = tmp_dir.path().join("array.json.gz");
+    let file = std::fs::File::create(&path)?;
+    let mut encoder = GzEncoder::new(file, Compression::default());
+    encoder.write_all(br#"[{"a": 1, "b": "hello"}, {"a": 2, "b": "world"}]"#)?;
+    encoder.finish()?;
+
+    let ctx = SessionContext::new();
+    let options = JsonReadOptions::default()
+        .newline_delimited(false)
+        .file_compression_type(FileCompressionType::GZIP)
+        .file_extension(".json.gz");
+    ctx.register_json("test_table", path.to_string_lossy(), options)
+        .await?;
+
+    let initial_plan = ctx
+        .sql("SELECT a, b FROM test_table ORDER BY a")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let roundtripped = roundtrip_test_and_return(
+        initial_plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let batches =
+        datafusion::physical_plan::collect(roundtripped, ctx.task_ctx()).await?;
+
+    datafusion::assert_batches_eq!(
+        &[
+            "+---+-------+",
+            "| a | b     |",
+            "+---+-------+",
+            "| 1 | hello |",
+            "| 2 | world |",
+            "+---+-------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
 #[cfg(feature = "avro")]
 #[test]
 fn roundtrip_avro_scan() -> Result<()> {
@@ -378,7 +428,7 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
             quote: b'\'',
             escape: Some(b'\\'),
             comment: Some(b'#'),
-            terminator: Some(b'\r'),
+            terminator: Some(0xff),
             newlines_in_values: Some(true),
             truncated_rows: Some(true),
             ..Default::default()
@@ -394,10 +444,12 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
             .build();
 
     let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
     let roundtripped = roundtrip_test_and_return(
-        DataSourceExec::from_data_source(scan_config),
+        Arc::clone(&plan),
         &ctx,
-        &DefaultPhysicalExtensionCodec {},
+        &codec,
         &DefaultPhysicalProtoConverter {},
     )?;
     let data_source = roundtripped
@@ -417,10 +469,28 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     assert_eq!(csv_source.quote(), b'\'');
     assert_eq!(csv_source.escape(), Some(b'\\'));
     assert_eq!(csv_source.comment(), Some(b'#'));
-    assert_eq!(csv_source.terminator(), Some(b'\r'));
+    assert_eq!(csv_source.terminator(), Some(0xff));
     assert!(csv_source.newlines_in_values());
     assert!(csv_source.truncate_rows());
     assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+
+    for invalid_terminator in [vec![], vec![b'\r', b'\n']] {
+        let mut node =
+            PhysicalPlanNode::try_from_physical_plan(Arc::clone(&plan), &codec)?;
+        match node.physical_plan_type.as_mut() {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => {
+                scan.terminator = Some(invalid_terminator);
+            }
+            other => return internal_err!("Expected CsvScan node, got {other:?}"),
+        }
+        let err = node
+            .try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)
+            .expect_err("invalid terminator length must fail");
+        assert!(
+            err.to_string().contains("expected exactly one byte"),
+            "unexpected error: {err}"
+        );
+    }
     Ok(())
 }
 

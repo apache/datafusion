@@ -1981,9 +1981,9 @@ pub struct CsvScanExecNode {
     pub newlines_in_values: bool,
     #[prost(bool, tag = "8")]
     pub truncate_rows: bool,
-    /// Custom line terminator. Absent means the default newline terminator.
-    #[prost(string, optional, tag = "9")]
-    pub terminator: ::core::option::Option<::prost::alloc::string::String>,
+    /// Custom one-byte line terminator. Absent means the default newline terminator.
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]

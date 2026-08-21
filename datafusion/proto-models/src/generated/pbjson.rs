@@ -4500,7 +4500,9 @@ impl serde::Serialize for CsvScanExecNode {
             struct_ser.serialize_field("truncateRows", &self.truncate_rows)?;
         }
         if let Some(v) = self.terminator.as_ref() {
-            struct_ser.serialize_field("terminator", v)?;
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.optional_escape.as_ref() {
             match v {
@@ -4652,7 +4654,9 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             if terminator__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("terminator"));
                             }
-                            terminator__ = map_.next_value()?;
+                            terminator__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
+                            ;
                         }
                         GeneratedField::Escape => {
                             if optional_escape__.is_some() {

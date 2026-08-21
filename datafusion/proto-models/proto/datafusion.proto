@@ -1294,8 +1294,8 @@ message CsvScanExecNode {
   }
   bool newlines_in_values = 7;
   bool truncate_rows = 8;
-  // Custom line terminator. Absent means the default newline terminator.
-  optional string terminator = 9;
+  // Custom one-byte line terminator. Absent means the default newline terminator.
+  optional bytes terminator = 9;
 }
 
 message JsonScanExecNode {
