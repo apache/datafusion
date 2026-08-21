@@ -452,6 +452,103 @@ fn create_list_of_struct_array(n: usize, list_len: usize, null_density: f32) -> 
     ))
 }
 
+/// Head-to-head for the coalesce-peers rewrite: N independent primitive
+/// `first_value` accumulators (the pre-rewrite plan) vs one struct-valued
+/// accumulator carrying the same N columns (the post-rewrite plan). Uses the
+/// same worst-case ordering as [`update_bench`] so every row forces an
+/// ordering comparison in every accumulator.
+#[expect(clippy::needless_pass_by_value)]
+fn coalesce_comparison_bench(
+    c: &mut Criterion,
+    name: &str,
+    column_values: Vec<ArrayRef>,
+    struct_values: ArrayRef,
+    ord: ArrayRef,
+    num_groups: usize,
+) {
+    let n = ord.len();
+    let group_indices: Vec<usize> = (0..n).map(|i| i % num_groups).collect();
+    let worst_ord: ArrayRef = Arc::new(Int64Array::from(vec![i64::MAX; n]));
+
+    // Pre-rewrite: one accumulator per column.
+    c.bench_function(&format!("{name} separate x{}", column_values.len()), |b| {
+        b.iter_batched(
+            || {
+                column_values
+                    .iter()
+                    .map(|values| {
+                        let mut acc = prepare_typed_groups_accumulator(
+                            true,
+                            values.data_type().clone(),
+                        );
+                        acc.update_batch(
+                            &[Arc::clone(values), Arc::clone(&worst_ord)],
+                            &group_indices,
+                            None,
+                            num_groups,
+                        )
+                        .unwrap();
+                        acc
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |mut accumulators| {
+                for _ in 0..100 {
+                    for (acc, values) in accumulators.iter_mut().zip(&column_values) {
+                        #[expect(clippy::unit_arg)]
+                        black_box(
+                            acc.update_batch(
+                                &[Arc::clone(values), Arc::clone(&ord)],
+                                &group_indices,
+                                None,
+                                num_groups,
+                            )
+                            .unwrap(),
+                        );
+                    }
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    // Post-rewrite: a single struct-valued accumulator.
+    c.bench_function(&format!("{name} coalesced struct"), |b| {
+        b.iter_batched(
+            || {
+                let mut acc = prepare_typed_groups_accumulator(
+                    true,
+                    struct_values.data_type().clone(),
+                );
+                acc.update_batch(
+                    &[Arc::clone(&struct_values), Arc::clone(&worst_ord)],
+                    &group_indices,
+                    None,
+                    num_groups,
+                )
+                .unwrap();
+                acc
+            },
+            |mut accumulator| {
+                for _ in 0..100 {
+                    #[expect(clippy::unit_arg)]
+                    black_box(
+                        accumulator
+                            .update_batch(
+                                &[Arc::clone(&struct_values), Arc::clone(&ord)],
+                                &group_indices,
+                                None,
+                                num_groups,
+                            )
+                            .unwrap(),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
 fn first_last_nested_benchmark(c: &mut Criterion) {
     const N: usize = 65536;
     const NUM_GROUPS: usize = 1024;
@@ -510,6 +607,19 @@ fn first_last_nested_benchmark(c: &mut Criterion) {
             );
         }
     }
+    // Coalesce-peers head-to-head on null-free columns.
+    let a = Arc::new(create_primitive_array::<Int64Type>(N, 0.0)) as ArrayRef;
+    let b = Arc::new(create_string_array_with_len::<i32>(N, 0.0, 16)) as ArrayRef;
+    let d = Arc::new(create_primitive_array::<Float64Type>(N, 0.0)) as ArrayRef;
+    let struct_values = create_struct_array(N, 0.0);
+    coalesce_comparison_bench(
+        c,
+        "first_value coalesce_peers(i64,utf8,f64)",
+        vec![a, b, d],
+        struct_values,
+        ord,
+        NUM_GROUPS,
+    );
 }
 
 fn first_last_benchmark(c: &mut Criterion) {
