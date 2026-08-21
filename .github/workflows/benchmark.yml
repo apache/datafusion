@@ -15,9 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Catches performance regressions by running TPC-H SF1 for the base branch and
+# Catches performance regressions by running TPC-H SF10 for the base branch and
 # for the PR merged into it, then failing when the PR is slower than the
-# configured limits allow.
+# configured limits allow. SF10 rather than SF1 because SF1 queries finish in
+# milliseconds, where runner noise is a large fraction of the measurement.
 #
 # The two binaries are built by two jobs, on a runner each, and both are then
 # measured by a third job on one machine: building is embarrassingly parallel,
@@ -49,6 +50,13 @@ on:
         description: 'Fail if the total time is more than this much slower'
         type: string
         default: '1.05'
+      scale_factor:
+        description: 'TPC-H scale factor'
+        type: choice
+        options:
+          - '10'
+          - '1'
+        default: '10'
       profile:
         description: 'Cargo profile to build both sides with'
         type: choice
@@ -67,6 +75,7 @@ env:
   # `release` when a change is expected to interact with cross-crate inlining,
   # or to get numbers comparable with locally posted `bench.sh` results.
   CARGO_PROFILE: ${{ inputs.profile || 'release-nonlto' }}
+  SCALE_FACTOR: ${{ inputs.scale_factor || '10' }}
   ITERATIONS: ${{ inputs.iterations || '5' }}
   QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
   TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
@@ -173,7 +182,7 @@ jobs:
 
   # Both sides are measured here, on this one machine, back to back.
   benchmark:
-    name: TPC-H SF1 (PR vs base)
+    name: TPC-H (PR vs base)
     needs: [resolve, build]
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     timeout-minutes: 90
@@ -218,67 +227,59 @@ jobs:
               exit 1
             fi
           done
-      - name: Install Rust
-        # Only so tpchgen-cli can be built from source if no prebuilt binary
-        # matches this runner; nothing here is compiled otherwise.
-        run: |
-          if ! command -v rustup > /dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-            export PATH="$HOME/.cargo/bin:$PATH"
-          fi
-          rustup toolchain install
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-      - name: Install tpchgen-cli
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
-        with:
-          # pinned, so the generated data does not change under the benchmark
-          tool: tpchgen-cli@3.0.0
-      - name: Generate TPC-H SF1 data
+      - name: Generate TPC-H data
         # Same generator settings as `bench.sh data tpch`, inlined because that
         # path also downloads the expected answers through `docker run -it`,
         # which needs a TTY and is only used for result validation.
+        #
+        # tpchgen-cli comes from its PyPI wheel: the same 3.0.0 release as the
+        # crate, but a ~4MB download instead of a build from source, since the
+        # project attaches no binaries to its GitHub releases for a prebuilt
+        # fetch to find. It also means this job needs no Rust toolchain at all.
         run: |
-          mkdir -p "$DATA_DIR/tpch_sf1" "$RESULTS_DIR/base" "$RESULTS_DIR/pr"
-          tpchgen-cli \
-            --scale-factor 1 \
+          mkdir -p "$DATA_DIR/tpch_sf$SCALE_FACTOR" "$RESULTS_DIR/base" "$RESULTS_DIR/pr"
+          uv tool run --from 'tpchgen-cli==3.0.0' tpchgen-cli \
+            --scale-factor "$SCALE_FACTOR" \
             --format parquet \
             --parquet-compression 'ZSTD(1)' \
             --parts=1 \
-            --output-dir "$DATA_DIR/tpch_sf1"
+            --output-dir "$DATA_DIR/tpch_sf$SCALE_FACTOR"
+          du -sh "$DATA_DIR/tpch_sf$SCALE_FACTOR"
+          df -h "$DATA_DIR"
       # Each side runs from its own tree and reads the one generated dataset.
       - name: Benchmark base
         run: |
           cd "$BENCH_ROOT/base/benchmarks"
           "$RUNNER_TEMP/bin/base/benchmark_runner" tpch \
-            --scale-factor 1 \
+            --scale-factor "$SCALE_FACTOR" \
             --format parquet \
             --iterations "$ITERATIONS" \
             --path "$DATA_DIR" \
-            --output "$RESULTS_DIR/base/tpch_sf1.json"
+            --output "$RESULTS_DIR/base/tpch_sf$SCALE_FACTOR.json"
       - name: Benchmark PR
         run: |
           cd "$BENCH_ROOT/pr/benchmarks"
           "$RUNNER_TEMP/bin/pr/benchmark_runner" tpch \
-            --scale-factor 1 \
+            --scale-factor "$SCALE_FACTOR" \
             --format parquet \
             --iterations "$ITERATIONS" \
             --path "$DATA_DIR" \
-            --output "$RESULTS_DIR/pr/tpch_sf1.json"
+            --output "$RESULTS_DIR/pr/tpch_sf$SCALE_FACTOR.json"
       - name: Compare
         run: |
           set -uo pipefail
           status=0
           uv run --no-project --with rich python3 benchmarks/compare.py \
-            "$RESULTS_DIR/base/tpch_sf1.json" \
-            "$RESULTS_DIR/pr/tpch_sf1.json" \
+            "$RESULTS_DIR/base/tpch_sf$SCALE_FACTOR.json" \
+            "$RESULTS_DIR/pr/tpch_sf$SCALE_FACTOR.json" \
             --fail-threshold "$QUERY_REGRESSION" \
             --fail-total-threshold "$TOTAL_REGRESSION" \
             > "$RESULTS_DIR/comparison.txt" 2>&1 || status=$?
           cat "$RESULTS_DIR/comparison.txt"
           {
-            echo "### TPC-H SF1: base (${{ needs.resolve.outputs.base_sha }}) vs PR"
+            echo "### TPC-H SF$SCALE_FACTOR: base (${{ needs.resolve.outputs.base_sha }}) vs PR"
             echo
             echo "\`$ITERATIONS\` iterations per query; the fastest of each is compared, to keep runner noise out of the ratio."
             echo "Fails above \`${QUERY_REGRESSION}x\` for a single query or \`${TOTAL_REGRESSION}x\` in total."
@@ -289,13 +290,13 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$status" -ne 0 ]; then
-            echo "::error::TPC-H SF1 got slower than the configured limits allow, see the job summary"
+            echo "::error::TPC-H SF$SCALE_FACTOR got slower than the configured limits allow, see the job summary"
           fi
           exit "$status"
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: tpch-sf1-comparison
+          name: tpch-comparison
           path: ${{ runner.temp }}/results
           retention-days: 7

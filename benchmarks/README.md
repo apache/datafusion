@@ -259,14 +259,17 @@ Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead
 
 ### In CI
 
-The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs TPC-H SF1
+The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs TPC-H SF10
 against the base branch and against the PR merged into it, both on the same
-runner, and fails when the PR is slower than the configured limits allow. It is
-opt-in, because two builds plus two benchmark runs still take a good half hour:
+runner, and fails when the PR is slower than the configured limits allow. SF10
+rather than SF1, because SF1 queries finish in milliseconds, where runner noise
+is a large fraction of the measurement. It is opt-in, because the builds plus
+two SF10 runs take a good half hour:
 
 - add the `performance` label to a PR, or
-- start it from the Actions tab (`workflow_dispatch`), where the iteration
-  count, both regression limits, and the cargo profile can be overridden
+- start it from the Actions tab (`workflow_dispatch`), where the scale factor,
+  iteration count, both regression limits, and the cargo profile can be
+  overridden
 
 The workflow is three jobs: one resolves the base commit, two build a
 `benchmark_runner` each (one runner per side, so the builds really are
@@ -290,7 +293,11 @@ checks that each binary can still see the `tpch` suite before it starts
 measuring.
 
 The comparison table is written to the job summary, and the two result JSON
-files plus the table are uploaded as the `tpch-sf1-comparison` artifact.
+files plus the table are uploaded as the `tpch-comparison` artifact.
+
+The data is generated with the same `tpchgen-cli` settings `bench.sh data tpch`
+uses, from the tool's PyPI wheel rather than a source build, which keeps a Rust
+toolchain out of the benchmark job entirely.
 
 Runners are shared machines, so treat the numbers as a signal rather than a
 measurement: the defaults (fail above `1.20x` for a single query or `1.05x` in
