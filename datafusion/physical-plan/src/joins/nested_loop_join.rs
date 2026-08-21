@@ -1260,9 +1260,9 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) left_data: OnceFut<JoinLeftData>,
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
-    /// - output_schema: ['a', 'c']
-    /// - left_schema: ['a', 'b']
-    /// - right_schema: ['c']
+    /// - output_schema: `['a', 'c']`
+    /// - left_schema: `['a', 'b']`
+    /// - right_schema: `['c']`
     ///
     /// The column indices would be [(left, 0), (right, 0)] -- taking the left
     /// 0th column and right 0th column can construct the output schema.

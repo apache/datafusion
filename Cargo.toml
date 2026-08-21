@@ -279,7 +279,6 @@ cast_sign_loss = "allow"                      # 440 hits
 cloned_instead_of_copied = "allow"            # 38 hits
 default_trait_access = "allow"                # 221 hits
 doc_comment_double_space_linebreaks = "allow" # 6 hits
-doc_link_with_quotes = "allow"                # 25 hits
 doc_markdown = "allow"                        # 4933 hits; needs a long `doc-valid-idents` list in `clippy.toml`
 enum_glob_use = "allow"                       # 98 hits
 explicit_into_iter_loop = "allow"             # 55 hits
