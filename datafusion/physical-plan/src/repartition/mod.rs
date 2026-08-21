@@ -2409,7 +2409,6 @@ impl PerPartitionStream {
                                 // We must block on spill stream until we get the batch
                                 // to preserve ordering
                                 self.state = StreamState::ReadingSpilled;
-                                continue;
                             }
                             Err(e) => {
                                 return Poll::Ready(Some(Err(e)));
@@ -2422,8 +2421,7 @@ impl PerPartitionStream {
                                 // All input partitions finished
                                 return Poll::Ready(None);
                             }
-                            // Continue to poll for more data from other partitions
-                            continue;
+                            // Otherwise poll for more data from the other partitions
                         }
                         None => {
                             // Channel closed unexpectedly

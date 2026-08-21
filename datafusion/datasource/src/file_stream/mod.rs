@@ -95,7 +95,7 @@ impl FileStream {
                 FileStreamState::Scan { scan_state: queue } => {
                     let action = queue.poll_scan(cx);
                     match action {
-                        ScanAndReturn::Continue => continue,
+                        ScanAndReturn::Continue => {}
                         ScanAndReturn::Done(result) => {
                             self.state = FileStreamState::Done;
                             return Poll::Ready(result);

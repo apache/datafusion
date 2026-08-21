@@ -305,7 +305,6 @@ missing_fields_in_debug = "allow"             # 29 hits
 missing_panics_doc = "allow"                  # 244 hits
 must_use_candidate = "allow"                  # 2726 hits
 needless_bitwise_bool = "allow"               # 1 hit
-needless_continue = "allow"                   # 37 hits
 needless_raw_string_hashes = "allow"          # 540 hits
 ptr_as_ptr = "allow"                          # 83 hits
 redundant_closure_for_method_calls = "allow"  # 686 hits
