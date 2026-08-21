@@ -194,6 +194,31 @@ impl OrderingEquivalenceCache {
     }
 }
 
+/// Counts how often [`EquivalenceProperties::project_reusing`] reused a cached
+/// equivalence group instead of reprojecting it.
+///
+/// Thread local rather than a global counter: the test binary runs tests in
+/// parallel, and a shared count would let one test observe another's hits.
+#[cfg(test)]
+mod eq_group_reuse_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static HITS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record_hit() {
+        HITS.with(|h| h.set(h.get() + 1));
+    }
+
+    /// Runs `f` and reports how many reuses happened while it did.
+    pub(super) fn count<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let before = HITS.with(Cell::get);
+        let value = f();
+        (value, HITS.with(Cell::get) - before)
+    }
+}
+
 impl EquivalenceProperties {
     /// Helper used by the ordering equivalence rule when considering whether
     /// an expression can replace an existing sort key without invalidating
@@ -1194,41 +1219,36 @@ impl EquivalenceProperties {
         self.project_with_eq_group_unchecked(mapping, output_schema, eq_group)
     }
 
-    /// Same as [`Self::project`], but takes an already-projected equivalence
-    /// group instead of computing one.
+    /// Projects `self`, reusing `cached`'s already-projected equivalence group
+    /// when `self`'s group is unchanged from `previous`'s.
     ///
     /// [`EquivalenceGroup::project`] is a pure function of the group and the
-    /// mapping, so a caller that knows both are unchanged since the last
-    /// projection can hand back the previous result rather than recomputing an
-    /// identical one. Orderings are still derived here: they are precisely what
-    /// changes when a sort is introduced below this node.
+    /// mapping, so when the group is unchanged the previous result can be handed
+    /// back rather than recomputed. Orderings are still derived here: they are
+    /// precisely what changes when a sort is introduced below this node.
     ///
-    /// # Preconditions
-    ///
-    /// `eq_group` must equal `self.eq_group.project(mapping)`. Anything else
-    /// yields equivalence properties that disagree with the projection, which
-    /// later rules will then reason from. The precondition cannot be enforced
-    /// cheaply -- checking it means performing the very projection the caller is
-    /// avoiding -- so it is asserted in debug builds only and left to the caller
-    /// in release.
-    pub fn project_with_eq_group(
+    /// Falls back to a full projection when the groups differ, so there is no
+    /// precondition to violate. The caller does still have to pass a `cached`
+    /// that came from projecting `previous` through this same `mapping`; that
+    /// part cannot be checked here, and in practice it holds because the caller
+    /// carries its projection over untouched.
+    pub fn project_reusing(
         &self,
         mapping: &ProjectionMapping,
         output_schema: SchemaRef,
-        eq_group: EquivalenceGroup,
+        previous: &EquivalenceProperties,
+        cached: &EquivalenceProperties,
     ) -> Self {
-        debug_assert!(
-            eq_group.has_same_classes(&self.eq_group.project(mapping)),
-            "project_with_eq_group was handed a group that is not the projection \
-             of this one: got {:?}, expected {:?}",
-            eq_group,
+        let eq_group = if self.eq_group.has_same_classes(&previous.eq_group) {
+            #[cfg(test)]
+            eq_group_reuse_probe::record_hit();
+            cached.eq_group.clone()
+        } else {
             self.eq_group.project(mapping)
-        );
+        };
         self.project_with_eq_group_unchecked(mapping, output_schema, eq_group)
     }
 
-    /// [`Self::project_with_eq_group`] without the precondition check, for
-    /// callers that produced `eq_group` themselves.
     fn project_with_eq_group_unchecked(
         &self,
         mapping: &ProjectionMapping,
@@ -1649,19 +1669,25 @@ mod tests {
     }
 
     #[test]
-    fn test_project_with_eq_group_matches_project() -> Result<()> {
+    fn test_project_reusing_matches_project() -> Result<()> {
         let (schema, eq_properties) = create_test_params()?;
         let output_schema = renamed_schema();
         let mapping = renaming_mapping(&schema, &output_schema)?;
 
         let baseline = eq_properties.project(&mapping, Arc::clone(&output_schema));
-        // Handing back exactly what `project` would have computed must
-        // reproduce it in full: this is the invariant the `ProjectionExec`
-        // fast path relies on.
-        let reused = eq_properties.project_with_eq_group(
-            &mapping,
-            Arc::clone(&output_schema),
-            eq_properties.eq_group().project(&mapping),
+
+        // Reusing the projection of an identical group must reproduce it exactly.
+        let (reused, hits) = eq_group_reuse_probe::count(|| {
+            eq_properties.project_reusing(
+                &mapping,
+                Arc::clone(&output_schema),
+                &eq_properties,
+                &baseline,
+            )
+        });
+        assert_eq!(
+            hits, 1,
+            "the reuse path was not taken, so this compares nothing"
         );
 
         // Guard against a vacuous comparison.
@@ -1686,22 +1712,41 @@ mod tests {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "not the projection of this one")]
-    fn test_project_with_eq_group_rejects_a_group_it_did_not_produce() {
-        // The precondition cannot be enforced cheaply in release -- checking it
-        // means performing the projection the caller is skipping -- so it is a
-        // debug assertion. This pins that the assertion is actually wired up,
-        // since a caller passing an unrelated group would otherwise get
-        // equivalence properties that silently disagree with the projection.
-        let (schema, eq_properties) = create_test_params().expect("test params");
+    fn test_project_reusing_falls_back_when_the_group_moved() -> Result<()> {
+        // A `previous` whose group differs must not have its projection carried
+        // over. There is no precondition to violate here: the fallback is what
+        // keeps a mismatched pair from producing properties that disagree with
+        // the projection.
+        let (schema, eq_properties) = create_test_params()?;
         let output_schema = renamed_schema();
-        let mapping = renaming_mapping(&schema, &output_schema).expect("mapping");
+        let mapping = renaming_mapping(&schema, &output_schema)?;
 
-        eq_properties.project_with_eq_group(
-            &mapping,
-            output_schema,
-            EquivalenceGroup::default(),
+        let baseline = eq_properties.project(&mapping, Arc::clone(&output_schema));
+        let unrelated = EquivalenceProperties::new(Arc::clone(&schema));
+        assert!(
+            !eq_properties
+                .eq_group()
+                .has_same_classes(unrelated.eq_group()),
+            "the two groups were meant to differ"
         );
+
+        let (recomputed, hits) = eq_group_reuse_probe::count(|| {
+            eq_properties.project_reusing(
+                &mapping,
+                Arc::clone(&output_schema),
+                &unrelated,
+                &baseline,
+            )
+        });
+        assert_eq!(hits, 0, "a mismatched group was carried over anyway");
+
+        // Falling back must land on exactly what `project` would have produced.
+        assert!(
+            baseline.eq_group().has_same_classes(recomputed.eq_group()),
+            "equivalence group"
+        );
+        assert_eq!(baseline.oeq_class(), recomputed.oeq_class(), "orderings");
+
+        Ok(())
     }
 }
