@@ -369,8 +369,7 @@ impl ExprSchemable for Expr {
 
                 Ok(expr_nullable | subquery_nullable)
             }
-            Expr::ScalarSubquery(subquery) => Ok(subquery.subquery.min_rows() == 0
-                || subquery.subquery.schema().field(0).is_nullable()),
+            Expr::ScalarSubquery(subquery) => Ok(scalar_subquery_nullable(subquery)),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
             }
@@ -518,9 +517,12 @@ impl ExprSchemable for Expr {
             }
             Expr::ScalarSubquery(subquery) => {
                 let field = subquery.subquery.schema().field(0);
-                Ok(Arc::new(field.as_ref().clone().with_nullable(
-                    field.is_nullable() || subquery.subquery.min_rows() == 0,
-                )))
+                Ok(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_nullable(scalar_subquery_nullable(subquery)),
+                ))
             }
             Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
                 let (left_field, right_field) =
@@ -753,6 +755,15 @@ fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
         Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
         _ => expr,
     }
+}
+
+/// Returns whether a scalar subquery may evaluate to NULL.
+///
+/// This is the case if the subquery's projected field is nullable, or if the
+/// subquery may return no rows: a scalar subquery that produces no rows
+/// evaluates to NULL regardless of the nullability of its projected field.
+fn scalar_subquery_nullable(subquery: &Subquery) -> bool {
+    subquery.subquery.schema().field(0).is_nullable() || subquery.subquery.min_rows() == 0
 }
 
 /// Cast subquery in InSubquery/ScalarSubquery to a given type.
