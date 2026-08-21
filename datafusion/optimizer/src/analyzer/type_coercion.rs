@@ -1076,6 +1076,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
                 | DataType::LargeList(_)
                 | DataType::FixedSizeList(_, _)
                 | DataType::Boolean
+                | DataType::Time32(_)
+                | DataType::Time64(_)
         )
     {
         Ok(col_type.clone())
