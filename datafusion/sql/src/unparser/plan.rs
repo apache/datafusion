@@ -1357,7 +1357,7 @@ impl Unparser<'_> {
 
                 let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
                     join.join_type,
-                    &join.filter,
+                    join.filter.as_ref(),
                     table_scan_filters,
                 );
                 for filter in where_filters {
@@ -2571,17 +2571,17 @@ impl Unparser<'_> {
     /// Returns `(on_filter, where_filters)`.
     fn split_join_on_and_where_filters(
         join_type: JoinType,
-        join_filter: &Option<Expr>,
+        join_filter: Option<&Expr>,
         table_scan_filters: Vec<Expr>,
     ) -> (Option<Expr>, Vec<Expr>) {
         if table_scan_filters.is_empty() {
-            return (join_filter.clone(), vec![]);
+            return (join_filter.cloned(), vec![]);
         }
 
         if join_type == JoinType::Inner {
             // ON and WHERE are equivalent for inner joins; prefer WHERE
             // because some dialects reject subqueries inside JOIN ON.
-            return (join_filter.clone(), table_scan_filters);
+            return (join_filter.cloned(), table_scan_filters);
         }
 
         // Outer joins: fold table-scan filters into ON to preserve semantics.
