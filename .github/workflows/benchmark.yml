@@ -190,6 +190,11 @@ jobs:
         with:
           fetch-depth: 2
       - name: Free Disk Space (Ubuntu)
+        # Two minutes of deleting Android SDKs, which a release build of the
+        # workspace genuinely needs on `ubuntu-latest`'s 14GB. The RunsOn
+        # runner above asks for `disk=large` and has no such problem, so only
+        # the fallback pays for this.
+        if: vars.USE_RUNS_ON != 'true'
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
       - name: Install Rust
         run: |
@@ -210,14 +215,28 @@ jobs:
           else
             git worktree add --detach "$BENCH_ROOT/$SIDE" HEAD
           fi
+      - name: Cache the dependency build
+        # A cold build of this is fourteen minutes, most of it dependencies
+        # that neither side changed. The action drops workspace crates from
+        # what it saves, so a hit rebuilds DataFusion and reuses the rest.
+        #
+        # `workspaces` because the build happens in a worktree outside the
+        # checkout, and one shared key for both sides because they are a commit
+        # or two apart and share a dependency graph. Only a push to `main`
+        # writes the cache: pull request runs would each save a near-identical
+        # copy of it.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          workspaces: ${{ env.BENCH_ROOT }}/${{ matrix.side }}
+          shared-key: benchmark-${{ env.CARGO_PROFILE }}
+          save-if: ${{ github.event_name == 'push' }}
       - name: Build benchmark_runner
         env:
           SIDE: ${{ matrix.side }}
-          CARGO_TARGET_DIR: ${{ runner.temp }}/target
         run: |
           cd "$BENCH_ROOT/$SIDE"
           cargo build --profile "$CARGO_PROFILE" -p datafusion-benchmarks --bin benchmark_runner
-          cp "$CARGO_TARGET_DIR/$CARGO_PROFILE/benchmark_runner" "$RUNNER_TEMP/benchmark_runner"
+          cp "target/$CARGO_PROFILE/benchmark_runner" "$RUNNER_TEMP/benchmark_runner"
       - name: Upload benchmark_runner
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -283,12 +302,14 @@ jobs:
         # crate, but a ~4MB download instead of a build from source, since the
         # project attaches no binaries to its GitHub releases for a prebuilt
         # fetch to find. It also means this job needs no Rust toolchain at all.
+        #
+        # `parquet` as a subcommand rather than `--format parquet`: 3.0.0
+        # deprecated the flag form and warns that it goes away in 4.0.0.
         run: |
           mkdir -p "$DATA_DIR/tpch_sf$SCALE_FACTOR" "$RESULTS_DIR/base" "$RESULTS_DIR/head"
-          uv tool run --from 'tpchgen-cli==3.0.0' tpchgen-cli \
+          uv tool run --from 'tpchgen-cli==3.0.0' tpchgen-cli parquet \
             --scale-factor "$SCALE_FACTOR" \
-            --format parquet \
-            --parquet-compression 'ZSTD(1)' \
+            --compression 'ZSTD(1)' \
             --parts=1 \
             --output-dir "$DATA_DIR/tpch_sf$SCALE_FACTOR"
           du -sh "$DATA_DIR/tpch_sf$SCALE_FACTOR"
@@ -323,11 +344,13 @@ jobs:
               --path "$DATA_DIR" \
               --output "$output"
           }
-          # One discarded pass first, so no measured round is the only one
-          # paying to pull the parquet files into the page cache. It writes
-          # outside RESULTS_DIR, which is where compare.py looks for rounds.
-          echo "::group::warmup"
-          run_side base "$RUNNER_TEMP/warmup.json"
+          # Read the data once first, so no measured round is the only one
+          # paying to pull the parquet files into the page cache. Reading the
+          # files is all a warmup can carry between rounds -- each round is a
+          # fresh process -- and it takes seconds where a discarded pass of the
+          # suite took as long as a round.
+          echo "::group::warm the page cache"
+          find "$DATA_DIR" -type f -exec cat {} + > /dev/null
           echo "::endgroup::"
           for round in $(seq 1 "$ROUNDS"); do
             # Alternate which side goes first, so with an even ROUNDS

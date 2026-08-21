@@ -333,7 +333,10 @@ JSON plus the table are uploaded as the `tpch-comparison` artifact.
 
 The data is generated with the same `tpchgen-cli` settings `bench.sh data tpch`
 uses, from the tool's PyPI wheel rather than a source build, which keeps a Rust
-toolchain out of the benchmark job entirely.
+toolchain out of the benchmark job entirely. Generating SF10 takes well under a
+minute; what the workflow's half hour actually goes on is the two builds, so
+they restore a dependency cache and skip the `ubuntu-latest` disk cleanup when
+the runner has the disk already.
 
 Runners are shared machines, so treat the numbers as a signal rather than a
 measurement. A query has to clear three separate bars to fail the gate, and
