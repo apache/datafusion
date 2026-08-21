@@ -280,6 +280,23 @@ A failure on `main` blocks nothing -- there is no PR left to hold up -- so read
 it as a bisect that has already been done for you: the run names the commit and
 the queries, and the uploaded rounds show how solid the verdict is.
 
+Which machine the run lands on follows from the trigger, and it matters more
+than any of the limits below. GitHub withholds `vars` from workflows triggered
+by a pull request from a fork, so `vars.USE_RUNS_ON` reads as empty there no
+matter how the repository has it set, and the run falls back to a shared 4-vCPU
+`ubuntu-latest` -- the same fallback the whole of `rust.yml` takes on fork pull
+requests. A push to `main` or a manual dispatch runs in the repository's own
+context and gets the 16-vCPU runner the workflow asks for. So a labelled fork
+pull request is a coarse signal, and the run on `main` right after the merge is
+the measurement; the benchmark job prints its CPU count and warns when it is
+on the fallback.
+
+One consequence of the faster machine: SF10 queries that take 300ms on four
+vCPUs take under 100ms on sixteen, and a 20% regression on those is inside the
+25ms floor described below, so the four shortest queries stop being gated.
+Dispatch with a smaller `min_delta_ms`, or a larger scale factor, when those
+are the queries in question.
+
 The workflow is three jobs: one resolves the base commit, two build a
 `benchmark_runner` each (one runner per side, so the builds really are
 simultaneous), and the last one measures both binaries on a single machine,

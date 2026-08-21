@@ -294,16 +294,20 @@ jobs:
           du -sh "$DATA_DIR/tpch_sf$SCALE_FACTOR"
           df -h "$DATA_DIR"
       - name: Describe the machine
-        # A comparison is only as good as the machine under it, and the runner
-        # this lands on is not always the one the `runs-on` line above asks for
-        # -- without the RunsOn variable set it falls back to a shared 4-vCPU
-        # `ubuntu-latest`, where the noise floor is several times higher.
+        # A comparison is only as good as the machine under it, and this does
+        # not always land on the machine the `runs-on` line above asks for.
+        # GitHub withholds `vars` from workflows triggered by a pull request
+        # from a fork, so `vars.USE_RUNS_ON` reads as empty there however it is
+        # set on the repository, and every job falls back to a shared 4-vCPU
+        # `ubuntu-latest` -- which is where this workflow's own false Q02
+        # regressions were measured. Pushes to `main` and manual dispatches run
+        # in the repository's own context and do get the 16-vCPU runner.
         run: |
           echo "cpus: $(nproc)"
           lscpu | grep -E '^(Model name|Socket|Core|Thread|CPU\(s\)):' || true
           free -h
           if [ "$(nproc)" -lt 8 ]; then
-            echo "::warning::running on $(nproc) CPUs; expect a high noise floor and marginal verdicts"
+            echo "::warning::running on $(nproc) CPUs, not the runner this workflow asks for; expect a high noise floor. Fork pull requests cannot reach the larger runner -- the run on \`main\` after the merge is the authoritative one."
           fi
       # Each side runs from its own tree and reads the one generated dataset.
       - name: Benchmark both sides, interleaved
