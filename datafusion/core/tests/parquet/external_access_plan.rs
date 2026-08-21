@@ -70,7 +70,7 @@ async fn scan_all() {
 
     // Verify that some bytes were read
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]
@@ -87,7 +87,7 @@ async fn skip_all() {
 
     // Verify that skipping all row groups skips reading any data at all
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_eq!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_eq!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]
@@ -184,7 +184,7 @@ async fn row_selection_extension() {
 
     // only the first row group is read, so some bytes are scanned
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]
@@ -215,7 +215,7 @@ async fn row_selection_extension_spanning_row_groups() {
     .unwrap();
 
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
 }
 
 #[tokio::test]

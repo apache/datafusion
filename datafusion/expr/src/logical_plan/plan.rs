@@ -2189,7 +2189,7 @@ impl LogicalPlan {
                         };
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "{join_type} Join:",)?;
+                                write!(f, "{join_type} Join:")?;
                                 if !join_expr.is_empty() || !filter_expr.is_empty() {
                                     write!(
                                         f,
@@ -2260,7 +2260,7 @@ impl LogicalPlan {
                                 .as_ref()
                                 .map_or_else(|| "None".to_string(), |x| x.to_string()),
                         };
-                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}",)
+                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}")
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
                         write!(f, "Subquery:")

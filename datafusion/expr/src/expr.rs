@@ -3042,7 +3042,7 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3324,7 +3324,7 @@ impl Display for SqlDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3338,7 +3338,7 @@ impl Display for SqlDisplay<'_> {
                 }
 
                 for (when, then) in when_then_expr {
-                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then))?;
                 }
 
                 if let Some(e) = else_expr {
