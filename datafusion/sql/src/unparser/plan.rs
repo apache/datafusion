@@ -329,7 +329,7 @@ impl Unparser<'_> {
                     .map(|e| unproject_unnest_expr(e, unnest))
                     .collect::<Result<Vec<_>>>()?;
             }
-        };
+        }
 
         // Rewrite column references that point to FLATTEN table aliases:
         // in Snowflake, FLATTEN output is accessed via .VALUE, not the
@@ -1170,7 +1170,7 @@ impl Unparser<'_> {
                         fetch.to_string(),
                         false,
                     ))));
-                };
+                }
 
                 let agg = find_agg_node_within_select(plan, select.already_projected());
                 // unproject sort expressions
@@ -1473,7 +1473,7 @@ impl Unparser<'_> {
                             select.projection(projection);
                         }
                     }
-                };
+                }
 
                 Ok(())
             }
@@ -1995,7 +1995,7 @@ impl Unparser<'_> {
             // which is normally safe to unnest as a table factor.
             // However, in the future, more comprehensive checks can be added here.
             return Ok(None);
-        };
+        }
 
         let exprs = projection
             .expr
@@ -2227,7 +2227,7 @@ impl Unparser<'_> {
                             })
                             .collect::<Vec<_>>();
                         builder = builder.project(project_columns)?;
-                    };
+                    }
                 }
 
                 let filter_expr: Result<Option<Expr>> = table_scan

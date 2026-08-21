@@ -2929,7 +2929,7 @@ impl HashNode for Expr {
                 name.hash(state);
                 field.hash(state);
             }
-        };
+        }
     }
 }
 
@@ -2952,7 +2952,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 *field = Some(other_field.as_ref().clone().with_nullable(true).into());
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -3262,7 +3262,7 @@ impl Display for SchemaDisplay<'_> {
                                 " ORDER BY [{}]",
                                 schema_name_from_sorts(order_by)?
                             )?;
-                        };
+                        }
 
                         write!(f, " {window_frame}")
                     }

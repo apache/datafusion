@@ -521,7 +521,7 @@ pub(crate) mod tests {
             let udf = node.inner();
             if !udf.is::<AbsFunc>() {
                 return exec_err!("TestExtensionCodec only expects Abs UDF");
-            };
+            }
 
             buf.push(Self::ABS_FUNC_SERIALIZED);
 

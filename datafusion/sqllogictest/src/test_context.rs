@@ -209,7 +209,7 @@ impl TestContext {
             _ => {
                 info!("Using default SessionContext");
             }
-        };
+        }
 
         Some(test_ctx)
     }

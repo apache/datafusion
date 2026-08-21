@@ -319,7 +319,6 @@ too_many_lines = "allow"                      # 484 hits
 trivially_copy_pass_by_ref = "allow"          # 74 hits
 unicode_not_nfc = "allow"                     # 2 hits
 unnecessary_literal_bound = "allow"           # 471 hits
-unnecessary_semicolon = "allow"               # 185 hits
 unnecessary_trailing_comma = "allow"          # 49 hits
 unnecessary_wraps = "allow"                   # 427 hits
 unnested_or_patterns = "allow"                # 68 hits

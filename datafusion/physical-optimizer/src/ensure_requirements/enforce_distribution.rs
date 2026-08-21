@@ -1196,7 +1196,7 @@ pub fn ensure_distribution(
         )?
     {
         plan = updated_window;
-    };
+    }
 
     // For joins in partitioned mode, we need exact hash matching between
     // both sides, so subset partitioning logic must be disabled.
@@ -1392,7 +1392,7 @@ pub fn ensure_distribution(
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
                 }
-            };
+            }
 
             Ok(DistributionChildState {
                 context: child,

@@ -2071,7 +2071,7 @@ impl LogicalPlan {
                                     ", full_filters=[{}]",
                                     expr_vec_fmt!(full_filter)
                                 )?;
-                            };
+                            }
                             if !partial_filter.is_empty() {
                                 write!(
                                     f,
@@ -4855,7 +4855,7 @@ impl Unnest {
                                     ));
                                 }
                                 _ => {}
-                            };
+                            }
                         }
 
                         // new columns dependent on the same original index
@@ -4946,7 +4946,7 @@ fn get_unnested_columns(
         _ => {
             return internal_err!("trying to unnest on invalid data type {data_type}");
         }
-    };
+    }
     Ok(qualified_columns)
 }
 
@@ -4968,7 +4968,7 @@ fn get_unnested_list_datatype_recursive(
             return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
         }
         _ => {}
-    };
+    }
 
     internal_err!("trying to unnest on invalid data type {data_type}")
 }

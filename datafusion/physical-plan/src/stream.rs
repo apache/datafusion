@@ -570,7 +570,7 @@ impl ObservedStream {
                     self.release_inner();
                 }
                 return Poll::Ready(Some(Ok(batch)));
-            };
+            }
             self.produced += batch.num_rows()
         }
         poll

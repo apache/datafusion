@@ -1581,7 +1581,7 @@ impl ConversionSpecifier {
                     temp = format!("{prefix}p{iexp}");
                 }
             }
-        };
+        }
 
         if self.conversion_type.is_upper() {
             temp = temp.to_ascii_uppercase();
@@ -1614,7 +1614,7 @@ impl ConversionSpecifier {
                 temp = " ".to_owned() + &temp;
             }
             writer.push_str(&temp);
-        };
+        }
         Ok(())
     }
 

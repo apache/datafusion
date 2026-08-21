@@ -144,7 +144,7 @@ impl StreamedBatch {
                 buffered_indices: UInt64Builder::with_capacity(capacity),
             });
             self.buffered_batch_idx = buffered_batch_idx;
-        };
+        }
         let current_chunk = self.output_indices.last_mut().unwrap();
 
         // Append index of streamed batch and index of buffered batch into current chunk

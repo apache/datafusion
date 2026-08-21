@@ -673,7 +673,7 @@ impl ListingTable {
                 }
             }
             None => {} // no ordering required
-        };
+        }
 
         let output_partitioning = if let Some(output_partitioning) =
             declared_output_partitioning

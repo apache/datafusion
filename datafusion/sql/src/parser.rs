@@ -1082,7 +1082,7 @@ impl<'a> DFParser<'a> {
                 options.push(ColumnOptionDef { name: None, option });
             } else {
                 break;
-            };
+            }
         }
         Ok(ColumnDef {
             name,

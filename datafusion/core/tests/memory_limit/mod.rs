@@ -908,7 +908,7 @@ impl TestCase {
 
         if let Some(pool) = memory_pool {
             builder = builder.with_memory_pool(pool);
-        };
+        }
         let runtime = builder.build_arc().unwrap();
 
         // Configure execution

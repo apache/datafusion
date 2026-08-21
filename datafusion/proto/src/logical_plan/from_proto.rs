@@ -255,7 +255,7 @@ pub fn parse_expr(
 
             if expr.distinct {
                 builder = builder.distinct();
-            };
+            }
 
             if let Some(filter) = parse_optional_expr(expr.filter.as_deref(), ctx, codec)?
             {

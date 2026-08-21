@@ -476,7 +476,7 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
 
                 if batch_tx.send(Ok((item, permit))).is_err() {
                     break; // stream was closed
-                };
+                }
             }
         });
 

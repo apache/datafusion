@@ -516,7 +516,7 @@ where
                         val = Some(r);
                     }
                 }
-            };
+            }
 
             val.transpose()
         })

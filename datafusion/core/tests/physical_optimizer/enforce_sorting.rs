@@ -1431,7 +1431,7 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
                 ");
             }
-        };
+        }
         })
         }
     }
@@ -1543,7 +1543,7 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
                 ");
             }
-        };
+        }
         })
         }
     }
