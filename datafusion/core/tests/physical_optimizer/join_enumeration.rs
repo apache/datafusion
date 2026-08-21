@@ -33,9 +33,12 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_enumeration::graph::{
+    JoinGraph, RelSet, iter_rels,
+};
 use datafusion_physical_optimizer::join_enumeration::{
     Combine, DefaultJoinCostModel, Exchange, JoinCostModel, JoinCostModelFactory,
-    JoinEnumeration, JoinGraph, PartSet, RelSet, iter_rels,
+    JoinEnumeration, PartSet,
 };
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
