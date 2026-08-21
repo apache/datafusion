@@ -15,10 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Catches performance regressions by running TPC-H SF10 for the base branch and
-# for the PR merged into it, then failing when the PR is slower than the
-# configured limits allow. SF10 rather than SF1 because SF1 queries finish in
-# milliseconds, where runner noise is a large fraction of the measurement.
+# Catches performance regressions by running TPC-H SF10 twice -- once for the
+# candidate commit (`head`) and once for the commit it sits on (`base`) -- then
+# failing when `head` is slower than the configured limits allow. SF10 rather
+# than SF1 because SF1 queries finish in milliseconds, where runner noise is a
+# large fraction of the measurement.
 #
 # The two binaries are built by two jobs, on a runner each, and both are then
 # measured by a third job on one machine: building is embarrassingly parallel,
@@ -38,10 +39,22 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# The builds and the benchmark runs add up to roughly half an hour of runner
-# time, and benchmarks on shared runners are noisy, so this is opt-in: add the
-# `performance` label to a PR, or start it by hand from the Actions tab.
+# On `main` this runs on every push, so each merge is measured against the
+# commit it landed on and a regression that no PR run caught is still pinned to
+# one merge. On a PR it is opt-in, because the builds and the benchmark runs add
+# up to roughly half an hour of runner time: add the `performance` label, or
+# start it by hand from the Actions tab.
 on:
+  push:
+    branches:
+      # The default branch upstream. A fork that calls it something else has to
+      # add that name here for its own merges to be measured.
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
@@ -118,7 +131,8 @@ jobs:
   # Resolved once, so the three jobs below cannot disagree about what "base" is.
   resolve:
     name: resolve base commit
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'performance')
+    # Every event except `pull_request` runs unconditionally; a PR needs the label.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'performance')
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=2,image=ubuntu24-full-x64,extras=s3-cache,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     timeout-minutes: 15
     outputs:
@@ -128,7 +142,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # For `pull_request` this is the PR already merged into the base
-          # branch; depth 2 is enough to also reach the merge's first parent.
+          # branch, for `push` the new branch tip; depth 2 is enough to also
+          # reach the first parent in both cases.
           fetch-depth: 2
       - name: Resolve base commit
         id: base
@@ -136,7 +151,14 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # A merge that just landed on the default branch. Its first parent
+            # is the branch as it was before, whether the merge was squashed
+            # into one commit or kept as a merge commit, so the difference is
+            # attributable to this one merge.
+            base_sha=$(git rev-parse "HEAD^1")
+            echo "push to $GITHUB_REF_NAME, comparing its tip against the parent"
+          elif [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
             # HEAD is the PR merged into the base branch, so its first parent
             # is the base branch tip that the merge used -- the commit this PR
             # would actually land on.
@@ -161,7 +183,7 @@ jobs:
       # No point in building one side if the other one is broken.
       fail-fast: true
       matrix:
-        side: [base, pr]
+        side: [base, head]
     steps:
       - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -205,7 +227,7 @@ jobs:
 
   # Both sides are measured here, on this one machine, back to back.
   benchmark:
-    name: TPC-H (PR vs base)
+    name: TPC-H (head vs base)
     needs: [resolve, build]
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     timeout-minutes: 90
@@ -225,23 +247,23 @@ jobs:
           # The same paths the build jobs used, so each binary finds the
           # `sql_benchmarks` directory of the tree it was built from.
           git worktree add --detach "$BENCH_ROOT/base" "$BASE_SHA"
-          git worktree add --detach "$BENCH_ROOT/pr" HEAD
+          git worktree add --detach "$BENCH_ROOT/head" HEAD
       - name: Download base benchmark_runner
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: benchmark_runner-base
           path: ${{ runner.temp }}/bin/base
-      - name: Download PR benchmark_runner
+      - name: Download head benchmark_runner
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: benchmark_runner-pr
-          path: ${{ runner.temp }}/bin/pr
+          name: benchmark_runner-head
+          path: ${{ runner.temp }}/bin/head
       - name: Check both runners see their queries
         run: |
           # Artifacts do not carry the executable bit, and a binary whose tree
           # is missing at the path baked into it would discover no benchmark at
           # all -- fail here rather than three steps later.
-          for side in base pr; do
+          for side in base head; do
             binary="$RUNNER_TEMP/bin/$side/benchmark_runner"
             chmod +x "$binary"
             if ! "$binary" --list | grep -qE '^[[:space:]]+tpch[[:space:]]'; then
@@ -262,7 +284,7 @@ jobs:
         # project attaches no binaries to its GitHub releases for a prebuilt
         # fetch to find. It also means this job needs no Rust toolchain at all.
         run: |
-          mkdir -p "$DATA_DIR/tpch_sf$SCALE_FACTOR" "$RESULTS_DIR/base" "$RESULTS_DIR/pr"
+          mkdir -p "$DATA_DIR/tpch_sf$SCALE_FACTOR" "$RESULTS_DIR/base" "$RESULTS_DIR/head"
           uv tool run --from 'tpchgen-cli==3.0.0' tpchgen-cli \
             --scale-factor "$SCALE_FACTOR" \
             --format parquet \
@@ -307,7 +329,7 @@ jobs:
             # Alternate which side goes first, so with an even ROUNDS
             # whatever the first position costs -- or saves -- is paid by each
             # side the same number of times.
-            if [ $((round % 2)) -eq 1 ]; then order="base pr"; else order="pr base"; fi
+            if [ $((round % 2)) -eq 1 ]; then order="base head"; else order="head base"; fi
             for side in $order; do
               echo "::group::round $round: $side"
               # Zero-padded, because compare.py pairs the two sides' rounds in
@@ -322,14 +344,14 @@ jobs:
           status=0
           uv run --no-project --with rich python3 benchmarks/compare.py \
             "$RESULTS_DIR/base" \
-            "$RESULTS_DIR/pr" \
+            "$RESULTS_DIR/head" \
             --fail-threshold "$QUERY_REGRESSION" \
             --fail-total-threshold "$TOTAL_REGRESSION" \
             --fail-min-delta-ms "$MIN_DELTA_MS" \
             > "$RESULTS_DIR/comparison.txt" 2>&1 || status=$?
           cat "$RESULTS_DIR/comparison.txt"
           {
-            echo "### TPC-H SF$SCALE_FACTOR: base (${{ needs.resolve.outputs.base_sha }}) vs PR"
+            echo "### TPC-H SF$SCALE_FACTOR: \`head\` (${{ github.event_name == 'push' && 'the merge that just landed' || 'this PR, merged into the base branch' }}) vs \`base\` (${{ needs.resolve.outputs.base_sha }})"
             echo
             echo "\`$ROUNDS\` rounds of \`$ITERATIONS\` iteration(s), the two sides interleaved and their order alternated per round."
             echo "A query fails the gate when the median of its per-round ratios is above \`${QUERY_REGRESSION}x\`, the regression costs at least \`${MIN_DELTA_MS}ms\`, and it is larger than the spread the base side showed against itself."

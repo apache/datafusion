@@ -260,16 +260,25 @@ Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead
 ### In CI
 
 The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs TPC-H SF10
-against the base branch and against the PR merged into it, both on the same
-runner, and fails when the PR is slower than the configured limits allow. SF10
-rather than SF1, because SF1 queries finish in milliseconds, where runner noise
-is a large fraction of the measurement. It is opt-in, because the builds plus
-two SF10 runs take a good half hour:
+twice on the same runner -- once for a candidate commit (`head`) and once for
+the commit it sits on (`base`) -- and fails when `head` is slower than the
+configured limits allow. SF10 rather than SF1, because SF1 queries finish in
+milliseconds, where runner noise is a large fraction of the measurement.
 
-- add the `performance` label to a PR, or
+It runs on **every push to `main`**, with `base` being the commit the merge
+landed on, so a regression that no pull request measured is still pinned to the
+one merge that introduced it. On a **pull request** it is opt-in, because the
+builds plus the benchmark runs take a good half hour:
+
+- add the `performance` label to a PR, whose `head` is then the PR merged into
+  its base branch, or
 - start it from the Actions tab (`workflow_dispatch`), where the scale factor,
   round and iteration counts, all three regression limits, and the cargo
   profile can be overridden
+
+A failure on `main` blocks nothing -- there is no PR left to hold up -- so read
+it as a bisect that has already been done for you: the run names the commit and
+the queries, and the uploaded rounds show how solid the verdict is.
 
 The workflow is three jobs: one resolves the base commit, two build a
 `benchmark_runner` each (one runner per side, so the builds really are
