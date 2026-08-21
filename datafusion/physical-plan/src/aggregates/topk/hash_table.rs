@@ -136,6 +136,7 @@ where
     owned: PrimitiveArray<VAL>,
     map: TopKHashTable<VAL::Native>,
     rnd: RandomState,
+    value_type: DataType,
 }
 
 impl<S> StringHashTable<S>
@@ -144,9 +145,8 @@ where
     for<'a> &'a S: StringArrayType<'a>,
 {
     pub fn new(limit: usize) -> Self {
-        let owned = S::from(Vec::new());
         Self {
-            owned,
+            owned: S::from(Vec::new()),
             map: TopKHashTable::new(limit, limit * 10),
             rnd: RandomState::default(),
         }
@@ -223,14 +223,12 @@ impl<VAL: ArrowPrimitiveType> PrimitiveHashTable<VAL>
 where
     Option<<VAL as ArrowPrimitiveType>::Native>: Comparable + HashValue,
 {
-    pub fn new(limit: usize, kt: DataType) -> Self {
-        let owned = PrimitiveArray::<VAL>::builder(0)
-            .with_data_type(kt)
-            .finish();
+    pub fn new(limit: usize, value_type: DataType) -> Self {
         Self {
-            owned,
+            owned: PrimitiveArray::<VAL>::new_null(0).with_data_type(value_type.clone()),
             map: TopKHashTable::new(limit, limit * 10),
             rnd: RandomState::default(),
+            value_type,
         }
     }
 
@@ -270,8 +268,8 @@ where
 
     fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
         let ids = self.map.take_all(indexes);
-        let mut builder: PrimitiveBuilder<VAL> = PrimitiveArray::builder(ids.len())
-            .with_data_type(self.owned.data_type().clone());
+        let mut builder: PrimitiveBuilder<VAL> =
+            PrimitiveArray::builder(ids.len()).with_data_type(self.value_type.clone());
         for id in ids.into_iter() {
             builder.append_option(id);
         }
