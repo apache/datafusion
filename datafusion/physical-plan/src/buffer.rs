@@ -357,6 +357,7 @@ impl BufferExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let buffer = crate::expect_plan_variant!(
             node,
@@ -365,7 +366,8 @@ impl BufferExec {
         );
         let input =
             ctx.decode_required_child(buffer.input.as_deref(), "BufferExec", "input")?;
-        Ok(Arc::new(BufferExec::new(input, buffer.capacity as usize)))
+        let capacity = usize_from_wire(buffer.capacity, "BufferExec", "capacity")?;
+        Ok(Arc::new(BufferExec::new(input, capacity)))
     }
 }
 

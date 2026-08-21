@@ -383,14 +383,19 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         let input = ctx.encode_child(self.input())?;
+        let fetch = self
+            .fetch()
+            .map(|fetch| usize_to_wire(fetch, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
                     protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch().map(|f| f as u32),
+                        fetch,
                     },
                 )),
             ),
@@ -411,6 +416,7 @@ impl CoalescePartitionsExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let merge = crate::expect_plan_variant!(
             node,
@@ -422,9 +428,12 @@ impl CoalescePartitionsExec {
             "CoalescePartitionsExec",
             "input",
         )?;
+        let fetch = merge
+            .fetch
+            .map(|f| usize_from_wire(f, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Arc::new(
-            CoalescePartitionsExec::new(input)
-                .with_fetch(merge.fetch.map(|f| f as usize)),
+            CoalescePartitionsExec::new(input).with_fetch(fetch),
         ))
     }
 }

@@ -213,17 +213,20 @@ impl ExecutionPlan for PlaceholderRowExec {
         &self,
         _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         let schema = self.schema().as_ref().try_into()?;
+        let partitions = usize_to_wire(
+            self.properties().output_partitioning().partition_count(),
+            "PlaceholderRowExec",
+            "partitions",
+        )?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow(
                     protobuf::PlaceholderRowExecNode {
                         schema: Some(schema),
-                        partitions: self
-                            .properties()
-                            .output_partitioning()
-                            .partition_count() as u32,
+                        partitions,
                     },
                 ),
             ),

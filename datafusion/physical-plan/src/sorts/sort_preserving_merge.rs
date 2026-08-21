@@ -472,6 +472,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         let input = ctx.encode_child(self.input())?;
         let expr = self
@@ -496,7 +497,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
-                        fetch: self.fetch().map(|f| f as i64).unwrap_or(-1),
+                        fetch: match self.fetch() {
+                            Some(n) => {
+                                usize_to_wire(n, "SortPreservingMergeExec", "fetch")?
+                            }
+                            None => -1, // no limit
+                        },
                     }),
                 ),
             ),
@@ -511,6 +517,7 @@ impl SortPreservingMergeExec {
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use arrow::compute::SortOptions;
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
         use datafusion_proto_models::protobuf;
         let spm = crate::expect_plan_variant!(
@@ -554,7 +561,9 @@ impl SortPreservingMergeExec {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return internal_err!("SortPreservingMergeExec requires an ordering");
         };
-        let fetch = (spm.fetch >= 0).then_some(spm.fetch as usize);
+        let fetch = (spm.fetch >= 0)
+            .then(|| usize_from_wire(spm.fetch, "SortPreservingMergeExec", "fetch"))
+            .transpose()?;
         Ok(Arc::new(
             SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
         ))
@@ -671,20 +680,24 @@ mod proto_tests {
         assert_eq!(encode(&spm_fixture(Some(0)), &encoder).fetch, 0);
     }
 
-    /// ... and `usize::MAX` does not survive it at all: `fetch` goes onto the
-    /// wire as `usize as i64`, so on a 64-bit target it wraps to `-1`, the
-    /// "absent" value, and reads back as an unlimited merge. Same pre-existing
-    /// `i64` wire behavior as `SortExec`, pinned here for the same reason.
+    /// `usize::MAX` does not fit the signed wire field on a 64-bit target and
+    /// must be rejected instead of wrapping to the `-1` "absent" encoding.
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn try_to_proto_wraps_usize_max_fetch_into_the_absent_encoding() {
+    fn try_to_proto_rejects_usize_max_fetch() {
         let encoder = StubPlanEncoder::ok();
-        let node = encode(&spm_fixture(Some(usize::MAX)), &encoder);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let err = spm_fixture(Some(usize::MAX))
+            .try_to_proto(&ctx)
+            .unwrap_err();
 
-        assert_eq!(node.fetch, -1);
-
-        let decoder = StubPlanDecoder::ok();
-        assert_eq!(decode(decodable_node(node.fetch), &decoder).fetch(), None);
+        assert_eq!(
+            err.strip_backtrace(),
+            format!(
+                "Error during planning: SortPreservingMergeExec: fetch value {} is out of range for the plan wire format",
+                usize::MAX
+            )
+        );
     }
 
     #[test]

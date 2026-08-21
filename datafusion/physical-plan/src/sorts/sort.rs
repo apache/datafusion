@@ -1602,6 +1602,7 @@ impl ExecutionPlan for SortExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         let input = ctx.encode_child(self.input())?;
         let expr = self
@@ -1634,8 +1635,8 @@ impl ExecutionPlan for SortExec {
                         input: Some(Box::new(input)),
                         expr,
                         fetch: match self.fetch() {
-                            Some(n) => n as i64,
-                            None => -1,
+                            Some(n) => usize_to_wire(n, "SortExec", "fetch")?,
+                            None => -1, // no limit
                         },
                         preserve_partitioning: self.preserve_partitioning(),
                         dynamic_filter,
@@ -1652,6 +1653,7 @@ impl SortExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         use protobuf::physical_expr_node::ExprType;
         let sort = crate::expect_plan_variant!(
@@ -1688,7 +1690,9 @@ impl SortExec {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return datafusion_common::internal_err!("SortExec requires an ordering");
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
+        let fetch = (sort.fetch >= 0)
+            .then(|| usize_from_wire(sort.fetch, "SortExec", "fetch"))
+            .transpose()?;
         let new_sort = SortExec::new(ordering, input)
             .with_fetch(fetch)
             .with_preserve_partitioning(sort.preserve_partitioning);
@@ -1817,25 +1821,23 @@ mod proto_tests {
         assert_eq!(node.fetch, 0);
     }
 
-    /// The other end of the range does *not* survive: `fetch` goes onto the
-    /// wire as `usize as i64`, so on a 64-bit target `usize::MAX` wraps to
-    /// `-1` — the very value that means "absent" — and reads back as an
-    /// unlimited sort. That is pre-existing behavior of the `i64` wire field
-    /// rather than something this tier introduces; pinning it keeps any change
-    /// to the encoding a deliberate one instead of a silent fix.
+    /// `usize::MAX` does not fit the signed wire field on a 64-bit target and
+    /// must be rejected instead of wrapping to the `-1` "absent" encoding.
     #[test]
     #[cfg(target_pointer_width = "64")]
-    fn try_to_proto_wraps_usize_max_fetch_into_the_absent_encoding() {
+    fn try_to_proto_rejects_usize_max_fetch() {
         let encoder = StubPlanEncoder::ok();
-        let node = encode(&sort_fixture(Some(usize::MAX)), &encoder);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let err = sort_fixture(Some(usize::MAX))
+            .try_to_proto(&ctx)
+            .unwrap_err();
 
-        assert_eq!(node.fetch, -1);
-
-        // ... and so the limit is gone by the time the node is read back.
-        let decoder = StubPlanDecoder::ok();
         assert_eq!(
-            decode(decodable_node(node.fetch, false), &decoder).fetch(),
-            None
+            err.strip_backtrace(),
+            format!(
+                "Error during planning: SortExec: fetch value {} is out of range for the plan wire format",
+                usize::MAX
+            )
         );
     }
 
