@@ -406,6 +406,8 @@ mod tests {
     }
 
     #[test]
+    // The pointer casts are aligned because the pointees are the concrete types.
+    #[expect(clippy::cast_ptr_alignment)]
     fn test_ffi_accumulator_local_bypass() -> Result<()> {
         let original_accum = AvgAccumulator::default();
         let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);

@@ -274,7 +274,6 @@ cast_lossless = "allow"                       # 361 hits
 cast_possible_truncation = "allow"            # 911 hits
 cast_possible_wrap = "allow"                  # 493 hits
 cast_precision_loss = "allow"                 # 266 hits
-cast_ptr_alignment = "allow"                  # 5 hits
 cast_sign_loss = "allow"                      # 440 hits
 cloned_instead_of_copied = "allow"            # 38 hits
 default_trait_access = "allow"                # 221 hits
