@@ -262,11 +262,19 @@ Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead
 The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs TPC-H SF1
 against the base branch and against the PR merged into it, both on the same
 runner, and fails when the PR is slower than the configured limits allow. It is
-opt-in, because two release builds plus two benchmark runs take about an hour:
+opt-in, because two builds plus two benchmark runs still take a good half hour:
 
 - add the `performance` label to a PR, or
 - start it from the Actions tab (`workflow_dispatch`), where the iteration
-  count and both regression limits can be overridden
+  count, both regression limits, and the cargo profile can be overridden
+
+The two binaries are built concurrently, with the `release-nonlto` profile
+(`release`, but with `lto = false` and 16 codegen units), which is what makes
+that half hour possible -- fat LTO with a single codegen unit roughly doubles
+the build. Both sides are built identically, so the ratio the gate looks at
+still holds. Dispatch the workflow with the `release` profile when a change is
+expected to interact with cross-crate inlining, or when the absolute numbers
+should line up with locally posted `bench.sh` results.
 
 The comparison table is written to the job summary, and the two result JSON
 files plus the table are uploaded as the `tpch-sf1-comparison` artifact.

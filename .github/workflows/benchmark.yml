@@ -46,6 +46,13 @@ on:
         description: 'Fail if the total time is more than this much slower'
         type: string
         default: '1.05'
+      profile:
+        description: 'Cargo profile to build both sides with'
+        type: choice
+        options:
+          - release-nonlto
+          - release
+        default: release-nonlto
 
 permissions:
   contents: read
@@ -56,10 +63,17 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'performance')
     # A single job, so both binaries are measured on the same machine.
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
-    # note: no rust container, so the two builds get plain `--release`
-    # binaries, comparable with what `benchmarks/bench.sh` produces locally
+    # note: no rust container, so both binaries are built the way a
+    # developer's `benchmarks/bench.sh` run builds them
     timeout-minutes: 150
     env:
+      # `release-nonlto` is `release` with `lto = false` and 16 codegen units.
+      # Building is what dominates this job, and fat LTO with one codegen unit
+      # roughly doubles it; both sides are built identically, so the ratio the
+      # gate looks at still holds. Dispatch with `release` when a change is
+      # expected to interact with cross-crate inlining, or to get numbers
+      # comparable with locally posted `bench.sh` results.
+      CARGO_PROFILE: ${{ inputs.profile || 'release-nonlto' }}
       ITERATIONS: ${{ inputs.iterations || '5' }}
       QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
       TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
@@ -131,24 +145,43 @@ jobs:
             --parquet-compression 'ZSTD(1)' \
             --parts=1 \
             --output-dir "$DATA_DIR/tpch_sf1"
-      # Separate target directories: the two source trees share crate names and
-      # versions, so one target directory would make each build evict the other.
-      - name: Build base benchmark runner
-        working-directory: ${{ runner.temp }}/base
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/target-base
-        run: cargo build --release -p datafusion-benchmarks --bin benchmark_runner
-      - name: Build PR benchmark runner
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/target-pr
-        run: cargo build --release -p datafusion-benchmarks --bin benchmark_runner
+      - name: Build both benchmark runners
+        # Concurrently, since neither build keeps every core busy on its own.
+        # They need a target directory each: cargo locks one exclusively, so
+        # sharing it would serialize the two.
+        run: |
+          build() {
+            (cd "$1" && CARGO_TARGET_DIR="$2" cargo build \
+              --profile "$CARGO_PROFILE" \
+              -p datafusion-benchmarks \
+              --bin benchmark_runner) > "$3" 2>&1
+          }
+          build "$RUNNER_TEMP/base" "$RUNNER_TEMP/target-base" "$RUNNER_TEMP/build-base.log" &
+          base_pid=$!
+          build "$GITHUB_WORKSPACE" "$RUNNER_TEMP/target-pr" "$RUNNER_TEMP/build-pr.log" &
+          pr_pid=$!
+          base_status=0
+          wait "$base_pid" || base_status=$?
+          pr_status=0
+          wait "$pr_pid" || pr_status=$?
+          # The two logs would be interleaved line by line without this.
+          echo "::group::base build"
+          cat "$RUNNER_TEMP/build-base.log"
+          echo "::endgroup::"
+          echo "::group::PR build"
+          cat "$RUNNER_TEMP/build-pr.log"
+          echo "::endgroup::"
+          if [ "$base_status" -ne 0 ] || [ "$pr_status" -ne 0 ]; then
+            echo "::error::benchmark_runner did not build (base: $base_status, PR: $pr_status)"
+            exit 1
+          fi
       # Each runner reads the queries of the tree it was built from (they are
       # resolved relative to its own `benchmarks` directory), and both read the
       # one generated dataset.
       - name: Benchmark base
         working-directory: ${{ runner.temp }}/base/benchmarks
         run: |
-          "$RUNNER_TEMP/target-base/release/benchmark_runner" tpch \
+          "$RUNNER_TEMP/target-base/$CARGO_PROFILE/benchmark_runner" tpch \
             --scale-factor 1 \
             --format parquet \
             --iterations "$ITERATIONS" \
@@ -157,7 +190,7 @@ jobs:
       - name: Benchmark PR
         working-directory: benchmarks
         run: |
-          "$RUNNER_TEMP/target-pr/release/benchmark_runner" tpch \
+          "$RUNNER_TEMP/target-pr/$CARGO_PROFILE/benchmark_runner" tpch \
             --scale-factor 1 \
             --format parquet \
             --iterations "$ITERATIONS" \
@@ -179,6 +212,7 @@ jobs:
             echo
             echo "\`$ITERATIONS\` iterations per query; the fastest of each is compared, to keep runner noise out of the ratio."
             echo "Fails above \`${QUERY_REGRESSION}x\` for a single query or \`${TOTAL_REGRESSION}x\` in total."
+            echo "Both sides built with the \`$CARGO_PROFILE\` profile."
             echo
             echo '```'
             cat "$RESULTS_DIR/comparison.txt"
