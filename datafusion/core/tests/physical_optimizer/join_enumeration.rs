@@ -33,7 +33,10 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_optimizer::join_enumeration::JoinEnumeration;
+use datafusion_physical_optimizer::join_enumeration::{
+    Combine, DefaultJoinCostModel, Exchange, JoinCostModel, JoinCostModelFactory,
+    JoinEnumeration, JoinGraph, PartSet, RelSet, iter_rels,
+};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
@@ -296,6 +299,80 @@ fn keeps_an_already_optimal_order() -> Result<()> {
         formatted(&optimize(Arc::clone(&plan), &ConfigOptions::new())?),
         formatted(&optimize(plan, &disabled)?),
     );
+    Ok(())
+}
+
+/// Row counts from outside the plan, keyed by the first column a relation emits. The
+/// tiny dimension table is claimed to be the largest of the three.
+fn external_rows(column: &str) -> f64 {
+    match column {
+        "t_type" => 1e9,
+        _ => 1e6,
+    }
+}
+
+/// Hands out [`ExternalStatisticsCostModel`].
+#[derive(Debug)]
+struct ExternalStatistics {}
+
+impl JoinCostModelFactory for ExternalStatistics {
+    fn create<'graph>(
+        &self,
+        graph: &'graph JoinGraph,
+        config: &ConfigOptions,
+    ) -> Result<Box<dyn JoinCostModel + 'graph>> {
+        Ok(Box::new(ExternalStatisticsCostModel {
+            graph,
+            inner: DefaultJoinCostModel::new(graph, config),
+        }))
+    }
+}
+
+/// Counts rows from statistics the plan does not carry, and leaves the rest of the model
+/// to the built-in one.
+struct ExternalStatisticsCostModel<'a> {
+    graph: &'a JoinGraph,
+    inner: DefaultJoinCostModel<'a>,
+}
+
+impl JoinCostModel for ExternalStatisticsCostModel<'_> {
+    fn cardinality(&self, mask: RelSet) -> f64 {
+        iter_rels(mask)
+            .map(|rel| {
+                let schema = self.graph.relations[rel].plan.schema();
+                external_rows(schema.field(0).name())
+            })
+            .product::<f64>()
+            .max(1.0)
+    }
+
+    fn combine(&self, left: RelSet, right: RelSet) -> Option<Combine> {
+        self.inner.combine(left, right)
+    }
+
+    fn exchanges(
+        &self,
+        left: RelSet,
+        right: RelSet,
+        left_part: PartSet,
+        right_part: PartSet,
+        collect_only: Option<RelSet>,
+    ) -> Vec<Exchange> {
+        self.inner
+            .exchanges(left, right, left_part, right_part, collect_only)
+    }
+}
+
+#[test]
+fn searches_under_a_plugged_in_cost_model() -> Result<()> {
+    let plan = late_reducer_plan()?;
+    // Under the plan's own statistics this order is the expensive one, and
+    // `reorders_a_late_reducer` shows the built-in model rewriting it. Told the dimension
+    // table is the largest of the three, the search keeps it.
+    let enumerated = JoinEnumeration::new()
+        .with_cost_model(Arc::new(ExternalStatistics {}))
+        .optimize(Arc::clone(&plan), &ConfigOptions::new())?;
+    assert_eq!(formatted(&enumerated), formatted(&plan));
     Ok(())
 }
 
