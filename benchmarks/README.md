@@ -268,13 +268,23 @@ two SF10 runs take a good half hour:
 
 - add the `performance` label to a PR, or
 - start it from the Actions tab (`workflow_dispatch`), where the scale factor,
-  iteration count, both regression limits, and the cargo profile can be
-  overridden
+  round and iteration counts, all three regression limits, and the cargo
+  profile can be overridden
 
 The workflow is three jobs: one resolves the base commit, two build a
 `benchmark_runner` each (one runner per side, so the builds really are
-simultaneous), and the last one measures both binaries back to back on a single
-machine, because timings taken on two different machines cannot be compared.
+simultaneous), and the last one measures both binaries on a single machine,
+because timings taken on two different machines cannot be compared.
+
+That last job measures the two sides **interleaved**: a full pass of one side,
+then a full pass of the other, six times, alternating which side goes first.
+This matters more than any choice of statistic. Measuring all of one side and
+then all of the other makes anything that drifts between the two blocks -- a
+runner that slows down halfway through, a process that drew an unlucky heap --
+look exactly like a code change, because it moves one side only. Interleaving
+turns it into round-to-round spread instead, which `compare.py` can see and
+report. The round count is kept even so each side leads the same number of
+times; dispatch with more rounds to tighten a marginal verdict.
 
 Both sides are built with the `release-nonlto` profile (`release`, but with
 `lto = false` and 16 codegen units), which together with the split is what
@@ -292,19 +302,34 @@ runs it. The workflow puts both under a fixed `/tmp` root for that reason, and
 checks that each binary can still see the `tpch` suite before it starts
 measuring.
 
-The comparison table is written to the job summary, and the two result JSON
-files plus the table are uploaded as the `tpch-comparison` artifact.
+The comparison table is written to the job summary, and every round's result
+JSON plus the table are uploaded as the `tpch-comparison` artifact.
 
 The data is generated with the same `tpchgen-cli` settings `bench.sh data tpch`
 uses, from the tool's PyPI wheel rather than a source build, which keeps a Rust
 toolchain out of the benchmark job entirely.
 
 Runners are shared machines, so treat the numbers as a signal rather than a
-measurement: the defaults (fail above `1.20x` for a single query or `1.05x` in
-total, fastest of 5 iterations) are set to catch clear regressions without
-flagging noise. Local runs on quiet hardware remain the way to confirm a
-result, and a PR that changes the TPC-H benchmark files themselves is measured
-against its own queries, which makes the comparison advisory.
+measurement. A query has to clear three separate bars to fail the gate, and
+each one is there because it was seen firing on its own:
+
+- the **median of its per-round ratios** is above `1.20x`. The median, not the
+  point ratio, so one slow pass on either side cannot decide the verdict.
+- the regression costs at least **25ms**. A `1.20x` swing on a query that runs
+  for 20ms is 4ms, which no shared runner can resolve -- this is what keeps an
+  SF1 run from failing on its short queries.
+- it is larger than the **spread the base side showed against itself** across
+  the rounds. If the same binary varied by 26% from round to round, a 25%
+  difference against the other binary is not a finding, and is reported as
+  inconclusive instead of blamed on the PR.
+
+The total time is gated at `1.05x` under the same noise floor. Everything that
+clears the first bar but not the others is printed under "Not counted against
+the gate", so a marginal result is visible rather than silently dropped.
+
+Local runs on quiet hardware remain the way to confirm a result, and a PR that
+changes the TPC-H benchmark files themselves is measured against its own
+queries, which makes the comparison advisory.
 
 ### Running Benchmarks Manually
 
@@ -351,10 +376,23 @@ of the regression limits. Without them it only prints the comparison and always
 exits successfully.
 
 ```shell
-# exit non-zero if a single query is more than 20% slower, or if the total
-# time is more than 5% slower
+# exit non-zero if a single query is more than 20% slower and at least 25ms
+# slower, or if the total time is more than 5% slower
 ./compare.py /tmp/output_main/tpch.json /tmp/output_branch/tpch.json \
-  --fail-threshold 1.20 --fail-total-threshold 1.05
+  --fail-threshold 1.20 --fail-total-threshold 1.05 --fail-min-delta-ms 25
+```
+
+Either path can also be a *directory* of summary files, one per measurement
+round, which is how CI runs it. Rounds are paired between the two sides in
+sorted filename order, so name them `round01.json`, `round02.json` and so on.
+Given several rounds, the gate rules on the median of the per-round ratios
+rather than on a single ratio, and reports how much each side varied against
+itself -- see [In CI](#in-ci) for why that is worth the trouble.
+
+```shell
+# five rounds per side, measured alternately rather than one side at a time
+./compare.py /tmp/output_main /tmp/output_branch \
+  --fail-threshold 1.20 --fail-total-threshold 1.05 --fail-min-delta-ms 25
 ```
 
 This will produce output like:

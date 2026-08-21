@@ -23,6 +23,14 @@
 # The two binaries are built by two jobs, on a runner each, and both are then
 # measured by a third job on one machine: building is embarrassingly parallel,
 # while comparing timings taken on different machines is meaningless.
+#
+# The two sides are measured interleaved -- a full pass of one, then a full
+# pass of the other, several times, alternating which goes first -- rather than
+# all of one side and then all of the other. Measuring in two blocks makes any
+# drift between them look exactly like a code change: a runner that gets slower
+# halfway through, or a process that happened to get an unlucky heap, shifts one
+# side only. Interleaving spreads that over both sides and turns it into
+# round-to-round spread, which `compare.py` can see and discount.
 
 name: Benchmarks
 
@@ -38,14 +46,22 @@ on:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
-      iterations:
-        description: 'Iterations per query (the fastest one is compared)'
+      rounds:
+        description: 'Measurement rounds (a full pass of each side per round; keep it even)'
         type: string
-        default: '5'
+        default: '6'
+      iterations:
+        description: 'Iterations per query within a round'
+        type: string
+        default: '1'
       query_regression:
         description: 'Fail if a single query is more than this much slower'
         type: string
         default: '1.20'
+      min_delta_ms:
+        description: 'Never fail a query that got less than this many ms slower'
+        type: string
+        default: '25'
       total_regression:
         description: 'Fail if the total time is more than this much slower'
         type: string
@@ -76,9 +92,16 @@ env:
   # or to get numbers comparable with locally posted `bench.sh` results.
   CARGO_PROFILE: ${{ inputs.profile || 'release-nonlto' }}
   SCALE_FACTOR: ${{ inputs.scale_factor || '10' }}
-  ITERATIONS: ${{ inputs.iterations || '5' }}
+  # Even, for two reasons: each side then leads the same number of rounds, and
+  # the median of an even number of ratios averages the two middle rounds
+  # instead of resting on one.
+  ROUNDS: ${{ inputs.rounds || '6' }}
+  ITERATIONS: ${{ inputs.iterations || '1' }}
   QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
   TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
+  # A 1.20x swing on a query that runs for 20ms is 4ms, which this kind of
+  # runner cannot resolve. Regressions have to cost real time to count.
+  MIN_DELTA_MS: ${{ inputs.min_delta_ms || '25' }}
   # `benchmark_runner` finds `sql_benchmarks` through the CARGO_MANIFEST_DIR
   # baked into it at compile time, so a binary built in one job only works in
   # another if its tree sits at the same absolute path there. Every job below
@@ -248,42 +271,70 @@ jobs:
             --output-dir "$DATA_DIR/tpch_sf$SCALE_FACTOR"
           du -sh "$DATA_DIR/tpch_sf$SCALE_FACTOR"
           df -h "$DATA_DIR"
+      - name: Describe the machine
+        # A comparison is only as good as the machine under it, and the runner
+        # this lands on is not always the one the `runs-on` line above asks for
+        # -- without the RunsOn variable set it falls back to a shared 4-vCPU
+        # `ubuntu-latest`, where the noise floor is several times higher.
+        run: |
+          echo "cpus: $(nproc)"
+          lscpu | grep -E '^(Model name|Socket|Core|Thread|CPU\(s\)):' || true
+          free -h
+          if [ "$(nproc)" -lt 8 ]; then
+            echo "::warning::running on $(nproc) CPUs; expect a high noise floor and marginal verdicts"
+          fi
       # Each side runs from its own tree and reads the one generated dataset.
-      - name: Benchmark base
+      - name: Benchmark both sides, interleaved
         run: |
-          cd "$BENCH_ROOT/base/benchmarks"
-          "$RUNNER_TEMP/bin/base/benchmark_runner" tpch \
-            --scale-factor "$SCALE_FACTOR" \
-            --format parquet \
-            --iterations "$ITERATIONS" \
-            --path "$DATA_DIR" \
-            --output "$RESULTS_DIR/base/tpch_sf$SCALE_FACTOR.json"
-      - name: Benchmark PR
-        run: |
-          cd "$BENCH_ROOT/pr/benchmarks"
-          "$RUNNER_TEMP/bin/pr/benchmark_runner" tpch \
-            --scale-factor "$SCALE_FACTOR" \
-            --format parquet \
-            --iterations "$ITERATIONS" \
-            --path "$DATA_DIR" \
-            --output "$RESULTS_DIR/pr/tpch_sf$SCALE_FACTOR.json"
+          set -euo pipefail
+          run_side() {
+            local side="$1" output="$2"
+            cd "$BENCH_ROOT/$side/benchmarks"
+            "$RUNNER_TEMP/bin/$side/benchmark_runner" tpch \
+              --scale-factor "$SCALE_FACTOR" \
+              --format parquet \
+              --iterations "$ITERATIONS" \
+              --path "$DATA_DIR" \
+              --output "$output"
+          }
+          # One discarded pass first, so no measured round is the only one
+          # paying to pull the parquet files into the page cache. It writes
+          # outside RESULTS_DIR, which is where compare.py looks for rounds.
+          echo "::group::warmup"
+          run_side base "$RUNNER_TEMP/warmup.json"
+          echo "::endgroup::"
+          for round in $(seq 1 "$ROUNDS"); do
+            # Alternate which side goes first, so with an even ROUNDS
+            # whatever the first position costs -- or saves -- is paid by each
+            # side the same number of times.
+            if [ $((round % 2)) -eq 1 ]; then order="base pr"; else order="pr base"; fi
+            for side in $order; do
+              echo "::group::round $round: $side"
+              # Zero-padded, because compare.py pairs the two sides' rounds in
+              # sorted filename order.
+              run_side "$side" "$(printf '%s/%s/round%02d.json' "$RESULTS_DIR" "$side" "$round")"
+              echo "::endgroup::"
+            done
+          done
       - name: Compare
         run: |
           set -uo pipefail
           status=0
           uv run --no-project --with rich python3 benchmarks/compare.py \
-            "$RESULTS_DIR/base/tpch_sf$SCALE_FACTOR.json" \
-            "$RESULTS_DIR/pr/tpch_sf$SCALE_FACTOR.json" \
+            "$RESULTS_DIR/base" \
+            "$RESULTS_DIR/pr" \
             --fail-threshold "$QUERY_REGRESSION" \
             --fail-total-threshold "$TOTAL_REGRESSION" \
+            --fail-min-delta-ms "$MIN_DELTA_MS" \
             > "$RESULTS_DIR/comparison.txt" 2>&1 || status=$?
           cat "$RESULTS_DIR/comparison.txt"
           {
             echo "### TPC-H SF$SCALE_FACTOR: base (${{ needs.resolve.outputs.base_sha }}) vs PR"
             echo
-            echo "\`$ITERATIONS\` iterations per query; the fastest of each is compared, to keep runner noise out of the ratio."
-            echo "Fails above \`${QUERY_REGRESSION}x\` for a single query or \`${TOTAL_REGRESSION}x\` in total."
-            echo "Both sides built with the \`$CARGO_PROFILE\` profile."
+            echo "\`$ROUNDS\` rounds of \`$ITERATIONS\` iteration(s), the two sides interleaved and their order alternated per round."
+            echo "A query fails the gate when the median of its per-round ratios is above \`${QUERY_REGRESSION}x\`, the regression costs at least \`${MIN_DELTA_MS}ms\`, and it is larger than the spread the base side showed against itself."
+            echo "The total time fails above \`${TOTAL_REGRESSION}x\` under the same noise floor."
+            echo "Both sides built with the \`$CARGO_PROFILE\` profile on \`$(nproc)\` CPUs."
             echo
             echo '```'
             cat "$RESULTS_DIR/comparison.txt"
