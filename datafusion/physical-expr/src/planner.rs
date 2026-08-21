@@ -538,8 +538,6 @@ pub fn create_physical_expr(
                     let dt = schema.field(0).data_type().clone();
                     Ok(Arc::new(ScalarSubqueryExpr::new(
                         dt,
-                        // Defer to the logical nullability rule, which accounts
-                        // for subqueries guaranteed to produce at least one row.
                         e.nullable(input_dfschema)?,
                         index,
                         planning_ctx.results().clone(),
