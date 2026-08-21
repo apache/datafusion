@@ -885,7 +885,7 @@ mod tests {
             _ => {
                 panic!("Not a timestamp");
             }
-        };
+        }
 
         let mut ts = aggregated
             .iter()
@@ -903,7 +903,7 @@ mod tests {
             _ => {
                 panic!("Not a timestamp");
             }
-        };
+        }
     }
 
     #[test]

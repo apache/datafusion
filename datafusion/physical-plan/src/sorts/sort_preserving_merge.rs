@@ -198,14 +198,14 @@ impl DisplayAs for SortPreservingMergeExec {
                 write!(f, "SortPreservingMergeExec: [{}]", self.expr)?;
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
-                };
+                }
 
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(fetch) = self.fetch {
                     writeln!(f, "limit={fetch}")?;
-                };
+                }
 
                 for (i, e) in self.expr().iter().enumerate() {
                     e.fmt_sql(f)?;

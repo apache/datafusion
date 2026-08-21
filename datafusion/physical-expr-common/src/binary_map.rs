@@ -324,7 +324,7 @@ where
                 )
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
+        }
     }
 
     /// Generic version of [`Self::insert_if_new`] that handles `ByteArrayType`

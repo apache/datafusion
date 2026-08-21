@@ -1827,7 +1827,7 @@ mod tests {
                     Second => {
                         assert_eq!(sec_expected_timestamps, parsed_array.as_ref())
                     }
-                };
+                }
             } else {
                 panic!("Expected a columnar array")
             }
@@ -1858,7 +1858,7 @@ mod tests {
                     Second => {
                         assert_eq!(sec_expected_timestamps, parsed_array.as_ref())
                     }
-                };
+                }
             } else {
                 panic!("Expected a columnar array")
             }

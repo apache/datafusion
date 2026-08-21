@@ -234,7 +234,7 @@ where
                 )
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
-        };
+        }
     }
 
     /// Generic version of [`Self::insert_if_new`] that handles `ByteViewType`

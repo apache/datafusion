@@ -979,7 +979,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
 
     if let Some(filter) = filter {
         schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
-    };
+    }
 
     if !order_by.is_empty() {
         let clause = match func.supports_within_group_clause() {
@@ -992,7 +992,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
             clause,
             schema_name_from_sorts(order_by)?
         ))?;
-    };
+    }
 
     Ok(schema_name)
 }
@@ -1025,14 +1025,14 @@ pub fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
 
     if let Some(filter) = filter {
         schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
-    };
+    }
 
     if !order_by.is_empty() {
         schema_name.write_fmt(format_args!(
             " ORDER BY [{}]",
             schema_name_from_sorts(order_by)?
         ))?;
-    };
+    }
 
     Ok(schema_name)
 }
@@ -1187,7 +1187,7 @@ pub fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
     if !order_by.is_empty() {
         display_name
             .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
-    };
+    }
 
     display_name.write_fmt(format_args!(
         " {} BETWEEN {} AND {}",

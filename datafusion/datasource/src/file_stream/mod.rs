@@ -85,7 +85,7 @@ impl FileStream {
             FileStreamState::Error | FileStreamState::Done => {
                 // no effect as there are no more files to process
             }
-        };
+        }
         self
     }
 

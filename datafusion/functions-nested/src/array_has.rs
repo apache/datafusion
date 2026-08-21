@@ -176,7 +176,7 @@ impl ScalarUDFImpl for ArrayHas {
                 )));
             }
             _ => {}
-        };
+        }
         Ok(ExprSimplifyResult::Original(args))
     }
 

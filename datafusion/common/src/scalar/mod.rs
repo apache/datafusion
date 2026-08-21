@@ -5728,7 +5728,7 @@ impl fmt::Display for ScalarValue {
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::RunEndEncoded(_, _, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
-        };
+        }
         Ok(())
     }
 }
@@ -9833,7 +9833,7 @@ mod tests {
                 let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
                 let back = timestamp2.add(intervals[idx].clone()).unwrap();
                 assert_eq!(ts1, &back);
-            };
+            }
         }
     }
 

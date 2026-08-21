@@ -822,7 +822,7 @@ impl TopK {
                     batch = batch.slice(batch_size, remaining_length);
                 }
             }
-        };
+        }
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
             futures::stream::iter(batches),

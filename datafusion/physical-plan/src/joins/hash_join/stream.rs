@@ -729,7 +729,7 @@ impl HashJoinStream {
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
-        };
+        }
 
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
@@ -991,7 +991,7 @@ impl HashJoinStream {
                     .ok_or_else(|| internal_datafusion_err!("unexpected None offset"))?,
                 last_joined_right_idx,
             )
-        };
+        }
 
         Ok(StatefulStreamResult::Continue)
     }

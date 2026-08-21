@@ -566,7 +566,7 @@ mod tests {
 
             if !node.is::<MemTable>() {
                 return exec_err!("TestExtensionCodec only expects MemTable");
-            };
+            }
 
             if node.schema() != create_test_table().schema() {
                 return exec_err!("Unexpected schema for encoding.");

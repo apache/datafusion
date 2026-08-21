@@ -272,13 +272,13 @@ impl ParquetOptions {
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
-        };
+        }
         if let Some(bloom_filter_ndv) = bloom_filter_ndv {
             builder = builder.set_bloom_filter_max_ndv(*bloom_filter_ndv);
-        };
+        }
         if let Some(dictionary_enabled) = dictionary_enabled {
             builder = builder.set_dictionary_enabled(*dictionary_enabled);
-        };
+        }
 
         // We do not have access to default ColumnProperties set in Arrow.
         // Therefore, only overwrite if these settings exist.
