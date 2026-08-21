@@ -748,14 +748,8 @@ impl Display for ConfigMinTwoUsize {
     }
 }
 
-/// A `u8` configuration value that rejects values greater than 100 when set
-/// from strings.
-///
-/// Use this for options that represent a percentage, such as
-/// [`OptimizerOptions::default_filter_selectivity`]. Without this, an
-/// out-of-range value (e.g. 200) is silently accepted at `SET` time and only
-/// rejected later, when the value is actually consumed (e.g. by
-/// `FilterExec`).
+/// Used for [`OptimizerOptions::default_filter_selectivity`] to represent
+/// an integer percentage value, when valid values are 0 to 100 inclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConfigFilterSelectivity(u8);
 
