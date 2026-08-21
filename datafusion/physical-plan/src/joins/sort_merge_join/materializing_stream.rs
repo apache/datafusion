@@ -568,7 +568,7 @@ impl MaterializingSortMergeJoinStream {
             buffered_exhausted: false,
             on_streamed,
             on_buffered,
-            deferred_filtering: needs_deferred_filtering(&filter, join_type),
+            deferred_filtering: needs_deferred_filtering(filter.as_ref(), join_type),
             filter,
             joined_record_batches: JoinedRecordBatches {
                 joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size)
@@ -1546,9 +1546,9 @@ impl MaterializingSortMergeJoinStream {
             self.materialize_right_columns(matched_chunks, total_matched_rows)?;
 
         let filter_columns = if self.join_type == JoinType::Right {
-            get_filter_columns(&self.filter, &right_columns, &left_columns)
+            get_filter_columns(self.filter.as_ref(), &right_columns, &left_columns)
         } else {
-            get_filter_columns(&self.filter, &left_columns, &right_columns)
+            get_filter_columns(self.filter.as_ref(), &left_columns, &right_columns)
         };
 
         let columns = if self.join_type != JoinType::Right {

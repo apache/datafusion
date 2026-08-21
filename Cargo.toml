@@ -309,7 +309,6 @@ needless_raw_string_hashes = "allow"          # 540 hits
 ptr_as_ptr = "allow"                          # 83 hits
 redundant_closure_for_method_calls = "allow"  # 686 hits
 redundant_else = "allow"                      # 48 hits
-ref_option = "allow"                          # 36 hits
 return_self_not_must_use = "allow"            # 644 hits
 semicolon_if_nothing_returned = "allow"       # 1353 hits
 similar_names = "allow"                       # 228 hits; too many false positives, e.g. `expr`/`exprs`
