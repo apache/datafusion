@@ -25,7 +25,8 @@
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, AsArray, LargeStringArray, PrimitiveArray, StringArray, StringArrayType, StringViewArray, downcast_primitive,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, AsArray, LargeStringArray,
+    PrimitiveArray, StringArray, StringArrayType, StringViewArray, downcast_primitive,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, i256};
