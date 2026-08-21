@@ -208,13 +208,12 @@ impl AvroSource {
         use datafusion_datasource::source::DataSourceExec;
         use datafusion_proto_models::protobuf;
 
-        let scan = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::AvroScan(scan)) => scan,
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not an AvroScan"
-                );
-            }
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::AvroScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not an AvroScan"
+            );
         };
 
         let base_conf = scan.base_conf.as_ref().ok_or_else(|| {

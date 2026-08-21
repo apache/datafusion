@@ -2065,6 +2065,91 @@ SELECT format_string('Hex: %#08x', 255);
 Hex: 0x0000ff
 
 # ================================
+# Shared numeric final assembly
+# ================================
+
+## Signed integer parentheses and zero padding include the suffix in the width
+query T
+SELECT format_string('[%(08d]', -12::BIGINT);
+----
+[(000012)]
+
+## Signed integer parentheses stay before right padding
+query T
+SELECT format_string('[%-(8d]', -12::BIGINT);
+----
+[(12)    ]
+
+## Signed integer force-sign and zero padding
+query T
+SELECT format_string('[%+08d]', 12::BIGINT);
+----
+[+0000012]
+
+## Signed integer space-sign and zero padding
+query T
+SELECT format_string('[% 08d]', 12::BIGINT);
+----
+[ 0000012]
+
+## Negative integers keep their minus sign with force-sign or space-sign flags
+query TT
+SELECT
+  format_string('[%+08d]', -12::BIGINT),
+  format_string('[% 08d]', -12::BIGINT);
+----
+[-0000012] [-0000012]
+
+## Signed integer grouping, force-sign, and width
+query T
+SELECT format_string('[%+,12d]', 1234567::BIGINT);
+----
+[  +1,234,567]
+
+## Minimum signed integer formats without overflowing its magnitude
+query TT
+SELECT
+  format_string('%d', (-9223372036854775808)::BIGINT),
+  format_string('%(,d', (-9223372036854775808)::BIGINT);
+----
+-9223372036854775808 (9,223,372,036,854,775,808)
+
+## Signed integer array input uses the same final assembly
+query T rowsort
+SELECT format_string('[%(08d]', value)
+FROM (VALUES (-12::BIGINT), (-1234::BIGINT)) AS t(value);
+----
+[(000012)]
+[(001234)]
+
+## Unsigned integer grouping and zero padding preserve the DataFusion extension
+query T
+SELECT format_string('[%0,12d]', arrow_cast(1234567::BIGINT, 'UInt64'));
+----
+[0001,234,567]
+
+## Unsigned integer grouping and left adjustment preserve the DataFusion extension
+query T
+SELECT format_string('[%-,12d]', arrow_cast(1234567::BIGINT, 'UInt64'));
+----
+[1,234,567   ]
+
+## Negative decimal zero padding keeps the closing parenthesis last
+query T
+SELECT format_string('[%(012.2f]', -1234.50::DECIMAL(10, 2));
+----
+[(0001234.50)]
+
+## Zero padding is ignored for non-finite floating-point values
+query TTT
+SELECT
+  format_string('[%010.2f]', arrow_cast('NaN', 'Float64')),
+  format_string('[%010.2f]', arrow_cast('Infinity', 'Float64')),
+  format_string('[%010.2f]', arrow_cast('-Infinity', 'Float64'));
+----
+[       NaN] [  Infinity] [ -Infinity]
+
+# ================================
 # Special numeric values
 # ================================
 

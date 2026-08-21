@@ -487,9 +487,9 @@ impl VarianceGroupsAccumulator {
         let m2s = emit_to.take_needed(&mut self.m2s);
 
         if self.stats_type == StatsType::Sample {
-            counts.iter_mut().for_each(|count| {
+            for count in &mut counts {
                 *count = count.saturating_sub(1);
-            });
+            }
         }
         let nulls = NullBuffer::from_iter(counts.iter().map(|&count| count != 0));
         let variance = m2s

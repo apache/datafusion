@@ -949,9 +949,13 @@ impl JoinFuzzTestCase {
 
                 if join_tests.contains(&NljHj) && nlj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    hj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &hj_formatted_sorted {
+                        println!("{s}");
+                    }
                     println!("=============== NestedLoopJoinExec ==================");
-                    nlj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &nlj_formatted_sorted {
+                        println!("{s}");
+                    }
                     Self::save_partitioned_batches_as_parquet(
                         &nlj_collected,
                         out_dir_name,
@@ -966,9 +970,13 @@ impl JoinFuzzTestCase {
 
                 if join_tests.contains(&HjSmj) && smj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    hj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &hj_formatted_sorted {
+                        println!("{s}");
+                    }
                     println!("=============== SortMergeJoinExec ==================");
-                    smj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &smj_formatted_sorted {
+                        println!("{s}");
+                    }
 
                     Self::save_partitioned_batches_as_parquet(
                         &hj_collected,
@@ -1272,9 +1280,9 @@ fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<Record
     let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
     let mut input3: Vec<i32> = vec![0; len];
     let mut input4: Vec<i32> = vec![0; len];
-    input12
-        .iter_mut()
-        .for_each(|v| *v = (rng.random_range(0..100), rng.random_range(0..100)));
+    for v in &mut input12 {
+        *v = (rng.random_range(0..100), rng.random_range(0..100));
+    }
     rng.fill(&mut input3[..]);
     rng.fill(&mut input4[..]);
     input12.sort_unstable();
@@ -1520,7 +1528,7 @@ async fn pwmj_collect_ids(
             ids.extend((0..col.len()).map(|i| col.value(i)));
         }
     }
-    ids.sort();
+    ids.sort_unstable();
     ids
 }
 

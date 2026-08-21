@@ -110,9 +110,8 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
         {
             self.file_groups = Some(file_config.file_groups.clone());
 
-            let metrics = match data_source_exec.metrics() {
-                None => return Ok(true),
-                Some(metrics) => metrics,
+            let Some(metrics) = data_source_exec.metrics() else {
+                return Ok(true);
             };
             self.bytes_scanned = metrics.sum_by_name("bytes_scanned");
         }
