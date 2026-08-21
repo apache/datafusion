@@ -51,11 +51,9 @@ def geometric_mean(values: Sequence[float]) -> float:
 
 
 def upward_spread(values: Sequence[float]) -> float:
-    """How far the typical measurement sits above the fastest one.
+    """`(median - min) / min`: the slowdown a side already shows against itself.
 
-    `(median - min) / min`, the noise floor of a single side: the relative
-    slowdown that this side already shows against itself. The median rather
-    than the max, so one hiccup in one round does not define the floor.
+    The median rather than the max, so one slow round does not set the floor.
     """
     fastest = min(values)
     if fastest <= 0:
@@ -188,11 +186,8 @@ class BenchmarkRun:
 class Side:
     """One side of the comparison: every round measured for it.
 
-    A single summary file is one round; a directory of summary files is one
-    round per file, taken in sorted order. Measuring several rounds and
-    interleaving them with the other side is what makes the comparison
-    trustworthy: a machine that slows down halfway through then shifts both
-    sides, instead of only the one that happened to run at that moment.
+    A single summary file is one round; a directory is one round per file, in
+    sorted order.
     """
 
     header: str
@@ -213,9 +208,8 @@ class Side:
 
         rounds = [BenchmarkRun.load_from_file(round_path) for round_path in paths]
 
-        # Every round is indexed by position below, so a round that measured a
-        # different set of queries has to be caught here rather than silently
-        # compared query against query.
+        # Rounds are indexed by position below, so a round that measured a
+        # different set of queries has to be caught rather than mispaired.
         queries = [query.query for query in rounds[0].queries]
         for round_path, round in zip(paths[1:], rounds[1:]):
             if [query.query for query in round.queries] != queries:
@@ -329,8 +323,7 @@ def compare(
     table.add_column(comparison.header, justify="right", style="dim", no_wrap=True)
     table.add_column("Change", justify="right", style="dim", no_wrap=True)
     if multi_round:
-        # The gate rules on the median of the per-round ratios, so show it
-        # next to the fastest-run ratio the `Change` column reports.
+        # What the gate rules on, next to the fastest-run ratio in `Change`.
         table.add_column("Per-round", justify="right", style="dim", no_wrap=True)
         table.add_column("Noise", justify="right", style="dim", no_wrap=True)
 
@@ -340,8 +333,7 @@ def compare(
     failure_count = 0
     total_baseline_time = 0
     total_comparison_time = 0
-    # Per-round totals over the queries that ran on both sides, so the total
-    # is gated the same paired way a single query is
+    # Per-round totals, so the total is gated the same paired way a query is
     baseline_totals = [0.0] * rounds
     comparison_totals = [0.0] * rounds
     comparisons: List[QueryComparison] = []
@@ -506,12 +498,10 @@ def report_regressions(
 ) -> int:
     """Report against the configured limits, returning the process exit code.
 
-    A query only fails the gate when its slowdown clears three bars: the
-    configured limit, the noise floor the baseline showed against itself, and
-    a minimum absolute cost in milliseconds. Anything that clears the first
-    but not the others is printed as inconclusive -- the machine could not
-    measure it that precisely, which is a fact about the run and not about the
-    change under test.
+    A query fails only when its slowdown clears three bars: the configured
+    limit, a minimum absolute cost in milliseconds, and the noise floor the
+    baseline showed against itself. Clearing the first but not the others is
+    reported as inconclusive -- a fact about the run, not about the change.
     """
     if fail_threshold is None and fail_total_threshold is None:
         return 0

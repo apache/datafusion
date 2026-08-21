@@ -260,105 +260,63 @@ Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead
 ### In CI
 
 The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs TPC-H SF10
-twice on the same runner -- once for a candidate commit (`head`) and once for
-the commit it sits on (`base`) -- and fails when `head` is slower than the
-configured limits allow. SF10 rather than SF1, because SF1 queries finish in
-milliseconds, where runner noise is a large fraction of the measurement.
+for a candidate commit (`head`) and for the commit it sits on (`base`), on one
+machine, and fails when `head` is slower than the limits allow. SF10 rather
+than SF1, because SF1 queries finish in milliseconds where runner noise
+dominates.
 
-It runs on **every push to `main`**, with `base` being the commit the merge
-landed on, so a regression that no pull request measured is still pinned to the
-one merge that introduced it. On a **pull request** it is opt-in, because the
-builds plus the benchmark runs take a good half hour:
+It runs on every push to `main`, so a regression no pull request measured is
+still pinned to the one merge that introduced it. On a pull request it is
+opt-in, at half an hour of runner time: add the `performance` label, or start it
+from the Actions tab, where the scale factor, round and iteration counts, the
+regression limits and the cargo profile can be overridden. A failure on `main`
+blocks nothing, so read it as a bisect already done for you.
 
-- add the `performance` label to a PR, whose `head` is then the PR merged into
-  its base branch, or
-- start it from the Actions tab (`workflow_dispatch`), where the scale factor,
-  round and iteration counts, all three regression limits, and the cargo
-  profile can be overridden
+Three jobs: one resolves the base commit, two build a `benchmark_runner` each
+(a runner per side, so the builds are simultaneous), and the last measures both
+binaries. Both sides use the `release-nonlto` profile, which roughly halves the
+build; dispatch with `release` for cross-crate inlining effects or for numbers
+comparable with locally posted `bench.sh` results.
 
-A failure on `main` blocks nothing -- there is no PR left to hold up -- so read
-it as a bisect that has already been done for you: the run names the commit and
-the queries, and the uploaded rounds show how solid the verdict is.
+The measuring job **interleaves** the sides: a pass of one, a pass of the other,
+six times, alternating which leads. This matters more than any choice of
+statistic -- measured in two blocks, anything that drifts between them moves one
+side only and reads as a code change. The round count is even so each side leads
+equally; dispatch more rounds to tighten a marginal verdict.
 
-Which machine the run lands on follows from the trigger, and it matters more
-than any of the limits below. GitHub withholds `vars` from workflows triggered
-by a pull request from a fork, so `vars.USE_RUNS_ON` reads as empty there no
-matter how the repository has it set, and the run falls back to a shared 4-vCPU
-`ubuntu-latest` -- the same fallback the whole of `rust.yml` takes on fork pull
-requests. A push to `main` or a manual dispatch runs in the repository's own
-context and gets the 16-vCPU runner the workflow asks for. So a labelled fork
-pull request is a coarse signal, and the run on `main` right after the merge is
-the measurement; the benchmark job prints its CPU count and warns when it is
-on the fallback.
+Which machine the run lands on follows from the trigger. GitHub withholds `vars`
+from fork pull requests, so `vars.USE_RUNS_ON` reads as empty there and the run
+falls back to a 4-vCPU `ubuntu-latest`, as the rest of `rust.yml` also does; a
+push to `main` or a manual dispatch gets the 16-vCPU runner. So a labelled fork
+pull request is a coarse signal and the `main` run after the merge is the
+measurement. On that faster machine an SF10 query that takes 300ms on four vCPUs
+takes under 100ms, and a 20% regression on it falls inside the 25ms floor below,
+so dispatch a smaller `min_delta_ms` when the shortest queries are the ones in
+question.
 
-One consequence of the faster machine: SF10 queries that take 300ms on four
-vCPUs take under 100ms on sixteen, and a 20% regression on those is inside the
-25ms floor described below, so the four shortest queries stop being gated.
-Dispatch with a smaller `min_delta_ms`, or a larger scale factor, when those
-are the queries in question.
-
-The workflow is three jobs: one resolves the base commit, two build a
-`benchmark_runner` each (one runner per side, so the builds really are
-simultaneous), and the last one measures both binaries on a single machine,
-because timings taken on two different machines cannot be compared.
-
-That last job measures the two sides **interleaved**: a full pass of one side,
-then a full pass of the other, six times, alternating which side goes first.
-This matters more than any choice of statistic. Measuring all of one side and
-then all of the other makes anything that drifts between the two blocks -- a
-runner that slows down halfway through, a process that drew an unlucky heap --
-look exactly like a code change, because it moves one side only. Interleaving
-turns it into round-to-round spread instead, which `compare.py` can see and
-report. The round count is kept even so each side leads the same number of
-times; dispatch with more rounds to tighten a marginal verdict.
-
-Both sides are built with the `release-nonlto` profile (`release`, but with
-`lto = false` and 16 codegen units), which together with the split is what
-keeps this to half an hour -- fat LTO with a single codegen unit roughly
-doubles a build. Both sides are built identically, so the ratio the gate looks
-at still holds. Dispatch the workflow with the `release` profile when a change
-is expected to interact with cross-crate inlining, or when the absolute numbers
-should line up with locally posted `bench.sh` results.
-
-Shipping a binary between jobs has one catch worth knowing about if you edit
-the workflow: `benchmark_runner` locates `sql_benchmarks` through the
-`CARGO_MANIFEST_DIR` baked into it at compile time, so each side's checkout has
-to sit at the same absolute path in the job that builds it and in the job that
-runs it. The workflow puts both under a fixed `/tmp` root for that reason, and
-checks that each binary can still see the `tpch` suite before it starts
-measuring.
-
-The comparison table is written to the job summary, and every round's result
-JSON plus the table are uploaded as the `tpch-comparison` artifact.
-
-The data is generated with the same `tpchgen-cli` settings `bench.sh data tpch`
-uses, from the tool's PyPI wheel rather than a source build, which keeps a Rust
-toolchain out of the benchmark job entirely. Generating SF10 takes well under a
-minute; what the workflow's half hour actually goes on is the two builds, so
-they restore a dependency cache and skip the `ubuntu-latest` disk cleanup when
-the runner has the disk already.
+If you edit the workflow, note that `benchmark_runner` locates `sql_benchmarks`
+through the `CARGO_MANIFEST_DIR` baked in at compile time, so each side's
+checkout has to sit at the same absolute path in the job that builds it and the
+job that runs it -- hence the fixed `/tmp` root, and the check that each binary
+still sees the `tpch` suite before measuring. The comparison table goes to the
+job summary, and every round's JSON plus the table are uploaded as the
+`tpch-comparison` artifact.
 
 Runners are shared machines, so treat the numbers as a signal rather than a
-measurement. A query has to clear three separate bars to fail the gate, and
-each one is there because it was seen firing on its own:
+measurement. A query has to clear three bars to fail the gate:
 
-- the **median of its per-round ratios** is above `1.20x`. The median, not the
-  point ratio, so one slow pass on either side cannot decide the verdict.
-- the regression costs at least **25ms**. A `1.20x` swing on a query that runs
-  for 20ms is 4ms, which no shared runner can resolve -- this is what keeps an
-  SF1 run from failing on its short queries.
-- it is larger than the **spread the base side showed against itself** across
-  the rounds. If the same binary varied by 26% from round to round, a 25%
-  difference against the other binary is not a finding, and is reported as
-  inconclusive instead of blamed on the PR.
+- the **median of its per-round ratios** is above `1.20x`, so one slow pass on
+  either side cannot decide the verdict
+- the regression costs at least **25ms**, which is what keeps an SF1 run from
+  failing on its short queries
+- it is larger than the **spread the base side showed against itself**, since a
+  query whose own baseline moved 26% between rounds cannot support a 25% verdict
 
-The total time is gated at `1.05x` under the same noise floor. Everything that
+The total time is gated at `1.05x` under the same noise floor. Anything that
 clears the first bar but not the others is printed under "Not counted against
-the gate", so a marginal result is visible rather than silently dropped.
-
-Local runs on quiet hardware remain the way to confirm a result, and a PR that
-changes the TPC-H benchmark files themselves is measured against its own
-queries, which makes the comparison advisory.
+the gate" rather than dropped. Local runs on quiet hardware remain the way to
+confirm a result, and a PR that changes the TPC-H benchmark files themselves is
+measured against its own queries, which makes the comparison advisory.
 
 ### Running Benchmarks Manually
 
@@ -412,14 +370,12 @@ exits successfully.
 ```
 
 Either path can also be a *directory* of summary files, one per measurement
-round, which is how CI runs it. Rounds are paired between the two sides in
-sorted filename order, so name them `round01.json`, `round02.json` and so on.
-Given several rounds, the gate rules on the median of the per-round ratios
-rather than on a single ratio, and reports how much each side varied against
-itself -- see [In CI](#in-ci) for why that is worth the trouble.
+round, which is how CI runs it: the gate then rules on the median of the
+per-round ratios and reports how much each side varied against itself. Rounds
+are paired in sorted filename order, so name them `round01.json` and so on.
 
 ```shell
-# five rounds per side, measured alternately rather than one side at a time
+# six rounds per side, measured alternately rather than one side at a time
 ./compare.py /tmp/output_main /tmp/output_branch \
   --fail-threshold 1.20 --fail-total-threshold 1.05 --fail-min-delta-ms 25
 ```

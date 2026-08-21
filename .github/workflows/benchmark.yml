@@ -15,23 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Catches performance regressions by running TPC-H SF10 twice -- once for the
-# candidate commit (`head`) and once for the commit it sits on (`base`) -- then
-# failing when `head` is slower than the configured limits allow. SF10 rather
-# than SF1 because SF1 queries finish in milliseconds, where runner noise is a
-# large fraction of the measurement.
-#
-# The two binaries are built by two jobs, on a runner each, and both are then
-# measured by a third job on one machine: building is embarrassingly parallel,
-# while comparing timings taken on different machines is meaningless.
-#
-# The two sides are measured interleaved -- a full pass of one, then a full
-# pass of the other, several times, alternating which goes first -- rather than
-# all of one side and then all of the other. Measuring in two blocks makes any
-# drift between them look exactly like a code change: a runner that gets slower
-# halfway through, or a process that happened to get an unlucky heap, shifts one
-# side only. Interleaving spreads that over both sides and turns it into
-# round-to-round spread, which `compare.py` can see and discount.
+# Catches performance regressions: runs TPC-H SF10 for a candidate commit
+# (`head`) and for the commit it sits on (`base`), on one machine, and fails
+# when `head` is slower than the limits allow. The sides are measured
+# interleaved, a pass each per round, because measuring one after the other
+# lets machine drift read as a code change.
 
 name: Benchmarks
 
@@ -39,16 +27,13 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# On `main` this runs on every push, so each merge is measured against the
-# commit it landed on and a regression that no PR run caught is still pinned to
-# one merge. On a PR it is opt-in, because the builds and the benchmark runs add
-# up to roughly half an hour of runner time: add the `performance` label, or
-# start it by hand from the Actions tab.
+# Every push to `main`, so an unlabelled regression is still pinned to one
+# merge. Opt-in on a PR, at half an hour of runner time: add the `performance`
+# label, or start it from the Actions tab.
 on:
   push:
     branches:
-      # The default branch upstream. A fork that calls it something else has to
-      # add that name here for its own merges to be measured.
+      # A fork whose default branch is named differently has to add it here.
       - main
     paths-ignore:
       - "docs/**"
@@ -98,28 +83,21 @@ permissions:
   contents: read
 
 env:
-  # `release-nonlto` is `release` with `lto = false` and 16 codegen units. Fat
-  # LTO with a single codegen unit roughly doubles the build, and both sides are
-  # built identically, so the ratio the gate looks at still holds. Dispatch with
-  # `release` when a change is expected to interact with cross-crate inlining,
-  # or to get numbers comparable with locally posted `bench.sh` results.
+  # `release-nonlto` is `release` without fat LTO, which roughly halves the
+  # build. Dispatch with `release` for cross-crate inlining effects, or for
+  # numbers comparable with locally posted `bench.sh` results.
   CARGO_PROFILE: ${{ inputs.profile || 'release-nonlto' }}
   SCALE_FACTOR: ${{ inputs.scale_factor || '10' }}
-  # Even, for two reasons: each side then leads the same number of rounds, and
-  # the median of an even number of ratios averages the two middle rounds
-  # instead of resting on one.
+  # Even, so each side leads the same number of rounds.
   ROUNDS: ${{ inputs.rounds || '6' }}
   ITERATIONS: ${{ inputs.iterations || '1' }}
   QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
   TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
-  # A 1.20x swing on a query that runs for 20ms is 4ms, which this kind of
-  # runner cannot resolve. Regressions have to cost real time to count.
+  # A 1.20x swing on a 20ms query is 4ms, below what a shared runner resolves.
   MIN_DELTA_MS: ${{ inputs.min_delta_ms || '25' }}
   # `benchmark_runner` finds `sql_benchmarks` through the CARGO_MANIFEST_DIR
-  # baked into it at compile time, so a binary built in one job only works in
-  # another if its tree sits at the same absolute path there. Every job below
-  # puts the two trees under this root, which is why it is a fixed path rather
-  # than something derived from the workspace or the runner.
+  # baked in at compile time, so its tree has to sit at the same absolute path
+  # in the job that builds it and the job that runs it -- hence a fixed root.
   BENCH_ROOT: /tmp/df-bench
   # Same cargo network settings as .github/actions/setup-rust-runtime, without
   # its RUSTFLAGS: benchmark binaries are built with the defaults.
@@ -141,9 +119,7 @@ jobs:
       - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # For `pull_request` this is the PR already merged into the base
-          # branch, for `push` the new branch tip; depth 2 is enough to also
-          # reach the first parent in both cases.
+          # Depth 2 reaches the first parent, which is the base in both cases.
           fetch-depth: 2
       - name: Resolve base commit
         id: base
@@ -152,16 +128,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            # A merge that just landed on the default branch. Its first parent
-            # is the branch as it was before, whether the merge was squashed
-            # into one commit or kept as a merge commit, so the difference is
-            # attributable to this one merge.
+            # A merge that just landed: its first parent is the branch as it
+            # was before, whether the merge was squashed or not.
             base_sha=$(git rev-parse "HEAD^1")
             echo "push to $GITHUB_REF_NAME, comparing its tip against the parent"
           elif [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
             # HEAD is the PR merged into the base branch, so its first parent
-            # is the base branch tip that the merge used -- the commit this PR
-            # would actually land on.
+            # is the commit this PR would land on.
             base_sha=$(git rev-parse "HEAD^1")
           else
             # Manual run on a branch: compare it as-is against the base tip.
@@ -190,10 +163,8 @@ jobs:
         with:
           fetch-depth: 2
       - name: Free Disk Space (Ubuntu)
-        # Two minutes of deleting Android SDKs, which a release build of the
-        # workspace genuinely needs on `ubuntu-latest`'s 14GB. The RunsOn
-        # runner above asks for `disk=large` and has no such problem, so only
-        # the fallback pays for this.
+        # A release build needs this on `ubuntu-latest`'s 14GB, but not on the
+        # RunsOn runner's `disk=large`, where it is two wasted minutes.
         if: vars.USE_RUNS_ON != 'true'
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
       - name: Install Rust
@@ -216,15 +187,8 @@ jobs:
             git worktree add --detach "$BENCH_ROOT/$SIDE" HEAD
           fi
       - name: Cache the dependency build
-        # A cold build of this is fourteen minutes, most of it dependencies
-        # that neither side changed. The action drops workspace crates from
-        # what it saves, so a hit rebuilds DataFusion and reuses the rest.
-        #
-        # `workspaces` because the build happens in a worktree outside the
-        # checkout, and one shared key for both sides because they are a commit
-        # or two apart and share a dependency graph. Only a push to `main`
-        # writes the cache: pull request runs would each save a near-identical
-        # copy of it.
+        # A cold build is fourteen minutes, mostly dependencies neither side
+        # changed. One shared key covers both sides; only pushes write it.
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           workspaces: ${{ env.BENCH_ROOT }}/${{ matrix.side }}
@@ -244,7 +208,7 @@ jobs:
           path: ${{ runner.temp }}/benchmark_runner
           retention-days: 1
 
-  # Both sides are measured here, on this one machine, back to back.
+  # Both sides are measured here, interleaved, on this one machine.
   benchmark:
     name: TPC-H (head vs base)
     needs: [resolve, build]
@@ -280,8 +244,7 @@ jobs:
       - name: Check both runners see their queries
         run: |
           # Artifacts do not carry the executable bit, and a binary whose tree
-          # is missing at the path baked into it would discover no benchmark at
-          # all -- fail here rather than three steps later.
+          # is missing would discover no benchmark at all -- fail here.
           for side in base head; do
             binary="$RUNNER_TEMP/bin/$side/benchmark_runner"
             chmod +x "$binary"
@@ -295,16 +258,9 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
       - name: Generate TPC-H data
         # Same generator settings as `bench.sh data tpch`, inlined because that
-        # path also downloads the expected answers through `docker run -it`,
-        # which needs a TTY and is only used for result validation.
-        #
-        # tpchgen-cli comes from its PyPI wheel: the same 3.0.0 release as the
-        # crate, but a ~4MB download instead of a build from source, since the
-        # project attaches no binaries to its GitHub releases for a prebuilt
-        # fetch to find. It also means this job needs no Rust toolchain at all.
-        #
-        # `parquet` as a subcommand rather than `--format parquet`: 3.0.0
-        # deprecated the flag form and warns that it goes away in 4.0.0.
+        # path also pulls the expected answers through `docker run -it`, which
+        # has no TTY here. From the PyPI wheel, so no Rust toolchain is needed;
+        # `parquet` is a subcommand because 3.0.0 deprecated `--format`.
         run: |
           mkdir -p "$DATA_DIR/tpch_sf$SCALE_FACTOR" "$RESULTS_DIR/base" "$RESULTS_DIR/head"
           uv tool run --from 'tpchgen-cli==3.0.0' tpchgen-cli parquet \
@@ -315,20 +271,15 @@ jobs:
           du -sh "$DATA_DIR/tpch_sf$SCALE_FACTOR"
           df -h "$DATA_DIR"
       - name: Describe the machine
-        # A comparison is only as good as the machine under it, and this does
-        # not always land on the machine the `runs-on` line above asks for.
-        # GitHub withholds `vars` from workflows triggered by a pull request
-        # from a fork, so `vars.USE_RUNS_ON` reads as empty there however it is
-        # set on the repository, and every job falls back to a shared 4-vCPU
-        # `ubuntu-latest` -- which is where this workflow's own false Q02
-        # regressions were measured. Pushes to `main` and manual dispatches run
-        # in the repository's own context and do get the 16-vCPU runner.
+        # GitHub withholds `vars` from fork pull requests, so `USE_RUNS_ON`
+        # reads as empty and they fall back to a 4-vCPU `ubuntu-latest`. Pushes
+        # to `main` and manual dispatches do get the 16-vCPU runner.
         run: |
           echo "cpus: $(nproc)"
           lscpu | grep -E '^(Model name|Socket|Core|Thread|CPU\(s\)):' || true
           free -h
           if [ "$(nproc)" -lt 8 ]; then
-            echo "::warning::running on $(nproc) CPUs, not the runner this workflow asks for; expect a high noise floor. Fork pull requests cannot reach the larger runner -- the run on \`main\` after the merge is the authoritative one."
+            echo "::warning::running on $(nproc) CPUs, not the runner asked for; expect a high noise floor. Fork pull requests cannot reach the larger one -- the run on \`main\` after the merge is authoritative."
           fi
       # Each side runs from its own tree and reads the one generated dataset.
       - name: Benchmark both sides, interleaved
@@ -344,18 +295,14 @@ jobs:
               --path "$DATA_DIR" \
               --output "$output"
           }
-          # Read the data once first, so no measured round is the only one
-          # paying to pull the parquet files into the page cache. Reading the
-          # files is all a warmup can carry between rounds -- each round is a
-          # fresh process -- and it takes seconds where a discarded pass of the
-          # suite took as long as a round.
+          # Pull the data into the page cache, which is all a warmup can carry
+          # between rounds -- each round is a fresh process.
           echo "::group::warm the page cache"
           find "$DATA_DIR" -type f -exec cat {} + > /dev/null
           echo "::endgroup::"
           for round in $(seq 1 "$ROUNDS"); do
-            # Alternate which side goes first, so with an even ROUNDS
-            # whatever the first position costs -- or saves -- is paid by each
-            # side the same number of times.
+            # Alternate the leader, so each side pays the first-position cost
+            # the same number of times.
             if [ $((round % 2)) -eq 1 ]; then order="base head"; else order="head base"; fi
             for side in $order; do
               echo "::group::round $round: $side"
