@@ -33,7 +33,10 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
     not_impl_err, plan_err,
     types::{NativeType, logical_string},
-    utils::take_function_args,
+    utils::{
+        hex::{HexCase, encode_bytes, encode_bytes_to_slice},
+        take_function_args,
+    },
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -292,9 +295,10 @@ fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
         }
         DataType::BinaryView => {
             let array = array.as_binary_view();
-            // Don't know if there is a more strict upper bound we can infer
-            // for view arrays byte data size.
-            encoding.decode_array::<_, i32>(&array, array.get_buffer_memory_size())
+            encoding.decode_array::<_, i32>(
+                &array,
+                array.lengths().map(|l| l as usize).sum::<usize>(),
+            )
         }
         DataType::LargeBinary => {
             let array = array.as_binary::<i64>();
@@ -369,7 +373,7 @@ impl Encoding {
         match self {
             Self::Base64 => BASE64_ENGINE.encode(value),
             Self::Base64Padded => BASE64_ENGINE_PADDED.encode(value),
-            Self::Hex => hex::encode(value),
+            Self::Hex => encode_bytes(value, HexCase::Lower),
         }
     }
 
@@ -476,11 +480,7 @@ where
     for v in array.iter() {
         if let Some(v) = v {
             let out_len = v.len() * 2;
-            // The slice is sized to exactly `2 * v.len()`, which is the only
-            // condition under which `encode_to_slice` can fail, so this cannot
-            // error.
-            hex::encode_to_slice(v, &mut values[pos..pos + out_len])
-                .map_err(|e| exec_datafusion_err!("Failed to encode to hex: {e}"))?;
+            encode_bytes_to_slice(v, HexCase::Lower, &mut values[pos..pos + out_len])?;
             pos += out_len;
         }
         offsets.push(OutputOffset::usize_as(pos));
@@ -528,7 +528,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::BinaryArray;
+    use arrow::array::{ArrayBuilder, BinaryArray, BinaryViewBuilder};
     use arrow_buffer::OffsetBuffer;
 
     use super::*;
@@ -552,5 +552,15 @@ mod tests {
         );
         let size = estimate_byte_data_size(&array);
         assert_eq!(size, 31);
+    }
+
+    #[test]
+    fn test_estimate_view_size() {
+        let mut builder = BinaryViewBuilder::new().with_deduplicate_strings();
+        for _ in 0..1000 {
+            builder.append_value([65u8; 64]);
+        }
+        let arr = ArrayBuilder::finish(&mut builder);
+        decode_array(&arr, Encoding::Base64).unwrap();
     }
 }

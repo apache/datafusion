@@ -326,6 +326,23 @@ fn update(count: u64, mean: f64, m2: f64, value: f64) -> (u64, f64, f64) {
     (new_count, new_mean, new_m2)
 }
 
+/// Inverse of [`update`]: removes a previously accumulated value. Retracting
+/// from a state with one or zero values resets the state to empty.
+#[inline]
+fn retract(count: u64, mean: f64, m2: f64, value: f64) -> (u64, f64, f64) {
+    if count <= 1 {
+        return (0, 0.0, 0.0);
+    }
+
+    let new_count = count - 1;
+    let delta1 = mean - value;
+    let new_mean = delta1 / new_count as f64 + mean;
+    let delta2 = new_mean - value;
+    let new_m2 = m2 - delta1 * delta2;
+
+    (new_count, new_mean, new_m2)
+}
+
 impl Accumulator for VarianceAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
@@ -348,22 +365,8 @@ impl Accumulator for VarianceAccumulator {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = as_float64_array(&values[0])?;
         for value in arr.iter().flatten() {
-            if self.count <= 1 {
-                self.count = 0;
-                self.mean = 0.0;
-                self.m2 = 0.0;
-                continue;
-            }
-
-            let new_count = self.count - 1;
-            let delta1 = self.mean - value;
-            let new_mean = delta1 / new_count as f64 + self.mean;
-            let delta2 = new_mean - value;
-            let new_m2 = self.m2 - delta1 * delta2;
-
-            self.count -= 1;
-            self.mean = new_mean;
-            self.m2 = new_m2;
+            (self.count, self.mean, self.m2) =
+                retract(self.count, self.mean, self.m2, value)
         }
 
         Ok(())
@@ -406,7 +409,7 @@ impl Accumulator for VarianceAccumulator {
         Ok(ScalarValue::Float64(match self.count {
             0 => None,
             1 => {
-                if let StatsType::Population = self.stats_type {
+                if self.stats_type == StatsType::Population {
                     Some(0.0)
                 } else {
                     None
@@ -483,10 +486,10 @@ impl VarianceGroupsAccumulator {
         let _ = emit_to.take_needed(&mut self.means);
         let m2s = emit_to.take_needed(&mut self.m2s);
 
-        if let StatsType::Sample = self.stats_type {
-            counts.iter_mut().for_each(|count| {
+        if self.stats_type == StatsType::Sample {
+            for count in &mut counts {
                 *count = count.saturating_sub(1);
-            });
+            }
         }
         let nulls = NullBuffer::from_iter(counts.iter().map(|&count| count != 0));
         let variance = m2s
@@ -613,11 +616,6 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
             Arc::new(Float64Array::new(m2s.into(), None)),
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.m2s.capacity() * size_of::<f64>()
             + self.means.capacity() * size_of::<f64>()
@@ -695,6 +693,75 @@ mod tests {
     use datafusion_expr::EmitTo;
 
     use super::*;
+
+    #[test]
+    fn update_batch_ignores_nulls() -> Result<()> {
+        // An array with nulls must accumulate the same values as a dense
+        // array of its non-null values.
+        let dense: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
+        let sparse: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(2.0),
+            Some(3.0),
+            None,
+            Some(4.0),
+        ]));
+
+        let mut dense_acc = VarianceAccumulator::try_new(StatsType::Sample)?;
+        dense_acc.update_batch(std::slice::from_ref(&dense))?;
+        let mut sparse_acc = VarianceAccumulator::try_new(StatsType::Sample)?;
+        sparse_acc.update_batch(std::slice::from_ref(&sparse))?;
+
+        // Sample variance of {1, 2, 3, 4} is 5/3 (all steps are exact in f64).
+        assert_eq!(dense_acc.evaluate()?, ScalarValue::Float64(Some(5.0 / 3.0)));
+        assert_eq!(dense_acc.evaluate()?, sparse_acc.evaluate()?);
+        Ok(())
+    }
+
+    #[test]
+    fn retract_batch_ignores_nulls() -> Result<()> {
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
+        let dense_retract: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        let sparse_retract: ArrayRef =
+            Arc::new(Float64Array::from(vec![Some(1.0), None, Some(2.0)]));
+
+        let mut dense_acc = VarianceAccumulator::try_new(StatsType::Sample)?;
+        dense_acc.update_batch(std::slice::from_ref(&values))?;
+        dense_acc.retract_batch(std::slice::from_ref(&dense_retract))?;
+        let mut sparse_acc = VarianceAccumulator::try_new(StatsType::Sample)?;
+        sparse_acc.update_batch(std::slice::from_ref(&values))?;
+        sparse_acc.retract_batch(std::slice::from_ref(&sparse_retract))?;
+
+        // Sample variance of the remaining {3, 4} is 0.5 (all steps are exact
+        // in f64).
+        assert_eq!(dense_acc.evaluate()?, ScalarValue::Float64(Some(0.5)));
+        assert_eq!(dense_acc.evaluate()?, sparse_acc.evaluate()?);
+        Ok(())
+    }
+
+    #[test]
+    fn retract_batch_resets_when_underflowing() -> Result<()> {
+        // Retracting more values than were accumulated resets to the empty
+        // state, with or without nulls in the retracted batch.
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        let dense_retract: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+        let sparse_retract: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(2.0),
+            Some(3.0),
+        ]));
+
+        for retract in [&dense_retract, &sparse_retract] {
+            let mut acc = VarianceAccumulator::try_new(StatsType::Sample)?;
+            acc.update_batch(std::slice::from_ref(&values))?;
+            acc.retract_batch(std::slice::from_ref(retract))?;
+            assert_eq!(acc.get_count(), 0);
+            assert_eq!(acc.evaluate()?, ScalarValue::Float64(None));
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_groups_accumulator_merge_empty_states() -> Result<()> {

@@ -81,7 +81,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -131,7 +132,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -181,7 +183,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -231,7 +234,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -280,7 +284,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -1698,9 +1703,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
@@ -1748,9 +1752,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));

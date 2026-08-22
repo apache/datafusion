@@ -27,6 +27,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use super::bitwise_stream::BitwiseSortMergeJoinStream;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
@@ -51,6 +52,7 @@ use arrow_ord::sort::SortColumn;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::JoinType::*;
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     JoinSide, internal_err,
     test_util::{batches_to_sort_string, batches_to_string},
@@ -2535,7 +2537,7 @@ async fn spill_join_arrays_memory_accounting() -> Result<()> {
 
     // Memory limit: too small for a full batch, large enough for join_arrays.
     // Every batch hits the Err arm → spills → grow(join_arrays_mem).
-    let memory_limit = (size_estimation + join_arrays_mem) / 2;
+    let memory_limit = usize::midpoint(size_estimation, join_arrays_mem);
     assert!(
         memory_limit < size_estimation && memory_limit > join_arrays_mem,
         "limit {memory_limit} must be between join_arrays_mem {join_arrays_mem} \
@@ -3814,7 +3816,7 @@ async fn consume_stream_until_finish_barrier_reached(
     let mut after_finish_barrier_reached = vec![];
     let mut background_task = JoinSet::new();
 
-    let mut start_time_since_last_ready = datafusion_common::instant::Instant::now();
+    let mut start_time_since_last_ready = Instant::now();
     loop {
         let next_item = output_stream.next();
 
@@ -3834,7 +3836,7 @@ async fn consume_stream_until_finish_barrier_reached(
                 } else {
                     output_batched.push(batch);
                 }
-                start_time_since_last_ready = datafusion_common::instant::Instant::now();
+                start_time_since_last_ready = Instant::now();
             }
             Poll::Ready(Some(Err(e))) => return Err(e),
             Poll::Ready(None) if !switch_to_finish_barrier => {
@@ -3861,9 +3863,7 @@ async fn consume_stream_until_finish_barrier_reached(
                 }
 
                 // Make sure the test doesn't run forever
-                if start_time_since_last_ready.elapsed()
-                    > std::time::Duration::from_secs(5)
-                {
+                if start_time_since_last_ready.elapsed() > Duration::from_secs(5) {
                     return internal_err!(
                         "Stream should have emitted data by now, but it's still pending. Output batches so far: {}",
                         output_batched.len()
@@ -4032,7 +4032,7 @@ fn columns(schema: &Schema) -> Vec<String> {
 // ==================== BitwiseSortMergeJoinStream direct tests ====================
 //
 // These tests construct a BitwiseSortMergeJoinStream directly (bypassing exec)
-// to exercise async re-entry and spill edge cases using PendingStream.
+// to exercise waiting on inputs and spill edge cases using PendingStream.
 
 /// Create test memory/spill resources for stream-level tests.
 fn test_stream_resources(
@@ -4112,18 +4112,353 @@ impl RecordBatchStream for PendingStream {
 }
 
 /// Helper: collect all output from a BitwiseSortMergeJoinStream.
-async fn collect_stream(stream: BitwiseSortMergeJoinStream) -> Result<Vec<RecordBatch>> {
-    common::collect(Box::pin(stream)).await
+async fn collect_stream(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
+    common::collect(stream).await
 }
 
-/// Reproduces the buffer_inner_key_group re-entry bug:
+// ==================== join_time metric tests ====================
+//
+// These verify that `join_time` measures only the join's own work: waiting
+// for either child input or for the consumer to take an emitted batch must
+// not be counted.
+
+/// Stream that sleeps `delay` before yielding each batch, to simulate a
+/// slow input.
+fn delayed_stream(
+    batches: Vec<RecordBatch>,
+    delay: Duration,
+) -> SendableRecordBatchStream {
+    let schema = batches[0].schema();
+    Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+        schema,
+        futures::stream::iter(batches.into_iter().map(Ok)).then(move |item| async move {
+            tokio::time::sleep(delay).await;
+            item
+        }),
+    ))
+}
+
+/// Three 2-row batches with unique matching keys.
+fn join_time_batches() -> Vec<RecordBatch> {
+    vec![
+        build_table_i32(
+            ("a1", &vec![0, 1]),
+            ("b1", &vec![1, 2]),
+            ("c1", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a1", &vec![2, 3]),
+            ("b1", &vec![3, 4]),
+            ("c1", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a1", &vec![4, 5]),
+            ("b1", &vec![5, 6]),
+            ("c1", &vec![7, 8]),
+        ),
+    ]
+}
+
+/// Build a no-filter LeftSemi bitwise stream over the given input streams.
+/// The small batch size makes each outer batch surface as its own output
+/// batch, so a slow consumer test sees multiple emits.
+fn join_time_test_join(
+    outer: SendableRecordBatchStream,
+    inner: SendableRecordBatchStream,
+) -> (SendableRecordBatchStream, ExecutionPlanMetricsSet) {
+    let metrics = ExecutionPlanMetricsSet::new();
+    let outer_schema = outer.schema();
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(inner.schema(), &metrics);
+    let stream = BitwiseSortMergeJoinStream::try_new(
+        outer_schema,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        outer,
+        inner,
+        vec![Arc::new(Column::new("b1", 1)) as PhysicalExprRef],
+        vec![Arc::new(Column::new("b1", 1)) as PhysicalExprRef],
+        None,
+        LeftSemi,
+        2,
+        0,
+        &metrics,
+        reservation,
+        spill_manager,
+        runtime_env,
+    )
+    .unwrap();
+    (stream, metrics)
+}
+
+fn join_time_of(metrics: &ExecutionPlanMetricsSet) -> Duration {
+    Duration::from_nanos(
+        metrics
+            .clone_inner()
+            .sum_by_name("join_time")
+            .map(|m| m.as_usize())
+            .unwrap_or(0) as u64,
+    )
+}
+
+/// Run a join with the given injected `delay`, retrying with 4x the delay
+/// (up to 3 attempts) when `join_time < delay` fails.
 ///
-/// When buffer_inner_key_group buffers inner rows across batch boundaries
-/// and poll_next_inner_batch returns Pending mid-way, the ready! macro
-/// exits poll_join. On re-entry, the merge-scan reaches Equal again and
-/// calls buffer_inner_key_group a second time -- which starts with
-/// clear(), destroying the partially collected inner rows. Previously
-/// consumed batches are gone, so re-buffering misses them.
+/// This de-flakes the check without masking real bugs: a genuine exclusion
+/// bug makes `join_time` absorb the injected waits, so it scales with the
+/// delay and fails at every escalation level. Only a fixed-size disturbance
+/// (e.g. the OS preempting the test thread while the join_time clock is
+/// running) is filtered out, since it cannot grow 4x with the delay.
+///
+/// `run` returns `(join_time, wall)` for one join execution. Deterministic
+/// invariants (row counts, wall-time lower bounds) stay as asserts inside
+/// `run` — deliberately: a panic there fails the test immediately without
+/// retrying, since those cannot flake and escalation would only mask a real
+/// bug. Likewise `Err` from `run` (join execution failure) propagates
+/// immediately. Only the preemption-sensitive `join_time` check is retried.
+async fn check_join_time_excluded<F, Fut>(mut run: F) -> Result<()>
+where
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = Result<(Duration, Duration)>>,
+{
+    let mut delay = Duration::from_millis(50);
+    for attempt in 0..3 {
+        let (join_time, wall) = run(delay).await?;
+        if join_time < delay {
+            return Ok(());
+        }
+        assert!(
+            attempt < 2,
+            "join_time ({join_time:?}) should be well below the injected \
+             delay ({delay:?}) even after escalating retries; wall {wall:?}"
+        );
+        delay *= 4;
+    }
+    unreachable!()
+}
+
+/// join_time must not include time spent waiting for the outer input.
+#[tokio::test]
+async fn join_time_excludes_outer_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let outer = delayed_stream(join_time_batches(), delay);
+        let inner = delayed_stream(join_time_batches(), Duration::ZERO);
+        let (stream, metrics) = join_time_test_join(outer, inner);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all outer rows should match");
+        assert!(
+            wall >= delay * 3,
+            "outer delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time spent waiting for the inner input.
+#[tokio::test]
+async fn join_time_excludes_inner_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let outer = delayed_stream(join_time_batches(), Duration::ZERO);
+        let inner = delayed_stream(join_time_batches(), delay);
+        let (stream, metrics) = join_time_test_join(outer, inner);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all outer rows should match");
+        assert!(
+            wall >= delay * 3,
+            "inner delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time the consumer spends holding an emitted
+/// batch (the generator is suspended inside `emitter.emit` meanwhile).
+#[tokio::test]
+async fn join_time_excludes_consumer_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let outer = delayed_stream(join_time_batches(), Duration::ZERO);
+        let inner = delayed_stream(join_time_batches(), Duration::ZERO);
+        let (mut stream, metrics) = join_time_test_join(outer, inner);
+
+        let start = Instant::now();
+        let mut output_batches = 0u32;
+        while let Some(batch) = stream.next().await {
+            batch?;
+            output_batches += 1;
+            // Simulate a slow consumer between emitted batches.
+            tokio::time::sleep(delay).await;
+        }
+        let wall = start.elapsed();
+
+        assert!(
+            output_batches >= 3,
+            "expected multiple emitted batches, got {output_batches}"
+        );
+        assert!(
+            wall >= delay * output_batches,
+            "consumer delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// Three 2-row batches with unique matching keys, right-side column names.
+fn join_time_batches_right() -> Vec<RecordBatch> {
+    vec![
+        build_table_i32(
+            ("a2", &vec![0, 1]),
+            ("b2", &vec![1, 2]),
+            ("c2", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a2", &vec![2, 3]),
+            ("b2", &vec![3, 4]),
+            ("c2", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a2", &vec![4, 5]),
+            ("b2", &vec![5, 6]),
+            ("c2", &vec![7, 8]),
+        ),
+    ]
+}
+
+/// Build a no-filter Inner materializing join over the given input streams.
+/// The small batch size makes the output surface as multiple batches, so a
+/// slow consumer test sees multiple emits.
+fn materializing_join_time_test_join(
+    streamed: SendableRecordBatchStream,
+    buffered: SendableRecordBatchStream,
+) -> (SendableRecordBatchStream, ExecutionPlanMetricsSet) {
+    use crate::joins::sort_merge_join::materializing_stream::MaterializingSortMergeJoinStream;
+    use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
+
+    let metrics = ExecutionPlanMetricsSet::new();
+    let out_schema = Arc::new(Schema::new(
+        streamed
+            .schema()
+            .fields()
+            .iter()
+            .chain(buffered.schema().fields().iter())
+            .map(|f| f.as_ref().clone())
+            .collect::<Vec<_>>(),
+    ));
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(buffered.schema(), &metrics);
+    let stream = MaterializingSortMergeJoinStream::try_new(
+        out_schema,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        streamed,
+        buffered,
+        vec![Arc::new(Column::new("b1", 1)) as _],
+        vec![Arc::new(Column::new("b2", 1)) as _],
+        None,
+        Inner,
+        2,
+        SortMergeJoinMetrics::new(0, &metrics),
+        reservation,
+        spill_manager,
+        runtime_env,
+    )
+    .unwrap();
+    (stream, metrics)
+}
+
+/// join_time must not include time spent waiting for the streamed input.
+#[tokio::test]
+async fn materializing_join_time_excludes_streamed_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let streamed = delayed_stream(join_time_batches(), delay);
+        let buffered = delayed_stream(join_time_batches_right(), Duration::ZERO);
+        let (stream, metrics) = materializing_join_time_test_join(streamed, buffered);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all rows should match");
+        assert!(
+            wall >= delay * 3,
+            "streamed delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time spent waiting for the buffered input.
+#[tokio::test]
+async fn materializing_join_time_excludes_buffered_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let streamed = delayed_stream(join_time_batches(), Duration::ZERO);
+        let buffered = delayed_stream(join_time_batches_right(), delay);
+        let (stream, metrics) = materializing_join_time_test_join(streamed, buffered);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all rows should match");
+        assert!(
+            wall >= delay * 3,
+            "buffered delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time the consumer spends holding an emitted
+/// batch (the generator is suspended inside `emitter.emit` meanwhile).
+#[tokio::test]
+async fn materializing_join_time_excludes_consumer_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let streamed = delayed_stream(join_time_batches(), Duration::ZERO);
+        let buffered = delayed_stream(join_time_batches_right(), Duration::ZERO);
+        let (mut stream, metrics) = materializing_join_time_test_join(streamed, buffered);
+
+        let start = Instant::now();
+        let mut output_batches = 0u32;
+        while let Some(batch) = stream.next().await {
+            batch?;
+            output_batches += 1;
+            // Simulate a slow consumer between emitted batches.
+            tokio::time::sleep(delay).await;
+        }
+        let wall = start.elapsed();
+
+        assert!(
+            output_batches >= 3,
+            "expected multiple emitted batches, got {output_batches}"
+        );
+        assert!(
+            wall >= delay * output_batches,
+            "consumer delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// An inner key group spanning multiple inner batches must survive the inner
+/// input returning Pending mid-way: inner rows delivered before the Pending
+/// still take part in the filter evaluation.
 ///
 /// Setup:
 /// - Inner: 3 single-row batches, all with key=1, filter values c2=[10, 20, 30]
@@ -4131,8 +4466,7 @@ async fn collect_stream(stream: BitwiseSortMergeJoinStream) -> Result<Vec<Record
 /// - Filter: c1 == c2 (only first inner row c2=10 matches)
 /// - Pending injected before 3rd inner batch
 ///
-/// Without the bug: outer row emitted (match via c2=10)
-/// With the bug: outer row missing (c2=10 batch lost on re-entry)
+/// Expected: outer row emitted (match via c2=10)
 #[tokio::test]
 async fn filter_buffer_pending_loses_inner_rows() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -4249,22 +4583,17 @@ async fn filter_buffer_pending_loses_inner_rows() -> Result<()> {
     Ok(())
 }
 
-/// Reproduces the no-filter boundary Pending re-entry bug:
-///
-/// When an outer key group spans a batch boundary, the no-filter path
-/// emits the current batch, then polls for the next outer batch. If
-/// poll returns Pending, poll_join exits. On re-entry, without the
-/// PendingBoundary fix, the new batch is processed fresh by the
-/// merge-scan. Since inner already advanced past this key, the outer
-/// rows with the matching key are skipped via Ordering::Less.
+/// A matched outer key group spanning a batch boundary must survive the outer
+/// input returning Pending at that boundary: the rows continuing the key group
+/// still count as matched, even though the inner side has already advanced
+/// past the key.
 ///
 /// Setup:
 /// - Outer: 2 single-row batches, both with key=1 (key group spans boundary)
 /// - Inner: 1 row with key=1
 /// - Pending injected on outer before 2nd batch
 ///
-/// Without fix: only first outer row emitted (second lost on re-entry)
-/// With fix: both outer rows emitted
+/// Expected: both outer rows emitted
 #[tokio::test]
 async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -4353,9 +4682,8 @@ async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
 ///
 /// The outer input has an unmatched prefix row followed by a matching key
 /// group that continues in the next batch. Both rows with key=1 should be
-/// treated as matched. Returning `Pending` before the second batch forces
-/// `poll_join` to return and later resume from its top-level state, rather
-/// than continuing the same in-progress boundary loop.
+/// treated as matched. Returning `Pending` before the second batch makes the
+/// join wait for the continuation while the key group is still open.
 #[tokio::test]
 async fn no_filter_boundary_pending_with_unmatched_prefix() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -4447,8 +4775,8 @@ async fn no_filter_boundary_pending_with_unmatched_prefix() -> Result<()> {
     Ok(())
 }
 
-/// Tests the filtered boundary Pending re-entry: outer key group spans
-/// batches with a filter, and poll_next_outer_batch returns Pending.
+/// Same as the no-filter boundary case, with a filter: the outer key group
+/// spans batches and the outer input returns Pending at the boundary.
 ///
 /// Setup:
 /// - Outer: 2 single-row batches, both key=1, c1=[10, 20]
@@ -4562,15 +4890,15 @@ async fn filtered_boundary_pending_outer_rows() -> Result<()> {
 
 // ── Bitwise stream spill tests ─────────────────────────────────────────────
 
-/// Exercises inner key group spilling under memory pressure.
-///
-/// Uses a tiny memory limit (100 bytes) with disk spilling enabled. Since our
-/// operator only buffers inner rows when a filter is present, this test includes
-/// a filter (c1 < c2, always true). Verifies:
-/// 1. Spill metrics are recorded (spill_count, spilled_bytes, spilled_rows > 0)
-/// 2. Results match a non-spilled run
-#[tokio::test]
-async fn bitwise_spill_with_filter() -> Result<()> {
+struct FilteredBitwiseSpillFixture {
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: JoinOn,
+    sort_options: Vec<SortOptions>,
+    filter: JoinFilter,
+}
+
+fn filtered_bitwise_spill_fixture() -> Result<FilteredBitwiseSpillFixture> {
     let left = build_table(
         ("a1", &vec![1, 2, 3, 4, 5, 6]),
         ("b1", &vec![1, 2, 3, 4, 5, 6]),
@@ -4586,29 +4914,33 @@ async fn bitwise_spill_with_filter() -> Result<()> {
         Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
     )];
     let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
 
-    // c1 < c2 is always true for matching keys
-    let filter = JoinFilter::new(
-        Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("c1", 0)),
-            Operator::Lt,
-            Arc::new(Column::new("c2", 1)),
-        )),
-        vec![
-            ColumnIndex {
-                index: 2,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 2,
-                side: JoinSide::Right,
-            },
-        ],
-        Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Int32, false),
-        ])),
-    );
+    Ok(FilteredBitwiseSpillFixture {
+        left,
+        right,
+        on,
+        sort_options,
+        filter,
+    })
+}
+
+/// Exercises inner key group spilling under memory pressure.
+///
+/// Uses a tiny memory limit (100 bytes) with disk spilling enabled. Since our
+/// operator only buffers inner rows when a filter is present, this test includes
+/// a filter (c1 < c2, always true). Verifies:
+/// 1. Spill metrics are recorded (spill_count, spilled_bytes, spilled_rows > 0)
+/// 2. Results match a non-spilled run
+#[tokio::test]
+async fn bitwise_spill_with_filter() -> Result<()> {
+    let FilteredBitwiseSpillFixture {
+        left,
+        right,
+        on,
+        sort_options,
+        filter,
+    } = filtered_bitwise_spill_fixture()?;
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_limit(100, 1.0)
@@ -4656,6 +4988,21 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 metrics.spilled_rows().unwrap() > 0,
                 "expected spilled_rows > 0 for {join_type:?}, batch_size={batch_size}"
             );
+            let join_time = metrics
+                .sum_by_name("join_time")
+                .map(|m| m.as_usize())
+                .unwrap_or(0);
+            assert!(
+                join_time > 0,
+                "expected join_time > 0 for {join_type:?}, batch_size={batch_size}"
+            );
+            let output_rows = metrics.output_rows().unwrap_or(0);
+            let collected_rows: usize = spilled_result.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                output_rows, collected_rows,
+                "output_rows metric should match collected rows for \
+                 {join_type:?}, batch_size={batch_size}"
+            );
 
             // Run without spilling and compare results
             let task_ctx_no_spill = Arc::new(
@@ -4690,22 +5037,290 @@ async fn bitwise_spill_with_filter() -> Result<()> {
     Ok(())
 }
 
-/// Reproduces a bug where `resume_boundary` for the Filtered pending case
-/// only checks `inner_key_buffer.is_empty()` but ignores `inner_key_spill`.
-/// After spilling, the in-memory buffer is cleared while the spill file
-/// holds the data. If the outer key group spans a batch boundary, the
-/// second outer batch's rows are never evaluated against the inner group.
+/// Semi/anti/mark joins use `BitwiseSortMergeJoinStream`, which buffers the
+/// inner key group for filter evaluation. When that buffer exhausts the memory
+/// pool and the `DiskManager` has spilling disabled, the stream must surface a
+/// clear "Disk spilling disabled" error instead of spilling or panicking.
+#[tokio::test]
+async fn bitwise_filtered_no_spill() -> Result<()> {
+    let FilteredBitwiseSpillFixture {
+        left,
+        right,
+        on,
+        sort_options,
+        filter,
+    } = filtered_bitwise_spill_fixture()?;
+
+    // Tiny memory pool with the DiskManager disabled: spilling is impossible.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        )
+        .build_arc()?;
+    let session_config = SessionConfig::default().with_batch_size(1);
+
+    for join_type in [
+        LeftSemi, LeftAnti, RightSemi, RightAnti, LeftMark, RightMark,
+    ] {
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(Arc::clone(&runtime)),
+        );
+
+        let join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let err = common::collect(stream).await.unwrap_err();
+
+        assert_contains!(err.to_string(), "Failed to allocate additional");
+        assert_contains!(err.to_string(), "SMJStream[0]");
+        assert_contains!(err.to_string(), "Disk spilling disabled");
+        let metrics = join
+            .metrics()
+            .unwrap_or_else(|| panic!("metrics missing for {join_type:?}"));
+        assert_eq!(
+            metrics.spill_count(),
+            Some(0),
+            "unexpected spill for {join_type:?} with disk disabled",
+        );
+        assert_eq!(
+            metrics.spilled_bytes(),
+            Some(0),
+            "unexpected spilled bytes for {join_type:?} with disk disabled",
+        );
+        assert_eq!(
+            metrics.spilled_rows(),
+            Some(0),
+            "unexpected spilled rows for {join_type:?} with disk disabled",
+        );
+    }
+
+    Ok(())
+}
+
+/// A single inner key group spanning several inner batches can spill more
+/// than once under memory pressure. Every spilled slice must still be
+/// evaluated against the outer rows — an earlier spill file must not be
+/// dropped when a later slice of the same group spills. A dropped slice
+/// surfaces differently per join type: semi loses its row, anti resurrects
+/// it, and mark flips to `false`.
+#[tokio::test]
+async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
+    // Outer: one row with key 1, c1 = 5.
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![5]));
+
+    // Inner: one key group (b2 = 1) spanning two batches. Only the first
+    // batch satisfies the filter c1 < c2 (5 < 10); the second (5 < 0) does
+    // not, so the outcome depends on the group's first spilled slice.
+    let right = build_table_from_batches(vec![
+        build_table_i32(("a2", &vec![10]), ("b2", &vec![1]), ("c2", &vec![10])),
+        build_table_i32(("a2", &vec![20]), ("b2", &vec![1]), ("c2", &vec![0])),
+    ]);
+
+    // Right variants stream right and buffer left, so mirror the two-batch
+    // key group onto left. Again, only its first slice satisfies c1 < c2.
+    let mirrored_left = build_table_from_batches(vec![
+        build_table_i32(("a1", &vec![10]), ("b1", &vec![1]), ("c1", &vec![0])),
+        build_table_i32(("a1", &vec![20]), ("b1", &vec![1]), ("c1", &vec![10])),
+    ]);
+    let mirrored_right =
+        build_table(("a2", &vec![1]), ("b2", &vec![1]), ("c2", &vec![5]));
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
+
+    // 100-byte pool: every buffered slice fails its reservation, so each
+    // inner batch of the key group spills separately.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for (join_type, expected_rows) in [
+        (LeftSemi, 1),
+        (LeftAnti, 0),
+        (LeftMark, 1),
+        (RightSemi, 1),
+        (RightAnti, 0),
+        (RightMark, 1),
+    ] {
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::default().with_batch_size(1))
+                .with_runtime(Arc::clone(&runtime)),
+        );
+        let (join_left, join_right) =
+            if matches!(join_type, RightSemi | RightAnti | RightMark) {
+                (&mirrored_left, &mirrored_right)
+            } else {
+                (&left, &right)
+            };
+
+        let join = SortMergeJoinExec::try_new(
+            Arc::clone(join_left),
+            Arc::clone(join_right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let output_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            output_rows, expected_rows,
+            "unexpected output rows for {join_type:?}",
+        );
+        if matches!(join_type, LeftMark | RightMark) {
+            let batch = batches.iter().find(|b| b.num_rows() > 0).unwrap();
+            let mark = batch
+                .column_by_name("mark")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap();
+            assert!(
+                mark.value(0),
+                "mark must be true: the row matches the group's first spilled slice",
+            );
+        }
+
+        let metrics = join.metrics().expect("must have metrics");
+        assert_eq!(
+            metrics.spill_count(),
+            Some(1),
+            "all overflows of one key group must share a single spill file for {join_type:?}",
+        );
+        assert_eq!(
+            metrics.spilled_rows(),
+            Some(2),
+            "both inner slices of the group must be spilled for {join_type:?}",
+        );
+    }
+    Ok(())
+}
+
+/// Under `NullEqualsNull`, a NULL-key inner group spanning a batch boundary
+/// must behave like any equal-key group through the spill path: one group,
+/// one spill file, matched by a NULL-key outer row.
+#[tokio::test]
+async fn bitwise_spill_null_key_group() -> Result<()> {
+    // Outer: one row whose join key is NULL, c1 = 5.
+    let left = build_table_i32_nullable(
+        ("a1", &vec![Some(1)]),
+        ("b1", &vec![None]),
+        ("c1", &vec![Some(5)]),
+    );
+
+    // Inner: one NULL-key group spanning two batches; only the first batch
+    // satisfies the filter (5 < 10), so the result depends on the group's
+    // first spilled slice.
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a2", DataType::Int32, true),
+        Field::new("b2", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+    ]));
+    let right_batches = vec![
+        RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(10)])),
+                Arc::new(Int32Array::from(vec![None::<i32>])),
+                Arc::new(Int32Array::from(vec![Some(10)])),
+            ],
+        )?,
+        RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(20)])),
+                Arc::new(Int32Array::from(vec![None::<i32>])),
+                Arc::new(Int32Array::from(vec![Some(0)])),
+            ],
+        )?,
+    ];
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(1))
+            .with_runtime(runtime),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        LeftSemi,
+        sort_options,
+        NullEquality::NullEqualsNull,
+    )?;
+    let stream = join.execute(0, task_ctx)?;
+    let batches = common::collect(stream).await?;
+
+    let output_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        output_rows, 1,
+        "NULL-key outer row must match the spilled NULL-key group under NullEqualsNull",
+    );
+
+    let metrics = join.metrics().expect("must have metrics");
+    assert_eq!(
+        metrics.spill_count(),
+        Some(1),
+        "the NULL-key group must span the batch boundary as one group with one spill file",
+    );
+    assert_eq!(
+        metrics.spilled_rows(),
+        Some(2),
+        "both NULL-key slices must be spilled",
+    );
+    Ok(())
+}
+
+/// Once the inner key group has spilled, an outer key group spanning a batch
+/// boundary must still be evaluated against the spilled inner rows — the
+/// second outer batch's rows must not be treated as having no inner group to
+/// match against.
 ///
 /// Setup:
 /// - Outer: 2 single-row batches, both key=1, c1=[10, 10]
 /// - Inner: 1 batch with many rows all key=1 (enough to trigger spill)
 /// - Filter: c1 == c2 (matches when c2=10)
 /// - Memory limit: tiny (100 bytes) to force spilling
-/// - Pending before 2nd outer batch to trigger boundary re-entry
+/// - Pending before 2nd outer batch, while the key group is still open
 ///
 /// Expected: both outer rows match (semi=2 rows, anti=0 rows)
-/// Bug: second outer row is skipped because resume_boundary sees empty
-///      inner_key_buffer and skips re-evaluation.
 #[tokio::test]
 async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -5253,8 +5868,8 @@ async fn materializing_spill_pending_stream() -> Result<()> {
             "expected spill_count > 0 for {join_type:?}"
         );
 
-        // Compare against a no-spill run to make sure the Pending
-        // re-entry path didn't corrupt or drop any data.
+        // Compare against a no-spill run to make sure waiting on the
+        // spill reads didn't corrupt or drop any data.
         let task_ctx_no_spill = Arc::new(TaskContext::default());
         let join_no_spill = join_with_options(
             Arc::clone(&left),
@@ -5277,9 +5892,9 @@ async fn materializing_spill_pending_stream() -> Result<()> {
 }
 
 /// Bitwise-side (Semi/Anti) coverage: identical to `bitwise_spill_with_filter`,
-/// but every spill read goes through `PendingSpillFile`, forcing
-/// `process_key_match_with_filter`'s spilled-batch loop to actually hit and
-/// resume from `Poll::Pending`.
+/// but every spill read goes through `PendingSpillFile`, so reading the
+/// spilled inner rows back must actually hit and recover from `Poll::Pending`
+/// mid-read.
 #[tokio::test]
 async fn bitwise_spill_pending_stream() -> Result<()> {
     let left = build_table(

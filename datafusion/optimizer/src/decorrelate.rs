@@ -18,7 +18,6 @@
 //! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
 use std::collections::BTreeSet;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
@@ -199,7 +198,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
                 let pull_up_expr_opt = if let Some(expr_result_map) =
-                    self.collected_count_expr_map.get(plan_filter.input.deref())
+                    self.collected_count_expr_map.get(&*plan_filter.input)
                 {
                     if let Some(expr) = conjunction(subquery_filters.clone()) {
                         filter_exprs_evaluation_result_on_empty_batch(
@@ -258,7 +257,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
                 if let Some(expr_result_map) =
-                    self.collected_count_expr_map.get(projection.input.deref())
+                    self.collected_count_expr_map.get(&*projection.input)
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
                         &projection.expr,
@@ -350,21 +349,34 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
+
+                let new_plan = if alias.input.schema().fields().len()
+                    != alias.schema.fields().len()
+                {
+                    LogicalPlanBuilder::from((*alias.input).clone())
+                        .alias(alias.alias.clone())?
+                        .build()?
+                } else {
+                    plan.clone()
+                };
+
                 self.correlated_subquery_cols_map
-                    .insert(plan.clone(), new_correlated_cols);
-                if let Some(input_map) =
-                    self.collected_count_expr_map.get(alias.input.deref())
+                    .insert(new_plan.clone(), new_correlated_cols);
+                if let Some(input_map) = self.collected_count_expr_map.get(&*alias.input)
                 {
                     self.collected_count_expr_map
-                        .insert(plan.clone(), input_map.clone());
+                        .insert(new_plan.clone(), input_map.clone());
                 }
-                Ok(Transformed::no(plan))
+
+                if new_plan != plan {
+                    Ok(Transformed::yes(new_plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
             }
             LogicalPlan::Limit(limit) => {
-                let input_expr_map = self
-                    .collected_count_expr_map
-                    .get(limit.input.deref())
-                    .cloned();
+                let input_expr_map =
+                    self.collected_count_expr_map.get(&*limit.input).cloned();
                 // handling the limit clause in the subquery
                 let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
                 {
@@ -432,16 +444,16 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
         right,
     }) = expr
     {
-        match (left.deref(), right.deref()) {
+        match (&**left, &**right) {
             (Expr::Column(_), right) => !right.any_column_refs(),
             (left, Expr::Column(_)) => !left.any_column_refs(),
             (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(expr.deref(), Expr::Column(_)) =>
+                if matches!(&**expr, Expr::Column(_)) =>
             {
                 !right.any_column_refs()
             }
             (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_)) =>
+                if matches!(&**expr, Expr::Column(_)) =>
             {
                 !left.any_column_refs()
             }

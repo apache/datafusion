@@ -453,7 +453,7 @@ async fn run_test_file_substrait_round_trip(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusionSubstraitRoundTrip::new(
@@ -473,6 +473,10 @@ async fn run_test_file_substrait_round_trip(
 }
 
 #[cfg(not(feature = "substrait"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the substrait-enabled implementation"
+)]
 async fn run_test_file_substrait_round_trip(
     _test_file: TestFile,
     _validator: Validator,
@@ -508,7 +512,7 @@ async fn run_test_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     // If DataFusion configuration has changed during test file runs, errors will be
     // pushed to this vec.
@@ -589,20 +593,22 @@ fn get_record_count(path: &PathBuf, label: String) -> u64 {
         parse_file(path).unwrap();
     let mut count: u64 = 0;
 
-    records.iter().for_each(|rec| match rec {
-        Record::Query { conditions, .. } | Record::Statement { conditions, .. }
-            if conditions.is_empty()
-                || !conditions.contains(&Condition::SkipIf {
-                    label: label.clone(),
-                })
-                || conditions.contains(&Condition::OnlyIf {
-                    label: label.clone(),
-                }) =>
-        {
-            count += 1;
+    for rec in &records {
+        match rec {
+            Record::Query { conditions, .. } | Record::Statement { conditions, .. }
+                if conditions.is_empty()
+                    || !conditions.contains(&Condition::SkipIf {
+                        label: label.clone(),
+                    })
+                    || conditions.contains(&Condition::OnlyIf {
+                        label: label.clone(),
+                    }) =>
+            {
+                count += 1;
+            }
+            _ => {}
         }
-        _ => {}
-    });
+    }
 
     count
 }
@@ -627,7 +633,7 @@ async fn run_test_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(
@@ -646,6 +652,10 @@ async fn run_test_file_with_postgres(
 }
 
 #[cfg(not(feature = "postgres"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the postgres-enabled implementation"
+)]
 async fn run_test_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,
@@ -682,7 +692,7 @@ async fn run_complete_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let config_change_errors = Arc::new(Mutex::new(Vec::new()));
     let mut runner = sqllogictest::Runner::new(|| async {
@@ -738,7 +748,7 @@ async fn run_complete_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{relative_path:?}"));
+    pb.set_message(relative_path.display().to_string());
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(
@@ -771,6 +781,10 @@ async fn run_complete_file_with_postgres(
 }
 
 #[cfg(not(feature = "postgres"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the postgres-enabled implementation"
+)]
 async fn run_complete_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,

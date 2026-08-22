@@ -218,9 +218,9 @@ pub fn analyze(
             }
             PropagationResult::Infeasible => {
                 // If the propagation result is infeasible, set intervals to None
-                target_boundaries
-                    .iter_mut()
-                    .for_each(|bound| bound.interval = None);
+                for bound in &mut target_boundaries {
+                    bound.interval = None;
+                }
                 Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
             }
             PropagationResult::CannotPropagate => {
@@ -240,7 +240,7 @@ fn shrink_boundaries(
     target_expr_and_indices: &[(Arc<dyn PhysicalExpr>, usize)],
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
-    target_expr_and_indices.iter().for_each(|(expr, i)| {
+    for (expr, i) in target_expr_and_indices {
         if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(bound) = target_boundaries
                 .iter_mut()
@@ -248,7 +248,7 @@ fn shrink_boundaries(
         {
             bound.interval = Some(graph.get_interval(*i));
         };
-    });
+    }
 
     let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
 
@@ -350,6 +350,7 @@ mod tests {
     use datafusion_common::{DFSchema, ScalarValue, assert_contains, stats::Precision};
     use datafusion_expr::{
         Expr, col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit,
+        physical_planning_context::PhysicalPlanningContext,
     };
 
     use crate::{AnalysisContext, create_physical_expr, expressions::Column};
@@ -412,8 +413,13 @@ mod tests {
         for (expr, lower, upper) in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
             let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-            let physical_expr =
-                create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+            let physical_expr = create_physical_expr(
+                &expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )
+            .unwrap();
             let analysis_result = analyze(
                 &physical_expr,
                 AnalysisContext::new(boundaries),
@@ -453,8 +459,13 @@ mod tests {
         for expr in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
             let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-            let physical_expr =
-                create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+            let physical_expr = create_physical_expr(
+                &expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )
+            .unwrap();
             let analysis_result = analyze(
                 &physical_expr,
                 AnalysisContext::new(boundaries),
@@ -475,8 +486,13 @@ mod tests {
         let expected_error = "OR operator cannot yet propagate true intervals";
         let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
         let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-        let physical_expr =
-            create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+        let physical_expr = create_physical_expr(
+            &expr,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )
+        .unwrap();
         let analysis_error = analyze(
             &physical_expr,
             AnalysisContext::new(boundaries),
