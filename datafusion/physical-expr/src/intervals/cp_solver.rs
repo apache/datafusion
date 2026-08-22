@@ -296,8 +296,8 @@ pub fn propagate_arithmetic(
     }
 }
 
-/// Match runtime `Eq`'s signed-zero semantics before using `ScalarValue`
-/// equality for singleton operands. `ScalarValue::PartialEq` is bit-wise for
+/// Compare two scalars the way runtime `Eq` does, instead of with
+/// `ScalarValue`'s bit-wise equality. `ScalarValue::PartialEq` is bit-wise for
 /// floats (`to_bits`), under which `-0.0 != +0.0`; runtime `Eq` normalizes
 /// them via `normalize_float_zero_scalar` (see
 /// `physical-expr-common/src/datum.rs`).
@@ -386,11 +386,15 @@ pub fn propagate_comparison(
                 // `a = b` is certainly true, so `NOT(a = b)` is infeasible.
                 // `ScalarValue::PartialEq` is bit-wise for floats, so
                 // `singleton_values_equal` normalizes signed zero to match
-                // runtime `Eq` behavior before comparing.
+                // runtime `Eq` behavior -- both when deciding whether a child
+                // is a singleton and when comparing the two children.
+                // `Interval::try_new` orders endpoints with `total_cmp`, so
+                // `[-0.0, +0.0]` is a valid interval whose endpoints differ
+                // bit-wise but denote a single `Eq`-comparable value.
                 if !left_child.is_unbounded()
                     && !right_child.is_unbounded()
-                    && left_child.lower() == left_child.upper()
-                    && right_child.lower() == right_child.upper()
+                    && singleton_values_equal(left_child.lower(), left_child.upper())
+                    && singleton_values_equal(right_child.lower(), right_child.upper())
                     && singleton_values_equal(left_child.lower(), right_child.lower())
                 {
                     Ok(None)
@@ -1765,6 +1769,106 @@ mod tests {
             Some((left.clone(), right.clone())),
             propagate_comparison(&Operator::Eq, &Interval::FALSE, &left, &right)?
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_eq_false_signed_zero_interval_singleton() -> Result<()> {
+        // `Interval::try_new` orders endpoints with `total_cmp`, so
+        // `[-0.0, +0.0]` is a valid interval. Its endpoints differ bit-wise
+        // but denote a single value under `Eq` comparison semantics, so
+        // `a = 0.0` is certainly true over it and `NOT(a = 0.0)` is
+        // infeasible. A bit-wise `lower() == upper()` singleton check would
+        // miss this and report the input intervals as feasible.
+        let left = Interval::try_new(
+            ScalarValue::Float32(Some(-0.0f32)),
+            ScalarValue::Float32(Some(0.0f32)),
+        )?;
+        let right = Interval::try_new(
+            ScalarValue::Float32(Some(0.0f32)),
+            ScalarValue::Float32(Some(0.0f32)),
+        )?;
+        assert_eq!(
+            None,
+            propagate_comparison(&Operator::Eq, &Interval::FALSE, &left, &right)?
+        );
+
+        // The signed-zero span may sit on either side.
+        assert_eq!(
+            None,
+            propagate_comparison(&Operator::Eq, &Interval::FALSE, &right, &left)?
+        );
+
+        // Float64 variant.
+        let left = Interval::try_new(
+            ScalarValue::Float64(Some(-0.0f64)),
+            ScalarValue::Float64(Some(0.0f64)),
+        )?;
+        let right = Interval::try_new(
+            ScalarValue::Float64(Some(-0.0f64)),
+            ScalarValue::Float64(Some(0.0f64)),
+        )?;
+        assert_eq!(
+            None,
+            propagate_comparison(&Operator::Eq, &Interval::FALSE, &left, &right)?
+        );
+
+        // A genuinely wider float interval is still not a singleton.
+        let left = Interval::try_new(
+            ScalarValue::Float64(Some(-0.0f64)),
+            ScalarValue::Float64(Some(1.0f64)),
+        )?;
+        let right = Interval::try_new(
+            ScalarValue::Float64(Some(0.0f64)),
+            ScalarValue::Float64(Some(0.0f64)),
+        )?;
+        assert_eq!(
+            Some((left.clone(), right.clone())),
+            propagate_comparison(&Operator::Eq, &Interval::FALSE, &left, &right)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_comparison_uncertain_parent_preserves_operands() -> Result<()> {
+        // A `TRUE_OR_FALSE` parent proves nothing about either operand, so the
+        // shared catch-all arm must return both children unchanged for every
+        // comparison operator. Returning `None` here would be read as
+        // infeasible and would discard satisfiable ranges (issue #19264).
+        let left = Interval::make(Some(-1_i64), Some(5_i64))?;
+        let right = Interval::make(Some(0_i64), Some(2_i64))?;
+        for op in [
+            Operator::Eq,
+            Operator::Gt,
+            Operator::GtEq,
+            Operator::Lt,
+            Operator::LtEq,
+        ] {
+            assert_eq!(
+                Some((left.clone(), right.clone())),
+                propagate_comparison(&op, &Interval::TRUE_OR_FALSE, &left, &right)?,
+                "operands must be preserved for {op} under an uncertain parent"
+            );
+        }
+
+        // Also holds for singleton and unbounded operands.
+        let left = Interval::make(Some(0_i64), Some(0_i64))?;
+        let right = Interval::make::<i64>(None, None)?;
+        for op in [
+            Operator::Eq,
+            Operator::Gt,
+            Operator::GtEq,
+            Operator::Lt,
+            Operator::LtEq,
+        ] {
+            assert_eq!(
+                Some((left.clone(), right.clone())),
+                propagate_comparison(&op, &Interval::TRUE_OR_FALSE, &left, &right)?,
+                "operands must be preserved for {op} under an uncertain parent"
+            );
+        }
 
         Ok(())
     }

@@ -657,6 +657,60 @@ mod tests {
         Ok(())
     }
 
+    fn analyze_not_eq_f64_helper(
+        lower: f64,
+        upper: f64,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float64)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float64(Some(lower)),
+                ScalarValue::Float64(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+        let ctx = AnalysisContext::new(boundaries);
+
+        let pred_not_eq = col("a").eq(lit(0.0f64)).not();
+        let phys_not = create_physical_expr(
+            &pred_not_eq,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let out = analyze(&phys_not, ctx, df_schema.as_ref())?;
+        Ok(out.boundaries[0].interval.clone())
+    }
+
+    // Regression test for the signed-zero singleton case.
+    //
+    // `Interval::try_new` orders endpoints with `total_cmp`, so
+    // `[-0.0, +0.0]` is a valid input domain. Its endpoints differ bit-wise
+    // but denote a single value under `Eq` comparison semantics, so
+    // `a = 0.0` is certainly true over it and `NOT (a = 0.0)` is infeasible.
+    // A bit-wise singleton check in `propagate_comparison` would instead
+    // report the input domain, i.e. a false-feasibility result on the public
+    // `analyze` path.
+    #[test]
+    fn test_analyze_not_eq_signed_zero_span_infeasible() -> datafusion_common::Result<()>
+    {
+        let out = analyze_not_eq_helper(-0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over Float32 [-0.0, +0.0] should yield None (infeasible), got {out:?}"
+        );
+
+        let out = analyze_not_eq_f64_helper(-0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over Float64 [-0.0, +0.0] should yield None (infeasible), got {out:?}"
+        );
+        Ok(())
+    }
+
     fn analyze_between_helper(
         lower: f32,
         upper: f32,
