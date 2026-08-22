@@ -132,6 +132,35 @@ SELECT pmod(NULL::int, NULL::int) as pmod_null_3;
 ----
 NULL
 
+# An untyped NULL matches the decimal signature and is passed through
+# uncoerced (apache/datafusion#19458), so these types are decided explicitly
+# rather than by coercion. `mod` answers Float64 for two untyped nulls and
+# keeps the other side's type when only one is null; pmod matches it.
+query T
+SELECT arrow_typeof(pmod(NULL, NULL));
+----
+Float64
+
+query R
+SELECT pmod(NULL, NULL);
+----
+NULL
+
+query T
+SELECT arrow_typeof(pmod(2.5::decimal(3,1), NULL));
+----
+Decimal128(3, 1)
+
+query R
+SELECT pmod(2.5::decimal(3,1), NULL);
+----
+NULL
+
+# An untyped NULL beside a typed non-decimal argument takes the Numeric path,
+# which cannot coerce the pair. `mod` rejects it the same way.
+statement error DataFusion error: Error during planning: Internal error: Function 'pmod' failed to match any signature
+SELECT pmod(NULL, 3::int);
+
 # PMOD tests with large integers
 query I
 SELECT pmod(100::int, 30::int) as pmod_large_1;

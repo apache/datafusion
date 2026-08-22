@@ -28,13 +28,10 @@ use arrow::compute::kernels::{
 };
 use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType};
 use arrow::error::ArrowError;
-use datafusion_common::types::NativeType;
-use datafusion_common::{
-    Result, ScalarValue, assert_eq_or_internal_err, exec_err, plan_err,
-};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-    binary::binary_numeric_coercion,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility, binary::binary_numeric_coercion,
 };
 
 /// Returns a one element array holding negative zero, for the floating point
@@ -141,43 +138,6 @@ fn pmod_computation_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     }
 }
 
-/// The coercion `Signature::numeric` applied before `pmod` moved to
-/// [`Signature::user_defined`], reproduced so that only the decimal pair below
-/// changes behaviour.
-///
-/// A null argument is skipped rather than coerced, and a call still typed null
-/// afterwards falls back to `Float64`; both match `TypeSignature::Numeric` in
-/// `datafusion_expr::type_coercion::functions`.
-fn pmod_numeric_coercion(lhs: &DataType, rhs: &DataType) -> Result<Vec<DataType>> {
-    let mut valid_type = lhs.clone();
-
-    let rhs_native: NativeType = rhs.into();
-    if rhs_native != NativeType::Null {
-        if !rhs_native.is_numeric() {
-            return plan_err!(
-                "Function 'pmod' expects Numeric but received {rhs_native}"
-            );
-        }
-        match binary_numeric_coercion(&valid_type, rhs) {
-            Some(coerced_type) => valid_type = coerced_type,
-            None => {
-                return plan_err!(
-                    "For function 'pmod' {valid_type} and {rhs} are not coercible to a common numeric type"
-                );
-            }
-        }
-    }
-
-    let valid_native: NativeType = valid_type.clone().into();
-    if valid_native == NativeType::Null {
-        valid_type = DataType::Float64;
-    } else if !valid_native.is_numeric() {
-        return plan_err!("Function 'pmod' expects Numeric but received {valid_native}");
-    }
-
-    Ok(vec![valid_type.clone(), valid_type])
-}
-
 /// Spark-compatible `pmod` function
 /// In ANSI mode, division by zero throws an error.
 /// In legacy mode, division by zero returns NULL (Spark behavior).
@@ -188,6 +148,16 @@ pub fn spark_pmod(
 ) -> Result<ColumnarValue> {
     assert_eq_or_internal_err!(args.len(), 2, "pmod expects exactly two arguments");
     let args = ColumnarValue::values_to_arrays(args)?;
+
+    // A null argument is passed through uncoerced by `Coercible` (#19458), so
+    // it still carries `DataType::Null` here. Every operation below needs a
+    // concrete numeric type, and the answer is null regardless.
+    if args.iter().any(|arg| arg.data_type() == &DataType::Null) {
+        return Ok(ColumnarValue::Array(new_null_array(
+            result_type,
+            args[0].len(),
+        )));
+    }
 
     let (left, right): (ArrayRef, ArrayRef) =
         if args[0].data_type() == args[1].data_type() {
@@ -295,7 +265,19 @@ impl Default for SparkPmod {
 impl SparkPmod {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    // A decimal pair must reach `return_type` with the
+                    // precision and scale as written, since Spark defines
+                    // `Pmod.resultDecimalType` on the declared arguments.
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Decimal),
+                        Coercion::new_exact(TypeSignatureClass::Decimal),
+                    ]),
+                    TypeSignature::Numeric(2),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -320,26 +302,15 @@ impl ScalarUDFImpl for SparkPmod {
             (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
                 Ok(pmod_decimal_result_type(*p1, *s1, *p2, *s2))
             }
+            // `Coercible` matches a null argument and passes it through
+            // uncoerced (#19458), so an untyped NULL reaches here rather than
+            // being folded by `Numeric(2)`. `mod` answers `Float64` for two
+            // untyped nulls and the other side's type when only one is null;
+            // `pmod` did too, so that behaviour is kept explicitly here.
+            (DataType::Null, DataType::Null) => Ok(DataType::Float64),
+            (DataType::Null, other) | (other, DataType::Null) => Ok(other.clone()),
             // Arrow's rem function handles type promotion for the rest
             _ => Ok(arg_types[0].clone()),
-        }
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return plan_err!(
-                "Function 'pmod' expects 2 arguments but received {}",
-                arg_types.len()
-            );
-        }
-
-        match (&arg_types[0], &arg_types[1]) {
-            // Spark applies resultDecimalType to the declared argument types, so
-            // these are left alone; spark_pmod widens them for the computation.
-            (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => {
-                Ok(arg_types.to_vec())
-            }
-            (lhs, rhs) => pmod_numeric_coercion(lhs, rhs),
         }
     }
 
