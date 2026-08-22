@@ -1596,7 +1596,7 @@ mod test {
         // For collect left mode, the min/max values are from the entire left table and the specific partition of the right table.
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Absent,
+            total_byte_size: Precision::Inexact(32),
             column_statistics: vec![
                 // Left id column: all partitions (id 1..4)
                 ColumnStatistics {
@@ -1677,7 +1677,7 @@ mod test {
         // For partitioned mode, the min/max values are from the specific partition for each side.
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Absent,
+            total_byte_size: Precision::Inexact(32),
             column_statistics: vec![
                 // Left id column: partition 0 only (id 3..4)
                 ColumnStatistics {
@@ -1756,7 +1756,7 @@ mod test {
         // For auto mode, the min/max values are from the entire left and right tables.
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(4),
-            total_byte_size: Precision::Absent,
+            total_byte_size: Precision::Inexact(64),
             column_statistics: vec![
                 // Left id column: all partitions (id 1..4)
                 ColumnStatistics {

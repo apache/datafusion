@@ -466,12 +466,42 @@ pub(crate) fn estimate_join_statistics(
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
+    // Width of one output row, from the sides this join emits. Without it a join reports
+    // no size and `hash_join_single_partition_threshold` falls back to counting rows.
+    let width = |stats: &Statistics| match (
+        stats.total_byte_size.get_value(),
+        stats.num_rows.get_value(),
+    ) {
+        (Some(bytes), Some(rows)) if *rows > 0 => Some(*bytes as f64 / *rows as f64),
+        _ => None,
+    };
+    // The boolean a mark join appends is one bit per row.
+    const MARK_COLUMN_WIDTH: f64 = 1.0 / 8.0;
+    let output_width = match join_type {
+        JoinType::LeftSemi | JoinType::LeftAnti => width(&left_stats),
+        JoinType::RightSemi | JoinType::RightAnti => width(&right_stats),
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+            width(&left_stats)
+                .zip(width(&right_stats))
+                .map(|(left, right)| left + right)
+        }
+        JoinType::LeftMark => width(&left_stats).map(|w| w + MARK_COLUMN_WIDTH),
+        JoinType::RightMark => width(&right_stats).map(|w| w + MARK_COLUMN_WIDTH),
+    };
+
     let join_stats =
         estimate_join_cardinality(join_type, left_stats, right_stats, on, null_equality);
     let (num_rows, total_byte_size, column_statistics) = match join_stats {
         Some(stats) => (
             Precision::Inexact(stats.num_rows),
-            stats.total_byte_size,
+            match (stats.total_byte_size, output_width) {
+                // Only fill a gap: a size the join derived from its column statistics
+                // knows which columns it keeps, which an average row width cannot.
+                (Precision::Absent, Some(width)) => {
+                    Precision::Inexact((stats.num_rows as f64 * width) as usize)
+                }
+                (derived, _) => derived,
+            },
             stats.column_statistics,
         ),
         None => (
@@ -2874,6 +2904,60 @@ mod tests {
                 join_type
             );
         }
+
+        Ok(())
+    }
+
+    /// A join reports the size of the rows it emits, so an operator above it can size
+    /// itself without counting rows.
+    #[test]
+    fn test_join_statistics_report_an_output_byte_size() -> Result<()> {
+        let sized = |rows: usize, bytes: usize| Statistics {
+            num_rows: Inexact(rows),
+            total_byte_size: Inexact(bytes),
+            column_statistics: vec![ColumnStatistics {
+                byte_size: Inexact(bytes),
+                ..create_column_stats(Inexact(0), Inexact(100), Inexact(100), Inexact(0))
+            }],
+        };
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]);
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("a", 0)) as _,
+            Arc::new(Column::new("c", 0)) as _,
+        )];
+        let estimate = |join_type: JoinType| -> Result<Statistics> {
+            estimate_join_statistics(
+                // Eight bytes per row on the left, sixteen on the right.
+                sized(1000, 8000),
+                sized(2000, 32000),
+                &on,
+                NullEquality::NullEqualsNothing,
+                &join_type,
+                &schema,
+            )
+        };
+
+        // An inner join emits both sides: 1000 * 2000 / 100 rows, 24 bytes each.
+        let inner = estimate(JoinType::Inner)?;
+        assert_eq!(inner.num_rows, Inexact(20000));
+        assert_eq!(inner.total_byte_size, Inexact(20000 * 24));
+
+        // A mark join emits the left side plus one bit per row.
+        let mark = estimate(JoinType::LeftMark)?;
+        assert_eq!(mark.num_rows, Inexact(1000));
+        assert_eq!(mark.total_byte_size, Inexact((1000.0 * 8.125) as usize));
+
+        // A semi join derives its size from the columns it keeps, which is more
+        // precise than an average row width, so that estimate is left alone.
+        let semi = estimate(JoinType::LeftSemi)?;
+        assert_ne!(semi.total_byte_size, Absent);
+        assert_eq!(
+            semi.total_byte_size,
+            total_byte_size_from_column_statistics(&semi.column_statistics)
+        );
 
         Ok(())
     }
