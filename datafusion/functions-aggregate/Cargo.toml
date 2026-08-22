@@ -81,6 +81,10 @@ name = "approx_distinct"
 harness = false
 
 [[bench]]
+name = "approx_top_k"
+harness = false
+
+[[bench]]
 name = "first_last"
 harness = false
 
