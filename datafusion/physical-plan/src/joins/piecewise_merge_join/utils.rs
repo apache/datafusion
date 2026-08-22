@@ -17,12 +17,14 @@
 
 use datafusion_expr::JoinType;
 
-// Returns boolean for whether the join is a right existence join
-pub(super) fn is_right_existence_join(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
-    )
+// Returns boolean for whether the join is a right existence join served by
+// `RightExistencePWMJStream`, which reads nothing but a single min/max off the buffered side.
+//
+// `RightMark` is deliberately excluded even though it is a right existence join: it needs the
+// buffered side walked in order and an extra boolean column, so it must not inherit this
+// stream's relaxed input requirements if the `try_new` gate is ever loosened.
+pub(super) fn is_supported_right_existence_join(join_type: JoinType) -> bool {
+    matches!(join_type, JoinType::RightSemi | JoinType::RightAnti)
 }
 
 // Returns boolean for whether the join is an existence join
@@ -38,12 +40,16 @@ pub(super) fn is_existence_join(join_type: JoinType) -> bool {
     )
 }
 
-// Returns boolean for whether the join is a left existence join that is currently
-// supported by `PiecewiseMergeJoin`. These do not require swapping the inputs: the
-// marked (left) side is already the buffered side, so `ExistencePWMJStream` can track the
-// matched suffix and slice the buffered batch at its start.
+// Returns boolean for whether the join is an existence join that is currently supported by
+// `PiecewiseMergeJoin`, which is every one of them except the Mark joins
 pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
-    matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti)
+    matches!(
+        join_type,
+        JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+    )
 }
 
 // Returns boolean to check if the join type needs to record
@@ -55,17 +61,13 @@ pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
 // Returns boolean for whether or not we need to build the buffered side
 // bitmap for marking matched rows on the buffered side.
 //
-// `LeftSemi`/`LeftAnti` are absent on purpose: `ExistencePWMJStream` only ever marks a
-// contiguous suffix of the buffered side, so it tracks the boundary as a single index
-// (`BufferedSideData::existence_min_marked`) and needs no bitmap.
+// The Semi/Anti joins are absent on purpose. `LeftSemi`/`LeftAnti` only ever mark a
+// contiguous suffix of the buffered side, so they track the boundary as a single index
+// (`BufferedSideData::existence_min_marked`); `RightSemi`/`RightAnti` mark the streamed
+// side and never touch the buffered side at all.
 pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
     matches!(
         join_type,
-        JoinType::Full
-            | JoinType::Left
-            | JoinType::RightAnti
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
+        JoinType::Full | JoinType::Left | JoinType::LeftMark | JoinType::RightMark
     )
 }
