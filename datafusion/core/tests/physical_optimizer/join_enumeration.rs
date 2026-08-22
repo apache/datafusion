@@ -360,9 +360,10 @@ impl JoinCostModel for ExternalStatisticsCostModel<'_> {
         left_part: PartSet,
         right_part: PartSet,
         collect_only: Option<RelSet>,
-    ) -> Vec<Exchange> {
+        into: &mut Vec<Exchange>,
+    ) {
         self.inner
-            .exchanges(left, right, left_part, right_part, collect_only)
+            .exchanges(left, right, left_part, right_part, collect_only, into)
     }
 }
 
@@ -420,8 +421,10 @@ fn star_schema_context(
     Ok(ctx)
 }
 
-/// A plain join tree, `EXISTS`, `NOT EXISTS`, and a non-equi predicate.
-const STAR_QUERIES: [&str; 4] = [
+/// A plain join tree, `EXISTS`, `NOT EXISTS`, a non-equi predicate, a left outer join
+/// whose right side matches only a few of the rows it extends, and an `EXISTS` inside a
+/// disjunction, which the planner decorrelates into a mark join.
+const STAR_QUERIES: [&str; 6] = [
     "select f_id, f_type, f_region from fact, ids, types, regions \
      where f_id = o_id and f_type = t_type and f_region = r_region order by f_id",
     "select f_id, f_type from fact where exists \
@@ -432,6 +435,11 @@ const STAR_QUERIES: [&str; 4] = [
      and f_id in (select o_id from ids) order by f_id",
     "select f_id, f_type, t_type from fact, ids, types \
      where f_id = o_id and f_type = t_type and f_id > t_type order by f_id",
+    "select f_id, f_type, r_region from fact \
+     left outer join regions on f_region = r_region \
+     join types on f_type = t_type order by f_id, r_region",
+    "select f_id, f_type from fact, ids where f_id = o_id \
+     and (exists (select 1 from types where t_type = f_type) or f_id < 5) order by f_id",
 ];
 
 #[tokio::test]
@@ -520,6 +528,107 @@ fn applies_an_anti_join_first() -> Result<()> {
         StatisticsExec: col_count=2, row_count=Inexact(1000000)
       StatisticsExec: col_count=1, row_count=Inexact(1000000)
     ");
+    Ok(())
+}
+
+/// A left outer join over a large table, with a selective join above it. An outer join
+/// only ever adds rows, so the cheap order applies it to the join's result instead.
+fn late_inner_join_over_an_outer_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let types = scan(1_000, &[("t_type", 1_000)]);
+    let other = scan(100, &[("o_id", 100)]);
+
+    let extended =
+        join_of_type(fact, types, &[("f_type", "t_type")], JoinType::Left, None)?;
+    join(extended, other, &[("f_id", "o_id")])
+}
+
+#[test]
+fn applies_an_outer_join_last() -> Result<()> {
+    let plan = late_inner_join_over_an_outer_plan()?;
+    assert_snapshot!(formatted(&plan), @r"
+    HashJoinExec: mode=Auto, join_type=Inner, on=[(f_id@0, o_id@0)]
+      HashJoinExec: mode=Auto, join_type=Left, on=[(f_type@1, t_type@0)]
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(1000)
+      StatisticsExec: col_count=1, row_count=Inexact(100)
+    ");
+
+    // The hundred surviving rows are extended, not the million. Enumeration emits this
+    // as a `Right` join with the null-supplying side building; `JoinSelection` then finds
+    // the other side smaller and swaps it back to a `Left` join.
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Left, on=[(f_type@0, t_type@0)], projection=[f_id@1, f_type@0, t_type@3, o_id@2]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(o_id@0, f_id@0)], projection=[f_type@2, f_id@1, o_id@0]
+        StatisticsExec: col_count=1, row_count=Inexact(100)
+        StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000)
+    ");
+    Ok(())
+}
+
+/// A mark join never changes the row count, so it neither wants reordering itself nor
+/// stops the joins around it from being reordered.
+fn marked_join_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let other = scan(1_000_000, &[("o_id", 1_000_000)]);
+    let wanted = scan(10, &[("w_type", 10)]);
+    let types = scan(10, &[("t_type", 10)]);
+
+    let joined = join(fact, other, &[("f_id", "o_id")])?;
+    let marked = join_of_type(
+        joined,
+        wanted,
+        &[("f_type", "w_type")],
+        JoinType::LeftMark,
+        None,
+    )?;
+    join(marked, types, &[("f_type", "t_type")])
+}
+
+#[test]
+fn reorders_around_a_mark_join() -> Result<()> {
+    let plan = marked_join_plan()?;
+    assert_snapshot!(formatted(&plan), @r"
+    HashJoinExec: mode=Auto, join_type=Inner, on=[(f_type@1, t_type@0)]
+      HashJoinExec: mode=Auto, join_type=LeftMark, on=[(f_type@1, w_type@0)]
+        HashJoinExec: mode=Auto, join_type=Inner, on=[(f_id@0, o_id@0)]
+          StatisticsExec: col_count=2, row_count=Inexact(1000000)
+          StatisticsExec: col_count=1, row_count=Inexact(1000000)
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+      StatisticsExec: col_count=1, row_count=Inexact(10)
+    ");
+
+    // The selective join runs first and the mark join is applied to its result, as a
+    // `RightMark` with the marking side building. The flag keeps its output position.
+    assert_snapshot!(formatted(&optimize(plan, &ConfigOptions::new())?), @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(f_id@0, o_id@0)], projection=[f_id@0, f_type@1, o_id@4, mark@2, t_type@3]
+      HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(w_type@0, f_type@0)], projection=[f_id@1, f_type@0, mark@3, t_type@2]
+        StatisticsExec: col_count=1, row_count=Inexact(10)
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t_type@0, f_type@1)], projection=[f_type@2, f_id@1, t_type@0]
+          StatisticsExec: col_count=1, row_count=Inexact(10)
+          StatisticsExec: col_count=2, row_count=Inexact(1000000)
+      StatisticsExec: col_count=1, row_count=Inexact(1000000)
+    ");
+    Ok(())
+}
+
+/// A predicate over a null-supplied column has to stay with the outer join that made it
+/// nullable, so a subtree holding one is left alone.
+#[test]
+fn leaves_a_predicate_over_a_null_supplied_column_alone() -> Result<()> {
+    let fact = scan(1_000_000, &[("f_id", 1_000_000), ("f_type", 1_000)]);
+    let types = scan(1_000, &[("t_type", 1_000), ("t_group", 10)]);
+    let groups = scan(10, &[("g_group", 10)]);
+
+    let extended =
+        join_of_type(fact, types, &[("f_type", "t_type")], JoinType::Left, None)?;
+    // `t_group` comes from the null-supplied side.
+    let plan = join(extended, groups, &[("t_group", "g_group")])?;
+
+    let optimized =
+        JoinEnumeration::new().optimize(Arc::clone(&plan), &ConfigOptions::new())?;
+    assert_eq!(formatted(&optimized), formatted(&plan));
     Ok(())
 }
 
