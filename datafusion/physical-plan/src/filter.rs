@@ -957,17 +957,6 @@ impl EmbeddedProjection for FilterExec {
     }
 }
 
-/// Collects column equality information from `col = literal` predicates in a
-/// conjunction.
-///
-/// Returns `(eq_columns, is_infeasible)`:
-/// - `eq_columns`: set of column indices constrained to a single literal value.
-/// - `is_infeasible`: `true` when the same column is equated to two different
-///   non-null literals (e.g. `name = 'alice' AND name = 'bob'`), which is
-///   always unsatisfiable.
-///
-/// Only AND conjunctions are traversed; OR is intentionally skipped
-/// since `a = 1 OR a = 2` does not pin NDV to 1.
 /// The most rows a filter can match, when it restricts a column holding each value
 /// once to a fixed set of values: one row per value.
 fn unique_match_limit(
@@ -1038,6 +1027,17 @@ fn holds_each_value_once(column: &ColumnStatistics, num_rows: &Precision<usize>)
     distinct.saturating_add(*nulls) >= *rows
 }
 
+/// Collects column equality information from `col = literal` predicates in a
+/// conjunction.
+///
+/// Returns `(eq_columns, is_infeasible)`:
+/// - `eq_columns`: set of column indices constrained to a single literal value.
+/// - `is_infeasible`: `true` when the same column is equated to two different
+///   non-null literals (e.g. `name = 'alice' AND name = 'bob'`), which is
+///   always unsatisfiable.
+///
+/// Only AND conjunctions are traversed; OR is intentionally skipped
+/// since `a = 1 OR a = 2` does not pin NDV to 1.
 fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize>, bool) {
     let mut eq_values: HashMap<usize, ScalarValue> = HashMap::new();
     let mut infeasible = false;
