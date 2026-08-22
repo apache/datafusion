@@ -102,9 +102,8 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let (_, min_maxes) = self.inner.emit_to(emit_to);
-        let fields = match &self.inner.data_type {
-            DataType::Struct(fields) => fields,
-            _ => return internal_err!("Data type is not a struct"),
+        let DataType::Struct(fields) = &self.inner.data_type else {
+            return internal_err!("Data type is not a struct");
         };
         let null_array = StructArray::new_null(fields.clone(), 1);
         let min_maxes_data: Vec<ArrayData> = min_maxes

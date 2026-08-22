@@ -1914,9 +1914,7 @@ mod tests {
             panic!("Expected statement, got {statement:?}");
         };
 
-        let query = if let SQLStatement::Query(query) = statement {
-            query
-        } else {
+        let SQLStatement::Query(query) = statement else {
             panic!("Expected query, got {statement:?}");
         };
 

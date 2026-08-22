@@ -495,7 +495,7 @@ impl ExecutionPlan for TestNode {
         children: Vec<Arc<dyn ExecutionPlan>>,
         _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.len() == 1);
+        assert_eq!(children.len(), 1);
         Ok(Arc::new(TestNode::new(
             self.inject_filter,
             children[0].clone(),

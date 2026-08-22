@@ -369,9 +369,7 @@ impl ExprSchemable for Expr {
 
                 Ok(expr_nullable | subquery_nullable)
             }
-            Expr::ScalarSubquery(subquery) => {
-                Ok(subquery.subquery.schema().field(0).is_nullable())
-            }
+            Expr::ScalarSubquery(subquery) => Ok(scalar_subquery_nullable(subquery)),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
             }
@@ -518,7 +516,13 @@ impl ExprSchemable for Expr {
                 Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
             Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
+                let field = subquery.subquery.schema().field(0);
+                Ok(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_nullable(scalar_subquery_nullable(subquery)),
+                ))
             }
             Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
                 let (left_field, right_field) =
@@ -753,6 +757,15 @@ fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
     }
 }
 
+/// Returns whether a scalar subquery may evaluate to NULL.
+///
+/// This is the case if the subquery's projected field is nullable, or if the
+/// subquery may return no rows: a scalar subquery that produces no rows
+/// evaluates to NULL regardless of the nullability of its projected field.
+fn scalar_subquery_nullable(subquery: &Subquery) -> bool {
+    subquery.subquery.schema().field(0).is_nullable() || subquery.subquery.min_rows() == 0
+}
+
 /// Cast subquery in InSubquery/ScalarSubquery to a given type.
 ///
 /// 1. **Projection plan**: If the subquery is a projection (i.e. a SELECT statement with specific
@@ -798,9 +811,10 @@ mod tests {
 
     use super::*;
     use crate::logical_plan::builder::LogicalTableSource;
+    use crate::test::function_stub::count;
     use crate::{
         LogicalPlanBuilder, and, col, in_subquery, lit, not, or,
-        out_ref_col_with_metadata, when,
+        out_ref_col_with_metadata, scalar_subquery, when,
     };
 
     use arrow::datatypes::Schema;
@@ -1265,6 +1279,40 @@ mod tests {
         assert_eq!(
             err.strip_backtrace(),
             "Error during planning: subquery must return exactly one column of data to compare against"
+        );
+    }
+
+    #[test]
+    fn scalar_subquery_nullability_accounts_for_min_rows() {
+        let possibly_empty = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(!possibly_empty.schema().field(0).is_nullable());
+
+        let expr = scalar_subquery(Arc::new(possibly_empty));
+        assert!(expr.nullable(&MockExprSchema::new()).unwrap());
+
+        let field = expr.to_field(&MockExprSchema::new()).unwrap().1;
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
+
+        let always_one = LogicalPlanBuilder::empty(false)
+            .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(!always_one.schema().field(0).is_nullable());
+
+        let expr = scalar_subquery(Arc::new(always_one));
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        assert!(
+            !expr
+                .to_field(&MockExprSchema::new())
+                .unwrap()
+                .1
+                .is_nullable()
         );
     }
 
