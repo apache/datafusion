@@ -161,7 +161,7 @@ pub fn pushdown_limit_helper(
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.preserve_order = limit_info.preserve_order;
+        global_state.preserve_order |= limit_info.preserve_order;
         global_state.satisfied = false;
 
         if let Some(fetch) = fetch
@@ -197,8 +197,10 @@ pub fn pushdown_limit_helper(
     }
 
     // If we have a non-limit operator with fetch capability, update global
-    // state as necessary:
+    // state as necessary. A fetched ordered merge selects the leading rows in
+    // its ordering, so preserve that ordering when pushing the fetch down.
     if pushdown_plan.fetch().is_some() {
+        global_state.preserve_order |= pushdown_plan.is::<SortPreservingMergeExec>();
         if global_state.skip == 0 {
             global_state.satisfied = true;
         }
@@ -270,36 +272,33 @@ pub fn pushdown_limit_helper(
         // to add a limit or a fetch. If the plan is already satisfied, we will try
         // to add the fetch info and return the plan.
 
-        // There's no push down, change fetch & skip to default values:
+        // This operator materializes the current fetch. Clear its requirements before
+        // descending so they are not combined with an independent limit below.
         let global_skip = global_state.skip;
+        let global_preserve_order = std::mem::take(&mut global_state.preserve_order);
         global_state.fetch = None;
         global_state.skip = 0;
 
-        let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch);
+        let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch).map(|plan| {
+            if global_preserve_order {
+                plan.with_preserve_order(true).unwrap_or(plan)
+            } else {
+                plan
+            }
+        });
         if global_state.satisfied {
             if let Some(plan_with_fetch) = maybe_fetchable {
-                let plan_with_preserve_order = plan_with_fetch
-                    .with_preserve_order(global_state.preserve_order)
-                    .unwrap_or(plan_with_fetch);
-                Ok((Transformed::yes(plan_with_preserve_order), global_state))
+                Ok((Transformed::yes(plan_with_fetch), global_state))
             } else {
                 Ok((Transformed::no(pushdown_plan), global_state))
             }
         } else {
             global_state.satisfied = true;
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
-                let plan_with_preserve_order = plan_with_fetch
-                    .with_preserve_order(global_state.preserve_order)
-                    .unwrap_or(plan_with_fetch);
-
                 if global_skip > 0 {
-                    add_global_limit(
-                        plan_with_preserve_order,
-                        global_skip,
-                        Some(global_fetch),
-                    )
+                    add_global_limit(plan_with_fetch, global_skip, Some(global_fetch))
                 } else {
-                    plan_with_preserve_order
+                    plan_with_fetch
                 }
             } else {
                 add_limit(pushdown_plan, global_skip, global_fetch)
