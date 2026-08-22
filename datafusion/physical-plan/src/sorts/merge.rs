@@ -499,7 +499,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// it takes as input the next item at (S0) and the loser of (S3, S4).
     #[inline]
     fn lt_leaf_node_index(&self, cursor_index: usize) -> usize {
-        (self.cursors.len() + cursor_index) / 2
+        usize::midpoint(self.cursors.len(), cursor_index)
     }
 
     /// Find the parent node index for the given node index
