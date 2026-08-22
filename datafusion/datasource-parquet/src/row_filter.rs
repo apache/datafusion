@@ -120,7 +120,12 @@ pub(crate) struct DatafusionArrowPredicate {
 }
 
 impl DatafusionArrowPredicate {
-    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
+    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`.
+    ///
+    /// Production code goes through [`prebuild_row_filter_candidates`] +
+    /// [`row_filter_from_prebuilt`]; this constructor remains as a test
+    /// convenience for exercising a single candidate.
+    #[cfg(test)]
     pub fn try_new(
         candidate: FilterCandidate,
         rows_pruned: metrics::Count,
@@ -401,67 +406,19 @@ pub fn build_row_filter(
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
-    let rows_pruned = &file_metrics.pushdown_rows_pruned;
-    let rows_matched = &file_metrics.pushdown_rows_matched;
-    let time = &file_metrics.row_pushdown_eval_time;
-
-    // Split into conjuncts:
-    // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
-    let predicates = split_conjunction(expr);
-
-    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
-    let mut candidates: Vec<FilterCandidate> = predicates
-        .into_iter()
-        .map(|expr| {
-            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
-                .build(metadata)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-
-    // no candidates
-    if candidates.is_empty() {
+    // Implemented on top of the prebuild split so there is a single place
+    // that splits conjuncts, orders candidates, and wires metrics — callers
+    // that build once per file go through the same code as the per-row-group
+    // rebuild path in `RowFilterContext`.
+    let Some(prebuilt) = prebuild_row_filter_candidates(expr, file_schema, metadata)?
+    else {
         return Ok(None);
-    }
-
-    if reorder_predicates {
-        candidates.sort_unstable_by_key(|c| c.required_bytes);
-    }
-
-    // To avoid double-counting metrics when multiple predicates are used:
-    // - All predicates should count rows_pruned (cumulative pruned rows)
-    // - Only the last predicate should count rows_matched (final result)
-    // This ensures: rows_matched + rows_pruned = total rows processed
-    let total_candidates = candidates.len();
-
-    candidates
-        .into_iter()
-        .enumerate()
-        .map(|(idx, candidate)| {
-            let is_last = idx == total_candidates - 1;
-
-            // All predicates share the pruned counter (cumulative)
-            let predicate_rows_pruned = rows_pruned.clone();
-
-            // Only the last predicate tracks matched rows (final result)
-            let predicate_rows_matched = if is_last {
-                rows_matched.clone()
-            } else {
-                metrics::Count::new()
-            };
-
-            DatafusionArrowPredicate::try_new(
-                candidate,
-                predicate_rows_pruned,
-                predicate_rows_matched,
-                time.clone(),
-            )
-            .map(|pred| Box::new(pred) as _)
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
+    };
+    Ok(Some(row_filter_from_prebuilt(
+        &prebuilt,
+        reorder_predicates,
+        file_metrics,
+    )))
 }
 
 /// A precomputed [`FilterCandidate`] with its expression column-reassigned to
