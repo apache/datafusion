@@ -87,6 +87,18 @@ fn cast_output_field(
     Arc::new(f)
 }
 
+/// Resolves the ScalarValue of a Literal or a simple literal Cast/TryCast.
+/// Allows UDF return type resolution when it depends on a constant argument's value.
+fn resolve_literal_scalar(e: &Expr) -> Option<ScalarValue> {
+    match e {
+        Expr::Literal(sv, _) => Some(sv.clone()),
+        Expr::Cast(Cast { expr, field }) | Expr::TryCast(TryCast { expr, field }) => {
+            resolve_literal_scalar(expr).and_then(|sv| sv.cast_to(field.data_type()).ok())
+        }
+        _ => None,
+    }
+}
+
 impl ExprSchemable for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
@@ -585,12 +597,11 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
-                let arguments = args
+                let resolved_arguments =
+                    args.iter().map(resolve_literal_scalar).collect::<Vec<_>>();
+                let arguments = resolved_arguments
                     .iter()
-                    .map(|e| match e {
-                        Expr::Literal(sv, _) => Some(sv),
-                        _ => None,
-                    })
+                    .map(|sv| sv.as_ref())
                     .collect::<Vec<_>>();
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
@@ -657,13 +668,14 @@ impl ExprSchemable for Expr {
                     func.func.as_ref(),
                 )?;
 
-                let arguments = func
+                let resolved_arguments = func
                     .args
                     .iter()
-                    .map(|e| match e {
-                        Expr::Literal(sv, _) => Some(sv),
-                        _ => None,
-                    })
+                    .map(resolve_literal_scalar)
+                    .collect::<Vec<_>>();
+                let arguments = resolved_arguments
+                    .iter()
+                    .map(|sv| sv.as_ref())
                     .collect::<Vec<_>>();
 
                 let args = HigherOrderReturnFieldArgs {

@@ -249,6 +249,16 @@ SELECT date_part('YEAR', CAST('2000-01-01' AS DATE))
 2000
 
 query I
+SELECT date_part(CAST('year' AS VARCHAR), CAST('2000-01-01' AS DATE))
+----
+2000
+
+query R
+SELECT date_part(CAST('epoch' AS VARCHAR), TIMESTAMP '2024-05-01T00:00:00')
+----
+1714521600
+
+query I
 SELECT EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')
 ----
 2020
