@@ -793,6 +793,22 @@ Invalid or Unsupported Configuration: value must be at least 2
 # out-of-range value like 200 was silently accepted here and only rejected
 # later, when FilterExec was built.
 statement error
+SET datafusion.optimizer.default_filter_selectivity = -1
+----
+DataFusion error: Error setting config datafusion.optimizer.default_filter_selectivity
+caused by
+Invalid or Unsupported Configuration: value must be between 0 and 100, got -1
+
+
+statement error
+SET datafusion.optimizer.default_filter_selectivity = 256
+----
+DataFusion error: Error setting config datafusion.optimizer.default_filter_selectivity
+caused by
+Invalid or Unsupported Configuration: value must be between 0 and 100, got 256
+
+
+statement error
 SET datafusion.optimizer.default_filter_selectivity = 200
 ----
 DataFusion error: Error setting config datafusion.optimizer.default_filter_selectivity
