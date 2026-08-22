@@ -23,7 +23,8 @@ use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err}
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    CurrentlyExecutingSqlTracker, DataFusion, Filter, TestContext, df_value_validator,
+    ConfigMatrixCombination, CurrentlyExecutingSqlTracker, DataFusion, Filter,
+    TestContext, df_value_validator, matrix_tag, parse_config_matrix_from_file,
     read_dir_recursive, setup_scratch_dir, should_skip_file, should_skip_record,
     value_normalizer,
 };
@@ -502,17 +503,79 @@ async fn run_test_file(
         path,
         relative_path,
     } = test_file;
+
+    let combinations = parse_config_matrix_from_file(&path)?;
+
+    // No matrix -> preserve the original single-pass behavior byte-for-byte.
+    if combinations.is_empty() {
+        return run_test_file_once(
+            path,
+            relative_path,
+            validator,
+            mp,
+            mp_style,
+            filters,
+            currently_executing_sql_tracker,
+            colored_output,
+            None,
+        )
+        .await;
+    }
+
+    for combo in combinations {
+        run_test_file_once(
+            path.clone(),
+            relative_path.clone(),
+            validator,
+            mp.clone(),
+            mp_style.clone(),
+            filters,
+            currently_executing_sql_tracker.clone(),
+            colored_output,
+            Some(&combo),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Run a single pass of the test file. If `combo` is `Some`, the config
+/// values are applied to a fresh `SessionContext` before the runner starts,
+/// and any failure is annotated with the matrix key/value.
+#[expect(clippy::too_many_arguments)]
+async fn run_test_file_once(
+    path: PathBuf,
+    relative_path: PathBuf,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+    filters: &[Filter],
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
+    combo: Option<&ConfigMatrixCombination>,
+) -> Result<()> {
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
+
     setup_scratch_dir(&relative_path)?;
+
+    if let Some(combo) = combo {
+        apply_config_matrix_combination(&test_ctx, combo, &relative_path)?;
+    }
+
+    // Suffix appended to the progress bar and any error to identify the
+    // active matrix combination. Empty when no matrix is in play.
+    let matrix_suffix = combo
+        .map(|c| format!(" {}", matrix_tag(c)))
+        .unwrap_or_default();
 
     let count: u64 = get_record_count(&path, "Datafusion".to_string());
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(relative_path.display().to_string());
+    pb.set_message(format!("{}{matrix_suffix}", relative_path.display()));
 
     // If DataFusion configuration has changed during test file runs, errors will be
     // pushed to this vec.
@@ -532,14 +595,46 @@ async fn run_test_file(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, &mut runner, filters, colored_output).await;
+    let mut result = run_file_in_runner(path, &mut runner, filters, colored_output).await;
     pb.finish_and_clear();
 
-    result?;
-
     // If there was no correctness error, check that the config is unchanged.
-    runner.shutdown_async().await;
-    config_change_result(&config_change_errors)
+    if result.is_ok() {
+        runner.shutdown_async().await;
+        result = config_change_result(&config_change_errors);
+    }
+
+    // Annotate any error with the active matrix combination so CI logs point
+    // at the offending config on the first line.
+    if matrix_suffix.is_empty() {
+        result
+    } else {
+        result
+            .map_err(|e| DataFusionError::External(format!("{e}{matrix_suffix}").into()))
+    }
+}
+
+/// Apply the matrix values to the given `TestContext`'s config in-place.
+/// Any unknown key or invalid value is reported with a user-friendly error
+/// naming the file, key, and value.
+fn apply_config_matrix_combination(
+    test_ctx: &TestContext,
+    combo: &ConfigMatrixCombination,
+    relative_path: &Path,
+) -> Result<()> {
+    let session_ctx = test_ctx.session_ctx();
+    let state_ref = session_ctx.state_ref();
+    let mut state = state_ref.write();
+    let opts = state.config_mut().options_mut();
+    for (key, value) in combo {
+        opts.set(key, value).map_err(|e| {
+            exec_datafusion_err!(
+                "configMatrix in {}: failed to set `{key}` = `{value}`: {e}",
+                relative_path.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(

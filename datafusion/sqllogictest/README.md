@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Apache DataFusion sqllogictest
+# Apache DataFusion SqlLogicTest
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
@@ -182,6 +182,42 @@ query TT
 EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 ----
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
+```
+
+## Cookbook: Sweeping config with `configMatrix`
+
+Runs the same `.slt` once per combination of config values. Each directive is a comment:
+
+```text
+# configMatrix: <key>=<v1>,<v2>[,...]
+```
+
+- Repeat the directive to nest keys. Values are the cartesian product.
+- Whitespace-trimmed and deduped; repeated keys merge value lists.
+- Unknown key or invalid value fails fast, naming the file, key, and value.
+- Test failures include `[configMatrix: k=v, ...]` in the `N errors in file …` banner.
+
+Nested example (2 × 2 = 4 runs):
+
+```text
+# configMatrix: datafusion.execution.parquet.coerce_int96=ms,us
+# configMatrix: datafusion.execution.parquet.coerce_int96_tz=UTC,America/New_York
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query I
+select count(*) from int96_from_spark
+----
+6
+```
+
+Failure banner:
+
+```text
+External error: 1 errors in file .../parquet_int96_matrix.slt [configMatrix: datafusion.execution.parquet.coerce_int96=ms, datafusion.execution.parquet.coerce_int96_tz=UTC]
 ```
 
 # Reference
