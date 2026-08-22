@@ -342,9 +342,9 @@ impl Stream for AlignedBoundaryStream {
                         .position(|&b| b == this.terminator)
                     {
                         this.phase = Phase::Done;
-                        return Poll::Ready(Some(Ok(
-                            chunk.slice(..search_from + rel + 1)
-                        )));
+                        return Poll::Ready(Some(
+                            Ok(chunk.slice(..=(search_from + rel))),
+                        ));
                     }
 
                     // No terminator found; continue scanning in EndScan.
@@ -383,7 +383,7 @@ impl Stream for AlignedBoundaryStream {
                                 chunk.iter().position(|&b| b == this.terminator)
                             {
                                 this.phase = Phase::Done;
-                                return Poll::Ready(Some(Ok(chunk.slice(..pos + 1))));
+                                return Poll::Ready(Some(Ok(chunk.slice(..=pos))));
                             }
                             // No terminator yet; yield and keep scanning.
                             return Poll::Ready(Some(Ok(chunk)));

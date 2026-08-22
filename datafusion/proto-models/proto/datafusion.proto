@@ -403,7 +403,22 @@ message ColumnUnnestListRecursion {
 }
 
 message UnnestOptions {
-  bool preserve_nulls = 1;
+  // Reserved for the historical `bool preserve_nulls = 1;` field.
+  // Use `null_handling` instead.
+  reserved 1;
+  reserved "preserve_nulls";
+
+  enum NullHandling {
+    // Preserve nulls; empty lists produce no rows. The historical default.
+    PRESERVE = 0;
+    // Drop both null and empty lists from the output.
+    DROP = 1;
+    // Preserve nulls, and additionally expand empty lists into a single
+    // NULL output row (outer-unnest semantics).
+    PRESERVE_AND_EXPAND_EMPTY = 2;
+  }
+
+  NullHandling null_handling = 3;
   repeated RecursionUnnestOption recursions = 2;
 }
 
@@ -618,6 +633,9 @@ message NegativeNode {
 
 message Unnest {
   repeated LogicalExprNode exprs = 1;
+  // When true, this Unnest expression has outer-unnest semantics: NULL and
+  // empty input lists both produce a single NULL output row.
+  bool outer = 2;
 }
 
 message InListNode {
@@ -1032,6 +1050,8 @@ message PhysicalExprNode {
     PhysicalHigherOrderUdfNode higher_order_udf = 24;
     PhysicalLambdaExprNode lambda = 25;
     PhysicalLambdaVariableExprNode lambda_variable = 26;
+    PhysicalRangeExprNode range_expr = 27;
+    PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
   }
 }
 
@@ -1041,6 +1061,10 @@ message PhysicalDynamicFilterNode {
   uint64 generation = 3;
   PhysicalExprNode inner_expr = 4;
   bool is_complete = 5;
+}
+
+message PhysicalSqlSimilarToPatternNode {
+  PhysicalExprNode expr = 1;
 }
 
 message PhysicalScalarUdfNode {
@@ -1078,6 +1102,7 @@ message PhysicalAggregateExprNode {
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
   string human_display = 8;
+  bool is_reversed = 9;
 }
 
 message PhysicalWindowExprNode {
@@ -1183,6 +1208,11 @@ message PhysicalHashExprNode {
   string description = 6;
 }
 
+message PhysicalRangeExprNode {
+  repeated PhysicalSortExprNode sort_expr = 1;
+  repeated PhysicalRangeSplitPoint split_point = 2;
+}
+
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
@@ -1271,8 +1301,18 @@ message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
+// Identifies which Arrow IPC format an ArrowScanExecNode reads.
+enum ArrowIpcFormat {
+  // Arrow IPC file format (with footer, supports range-based parallel reading).
+  // This is the default for payloads encoded before the format field existed.
+  ARROW_IPC_FORMAT_FILE = 0;
+  // Arrow IPC stream format (without footer, sequential reading only)
+  ARROW_IPC_FORMAT_STREAM = 1;
+}
+
 message ArrowScanExecNode {
   FileScanExecConf base_conf = 1;
+  ArrowIpcFormat format = 2;
 }
 
 message MemoryScanExecNode {
@@ -1306,6 +1346,14 @@ message HashJoinExecNode {
   bool null_aware = 10;
   // Optional dynamic filter expression for pushing down to the probe side.
   PhysicalExprNode dynamic_filter = 11;
+  // Optional row limit pushed into the join by the `limit_pushdown` rule.
+  //
+  // This is presence-tracked (`optional`) on purpose: messages produced by
+  // versions predating this field carry no `fetch` at all, and a plain proto3
+  // scalar would decode that absence as `0`, i.e. "fetch 0 rows", silently
+  // turning old plans into empty results. With `optional`, absent decodes to
+  // `None`, which is the correct reading of an older message.
+  optional uint64 fetch = 12;
 }
 
 enum StreamPartitionMode {
@@ -1446,6 +1494,8 @@ message AggregateExecNode {
   bool has_grouping_set = 12;
   // Optional dynamic filter expression for pushing down to the child.
   PhysicalExprNode dynamic_filter = 13;
+  // Output schema preserved by physical optimizer rewrites.
+  datafusion_common.Schema schema = 14;
 }
 
 message GlobalLimitExecNode {
@@ -1454,11 +1504,15 @@ message GlobalLimitExecNode {
   uint32 skip = 2;
   // Maximum number of rows to fetch; negative means no limit
   int64 fetch = 3;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 4;
 }
 
 message LocalLimitExecNode {
   PhysicalPlanNode input = 1;
   uint32 fetch = 2;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 3;
 }
 
 message SortExecNode {

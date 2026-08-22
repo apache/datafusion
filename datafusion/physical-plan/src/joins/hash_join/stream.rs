@@ -445,7 +445,7 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
         return 0;
     }
 
-    debug_assert!(indices.null_count() == 0);
+    debug_assert_eq!(indices.null_count(), 0);
 
     let values_buf = indices.values();
     let values = values_buf.as_ref();
@@ -559,16 +559,24 @@ impl HashJoinStream {
             .bounds
             .clone()
             .unwrap_or_else(|| PartitionBounds::new(vec![]));
+        // Arrow tracks null counts per array, so this costs no data scan.
+        let keys_have_null = left_data
+            .values()
+            .iter()
+            .any(|array| array.null_count() > 0);
 
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                 partition_id: self.partition,
                 pushdown,
                 bounds,
+                keys_have_null,
             },
-            PartitionMode::CollectLeft => {
-                PartitionBuildData::CollectLeft { pushdown, bounds }
-            }
+            PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
+                pushdown,
+                bounds,
+                keys_have_null,
+            },
             PartitionMode::Auto => unreachable!(
                 "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
             ),
@@ -742,40 +750,63 @@ impl HashJoinStream {
         let timer = self.join_metrics.join_time.timer();
 
         // Null-aware anti join semantics:
+
         // For LeftAnti: output LEFT (build) rows where LEFT.key NOT IN RIGHT.key
         // 1. If RIGHT (probe) contains NULL in any batch, no LEFT rows should be output
         // 2. LEFT rows with NULL keys should not be output (handled in final stage)
+
+        // For RightAnti: output RIGHT (probe) rows where RIGHT.key NOT IN LEFT.key
+        // 1. If LEFT (build) contains NULL, no RIGHT rows should be output
+        // 2. RIGHT rows with NULL keys should not be output
+        // 3. If LEFT (build) is empty, all RIGHT rows should be output
         if self.null_aware {
-            // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
-            // Only set this if batch has rows - empty batches don't count
-            // Use shared atomic state so all partitions can see this global information
-            if state.batch.num_rows() > 0 {
-                build_side
-                    .left_data
-                    .probe_side_non_empty
-                    .store(true, Ordering::Relaxed);
-            }
+            match self.join_type {
+                JoinType::RightAnti => {
+                    if build_side.left_data.build_side_has_null {
+                        timer.done();
+                        self.state = HashJoinStreamState::FetchProbeBatch;
+                        return Ok(StatefulStreamResult::Continue);
+                    }
+                }
+                JoinType::LeftAnti => {
+                    // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
+                    // Only set this if batch has rows - empty batches don't count
+                    // Use shared atomic state so all partitions can see this global information
+                    if state.batch.num_rows() > 0 {
+                        build_side
+                            .left_data
+                            .probe_side_non_empty
+                            .store(true, Ordering::Relaxed);
+                    }
 
-            // Check if probe side (RIGHT) contains NULL
-            // Since null_aware validation ensures single column join, we only check the first column
-            let probe_key_column = &state.values[0];
-            if probe_key_column.null_count() > 0 {
-                // Found NULL in probe side - set shared flag to prevent any output
-                build_side
-                    .left_data
-                    .probe_side_has_null
-                    .store(true, Ordering::Relaxed);
-            }
+                    // Check if probe side (RIGHT) contains NULL
+                    // Since null_aware validation ensures single column join, we only check the first column
+                    let probe_key_column = &state.values[0];
+                    let probe_has_null = if self.filter.is_some() {
+                        probe_key_column.null_count() > 0
+                    } else {
+                        probe_key_column.logical_null_count() > 0
+                    };
+                    if probe_has_null {
+                        // Found NULL in probe side - set shared flag to prevent any output
+                        build_side
+                            .left_data
+                            .probe_side_has_null
+                            .store(true, Ordering::Relaxed);
+                    }
 
-            // If probe side has NULL (detected in this or any other partition), return empty result
-            if build_side
-                .left_data
-                .probe_side_has_null
-                .load(Ordering::Relaxed)
-            {
-                timer.done();
-                self.state = HashJoinStreamState::FetchProbeBatch;
-                return Ok(StatefulStreamResult::Continue);
+                    // If probe side has NULL (detected in this or any other partition), return empty result
+                    if build_side
+                        .left_data
+                        .probe_side_has_null
+                        .load(Ordering::Relaxed)
+                    {
+                        timer.done();
+                        self.state = HashJoinStreamState::FetchProbeBatch;
+                        return Ok(StatefulStreamResult::Continue);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -894,13 +925,33 @@ impl HashJoinStream {
             last_joined_right_idx.map_or(0, |v| v + 1)
         };
 
-        let (left_indices, right_indices) = adjust_indices_by_join_type(
+        let (left_indices, mut right_indices) = adjust_indices_by_join_type(
             left_indices,
             right_indices,
             index_alignment_range_start..index_alignment_range_end,
             self.join_type,
             self.right_side_ordered,
         )?;
+
+        // If null-aware RightAnti join, we don't want to emit NULL probe keys
+        if self.join_type == JoinType::RightAnti && self.null_aware {
+            let probe_key = &state.values[0];
+            // if the valid_keys mask is available, use that, else use the probe key
+            let mask = state
+                .valid_keys
+                .clone()
+                .or_else(|| probe_key.logical_nulls());
+            // we only need this copy if there are NULLs
+            if let Some(mask) = mask.filter(|m| m.null_count() > 0) {
+                let filtered_right_indices = right_indices
+                    .values()
+                    .iter()
+                    .copied()
+                    .filter(|idx| !mask.is_null(*idx as usize))
+                    .collect::<Vec<_>>();
+                right_indices = UInt32Array::from(filtered_right_indices);
+            }
+        }
 
         // Build output batch and push to coalescer
         let (build_batch, probe_batch, join_side) =
@@ -1075,6 +1126,7 @@ mod tests {
             partition_id,
             pushdown: PushdownStrategy::Empty,
             bounds: PartitionBounds::new(vec![]),
+            keys_have_null: false,
         }
     }
 

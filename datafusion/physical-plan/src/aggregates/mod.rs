@@ -59,8 +59,8 @@
 //!     AggregateExec (partial, ordered)
 //! ```
 //!
-//! See [`OrderedPartialAggregateStream`] and [`OrderedFinalAggregateStream`] for
-//! details.
+//! See [`OrderedPartialAggregateStream`], [`OrderedFinalAggregateStream`], and
+//! [`OrderedSingleAggregateStream`] for details.
 //!
 //! Related configuration:
 //!
@@ -81,7 +81,8 @@
 //!   input
 //! ```
 //!
-//! See [`SingleHashAggregateStream`] for details.
+//! See [`SingleHashAggregateStream`] and [`OrderedSingleAggregateStream`] for
+//! details.
 //!
 //! Related configuration:
 //!
@@ -153,19 +154,23 @@ use crate::aggregates::{
     hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
     ordered_final_stream::OrderedFinalAggregateStream,
     ordered_partial_stream::OrderedPartialAggregateStream,
+    ordered_single_stream::OrderedSingleAggregateStream,
     partial_reduce_stream::PartialReduceHashAggregateStream,
     single_stream::SingleHashAggregateStream,
 };
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    CardinalityEffect, EmissionType, plan_contains_expression_id,
+};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, SendableRecordBatchStream, Statistics, check_if_same_properties,
+    InputOrderMode, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
@@ -176,9 +181,10 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err,
-    internal_err, not_impl_err,
+    ColumnStatistics, Constraint, Constraints, Result, ScalarValue,
+    assert_eq_or_internal_err, internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryLimit;
@@ -209,6 +215,7 @@ mod hash_stream;
 pub mod order;
 mod ordered_final_stream;
 mod ordered_partial_stream;
+mod ordered_single_stream;
 mod partial_reduce_stream;
 mod single_stream;
 mod skip_partial;
@@ -672,12 +679,15 @@ enum StreamType {
     OrderedPartialAggregate(OrderedPartialAggregateStream),
     /// Final stage of aggregation for ordered input.
     OrderedFinalAggregate(OrderedFinalAggregateStream),
+    /// Single stage of aggregation for ordered input.
+    OrderedSingleAggregate(OrderedSingleAggregateStream),
     /// Hash aggregation reused for multiple stages
     ///
     /// Note this is being incrementally migrated to dedicated streams like
     /// [`StreamType::PartialHash`], [`StreamType::FinalHash`],
-    /// [`StreamType::OrderedPartialAggregate`], and
-    /// [`StreamType::OrderedFinalAggregate`]
+    /// [`StreamType::OrderedPartialAggregate`],
+    /// [`StreamType::OrderedFinalAggregate`], and
+    /// [`StreamType::OrderedSingleAggregate`]
     ///
     /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
     GroupedHash(GroupedHashAggregateStream),
@@ -697,8 +707,9 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::SingleHash(stream) => Box::pin(stream),
-            StreamType::OrderedPartialAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedSingleAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
@@ -1004,7 +1015,7 @@ impl AggregateExec {
             .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
             .collect();
 
-        let input_order_mode = if indices.len() == groupby_exprs.len()
+        let mut input_order_mode = if indices.len() == groupby_exprs.len()
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
@@ -1015,19 +1026,29 @@ impl AggregateExec {
             InputOrderMode::Linear
         };
 
+        // To keep the ordering optimization simple, grouping sets are not supported.
+        // See [`OrderedPartialAggregateStream`] for more details about this optimization.
+        if group_by.has_grouping_set() {
+            input_order_mode = InputOrderMode::Linear;
+        }
+
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
             ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
 
-        let cache = Self::compute_properties(
-            &input,
-            Arc::clone(&schema),
-            &group_expr_mapping,
-            group_by.is_true_no_grouping(),
-            &mode,
-            &input_order_mode,
-            aggr_expr.as_ref(),
-        )?;
+        let cache = if group_by.has_grouping_set() {
+            Self::compute_grouping_set_properties(&input, Arc::clone(&schema))
+        } else {
+            Self::compute_properties(
+                &input,
+                Arc::clone(&schema),
+                &group_expr_mapping,
+                group_by.is_true_no_grouping(),
+                &mode,
+                &input_order_mode,
+                aggr_expr.as_ref(),
+            )?
+        };
 
         let mut exec = AggregateExec {
             mode,
@@ -1087,6 +1108,10 @@ impl AggregateExec {
     }
 
     /// Returns the dynamic filter expression for this aggregate, if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
@@ -1208,6 +1233,12 @@ impl AggregateExec {
                 )?));
             }
 
+            if self.should_use_ordered_single_aggregate_stream(context) {
+                return Ok(StreamType::OrderedSingleAggregate(
+                    OrderedSingleAggregateStream::new(self, context, partition)?,
+                ));
+            }
+
             if self.should_use_single_hash_stream(context) {
                 return Ok(StreamType::SingleHash(SingleHashAggregateStream::new(
                     self, context, partition,
@@ -1221,12 +1252,7 @@ impl AggregateExec {
         )?))
     }
 
-    fn should_use_partial_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -1245,12 +1271,7 @@ impl AggregateExec {
             && self.limit_options_supported_by_hash_stream()
     }
 
-    fn should_use_final_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -1273,17 +1294,22 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_single_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_single_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ) && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
+            && !self.group_by.is_true_no_grouping()
+            && self.group_by.is_single()
+    }
+
+    fn should_use_ordered_single_aggregate_stream(&self, _context: &TaskContext) -> bool {
+        matches!(
+            self.mode,
+            AggregateMode::Single | AggregateMode::SinglePartitioned
+        ) && self.limit_options.is_none()
+            && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1384,7 +1410,7 @@ impl AggregateExec {
             group_expr_mapping
                 .iter()
                 .flat_map(|(_, target_cols)| {
-                    target_cols.iter().flat_map(|(expr, _)| {
+                    target_cols.iter().filter_map(|(expr, _)| {
                         expr.downcast_ref::<Column>().map(|c| c.index())
                     })
                 })
@@ -1420,6 +1446,22 @@ impl AggregateExec {
             emission_type,
             input.boundedness(),
         ))
+    }
+
+    fn compute_grouping_set_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanProperties {
+        // Grouping-set expansion can replace group keys with nulls and adds a
+        // grouping ID, so input properties do not project through unchanged.
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(
+                input.output_partitioning().partition_count(),
+            ),
+            EmissionType::Final,
+            input.boundedness(),
+        )
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -1510,7 +1552,12 @@ impl AggregateExec {
                 })
             }
             None => {
-                let num_rows = self.estimate_num_rows(child_statistics);
+                let num_rows = self.estimate_num_rows(child_statistics, partition);
+                let column_statistics = self.nullify_group_columns_for_empty_input(
+                    column_statistics,
+                    child_statistics,
+                    &num_rows,
+                );
 
                 let total_byte_size = num_rows
                     .get_value()
@@ -1549,13 +1596,79 @@ impl AggregateExec {
     ) -> Option<usize> {
         let logical_rows = self.logical_rows_without_group_exprs()?;
 
-        Some(match (self.mode.output_mode(), partition) {
+        Some(self.scale_logical_rows(logical_rows, partition))
+    }
+
+    /// Scales a logical aggregate row count to the rows this operator emits,
+    /// which for partial aggregation is once per output partition.
+    fn scale_logical_rows(&self, logical_rows: usize, partition: Option<usize>) -> usize {
+        match (self.mode.output_mode(), partition) {
             (AggregateOutputMode::Final, _) => logical_rows,
             (AggregateOutputMode::Partial, Some(_)) => logical_rows,
             (AggregateOutputMode::Partial, None) => {
                 logical_rows * self.cache.output_partitioning().partition_count()
             }
-        })
+        }
+    }
+
+    /// Number of rows a grouped aggregate emits for an empty input.
+    ///
+    /// Grouping expressions yield no groups, so the only rows are the
+    /// grand-total rows of the empty grouping sets that `GROUPING SETS(())`,
+    /// `ROLLUP` and `CUBE` introduce alongside the non-empty ones.
+    fn output_rows_for_empty_input(&self, partition: Option<usize>) -> usize {
+        let empty_grouping_sets = self
+            .group_by
+            .groups
+            .iter()
+            .filter(|nulls| nulls.iter().all(|is_null| *is_null))
+            .count();
+
+        self.scale_logical_rows(empty_grouping_sets, partition)
+    }
+
+    /// Reports the grouping columns of an empty input as all NULL.
+    ///
+    /// The only rows such an input produces are grand-total rows, which hold
+    /// NULL in every grouping column, so the values copied from the child do not
+    /// describe the output. Rules that answer `MIN`/`MAX` from statistics read
+    /// these values, so an input value here becomes a wrong query result.
+    ///
+    /// The bounds are typed nulls rather than [`Precision::Absent`], both
+    /// because NULL is the `MIN`/`MAX` of such a column and because the data
+    /// type lets downstream interval analysis keep intersecting intervals of
+    /// that type, as `FilterExec` does for a column with no rows.
+    fn nullify_group_columns_for_empty_input(
+        &self,
+        mut column_statistics: Vec<ColumnStatistics>,
+        child_statistics: &Statistics,
+        num_rows: &Precision<usize>,
+    ) -> Vec<ColumnStatistics> {
+        let empty_input = child_statistics.num_rows.get_value() == Some(&0);
+        let emits_rows = num_rows.get_value().is_some_and(|&rows| rows > 0);
+        if !empty_input || !emits_rows {
+            return column_statistics;
+        }
+
+        let schema = self.schema();
+        for (idx, column_stats) in column_statistics
+            .iter_mut()
+            .take(self.group_by.expr.len())
+            .enumerate()
+        {
+            let typed_null = ScalarValue::try_from(schema.field(idx).data_type())
+                .unwrap_or(ScalarValue::Null);
+            let mut null_bound = Precision::Exact(typed_null);
+            if matches!(num_rows, Precision::Inexact(_)) {
+                null_bound = null_bound.to_inexact();
+            }
+            column_stats.min_value = null_bound.clone();
+            column_stats.max_value = null_bound;
+            column_stats.distinct_count = num_rows.map(|_| 0);
+            column_stats.null_count = *num_rows;
+        }
+
+        column_statistics
     }
 
     /// Exact number of logical aggregate rows for aggregates without group-by
@@ -1577,7 +1690,11 @@ impl AggregateExec {
 
     /// Estimates the output row count for grouped aggregations, combining NDV,
     /// input row count, and TopK limit into a single [`Precision<usize>`].
-    fn estimate_num_rows(&self, child_statistics: &Statistics) -> Precision<usize> {
+    fn estimate_num_rows(
+        &self,
+        child_statistics: &Statistics,
+        partition: Option<usize>,
+    ) -> Precision<usize> {
         let ndv = if !self.group_by.expr.is_empty() {
             self.compute_group_ndv(child_statistics)
         } else {
@@ -1596,7 +1713,11 @@ impl AggregateExec {
                 }
                 num_rows
             } else if value == 0 {
-                child_statistics.num_rows
+                // The limit bounds groups built from input rows, not the rows
+                // the empty grouping sets contribute.
+                child_statistics
+                    .num_rows
+                    .map(|_| self.output_rows_for_empty_input(partition))
             } else {
                 let grouping_set_num = self.group_by.groups.len();
                 let mut num_rows =
@@ -1733,7 +1854,7 @@ impl AggregateExec {
                 None
             })
             .collect();
-        debug_assert!(all_cols.len() == supported_accumulators_info.len());
+        debug_assert_eq!(all_cols.len(), supported_accumulators_info.len());
         all_cols
     }
 
@@ -1890,25 +2011,32 @@ impl DisplayAs for AggregateExec {
 
 fn format_aggregate_exec_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
     match agg.human_display_alias() {
-        Some(_) => format_human_display(agg.human_display(), agg.human_display_alias())
+        Some(_) => agg
+            .human_display()
+            .map(|display| format_human_display(display, agg.human_display_alias()))
             .unwrap_or_else(|| Cow::Borrowed(agg.name())),
         None => Cow::Borrowed(agg.name()),
     }
 }
 
 fn format_tree_aggregate_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
-    format_human_display(agg.human_display(), agg.human_display_alias())
+    agg.human_display()
+        .map(|display| format_human_display(display, agg.human_display_alias()))
         .unwrap_or_else(|| Cow::Borrowed(agg.name()))
 }
 
+fn aggregate_metric_label(agg: &AggregateFunctionExpr) -> String {
+    format_tree_aggregate_expr(agg).into_owned()
+}
+
 fn format_human_display<'a>(
-    human_display: Option<&'a str>,
+    human_display: &'a str,
     alias: Option<&'a str>,
-) -> Option<Cow<'a, str>> {
-    human_display.map(|human_display| match alias {
+) -> Cow<'a, str> {
+    match alias {
         Some(alias) => Cow::Owned(format!("{human_display} as {alias}")),
         None => Cow::Borrowed(human_display),
-    })
+    }
 }
 
 impl ExecutionPlan for AggregateExec {
@@ -1960,36 +2088,90 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut me = AggregateExec::try_new_with_schema(
+                    self.mode,
+                    Arc::clone(&self.group_by),
+                    self.aggr_expr.to_vec(),
+                    Arc::clone(&self.filter_expr),
+                    Arc::clone(&children[0]),
+                    Arc::clone(&self.input_schema),
+                    Arc::clone(&self.schema),
+                )?;
+                me.limit_options = self.limit_options;
+                me.dynamic_filter.clone_from(&self.dynamic_filter);
+                Ok(Arc::new(me))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
 
-        let mut me = AggregateExec::try_new_with_schema(
-            self.mode,
-            Arc::clone(&self.group_by),
-            self.aggr_expr.to_vec(),
-            Arc::clone(&self.filter_expr),
-            Arc::clone(&children[0]),
-            Arc::clone(&self.input_schema),
-            Arc::clone(&self.schema),
-        )?;
-        me.limit_options = self.limit_options;
-        me.dynamic_filter.clone_from(&self.dynamic_filter);
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let group_by = self.group_by.input_exprs();
+        let aggregates = self.aggr_expr.iter().flat_map(|aggr| {
+            let expressions = aggr.all_expressions();
+            expressions
+                .args
+                .into_iter()
+                .chain(expressions.order_by_exprs)
+        });
+        let filters = self.filter_expr.iter().flatten().cloned();
+        let dynamic_filter = self.dynamic_filter.iter().map(|dynamic_filter| {
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                as Arc<dyn PhysicalExpr>
+        });
+        crate::apply_expression_roots(
+            group_by
+                .into_iter()
+                .chain(aggregates)
+                .chain(filters)
+                .chain(dynamic_filter),
+            f,
+        )
+    }
 
-        Ok(Arc::new(me))
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.dynamic_filter
+            .iter()
+            .map(|dynamic_filter| {
+                Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                    as Arc<dyn PhysicalExpr>
+            })
+            .collect()
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -2097,27 +2279,12 @@ impl ExecutionPlan for AggregateExec {
         if phase == FilterPushdownPhase::Post
             && let Some(dyn_filter) = &self.dynamic_filter
         {
-            // let child_accepts_dyn_filter = child_pushdown_result
-            //     .self_filters
-            //     .first()
-            //     .map(|filters| {
-            //         assert_eq_or_internal_err!(
-            //             filters.len(),
-            //             1,
-            //             "Aggregate only pushdown one self dynamic filter"
-            //         );
-            //         let filter = filters.get(0).unwrap(); // Asserted above
-            //         Ok(matches!(filter.discriminant, PushedDown::Yes))
-            //     })
-            //     .unwrap_or_else(|| internal_err!("The length of self filters equals to the number of child of this ExecutionPlan, so it must be 1"))?;
-
-            // HACK: The above snippet should be used, however, now the child reply
-            // `PushDown::No` can indicate they're not able to push down row-level
-            // filter, but still keep the filter for statistics pruning.
-            // So here, we try to use ref count to determine if the dynamic filter
-            // has actually be pushed down.
-            // Issue: <https://github.com/apache/datafusion/issues/18856>
-            let child_accepts_dyn_filter = Arc::strong_count(dyn_filter) > 1;
+            let child_accepts_dyn_filter = dyn_filter
+                .filter
+                .expression_id()
+                .map(|id| plan_contains_expression_id(&self.input, id))
+                .transpose()?
+                .unwrap_or(false);
 
             if !child_accepts_dyn_filter {
                 // Child can't consume the self dynamic filter, so disable it by setting
@@ -2140,8 +2307,32 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let input = ctx.encode_child(self.input())?;
-        let group_by = self.group_expr();
+        // Exhaustive destructure: adding a field to `AggregateExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            limit_options,
+            input,
+            // Derived at construction by `create_schema` from `input_schema`,
+            // `group_by`, `aggr_expr` and `mode`.
+            schema: _,
+            input_schema,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+            // Derived at construction from the input ordering and `group_by`.
+            required_input_ordering: _,
+            // Derived at construction from the input ordering and `group_by`.
+            input_order_mode: _,
+            // Derived at construction by `Self::compute_properties`.
+            cache: _,
+            dynamic_filter,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
         let group_expr =
             ctx.encode_expressions(group_by.expr().iter().map(|(expr, _)| expr))?;
         let group_expr_name = group_by
@@ -2152,18 +2343,15 @@ impl ExecutionPlan for AggregateExec {
         let null_expr =
             ctx.encode_expressions(group_by.null_expr().iter().map(|(expr, _)| expr))?;
         let groups = group_by.groups().iter().flatten().copied().collect();
-        let aggr_expr = self
-            .aggr_expr()
-            .iter()
-            .map(|expr| encode_aggregate_expr(expr, ctx))
-            .collect::<Result<Vec<_>>>()?;
-        let aggr_expr_name = self
-            .aggr_expr()
+        let aggr_expr_name = aggr_expr
             .iter()
             .map(|expr| expr.name().to_string())
             .collect();
-        let filter_expr = self
-            .filter_expr()
+        let aggr_expr = aggr_expr
+            .iter()
+            .map(|expr| encode_aggregate_expr(expr, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let filter_expr = filter_expr
             .iter()
             .map(|filter| {
                 Ok(protobuf::MaybeFilter {
@@ -2176,7 +2364,7 @@ impl ExecutionPlan for AggregateExec {
             .collect::<Result<Vec<_>>>()?;
         // Match by name because the protobuf and execution enums use different
         // discriminants, so a numeric cast would corrupt the wire format.
-        let mode = match self.mode() {
+        let mode = match mode {
             AggregateMode::Partial => protobuf::AggregateMode::Partial,
             AggregateMode::Final => protobuf::AggregateMode::Final,
             AggregateMode::FinalPartitioned => protobuf::AggregateMode::FinalPartitioned,
@@ -2186,14 +2374,16 @@ impl ExecutionPlan for AggregateExec {
             }
             AggregateMode::PartialReduce => protobuf::AggregateMode::PartialReduce,
         };
-        let limit = self.limit_options().map(|options| protobuf::AggLimit {
+        let limit = limit_options.map(|options| protobuf::AggLimit {
             limit: options.limit() as u64,
             descending: options.descending(),
         });
-        let dynamic_filter = match self.dynamic_filter_expr() {
-            Some(filter) => {
+        // Only the shared `filter` expr is on the wire; the accumulator bounds
+        // in `AggrDynFilter` are runtime state repopulated during execution.
+        let dynamic_filter = match dynamic_filter {
+            Some(dynamic_filter) => {
                 let expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(filter) as Arc<dyn PhysicalExpr>;
+                    Arc::clone(&dynamic_filter.filter) as Arc<dyn PhysicalExpr>;
                 Some(ctx.encode_expr(&expr)?)
             }
             None => None,
@@ -2210,12 +2400,13 @@ impl ExecutionPlan for AggregateExec {
                         aggr_expr_name,
                         mode: mode as i32,
                         input: Some(Box::new(input)),
-                        input_schema: Some(self.input_schema().as_ref().try_into()?),
+                        input_schema: Some(input_schema.as_ref().try_into()?),
                         null_expr,
                         groups,
                         limit,
                         has_grouping_set: group_by.has_grouping_set(),
                         dynamic_filter,
+                        schema: Some(self.schema.as_ref().try_into()?),
                     },
                 )),
             ),
@@ -2264,17 +2455,11 @@ fn encode_aggregate_expr(
 
     let expressions = aggr_expr.expressions();
     let expr = ctx.encode_expressions(expressions.iter())?;
-    let ordering_req = aggr_expr
-        .order_bys()
-        .iter()
-        .map(|sort_expr| {
-            Ok(protobuf::PhysicalSortExprNode {
-                expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
-                asc: !sort_expr.options.descending,
-                nulls_first: sort_expr.options.nulls_first,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let ordering_req =
+        datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto(
+            aggr_expr.order_bys(),
+            &ctx.expr_ctx(),
+        )?;
     let name = aggr_expr.fun().name().to_string();
     // The context already applies `(!buf.is_empty()).then_some(buf)`.
     let fun_definition = ctx.encode_udaf(aggr_expr.fun())?;
@@ -2298,6 +2483,7 @@ fn encode_aggregate_expr(
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition,
                 human_display,
+                is_reversed: aggr_expr.is_reversed(),
             },
         )),
     })
@@ -2314,7 +2500,6 @@ impl AggregateExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_physical_expr::PhysicalSortExpr;
         use datafusion_physical_expr::aggregate::AggregateExprBuilder;
         use datafusion_proto_models::protobuf;
         use protobuf::physical_aggregate_expr_node::AggregateFunction;
@@ -2325,17 +2510,32 @@ impl AggregateExec {
             protobuf::physical_plan_node::PhysicalPlanType::Aggregate,
             "AggregateExec",
         );
-        let input = ctx.decode_required_child(
-            hash_agg.input.as_deref(),
-            "AggregateExec",
-            "input",
-        )?;
+        // Exhaustive destructure: a new field on `AggregateExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::AggregateExecNode {
+            group_expr,
+            aggr_expr,
+            mode,
+            input,
+            group_expr_name,
+            aggr_expr_name,
+            input_schema,
+            null_expr,
+            groups,
+            filter_expr,
+            limit,
+            has_grouping_set,
+            dynamic_filter,
+            schema,
+        } = hash_agg.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "AggregateExec", "input")?;
         // Match by name because the protobuf and execution enums use different
         // discriminants, so a numeric cast would corrupt the wire format.
-        let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(|_| {
+        let mode = protobuf::AggregateMode::try_from(*mode).map_err(|_| {
             datafusion_common::internal_datafusion_err!(
-                "Received an AggregateNode message with unknown AggregateMode {}",
-                hash_agg.mode
+                "Received an AggregateNode message with unknown AggregateMode {mode}"
             )
         })?;
         let mode = match mode {
@@ -2348,13 +2548,12 @@ impl AggregateExec {
             }
             protobuf::AggregateMode::PartialReduce => AggregateMode::PartialReduce,
         };
-        let num_expr = hash_agg.group_expr.len();
+        let num_expr = group_expr.len();
         // Grouping expressions refer to the child plan's output schema.
         let child_schema = input.schema();
-        let group_expr = hash_agg
-            .group_expr
+        let group_expr = group_expr
             .iter()
-            .zip(hash_agg.group_expr_name.iter())
+            .zip(group_expr_name.iter())
             .map(|(expr, name)| {
                 Ok((
                     ctx.decode_expr(expr, child_schema.as_ref())?,
@@ -2362,10 +2561,9 @@ impl AggregateExec {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let null_expr = hash_agg
-            .null_expr
+        let null_expr = null_expr
             .iter()
-            .zip(hash_agg.group_expr_name.iter())
+            .zip(group_expr_name.iter())
             .map(|(expr, name)| {
                 Ok((
                     ctx.decode_expr(expr, child_schema.as_ref())?,
@@ -2373,25 +2571,23 @@ impl AggregateExec {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let groups = if hash_agg.groups.is_empty() {
+        let groups = if groups.is_empty() {
             vec![]
         } else {
-            hash_agg
-                .groups
+            groups
                 .chunks(num_expr)
                 .map(|group| group.to_vec())
                 .collect()
         };
         // Aggregate arguments, ordering, filters, and dynamic filters refer to
         // the aggregate input schema carried in the protobuf node.
-        let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
+        let input_schema = input_schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "input_schema in AggregateNode is missing."
             )
         })?;
         let input_schema: SchemaRef = SchemaRef::new(input_schema.try_into()?);
-        let filter_expr = hash_agg
-            .filter_expr
+        let filter_expr = filter_expr
             .iter()
             .map(|filter| {
                 filter
@@ -2401,10 +2597,9 @@ impl AggregateExec {
                     .transpose()
             })
             .collect::<Result<Vec<_>>>()?;
-        let aggr_expr = hash_agg
-            .aggr_expr
+        let aggr_expr = aggr_expr
             .iter()
-            .zip(hash_agg.aggr_expr_name.iter())
+            .zip(aggr_expr_name.iter())
             .map(|(expr, name)| {
                 let expr_type = expr.expr_type.as_ref().ok_or_else(|| {
                     datafusion_common::internal_datafusion_err!(
@@ -2421,24 +2616,11 @@ impl AggregateExec {
                     .iter()
                     .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
                     .collect::<Result<Vec<_>>>()?;
-                let order_by = aggregate
-                    .ordering_req
-                    .iter()
-                    .map(|sort_expr| {
-                        let expr = sort_expr.expr.as_deref().ok_or_else(|| {
-                            datafusion_common::internal_datafusion_err!(
-                                "AggregateExec ordering expression is missing its inner expr"
-                            )
-                        })?;
-                        Ok(PhysicalSortExpr {
-                            expr: ctx.decode_expr(expr, input_schema.as_ref())?,
-                            options: arrow::compute::SortOptions {
-                                descending: !sort_expr.asc,
-                                nulls_first: sort_expr.nulls_first,
-                            },
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let order_by =
+                    datafusion_physical_expr_common::sort_expr::sort_exprs_try_from_proto(
+                        &aggregate.ordering_req,
+                        &ctx.expr_ctx(input_schema.as_ref()),
+                    )?;
                 let Some(AggregateFunction::UserDefinedAggrFunction(udaf_name)) =
                     aggregate.aggregate_function.as_ref()
                 else {
@@ -2448,10 +2630,8 @@ impl AggregateExec {
                 };
                 // The context owns the payload-to-codec and
                 // registry-to-codec fallback order.
-                let udaf = ctx.decode_udaf(
-                    udaf_name,
-                    aggregate.fun_definition.as_deref(),
-                )?;
+                let udaf =
+                    ctx.decode_udaf(udaf_name, aggregate.fun_definition.as_deref())?;
                 let (human_display, human_display_alias) =
                     split_human_display_alias(&aggregate.human_display, name);
                 let builder = AggregateExprBuilder::new(udaf, args)
@@ -2460,6 +2640,7 @@ impl AggregateExec {
                     .with_ignore_nulls(aggregate.ignore_nulls)
                     .with_distinct(aggregate.distinct)
                     .order_by(order_by)
+                    .with_reversed(aggregate.is_reversed)
                     .human_display(human_display);
                 let builder = if let Some(alias) = human_display_alias {
                     builder.human_display_alias(alias)
@@ -2469,20 +2650,30 @@ impl AggregateExec {
                 builder.build().map(Arc::new)
             })
             .collect::<Result<Vec<_>>>()?;
-        let aggregate = AggregateExec::try_new(
-            mode,
-            PhysicalGroupBy::new(
-                group_expr,
-                null_expr,
-                groups,
-                hash_agg.has_grouping_set,
-            ),
-            aggr_expr,
-            filter_expr,
-            input,
-            Arc::clone(&input_schema),
-        )?;
-        let aggregate = if let Some(limit) = &hash_agg.limit {
+        let group_by =
+            PhysicalGroupBy::new(group_expr, null_expr, groups, *has_grouping_set);
+        let aggregate = if let Some(schema) = schema {
+            let schema = SchemaRef::new(schema.try_into()?);
+            AggregateExec::try_new_with_schema(
+                mode,
+                group_by,
+                aggr_expr,
+                filter_expr,
+                input,
+                Arc::clone(&input_schema),
+                schema,
+            )
+        } else {
+            AggregateExec::try_new(
+                mode,
+                group_by,
+                aggr_expr,
+                filter_expr,
+                input,
+                Arc::clone(&input_schema),
+            )
+        }?;
+        let aggregate = if let Some(limit) = limit {
             let options = match limit.descending {
                 Some(descending) => {
                     LimitOptions::new_with_order(limit.limit as usize, descending)
@@ -2493,7 +2684,7 @@ impl AggregateExec {
         } else {
             aggregate
         };
-        let aggregate = if let Some(dynamic_filter) = &hash_agg.dynamic_filter {
+        let aggregate = if let Some(dynamic_filter) = dynamic_filter {
             let dynamic_filter =
                 ctx.decode_expr(dynamic_filter, input_schema.as_ref())?;
             let dynamic_filter = (dynamic_filter
@@ -2506,6 +2697,8 @@ impl AggregateExec {
                 })?;
             aggregate.with_dynamic_filter_expr(dynamic_filter)?
         } else {
+            let mut aggregate = aggregate;
+            aggregate.dynamic_filter = None;
             aggregate
         };
 
@@ -2887,9 +3080,9 @@ pub(crate) fn group_id_array(
              {max_ordinal} require {total_bits} bits, which exceeds 64"
         );
     }
-    let semantic_id = group.iter().fold(0u64, |acc, &is_null| {
-        (acc << 1) | if is_null { 1 } else { 0 }
-    });
+    let semantic_id = group
+        .iter()
+        .fold(0u64, |acc, &is_null| (acc << 1) | u64::from(is_null));
     let full_id = semantic_id | ((ordinal as u64) << n);
     if total_bits <= 8 {
         Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
@@ -3009,6 +3202,7 @@ mod tests {
     use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
+    use crate::filter::FilterExecBuilder;
     use crate::metrics::MetricValue;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test::TestMemoryExec;
@@ -3044,9 +3238,10 @@ mod tests {
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::expressions::{Literal, NotExpr};
 
     use crate::projection::ProjectionExec;
+    use crate::repartition::RepartitionExec;
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
@@ -3180,6 +3375,18 @@ mod tests {
         Arc::new(task_ctx)
     }
 
+    fn new_migrated_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
+            .build_arc()
+            .unwrap();
+        Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_runtime(runtime),
+        )
+    }
+
     fn migrated_hash_session_config(batch_size: usize) -> SessionConfig {
         SessionConfig::new()
             .with_batch_size(batch_size)
@@ -3191,6 +3398,16 @@ mod tests {
             TaskContext::default()
                 .with_session_config(migrated_hash_session_config(batch_size)),
         )
+    }
+
+    fn assert_accumulator_phase_times(aggregate: &AggregateExec, phases: &[&str]) {
+        let metrics = aggregate.metrics().unwrap();
+        for phase in phases {
+            let time = metrics
+                .sum_by_name(&format!("agg_expr_0_{phase}_time"))
+                .unwrap_or_else(|| panic!("aggregate records {phase} time"));
+            assert!(time.as_usize() > 0);
+        }
     }
 
     fn new_finite_memory_migrated_hash_ctx(
@@ -3417,7 +3634,8 @@ mod tests {
             | 2 | 1             | 1.0         |
             | 3 | 1             | 2.0         |
             | 3 | 2             | 5.0         |
-            | 4 | 3             | 11.0        |
+            | 4 | 1             | 4.0         |
+            | 4 | 2             | 7.0         |
             +---+---------------+-------------+
             ");
             }
@@ -3455,7 +3673,7 @@ mod tests {
 
         let task_ctx = if spill {
             // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 2600)
+            new_spill_ctx(2, 4640)
         } else {
             Arc::clone(&task_ctx)
         };
@@ -3484,17 +3702,12 @@ mod tests {
         let spilled_bytes = metrics.spilled_bytes().unwrap();
         let spilled_rows = metrics.spilled_rows().unwrap();
 
+        assert_eq!(3, output_rows);
         if spill {
-            // When spilling, the output rows metrics become partial output size + final output size
-            // This is because final aggregation starts while partial aggregation is still emitting
-            assert_eq!(8, output_rows);
-
             assert!(spill_count > 0);
             assert!(spilled_bytes > 0);
             assert!(spilled_rows > 0);
         } else {
-            assert_eq!(3, output_rows);
-
             assert_eq!(0, spill_count);
             assert_eq!(0, spilled_bytes);
             assert_eq!(0, spilled_rows);
@@ -3564,11 +3777,29 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             internal_err!("Children cannot be replaced in {self:?}")
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -3702,9 +3933,9 @@ mod tests {
 
     // Median(a)
     fn test_median_agg_expr(schema: SchemaRef) -> Result<AggregateFunctionExpr> {
-        AggregateExprBuilder::new(median_udaf(), vec![col("a", &schema)?])
+        AggregateExprBuilder::new(median_udaf(), vec![col("b", &schema)?])
             .schema(schema)
-            .alias("MEDIAN(a)")
+            .alias("MEDIAN(b)")
             .build()
     }
 
@@ -3731,7 +3962,7 @@ mod tests {
         let aggregates_v0: Vec<Arc<AggregateFunctionExpr>> =
             vec![Arc::new(test_median_agg_expr(Arc::clone(&input_schema))?)];
 
-        // use fast-path in `grouped_hash_stream.rs`.
+        // Use the fast path in `single_stream.rs`.
         let aggregates_v2: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
                 .schema(Arc::clone(&input_schema))
@@ -3764,7 +3995,7 @@ mod tests {
                     assert!(matches!(stream, StreamType::GroupedHash(_)));
                 }
                 2 => {
-                    assert!(matches!(stream, StreamType::GroupedHash(_)));
+                    assert!(matches!(stream, StreamType::SingleHash(_)));
                 }
                 _ => panic!("Unknown version: {version}"),
             }
@@ -4099,15 +4330,91 @@ mod tests {
         Ok(())
     }
 
-    /// Spilling behavior is not implemented for single hash stream yet, so fall
-    /// back to the existing `GroupedHashAggregateStream`.
+    /// Single hash aggregation supports finite memory.
     #[tokio::test]
     async fn single_aggregate_with_memory_limit_planning() -> Result<()> {
         let single = single_test_aggregate()?;
         let task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
 
         let stream = single.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::SingleHash(_)));
+
+        Ok(())
+    }
+
+    /// Ensures `OrderedSingleAggregateStream` is used for ordered raw input.
+    #[tokio::test]
+    async fn ordered_single_aggregate_planning() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sort_col", DataType::Int32, false),
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 1, 1])),
+                    Arc::new(Int32Array::from(vec![10, 11, 10])),
+                    Arc::new(Int64Array::from(vec![1, 2, 3])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![2, 2])),
+                    Arc::new(Int32Array::from(vec![20, 21])),
+                    Arc::new(Int64Array::from(vec![4, 5])),
+                ],
+            )?,
+        ];
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("sort_col", 0),
+        ))])
+        .unwrap();
+        let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![
+                (col("sort_col", &schema)?, "sort_col".to_string()),
+                (col("group_col", &schema)?, "group_col".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value_col", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(value_col)")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        assert!(matches!(
+            aggregate.input_order_mode(),
+            InputOrderMode::PartiallySorted(_)
+        ));
+
+        let task_ctx = new_migrated_hash_ctx(2);
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++----------+-----------+----------------+
+| sort_col | group_col | SUM(value_col) |
++----------+-----------+----------------+
+| 1        | 10        | 4              |
+| 1        | 11        | 2              |
+| 2        | 20        | 4              |
+| 2        | 21        | 5              |
++----------+-----------+----------------+
+");
+
+        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
+        assert!(matches!(stream, StreamType::OrderedSingleAggregate(_)));
 
         Ok(())
     }
@@ -4269,6 +4576,7 @@ mod tests {
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+        assert_accumulator_phase_times(&aggregate, &["update", "state"]);
         assert_snapshot!(batches_to_sort_string(&output), @r"
 +----------+-----------+-------------------------+
 | sort_col | group_col | COUNT(value_col)[count] |
@@ -4347,6 +4655,7 @@ mod tests {
 
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+        assert_accumulator_phase_times(&final_aggregate, &["merge", "evaluate"]);
         assert_snapshot!(batches_to_sort_string(&output), @r"
 +-----+--------------+
 | key | COUNT(value) |
@@ -4429,9 +4738,8 @@ mod tests {
                 .with_session_config(session_config),
         );
 
-        let mut stream: SendableRecordBatchStream = Box::pin(
-            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?,
-        );
+        let mut stream: SendableRecordBatchStream =
+            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
 
         while let Some(result) = stream.next().await {
             if let Err(e) = result {
@@ -4524,7 +4832,7 @@ mod tests {
     async fn run_first_last_multi_partitions() -> Result<()> {
         for is_first_acc in [false, true] {
             for spill in [false, true] {
-                first_last_multi_partitions(is_first_acc, spill, 4200).await?
+                first_last_multi_partitions(is_first_acc, spill, 5000).await?
             }
         }
         Ok(())
@@ -4907,8 +5215,10 @@ mod tests {
             Arc::clone(&blocking_exec) as Arc<dyn ExecutionPlan>,
             schema,
         )?);
-        let new_agg =
-            Arc::clone(&aggregate_exec).with_new_children(vec![blocking_exec])?;
+        let new_agg = Arc::clone(&aggregate_exec).replace_children(
+            vec![blocking_exec],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         assert_eq!(new_agg.schema(), aggregate_exec.schema());
         Ok(())
     }
@@ -5375,6 +5685,7 @@ mod tests {
             .map(|m| m.as_usize())
             .unwrap_or(0);
         assert_eq!(skipped_rows, 3);
+        assert_accumulator_phase_times(&aggregate_exec, &["convert_to_state"]);
 
         Ok(())
     }
@@ -5628,9 +5939,11 @@ mod tests {
             Field::new("b", DataType::Float64, false),
         ]));
 
+        let group_keys = [2, 3, 4, 4].repeat(1_000);
+        let values = [1.0, 2.0, 3.0, 4.0].repeat(1_000);
         let batches = vec![
-            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
-            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+            create_record_batch(&schema, (group_keys.clone(), values.clone()))?,
+            create_record_batch(&schema, (group_keys, values))?,
         ];
         let plan: Arc<dyn ExecutionPlan> =
             TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
@@ -5730,9 +6043,9 @@ mod tests {
     #[tokio::test]
     async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
         // test with spill
-        run_test_with_spill_pool_if_necessary(2_000, true).await?;
+        run_test_with_spill_pool_if_necessary(20_000, true).await?;
         // test without spill
-        run_test_with_spill_pool_if_necessary(20_000, false).await?;
+        run_test_with_spill_pool_if_necessary(200_000, false).await?;
         Ok(())
     }
 
@@ -5910,6 +6223,160 @@ mod tests {
         assert_eq!(single_stats_zero.num_rows, Precision::Exact(1));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_statistics_empty_input_with_grouping_sets() -> Result<()> {
+        let schema = empty_grouping_sets_test_schema();
+
+        // `GROUP BY a` produces no groups for an empty input.
+        let grouped = build_test_aggregate(
+            &schema,
+            empty_input_statistics(),
+            simple_group_by(&schema, &["a"]),
+            None,
+        )?;
+        let stats = StatisticsContext::new().compute(&grouped, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(0));
+
+        // `GROUPING SETS((a), ())`, as ROLLUP and CUBE produce, still emits the
+        // grand-total row of the empty grouping set on an empty input.
+        let with_empty_set = build_test_aggregate(
+            &schema,
+            empty_input_statistics(),
+            grouping_sets_with_empty(&schema, 1)?,
+            None,
+        )?;
+        let stats =
+            StatisticsContext::new().compute(&with_empty_set, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(1));
+
+        // `GROUPING SETS((a), (), ())` emits one grand-total row per empty
+        // grouping set, because execution gives each duplicate its own ordinal.
+        let with_duplicate_empty_sets = build_test_aggregate(
+            &schema,
+            empty_input_statistics(),
+            grouping_sets_with_empty(&schema, 2)?,
+            None,
+        )?;
+        let stats = StatisticsContext::new()
+            .compute(&with_duplicate_empty_sets, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(2));
+
+        Ok(())
+    }
+
+    /// Partial aggregation emits the grand-total row from every output
+    /// partition, so the whole-plan estimate scales with the partition count
+    /// while a single-partition request does not.
+    #[tokio::test]
+    async fn test_aggregate_statistics_empty_input_partial_mode_scaling() -> Result<()> {
+        let schema = empty_grouping_sets_test_schema();
+        let input = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(
+                empty_input_statistics(),
+                (*schema).clone(),
+            )),
+            Partitioning::RoundRobinBatch(4),
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            grouping_sets_with_empty(&schema, 1)?,
+            vec![count_a_aggregate(&schema)?],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(agg.properties().output_partitioning().partition_count(), 4);
+
+        let context = StatisticsContext::new();
+        assert_eq!(
+            context.compute(&agg, &StatisticsArgs::new())?.num_rows,
+            Precision::Exact(4)
+        );
+        // Inexact because a repartition only estimates its per-partition row
+        // count. The grouping column statistics carry that same precision.
+        let partition_statistics =
+            context.compute(&agg, &StatisticsArgs::new().with_partition(Some(0)))?;
+        assert_eq!(partition_statistics.num_rows, Precision::Inexact(1));
+        let group_column = &partition_statistics.column_statistics[0];
+        let typed_null = Precision::Inexact(ScalarValue::Int32(None));
+        assert_eq!(group_column.min_value, typed_null);
+        assert_eq!(group_column.max_value, typed_null);
+        assert_eq!(group_column.distinct_count, Precision::Inexact(0));
+        assert_eq!(group_column.null_count, Precision::Inexact(1));
+
+        Ok(())
+    }
+
+    /// The input's min, max and distinct values must not reach the output
+    /// column statistics. See `nullify_group_columns_for_empty_input`.
+    #[tokio::test]
+    async fn test_aggregate_statistics_empty_input_nullifies_group_columns() -> Result<()>
+    {
+        let schema = empty_grouping_sets_test_schema();
+        let mut input_statistics = empty_input_statistics();
+        input_statistics.column_statistics[0] = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Exact(1),
+            byte_size: Precision::Absent,
+        };
+
+        let agg = build_test_aggregate(
+            &schema,
+            input_statistics,
+            grouping_sets_with_empty(&schema, 1)?,
+            None,
+        )?;
+
+        let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(1));
+        let group_column = &stats.column_statistics[0];
+        let typed_null = Precision::Exact(ScalarValue::Int32(None));
+        assert_eq!(group_column.min_value, typed_null);
+        assert_eq!(group_column.max_value, typed_null);
+        assert_eq!(group_column.distinct_count, Precision::Exact(0));
+        assert_eq!(group_column.null_count, Precision::Exact(1));
+
+        Ok(())
+    }
+
+    fn empty_grouping_sets_test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]))
+    }
+
+    fn empty_input_statistics() -> Statistics {
+        Statistics {
+            num_rows: Precision::Exact(0),
+            total_byte_size: Precision::Exact(0),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        }
+    }
+
+    /// `GROUPING SETS((a), (), ...)` with `empty_sets` empty grouping sets, as
+    /// `ROLLUP(a)` and `CUBE(a)` produce with one.
+    fn grouping_sets_with_empty(
+        schema: &SchemaRef,
+        empty_sets: usize,
+    ) -> Result<PhysicalGroupBy> {
+        let mut groups = vec![vec![false]];
+        groups.resize(1 + empty_sets, vec![true]);
+        Ok(PhysicalGroupBy::new(
+            vec![(col("a", schema)?, "a".to_string())],
+            vec![(lit(ScalarValue::Int32(None)), "a".to_string())],
+            groups,
+            true,
+        ))
     }
 
     fn build_test_aggregate(
@@ -6565,9 +7032,18 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        let task_ctx = new_spill_ctx(1, 600);
+        let task_ctx = new_migrated_spill_ctx(1, 600);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
-        assert_spill_count_metric(true, aggr);
+        assert_spill_count_metric(true, Arc::clone(&aggr));
+        let metrics = aggr.metrics().unwrap();
+        for phase in ["update", "state", "merge", "evaluate"] {
+            let time = metrics
+                .sum_by_name(&format!("agg_expr_0_{phase}_time"))
+                .unwrap_or_else(|| {
+                    panic!("migrated single aggregate records {phase} time")
+                });
+            assert!(time.as_usize() > 0);
+        }
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
@@ -6707,11 +7183,6 @@ mod tests {
                 assert!(
                     matches!(root, DataFusionError::ResourcesExhausted(_)),
                     "Expected ResourcesExhausted, got: {root}",
-                );
-                let msg = root.to_string();
-                assert!(
-                    msg.contains("Failed to reserve memory for sort during spill"),
-                    "Expected sort reservation error, got: {msg}",
                 );
             }
         }
@@ -7555,11 +8026,14 @@ mod tests {
             lit(false),
         ));
         let agg = agg.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let produced = agg.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        assert_eq!(produced[0].expression_id(), new_df.expression_id());
 
         // The aggregate's filter should now resolve to the new inner expression.
-        let swapped = agg
-            .dynamic_filter_expr()
-            .expect("should still have dynamic filter")
+        let swapped = produced[0]
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("produced expression should be a DynamicFilterPhysicalExpr")
             .current()?;
         assert_eq!(format!("{swapped}"), format!("{}", lit(false)));
 
@@ -7577,6 +8051,38 @@ mod tests {
         // Hard to assert this because the filter is identical. No error means
         // the filter was accepted. That's a good enough assertion for now.
         let _agg = agg.with_dynamic_filter_expr(remapped_df)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_plan_contains_expression_id_recurses_plans_and_expressions() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(true),
+        ));
+        let expression_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+
+        assert!(!plan_contains_expression_id(&empty, expression_id)?);
+
+        let dynamic_filter_expr: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter);
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(NotExpr::new(dynamic_filter_expr));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExecBuilder::new(predicate, empty).build()?);
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [ProjectionExpr::new_from_expression(
+                col("a", &schema)?,
+                &schema,
+            )?],
+            filter,
+        )?);
+
+        assert!(plan_contains_expression_id(&projection, expression_id)?);
         Ok(())
     }
 
@@ -7603,7 +8109,7 @@ mod tests {
             child,
             Arc::clone(&schema),
         )?;
-        assert!(agg.dynamic_filter_expr().is_none());
+        assert!(agg.dynamic_expressions_produced().is_empty());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &schema)?],

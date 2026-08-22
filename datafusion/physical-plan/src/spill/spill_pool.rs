@@ -1305,7 +1305,7 @@ mod tests {
         let mut batch_order = reader_handle.await.unwrap();
 
         // When used with multiple writers, order is not guaranteed
-        batch_order.sort();
+        batch_order.sort_unstable();
         assert_eq!(batch_order, (0i32..100i32).collect::<Vec<_>>());
 
         Ok(())
