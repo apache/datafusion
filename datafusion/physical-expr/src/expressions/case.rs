@@ -17,12 +17,13 @@
 
 mod literal_lookup_table;
 
-use super::{Column, Literal};
+use super::{BinaryExpr, Column, Literal};
 use crate::PhysicalExpr;
 use crate::expressions::{
-    CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+    CastExpr, LambdaVariable, NegativeExpr, NotExpr, TryCastExpr, lit, try_cast,
 };
 use arrow::array::*;
+use arrow::compute::kernels::numeric::div;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
@@ -34,7 +35,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Operator};
 use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -89,6 +90,19 @@ enum EvalMethod {
     ///
     /// See [`LiteralLookupTable`] for more details
     WithExprScalarLookupTable(LiteralLookupTable),
+
+    /// Specialization for the common divide-by-zero protection pattern:
+    ///
+    /// ```sql
+    /// CASE WHEN y > 0 THEN x / y ELSE NULL END
+    /// CASE WHEN y != 0 THEN x / y ELSE NULL END
+    /// CASE WHEN y < 0 THEN x / y ELSE NULL END
+    /// ```
+    ///
+    /// The WHEN predicate is applied (so `>`, `!=`, and `<` stay correct) and the
+    /// divisor is nulled on excluded rows so those rows become NULL without a
+    /// dummy divide-by-one.
+    DivideByZeroProtection,
 }
 
 /// Implementing hash so we can use `derive` on [`EvalMethod`].
@@ -318,6 +332,181 @@ impl std::fmt::Display for CaseExpr {
 /// expressions in the future
 fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.is::<Column>()
+}
+
+/// True when `when` / `then` is the divide-by-zero protection pattern
+/// `CASE WHEN y {>, !=, <} 0 THEN x / y`.
+///
+/// Both divide operands must be cheap (column, literal, or cast of those).
+/// [`CastExpr`]s that are provably fallible (for example a narrowing
+/// `Int32` → `Int8` of a literal) are rejected so CASE short-circuit
+/// semantics are preserved. Column casts whose source type is not known
+/// until evaluation are re-checked with the batch schema in
+/// [`CaseExpr::divide_by_zero_protection`].
+fn is_divide_by_zero_protection(
+    when_expr: &Arc<dyn PhysicalExpr>,
+    then_expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    let Some(checked) = extract_nonzero_checked_operand(when_expr) else {
+        return false;
+    };
+    let Some((numerator, divisor)) = extract_division_operands(then_expr) else {
+        return false;
+    };
+    unwrap_casts(divisor).eq(unwrap_casts(checked))
+        && is_column_literal_or_cast(numerator)
+        && is_column_literal_or_cast(divisor)
+        && !has_provably_fallible_cast(numerator)
+        && !has_provably_fallible_cast(divisor)
+}
+
+/// Operand being tested for a non-zero (or strictly positive / negative) value.
+///
+/// Matches `y > 0`, `y != 0`, `y < 0` and the swapped forms `0 < y`, `0 != y`,
+/// `0 > y`.
+fn extract_nonzero_checked_operand(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<&Arc<dyn PhysicalExpr>> {
+    let binary = expr.downcast_ref::<BinaryExpr>()?;
+    match binary.op() {
+        Operator::Gt | Operator::NotEq | Operator::Lt
+            if is_literal_zero(binary.right().as_ref()) =>
+        {
+            Some(binary.left())
+        }
+        Operator::Lt | Operator::NotEq | Operator::Gt
+            if is_literal_zero(binary.left().as_ref()) =>
+        {
+            Some(binary.right())
+        }
+        _ => None,
+    }
+}
+
+/// `(numerator, divisor)` from a `/` expression.
+type DivisionOperands<'a> = (&'a Arc<dyn PhysicalExpr>, &'a Arc<dyn PhysicalExpr>);
+
+fn extract_division_operands(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<DivisionOperands<'_>> {
+    let binary = expr.downcast_ref::<BinaryExpr>()?;
+    if *binary.op() == Operator::Divide {
+        Some((binary.left(), binary.right()))
+    } else {
+        None
+    }
+}
+
+/// Strip `Cast` / `TryCast` layers so `a > 0 THEN x / CAST(a AS …)` still matches.
+fn unwrap_casts(expr: &Arc<dyn PhysicalExpr>) -> &Arc<dyn PhysicalExpr> {
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        unwrap_casts(cast.expr())
+    } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
+        unwrap_casts(try_cast.expr())
+    } else {
+        expr
+    }
+}
+
+fn is_literal_zero(expr: &dyn PhysicalExpr) -> bool {
+    let Some(lit) = expr.downcast_ref::<Literal>() else {
+        return false;
+    };
+    match ScalarValue::new_zero(&lit.value().data_type()) {
+        Ok(zero) => lit.value() == &zero,
+        Err(_) => false,
+    }
+}
+
+/// Column, literal, or (possibly nested) `Cast` / `TryCast` of those.
+///
+/// This only describes the *shape* of the tree: evaluating it on a full
+/// batch is cheap. It does **not** mean a `CastExpr` is safe — use
+/// [`is_cheap_for_full_batch`] for that.
+fn is_column_literal_or_cast(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if expr.is::<Column>() || expr.is::<Literal>() {
+        true
+    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        is_column_literal_or_cast(cast.expr())
+    } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
+        is_column_literal_or_cast(try_cast.expr())
+    } else {
+        false
+    }
+}
+
+/// True when `expr` is cheap **and** safe to evaluate on every row of a
+/// batch, including rows that CASE would otherwise skip.
+///
+/// `CastExpr` is allowed only when it cannot fail: safe-mode casts,
+/// [`TryCastExpr`] (returns NULL on failure), same-type casts, and
+/// widening numeric casts identified by [`CastExpr::check_bigger_cast`].
+/// Narrowing casts such as `Int32` → `Int8` return false.
+///
+/// When `schema` is `None`, column types are unknown, so a `CastExpr` over
+/// a column cannot be proven infallible and is rejected.
+fn is_cheap_for_full_batch(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: Option<&Schema>,
+) -> bool {
+    if expr.is::<Column>() || expr.is::<Literal>() {
+        true
+    } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        is_infallible_cast(cast, schema) && is_cheap_for_full_batch(cast.expr(), schema)
+    } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
+        // TRY_CAST never errors (it yields NULL on failure).
+        is_cheap_for_full_batch(try_cast.expr(), schema)
+    } else {
+        false
+    }
+}
+
+/// True when a `CastExpr` is known to be unable to error.
+fn is_infallible_cast(cast: &CastExpr, schema: Option<&Schema>) -> bool {
+    // Safe-mode CAST returns NULL on failure rather than erroring.
+    if cast.cast_options().safe {
+        return true;
+    }
+    let Some(source_type) = expr_data_type(cast.expr(), schema) else {
+        return false;
+    };
+    CastExpr::check_bigger_cast(cast.cast_type(), &source_type)
+}
+
+/// Best-effort data type of `expr`. With a schema this uses
+/// [`PhysicalExpr::data_type`]; without one, only literals and casts
+/// (which know their output type) can be resolved.
+fn expr_data_type(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: Option<&Schema>,
+) -> Option<DataType> {
+    if let Some(schema) = schema {
+        return expr.data_type(schema).ok();
+    }
+    if let Some(lit) = expr.downcast_ref::<Literal>() {
+        return Some(lit.value().data_type());
+    }
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        return Some(cast.cast_type().clone());
+    }
+    expr.downcast_ref::<TryCastExpr>()
+        .map(|try_cast| try_cast.cast_type().clone())
+}
+
+/// Walk a column / literal / cast tree and report whether any `CastExpr`
+/// is known to be fallible without a schema (typically a narrowing cast
+/// of a literal or of another cast whose output type is known).
+fn has_provably_fallible_cast(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+        let known_fallible = !cast.cast_options().safe
+            && expr_data_type(cast.expr(), None)
+                .is_some_and(|src| !CastExpr::check_bigger_cast(cast.cast_type(), &src));
+        known_fallible || has_provably_fallible_cast(cast.expr())
+    } else if let Some(try_cast) = expr.downcast_ref::<TryCastExpr>() {
+        has_provably_fallible_cast(try_cast.expr())
+    } else {
+        false
+    }
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
@@ -688,6 +877,17 @@ impl CaseExpr {
             return Ok(EvalMethod::WithExpression(body.project()?));
         }
 
+        // CASE WHEN y {>, !=, <} 0 THEN x / y [ELSE NULL] END
+        if body.when_then_expr.len() == 1
+            && body.else_expr.is_none()
+            && is_divide_by_zero_protection(
+                &body.when_then_expr[0].0,
+                &body.when_then_expr[0].1,
+            )
+        {
+            return Ok(EvalMethod::DivideByZeroProtection);
+        }
+
         Ok(
             if body.when_then_expr.len() == 1
                 && is_cheap_and_infallible(&(body.when_then_expr[0].1))
@@ -721,6 +921,68 @@ impl CaseExpr {
     /// Optional "else" expression
     pub fn else_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.body.else_expr.as_ref()
+    }
+
+    /// Evaluate `CASE WHEN <divisor-nonzero-check> THEN x / y ELSE NULL`.
+    ///
+    /// Rows excluded by WHEN get a null divisor so they become NULL without
+    /// being divided (and without dummy-dividing by 1, which is expensive when
+    /// most rows are excluded).
+    fn divide_by_zero_protection(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let (when_expr, then_expr) = &self.body.when_then_expr[0];
+
+        let when_value = when_expr.evaluate(batch)?;
+        // `num_rows == 1` avoids expanding a scalar WHEN (same as expr_or_expr).
+        let when_value = when_value.into_array(1)?;
+        let when_value = as_boolean_array(&when_value).map_err(|_| {
+            internal_datafusion_err!("WHEN expression did not return a BooleanArray")
+        })?;
+
+        // Treat NULL WHEN as false (do not divide).
+        let when_value = match when_value.null_count() {
+            0 => Cow::Borrowed(when_value),
+            _ => Cow::Owned(prep_null_mask_filter(when_value)),
+        };
+
+        if when_value.null_count() == 0 && !when_value.has_false() {
+            // Every row is protected; the original divide is safe as-is.
+            return then_expr.evaluate(batch);
+        }
+        if !when_value.has_true() {
+            let return_type = self.data_type(&batch.schema())?;
+            return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
+                &return_type,
+            )?));
+        }
+
+        let binary = then_expr.downcast_ref::<BinaryExpr>().ok_or_else(|| {
+            internal_datafusion_err!(
+                "THEN expression of divide-by-zero protection must be a division"
+            )
+        })?;
+
+        // Mixed WHEN: the fast path evaluates the divisor on the full batch.
+        // Fallible casts (e.g. Int32 → Int8) can error on excluded rows and
+        // must use filtered CASE evaluation instead. Widening casts such as
+        // Int32 → Float64 stay on the fast path.
+        let schema = batch.schema();
+        if !is_cheap_for_full_batch(binary.left(), Some(schema.as_ref()))
+            || !is_cheap_for_full_batch(binary.right(), Some(schema.as_ref()))
+        {
+            let projected = self.body.project()?;
+            return self.expr_or_expr(batch, &projected);
+        }
+
+        let num_rows = batch.num_rows();
+        let numerator = binary.left().evaluate(batch)?.into_array(num_rows)?;
+        let divisor = binary.right().evaluate(batch)?.into_array(num_rows)?;
+
+        // WHEN false → null divisor → result NULL. WHEN true keeps the real
+        // divisor; a leftover zero still errors, matching SQL.
+        let skip = not(&when_value)?;
+        let safe_divisor = nullif(divisor.as_ref(), &skip)?;
+        let result = div(&numerator, &safe_divisor)?;
+        Ok(ColumnarValue::Array(result))
     }
 }
 
@@ -1337,6 +1599,7 @@ impl PhysicalExpr for CaseExpr {
             EvalMethod::WithExprScalarLookupTable(lookup_table) => {
                 self.with_lookup_table(batch, lookup_table)
             }
+            EvalMethod::DivideByZeroProtection => self.divide_by_zero_protection(batch),
         }
     }
 
@@ -1575,7 +1838,7 @@ mod tests {
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
-    use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::cast::{as_float64_array, as_int8_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::type_union_coercion;
@@ -2463,6 +2726,251 @@ mod tests {
         let expected = &Int32Array::from(vec![Some(3), None, Some(777), None]);
 
         assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_specialization() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE NULL END
+        let when = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &schema)?;
+        let then = binary(
+            lit(25.0f64),
+            Operator::Divide,
+            cast(col("a", &schema)?, &schema, Float64)?,
+            &schema,
+        )?;
+
+        let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+        assert!(
+            matches!(expr.eval_method, EvalMethod::DivideByZeroProtection),
+            "Expected DivideByZeroProtection, got {:?}",
+            expr.eval_method
+        );
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_float64_array(&result)?;
+        let expected = &Float64Array::from(vec![Some(25.0), None, None, Some(5.0)]);
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_predicates() -> Result<()> {
+        // n / d over (1, 1), (1, 0), (1, -1)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("n", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(1)])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(0), Some(-1)])),
+            ],
+        )?;
+
+        let eval = |op: Operator| -> Result<Vec<Option<i32>>> {
+            let when = binary(col("d", &schema)?, op, lit(0i32), &schema)?;
+            let then = binary(
+                col("n", &schema)?,
+                Operator::Divide,
+                col("d", &schema)?,
+                &schema,
+            )?;
+            let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+            assert!(
+                matches!(expr.eval_method, EvalMethod::DivideByZeroProtection),
+                "op {op} should specialize, got {:?}",
+                expr.eval_method
+            );
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            Ok(as_int32_array(&result)?.iter().collect())
+        };
+
+        assert_eq!(eval(Operator::NotEq)?, vec![Some(1), None, Some(-1)]);
+        assert_eq!(eval(Operator::Gt)?, vec![Some(1), None, None]);
+        assert_eq!(eval(Operator::Lt)?, vec![None, None, Some(-1)]);
+
+        // Swapped form: `0 != d` is the same protection as `d != 0`.
+        let when = binary(lit(0i32), Operator::NotEq, col("d", &schema)?, &schema)?;
+        let then = binary(
+            col("n", &schema)?,
+            Operator::Divide,
+            col("d", &schema)?,
+            &schema,
+        )?;
+        let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+        assert!(matches!(
+            expr.eval_method,
+            EvalMethod::DivideByZeroProtection
+        ));
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_int32_array(&result)?.iter().collect::<Vec<_>>(),
+            vec![Some(1), None, Some(-1)]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_all_true_all_false_and_nulls() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("n", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+
+        let eval = |divisors: Vec<Option<i32>>| -> Result<Vec<Option<i32>>> {
+            let n = divisors.len();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(10); n])),
+                    Arc::new(Int32Array::from(divisors)),
+                ],
+            )?;
+            let when = binary(col("d", &schema)?, Operator::NotEq, lit(0i32), &schema)?;
+            let then = binary(
+                col("n", &schema)?,
+                Operator::Divide,
+                col("d", &schema)?,
+                &schema,
+            )?;
+            let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+            assert!(matches!(
+                expr.eval_method,
+                EvalMethod::DivideByZeroProtection
+            ));
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            Ok(as_int32_array(&result)?.iter().collect())
+        };
+
+        assert_eq!(eval(vec![Some(2), Some(5)])?, vec![Some(5), Some(2)]);
+        assert_eq!(eval(vec![Some(0), Some(0)])?, vec![None, None]);
+        assert_eq!(
+            eval(vec![Some(2), None, Some(0)])?,
+            vec![Some(5), None, None]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_specialization_not_applied() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // WHEN checks `a`, but the divisor is `b` — must not specialize.
+        let when = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &schema)?;
+        let then = binary(lit(25i32), Operator::Divide, col("b", &schema)?, &schema)?;
+
+        let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+        assert!(
+            matches!(expr.eval_method, EvalMethod::ExpressionOrExpression(_)),
+            "Expected ExpressionOrExpression, got {:?}",
+            expr.eval_method
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_not_applied_with_else() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        let when = binary(col("a", &schema)?, Operator::NotEq, lit(0i32), &schema)?;
+        let then = binary(
+            col("b", &schema)?,
+            Operator::Divide,
+            col("a", &schema)?,
+            &schema,
+        )?;
+
+        let expr = CaseExpr::try_new(None, vec![(when, then)], Some(lit(0i32)))?;
+        assert!(
+            matches!(expr.eval_method, EvalMethod::ExpressionOrExpression(_)),
+            "ELSE 0 must not use DivideByZeroProtection, got {:?}",
+            expr.eval_method
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_skips_fallible_cast() -> Result<()> {
+        // CASE WHEN d < 0 THEN CAST(10 AS TINYINT) / CAST(d AS TINYINT) END
+        // over (-1), (1000), (0) => -10, NULL, NULL
+        //
+        // CAST(1000 AS TINYINT) would error, but 1000 is excluded by WHEN so
+        // CASE short-circuiting must yield NULL instead of failing.
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(-1),
+                Some(1000),
+                Some(0),
+            ]))],
+        )?;
+
+        let when = binary(col("d", &schema)?, Operator::Lt, lit(0i32), &schema)?;
+        let then = binary(
+            cast(lit(10i32), &schema, DataType::Int8)?,
+            Operator::Divide,
+            cast(col("d", &schema)?, &schema, DataType::Int8)?,
+            &schema,
+        )?;
+
+        let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+        assert!(
+            !matches!(expr.eval_method, EvalMethod::DivideByZeroProtection),
+            "fallible CAST must not specialize, got {:?}",
+            expr.eval_method
+        );
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int8_array(&result)?;
+        let expected = &Int8Array::from(vec![Some(-10), None, None]);
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_divide_by_zero_protection_fallible_column_cast_does_not_error() -> Result<()>
+    {
+        // Numerator is already Int8, so construction cannot prove the
+        // CAST(d AS TINYINT) narrowing is fallible. Evaluation must still
+        // fall back to filtered CASE and not error on the excluded 1000.
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(-1),
+                Some(1000),
+                Some(0),
+            ]))],
+        )?;
+
+        let when = binary(col("d", &schema)?, Operator::Lt, lit(0i32), &schema)?;
+        let then = binary(
+            lit(10i8),
+            Operator::Divide,
+            cast(col("d", &schema)?, &schema, DataType::Int8)?,
+            &schema,
+        )?;
+
+        let expr = CaseExpr::try_new(None, vec![(when, then)], None)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int8_array(&result)?;
+        let expected = &Int8Array::from(vec![Some(-10), None, None]);
+        assert_eq!(expected, result);
+
         Ok(())
     }
 
