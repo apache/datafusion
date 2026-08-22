@@ -32,8 +32,10 @@
 //! compaction: each test runs a spilling query over `Utf8View` / `BinaryView`
 //! data and asserts the total `spilled_bytes` stays proportional to the
 //! logical data size. If an operator's spill path stops compacting (or a new
-//! write path bypasses `append_batch`), the multiplied buffer duplication
-//! trips the upper bound.
+//! write path bypasses `append_batch`), the duplicated buffers either trip
+//! that bound (sort) or blow up the merge memory estimates and fail the query
+//! outright (aggregation); see `assert_compact_spill` for the measurements
+//! behind the bounds.
 
 use std::sync::Arc;
 
@@ -125,9 +127,21 @@ fn logical_size(batches: &[RecordBatch]) -> usize {
 
 /// Run `sql` over the view table with a memory pool small enough to force
 /// spilling, and return the executed plan for metric inspection.
+///
+/// `batch_size` is a sensitivity knob rather than a realistic setting: the
+/// amplification a missing compaction produces is proportional to the number
+/// of sliced batches sharing one parent buffer, so smaller batches make the
+/// regression easier to assert on. Measured amplification for the sort query
+/// below with `gc_view_arrays` disabled, at an 8 MB pool:
+///
+/// | batch_size | 256   | 512   | 1024  | 4096  | 8192  |
+/// |------------|-------|-------|-------|-------|-------|
+/// | compacted  | 1.02x | 1.01x | 1.01x | 1.00x | 1.00x |
+/// | regressed  | 9.34x | 2.56x | 1.68x | 1.08x | 1.04x |
 async fn run_spilling_query(
     sql: &str,
     pool_bytes: usize,
+    batch_size: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let batches = view_batches();
     let table = MemTable::try_new(view_schema(), vec![batches])?;
@@ -136,12 +150,11 @@ async fn run_spilling_query(
         .with_memory_pool(Arc::new(FairSpillPool::new(pool_bytes)))
         .build_arc()?;
     // A single partition keeps the whole workload on one operator instance,
-    // making the spill volume deterministic. The small batch size makes the
-    // emitted batches get sliced into many chunks, so a missing compaction
-    // shows up as a large (roughly chunk-count times) amplification.
+    // making the spill volume deterministic: every configuration below
+    // reproduces its `spilled_bytes` exactly, byte for byte, across runs.
     let config = SessionConfig::new()
         .with_target_partitions(1)
-        .with_batch_size(1024)
+        .with_batch_size(batch_size)
         .with_sort_spill_reservation_bytes(256 * 1024);
     let ctx = SessionContext::new_with_config_rt(config, runtime);
     ctx.register_table("t", Arc::new(table))?;
@@ -164,26 +177,38 @@ fn assert_compact_spill(plan: &dyn ExecutionPlan, context: &str) {
     );
 
     assert!(spill_count > 0, "{context}: expected the query to spill");
-    // Sanity check that a meaningful share of the data went through the
-    // spill files, so the compaction bound below actually tests something.
+    // Vacuity guard, not a regression bound: it keeps the upper bound from
+    // passing trivially if a future change makes these queries stop pushing a
+    // meaningful share of the data through the spill files. Measured ratios
+    // are 0.50x for aggregation (which spills part of its input) and 1.02x
+    // for sort, so 0.25x leaves 2x of headroom under the tighter of the two.
     assert!(
         spilled_bytes > logical_bytes / 4,
         "{context}: expected a meaningful share of the data to spill, got \
          {spilled_bytes} of {logical_bytes} logical bytes"
     );
-    // The regression bound: compacted spill files hold each spilled row once,
-    // so total spilled bytes stay within a small factor of the logical size
-    // (IPC framing and re-spilling during multi-pass merging contribute the
-    // slack; measured ratios are ~1.01x for sort and ~0.5x for aggregation,
-    // which spills only part of its input). Without `gc_view_arrays` in the
-    // spill path, the shared view buffers are re-written for every sliced
-    // batch: at looser memory limits that inflates the spill files, and at
-    // the limits used here the inflated buffer sizes flow into the merge
-    // memory estimates and both queries fail with ResourcesExhausted before
-    // reaching this assertion. Either way a compaction regression fails the
-    // test.
+    // The regression bound. Compacted spill files hold each spilled row once,
+    // so the total stays just above the logical size (IPC framing and
+    // re-spilling during multi-pass merges are the only slack). Bounds were
+    // picked from a sweep over pool size and batch size with `gc_view_arrays`
+    // disabled; the sort configuration below separates cleanly:
+    //
+    //   compacted 1.0152x  vs  regressed 9.3384x
+    //
+    // 2x therefore sits ~97% above the compacted ratio and ~4.7x below the
+    // regressed one. Both are exactly reproducible, so the headroom is for
+    // portability, not run-to-run noise. The bound also holds its margin if
+    // the pool drifts: every pool >= 8 MB measured <= 1.0152x compacted and
+    // >= 4.14x regressed.
+    //
+    // The aggregation path cannot be caught this way. Across pools of 2-24 MB,
+    // batch sizes of 256 and 1024, and 4.4 MB and 13.2 MB of data, there is no
+    // configuration where the regressed aggregation both completes and spills:
+    // the inflated buffer sizes flow into the merge memory estimates and it
+    // fails with ResourcesExhausted, which is what makes its test fail. The
+    // bound below is a cheap consistency check there rather than the detector.
     assert!(
-        spilled_bytes < logical_bytes * 3,
+        spilled_bytes < logical_bytes * 2,
         "{context}: spilled {spilled_bytes} bytes for {logical_bytes} logical \
          bytes; view array buffers are being duplicated into the spill files \
          instead of compacted"
@@ -199,6 +224,7 @@ async fn aggregate_spill_is_compacted_for_view_arrays() -> Result<()> {
         "SELECT group_key, max(payload) AS payload, sum(value) AS total \
          FROM t GROUP BY group_key",
         2 * 1024 * 1024,
+        1024,
     )
     .await?;
     assert_compact_spill(plan.as_ref(), "aggregate");
@@ -212,7 +238,8 @@ async fn aggregate_spill_is_compacted_for_view_arrays() -> Result<()> {
 async fn sort_spill_is_compacted_for_view_arrays() -> Result<()> {
     let plan = run_spilling_query(
         "SELECT group_key, payload, value FROM t ORDER BY group_key",
-        4 * 1024 * 1024,
+        8 * 1024 * 1024,
+        256,
     )
     .await?;
     assert_compact_spill(plan.as_ref(), "sort");
