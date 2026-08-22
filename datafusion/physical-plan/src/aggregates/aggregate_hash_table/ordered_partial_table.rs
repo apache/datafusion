@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate table for partial aggregation when input is ordered by group keys.
+//! Aggregate table for partial aggregation with incrementally completed groups.
 //!
 //! See the [`super::common_ordered`] comments for the high-level ideas.
 //!
-//! This operator handles input that is ordered by group keys:
+//! This operator handles input whose group-completion keys are contiguous:
 //! - Fully ordered: `GROUP BY a, b`, input is `ORDER BY a, b`
 //! - Partially ordered: `GROUP BY a, b`, input is `ORDER BY a`
+//! - Partition-disjoint: logical source runs may reset key order, but completed
+//!   key tuples never recur in the same output stream
 //!
 //! When a group key combination is exhausted, this table eagerly flushes the
 //! completed groups to improve memory efficiency.
@@ -68,7 +70,7 @@ impl OrderedAggregateTable<PartialMarker> {
             output_schema,
             state_schema,
             batch_size,
-            &agg.input_order_mode,
+            &agg.group_completion_mode,
             &AggregateMode::Partial,
             agg.filter_expr.iter().cloned().collect(),
             metrics,
@@ -90,11 +92,11 @@ impl OrderedAggregateTable<PartialMarker> {
     }
 
     /// Emits the next batch of partial state rows for groups proven complete by
-    /// the input ordering.
+    /// the input's group-contiguity guarantee.
     ///
-    /// For example, when the query is `GROUP BY a` and the input is ordered by
-    /// `a`, seeing a latest input row with `a = 3` means all groups with `a < 3`
-    /// are complete and safe to emit.
+    /// For example, when the query is `GROUP BY a`, seeing a new `a` range means
+    /// the prior range is complete and safe to emit when `a` is ordered or
+    /// otherwise guaranteed contiguous.
     ///
     /// Key steps:
     /// 1. Ask `group_ordering` to decide how many groups can be emitted eagerly.

@@ -178,8 +178,9 @@ extern "C" fn construct_table_provider_factory(
 
 pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
-
-    let plan = Arc::new(EmptyExec::new(schema));
+    let expression = datafusion_physical_expr::expressions::col("a", &schema).unwrap();
+    let plan =
+        Arc::new(EmptyExec::new(schema).with_group_contiguous_exprs(vec![expression]));
     FFI_ExecutionPlan::new(plan, None)
 }
 

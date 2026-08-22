@@ -28,6 +28,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use stabby::vec::Vec as SVec;
 
 use crate::arrow_wrappers::WrappedSchema;
+use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_expr::partitioning::FFI_Partitioning;
 use crate::physical_expr::sort::FFI_PhysicalSortExpr;
 use crate::util::FFI_Option;
@@ -63,6 +64,13 @@ pub struct FFI_PlanProperties {
     /// the foreign interface. See [`crate::get_library_marker_id`] and
     /// the crate's `README.md` for more information.
     pub library_marker_id: extern "C" fn() -> usize,
+
+    /// Return the components of the plan's group-contiguous composite key.
+    ///
+    /// See [`datafusion_physical_plan::ExecutionPlan::group_contiguous_exprs`]
+    /// for the correctness contract.
+    pub group_contiguous_exprs:
+        unsafe extern "C" fn(plan: &Self) -> SVec<FFI_PhysicalExpr>,
 }
 
 struct PlanPropertiesPrivateData {
@@ -109,6 +117,18 @@ unsafe extern "C" fn output_ordering_fn_wrapper(
     ordering.into()
 }
 
+unsafe extern "C" fn group_contiguous_exprs_fn_wrapper(
+    properties: &FFI_PlanProperties,
+) -> SVec<FFI_PhysicalExpr> {
+    properties
+        .inner()
+        .group_contiguous_exprs()
+        .iter()
+        .cloned()
+        .map(FFI_PhysicalExpr::from)
+        .collect()
+}
+
 unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema {
     let schema: SchemaRef = Arc::clone(properties.inner().eq_properties.schema());
     schema.into()
@@ -145,6 +165,7 @@ impl From<&PlanProperties> for FFI_PlanProperties {
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
+            group_contiguous_exprs: group_contiguous_exprs_fn_wrapper,
         }
     }
 }
@@ -186,12 +207,16 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let boundedness: Boundedness =
             unsafe { (ffi_props.boundedness)(&ffi_props).into() };
 
-        Ok(PlanProperties::new(
-            eq_properties,
-            partitioning,
-            emission_type,
-            boundedness,
-        ))
+        let group_contiguous_exprs =
+            unsafe { (ffi_props.group_contiguous_exprs)(&ffi_props) }
+                .iter()
+                .map(<Arc<dyn datafusion_physical_expr::PhysicalExpr>>::from)
+                .collect();
+
+        Ok(
+            PlanProperties::new(eq_properties, partitioning, emission_type, boundedness)
+                .with_group_contiguous_exprs(group_contiguous_exprs),
+        )
     }
 }
 
@@ -273,16 +298,16 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
+        let column = datafusion::physical_plan::expressions::col("a", &schema)?;
         let mut eqp = EquivalenceProperties::new(Arc::clone(&schema));
-        let _ = eqp.reorder([PhysicalSortExpr::new_default(
-            datafusion::physical_plan::expressions::col("a", &schema)?,
-        )]);
+        let _ = eqp.reorder([PhysicalSortExpr::new_default(Arc::clone(&column))]);
         Ok(PlanProperties::new(
             eqp,
             Partitioning::RoundRobinBatch(3),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        ))
+        )
+        .with_group_contiguous_exprs(vec![column]))
     }
 
     fn create_range_test_props() -> Result<PlanProperties> {

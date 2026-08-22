@@ -35,12 +35,14 @@ use datafusion_physical_expr::expressions::{col, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion_physical_plan::displayable;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::test::TestMemoryExec;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
 macro_rules! assert_optimized {
@@ -230,6 +232,50 @@ fn aggregations_with_group_combined() -> datafusion_common::Result<()> {
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
     "
     );
+    Ok(())
+}
+
+#[test]
+fn partition_disjoint_aggregation_combines_and_streams() -> datafusion_common::Result<()>
+{
+    let schema = schema();
+    let source = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+        .try_with_group_contiguous_keys(vec![col("c", &schema)?])?;
+    let aggr_expr = vec![Arc::new(
+        AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("Sum(b)")
+            .build()?,
+    )];
+    let partial = partial_aggregate_exec(
+        Arc::new(source),
+        PhysicalGroupBy::new_single(vec![(col("c", &schema)?, "c".to_string())]),
+        aggr_expr.clone(),
+    );
+    let final_group_by = PhysicalGroupBy::new_single(vec![(
+        col("c", &partial.schema())?,
+        "c".to_string(),
+    )]);
+    let plan = final_aggregate_exec(partial, final_group_by, aggr_expr);
+
+    let optimized =
+        CombinePartialFinalAggregate::default().optimize(plan, &ConfigOptions::new())?;
+    let aggregate = optimized
+        .downcast_ref::<AggregateExec>()
+        .expect("adjacent partial and final aggregates should combine");
+    assert_eq!(aggregate.mode(), &AggregateMode::Single);
+    assert_eq!(
+        aggregate.input_order_mode(),
+        &datafusion_physical_plan::InputOrderMode::Linear
+    );
+    assert_eq!(optimized.pipeline_behavior(), EmissionType::Incremental);
+
+    let display = displayable(optimized.as_ref()).indent(true).to_string();
+    assert_snapshot!(display.trim(), @r"
+AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)], group_completion_mode=Full
+  DataSourceExec: partitions=1, partition_sizes=[0], group_contiguous=[c@2]
+");
+
     Ok(())
 }
 

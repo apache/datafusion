@@ -27,12 +27,13 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 
-/// Tracks grouping state when the data is ordered by some subset of
-/// the group keys.
+/// Tracks grouping state when a subset of the group keys forms contiguous
+/// ranges of input rows.
 ///
-/// Once the next *sort key* value is seen, never see groups with that
-/// sort key again, so we can emit all groups with the previous sort
-/// key and earlier.
+/// Once the next completion-key value is seen, the prior value cannot recur, so
+/// all groups from that prior range can be emitted. A sort order on the subset
+/// is one way to establish this guarantee, but the values may also reset between
+/// disjoint logical source runs.
 ///
 /// For example, given `SUM(amt) GROUP BY id, state` if the input is
 /// sorted by `state`, when a new value of `state` is seen, all groups

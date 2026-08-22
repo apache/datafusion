@@ -73,6 +73,8 @@ pub struct TestMemoryExec {
     projection: Option<Vec<usize>>,
     /// Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
+    /// Composite key whose values are contiguous within each output stream.
+    group_contiguous_exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// if partition sizes should be displayed
     show_sizes: bool,
     /// The maximum number of records to read from this plan. If `None`,
@@ -106,16 +108,27 @@ impl DisplayAs for TestMemoryExec {
                 let limit = self
                     .fetch
                     .map_or(String::new(), |limit| format!(", fetch={limit}"));
+                let group_contiguous_exprs = self.group_contiguous_exprs();
+                let group_contiguous = if group_contiguous_exprs.is_empty() {
+                    String::new()
+                } else {
+                    let exprs = group_contiguous_exprs
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(", group_contiguous=[{exprs}]")
+                };
                 if self.show_sizes {
                     write!(
                         f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}{group_contiguous}",
                         partition_sizes.len(),
                     )
                 } else {
                     write!(
                         f,
-                        "partitions={}{limit}{output_ordering}{constraints}",
+                        "partitions={}{limit}{output_ordering}{constraints}{group_contiguous}",
                         partition_sizes.len(),
                     )
                 }
@@ -226,6 +239,7 @@ impl TestMemoryExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_group_contiguous_exprs(self.group_contiguous_exprs.clone())
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -268,6 +282,7 @@ impl TestMemoryExec {
             projected_schema,
             projection,
             sort_information: vec![],
+            group_contiguous_exprs: vec![],
             show_sizes: true,
             fetch: None,
         })
@@ -359,6 +374,50 @@ impl TestMemoryExec {
         }
 
         self.sort_information = sort_information;
+        self.cache = Arc::new(self.compute_properties());
+        Ok(self)
+    }
+
+    /// Attach a composite key whose values occur in one contiguous range in
+    /// each output stream. See [`ExecutionPlan::group_contiguous_exprs`] for
+    /// the correctness contract.
+    pub fn try_with_group_contiguous_keys(
+        mut self,
+        mut group_contiguous_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Self> {
+        // All expressions must refer to the original schema.
+        let fields = self.schema.fields();
+        let ambiguous_column = group_contiguous_exprs
+            .iter()
+            .flat_map(collect_columns)
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the TestMemoryExec",
+            ambiguous_column.as_ref().unwrap()
+        );
+
+        if let Some(projection) = &self.projection {
+            let base_schema = self.original_schema();
+            let proj_exprs = projection.iter().map(|idx| {
+                let name = base_schema.field(*idx).name();
+                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+            });
+            let projection_mapping =
+                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
+            let base_eqp = EquivalenceProperties::new(base_schema);
+            group_contiguous_exprs = base_eqp
+                .project_expressions(group_contiguous_exprs.iter(), &projection_mapping)
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default();
+        }
+
+        self.group_contiguous_exprs = group_contiguous_exprs;
         self.cache = Arc::new(self.compute_properties());
         Ok(self)
     }

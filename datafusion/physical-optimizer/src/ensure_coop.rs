@@ -152,6 +152,42 @@ mod tests {
         ");
     }
 
+    #[test]
+    fn test_cooperative_exec_preserves_partition_disjoint_aggregation() -> Result<()> {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_physical_expr::expressions::col;
+        use datafusion_physical_plan::ExecutionPlanProperties;
+        use datafusion_physical_plan::aggregates::{
+            AggregateExec, AggregateMode, PhysicalGroupBy,
+        };
+        use datafusion_physical_plan::execution_plan::EmissionType;
+        use datafusion_physical_plan::test::TestMemoryExec;
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, false)]));
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_group_contiguous_keys(vec![col("key", &schema)?])?;
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]),
+            vec![],
+            vec![],
+            Arc::new(input),
+            schema,
+        )?);
+
+        let optimized =
+            EnsureCooperative::new().optimize(aggregate, &ConfigOptions::new())?;
+        assert_eq!(optimized.pipeline_behavior(), EmissionType::Incremental);
+        assert_snapshot!(displayable(optimized.as_ref()).indent(true).to_string(), @r"
+        AggregateExec: mode=Partial, gby=[key@0 as key], aggr=[], group_completion_mode=Full
+          CooperativeExec
+            DataSourceExec: partitions=1, partition_sizes=[0], group_contiguous=[key@0]
+        ");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_optimizer_is_idempotent() {
         // Comprehensive idempotency test: verify f(f(...f(x))) = f(x)

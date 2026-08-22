@@ -165,6 +165,20 @@ pub trait DataSource: Any + Send + Sync + Debug {
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
+
+    /// Components of one composite key whose tuple values occur in one
+    /// contiguous range within each output stream.
+    ///
+    /// See [`ExecutionPlan::group_contiguous_exprs`] for the full contract.
+    /// Implementations must return expressions in terms of the schema returned
+    /// by [`Self::eq_properties`]. Any implementation that returns a rewritten
+    /// source from [`Self::repartitioned`] or [`Self::try_swapping_with_projection`]
+    /// must remap, preserve, or clear these expressions so the contract remains
+    /// valid for the rewritten output streams.
+    fn group_contiguous_exprs(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &[]
+    }
+
     fn scheduling_type(&self) -> SchedulingType {
         SchedulingType::NonCooperative
     }
@@ -384,7 +398,20 @@ impl DisplayAs for DataSourceExec {
             }
             DisplayFormatType::TreeRender => {}
         }
-        self.data_source.fmt_as(t, f)
+        self.data_source.fmt_as(t, f)?;
+        if matches!(t, DisplayFormatType::Default | DisplayFormatType::Verbose)
+            && !self.group_contiguous_exprs().is_empty()
+        {
+            write!(
+                f,
+                ", group_contiguous=[{}]",
+                self.group_contiguous_exprs()
+                    .iter()
+                    .map(ToString::to_string)
+                    .join(", ")
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -674,6 +701,7 @@ impl DataSourceExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_group_contiguous_exprs(data_source.group_contiguous_exprs().to_vec())
         .with_scheduling_type(data_source.scheduling_type())
     }
 

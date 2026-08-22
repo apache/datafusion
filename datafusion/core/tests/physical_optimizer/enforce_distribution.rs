@@ -72,6 +72,7 @@ use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
@@ -2613,6 +2614,29 @@ fn added_repartition_to_single_partition() -> Result<()> {
     ");
     let plan_sort = test_config.to_plan(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
+fn partition_disjoint_aggregate_preserves_source_partitioning() -> Result<()> {
+    let schema = schema();
+    let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+        .try_with_group_contiguous_keys(vec![col("a", &schema)?])?;
+    let aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+        vec![],
+        vec![],
+        Arc::new(input),
+        schema,
+    )?) as Arc<dyn ExecutionPlan>;
+
+    let plan = TestConfig::default().to_plan(aggregate, &DISTRIB_DISTRIB_SORT);
+    assert_plan!(plan, @r"
+    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], group_completion_mode=Full
+      DataSourceExec: partitions=1, partition_sizes=[0], group_contiguous=[a@0]
+    ");
 
     Ok(())
 }

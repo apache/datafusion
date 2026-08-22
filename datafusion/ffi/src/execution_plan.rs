@@ -615,6 +615,17 @@ pub mod tests {
             self.dynamic_expressions = dynamic_expressions;
             self
         }
+
+        pub fn with_group_contiguous_exprs(
+            mut self,
+            group_contiguous_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.props = Arc::new(
+                PlanProperties::clone(&self.props)
+                    .with_group_contiguous_exprs(group_contiguous_exprs),
+            );
+            self
+        }
     }
 
     impl DisplayAs for EmptyExec {
@@ -784,6 +795,30 @@ pub mod tests {
         assert_eq!(produced[0].expression_id(), Some(expected_id));
         drop(foreign_plan);
         assert_eq!(produced[0].expression_id(), Some(expected_id));
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_group_contiguous_exprs() -> Result<()> {
+        use datafusion_physical_expr::expressions::col;
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Int32, false),
+        ]));
+        let expression = col("key", &schema)?;
+        let original_plan = Arc::new(
+            EmptyExec::new(schema)
+                .with_group_contiguous_exprs(vec![Arc::clone(&expression)]),
+        );
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(original_plan, None);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+
+        let group_contiguous_exprs = foreign_plan.group_contiguous_exprs();
+        assert_eq!(group_contiguous_exprs.len(), 1);
+        assert!(group_contiguous_exprs[0].eq(&expression));
+
         Ok(())
     }
 

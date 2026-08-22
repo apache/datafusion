@@ -28,14 +28,39 @@ use crate::InputOrderMode;
 pub use full::GroupOrderingFull;
 pub use partial::GroupOrderingPartial;
 
-/// Ordering information for each group in the hash table
+/// Describes how an aggregate can detect completed groups.
+///
+/// Unlike [`InputOrderMode`], this mode does not imply that key values are
+/// sorted. A source-provided contiguity guarantee can establish `Partial` or
+/// `Full` completion even when successive key ranges have no global order.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum GroupCompletionMode {
+    /// No group can be proven complete before end-of-input.
+    None,
+    /// A subset of the group keys identifies contiguous ranges.
+    Partial(Vec<usize>),
+    /// Every complete group key identifies one contiguous range.
+    Full,
+}
+
+impl From<&InputOrderMode> for GroupCompletionMode {
+    fn from(value: &InputOrderMode) -> Self {
+        match value {
+            InputOrderMode::Linear => Self::None,
+            InputOrderMode::PartiallySorted(indices) => Self::Partial(indices.clone()),
+            InputOrderMode::Sorted => Self::Full,
+        }
+    }
+}
+
+/// Tracks which groups in the hash table are complete.
 #[derive(Debug)]
 pub enum GroupOrdering {
-    /// Groups are not ordered
+    /// No group-completion guarantee is available.
     None,
-    /// Groups are ordered by some pre-set of the group keys
+    /// A subset of the group keys forms contiguous ranges.
     Partial(GroupOrderingPartial),
-    /// Groups are entirely contiguous,
+    /// Complete group keys form contiguous ranges.
     Full(GroupOrderingFull),
 }
 
@@ -43,17 +68,27 @@ impl GroupOrdering {
     /// Create a `GroupOrdering` for the specified ordering
     pub fn try_new(mode: &InputOrderMode) -> Result<Self> {
         match mode {
-            InputOrderMode::Linear => Ok(GroupOrdering::None),
+            InputOrderMode::Linear => Ok(Self::None),
             InputOrderMode::PartiallySorted(order_indices) => {
-                GroupOrderingPartial::try_new(order_indices.clone())
-                    .map(GroupOrdering::Partial)
+                GroupOrderingPartial::try_new(order_indices.clone()).map(Self::Partial)
             }
-            InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new())),
+            InputOrderMode::Sorted => Ok(Self::Full(GroupOrderingFull::new())),
         }
     }
 
-    /// Returns how many groups can be emitted while respecting the current
-    /// ordering guarantees, or `None` if no data can be emitted.
+    /// Create a `GroupOrdering` for the specified group-completion mode.
+    pub(crate) fn try_new_for_mode(mode: &GroupCompletionMode) -> Result<Self> {
+        match mode {
+            GroupCompletionMode::None => Ok(Self::None),
+            GroupCompletionMode::Partial(order_indices) => {
+                GroupOrderingPartial::try_new(order_indices.clone()).map(Self::Partial)
+            }
+            GroupCompletionMode::Full => Ok(Self::Full(GroupOrderingFull::new())),
+        }
+    }
+
+    /// Returns how many groups can be emitted under the current completion
+    /// guarantee, or `None` if no data can be emitted.
     pub fn emit_to(&self) -> Option<EmitTo> {
         match self {
             GroupOrdering::None => None,
@@ -65,7 +100,7 @@ impl GroupOrdering {
     /// Returns the emit strategy to use under memory pressure (OOM).
     ///
     /// Returns the strategy that must be used when emitting up to `n` groups
-    /// while respecting the current ordering guarantees.
+    /// while respecting the current completion guarantee.
     ///
     /// Returns `None` if no data can be emitted.
     pub fn oom_emit_to(&self, n: usize) -> Option<EmitTo> {
@@ -93,7 +128,7 @@ impl GroupOrdering {
         }
     }
 
-    /// Resets the ordering state while preserving the configured ordering mode.
+    /// Resets the completion state while preserving the configured mode.
     ///
     /// Ordered partial aggregation uses this after passing intermediate states
     /// downstream, and ordered final aggregation uses it after spilling a run.
@@ -147,7 +182,7 @@ impl GroupOrdering {
         Ok(())
     }
 
-    /// Returns the size of memory used by the ordering state, in bytes.
+    /// Returns the size of memory used by the completion state, in bytes.
     pub fn size(&self) -> usize {
         size_of::<Self>()
             + match self {

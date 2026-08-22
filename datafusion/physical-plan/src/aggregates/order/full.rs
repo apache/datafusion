@@ -18,11 +18,11 @@
 use datafusion_expr::EmitTo;
 use std::mem::size_of;
 
-/// Tracks grouping state when the data is ordered entirely by its
-/// group keys
+/// Tracks grouping state when each complete group key forms one contiguous
+/// range of input rows.
 ///
-/// When the group values are sorted, as soon as we see group `n+1` we
-/// know we will never see any rows for group `n` again and thus they
+/// A full sort order is sufficient but not necessary. As soon as a new group is
+/// seen, the contiguity guarantee proves that all prior groups are complete and
 /// can be emitted.
 ///
 /// For example, given `SUM(amt) GROUP BY id` if the input is sorted

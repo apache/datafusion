@@ -110,6 +110,21 @@ mod tests {
     }
 
     #[test]
+    fn test_ffi_execution_plan_group_contiguous_exprs_cross_library()
+    -> Result<(), DataFusionError> {
+        let module = get_module()?;
+        let plan = (module.create_empty_exec)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+
+        let group_contiguous_exprs = plan.group_contiguous_exprs();
+        assert_eq!(group_contiguous_exprs.len(), 1);
+        assert_eq!(group_contiguous_exprs[0].to_string(), "a@0");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ffi_execution_plan_new_sets_runtimes_on_children()
     -> Result<(), DataFusionError> {
         // We want to test the case where we have two libraries.
