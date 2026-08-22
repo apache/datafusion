@@ -215,10 +215,10 @@ fn keep_partitioning_needed_above(
             deprecated,
             reason = "HashPartitioned is still planned during the KeyPartitioned migration"
         )]
-        let required_exprs = match required {
-            Distribution::KeyPartitioned(exprs)
-            | Distribution::HashPartitioned(exprs) => exprs,
-            _ => continue,
+        let (Distribution::KeyPartitioned(required_exprs)
+        | Distribution::HashPartitioned(required_exprs)) = required
+        else {
+            continue;
         };
         if let Some(rewritten) =
             repartition_collected_join(&children[idx], required_exprs, registry)?

@@ -401,7 +401,7 @@ impl<'a> DefaultJoinCostModel<'a> {
 
         // A non-equi filter has no statistics, so it takes the optimizer's default.
         let default_selectivity =
-            f64::from(config.optimizer.default_filter_selectivity) / 100.0;
+            f64::from(config.optimizer.default_filter_selectivity.get()) / 100.0;
         let filter_selectivity = graph
             .filters
             .iter()

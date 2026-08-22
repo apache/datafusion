@@ -1703,9 +1703,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
@@ -1753,9 +1752,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));

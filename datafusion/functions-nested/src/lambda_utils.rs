@@ -85,9 +85,8 @@ pub(crate) fn single_list_lambda_parameters(
 ) -> Result<LambdaParametersProgress> {
     let (list, _lambda) = value_lambda_pair(name, fields)?;
 
-    let field = match list.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => return plan_err!("expected list, got {list}"),
+    let (DataType::List(field) | DataType::LargeList(field)) = list.data_type() else {
+        return plan_err!("expected list, got {list}");
     };
 
     Ok(LambdaParametersProgress::Complete(vec![vec![Arc::clone(

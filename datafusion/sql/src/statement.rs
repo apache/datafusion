@@ -1897,9 +1897,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .iter()
             .map(|index_column| {
                 let expr = &index_column.column.expr;
-                let ident = if let SQLExpr::Identifier(ident) = expr {
-                    ident
-                } else {
+                let SQLExpr::Identifier(ident) = expr else {
                     return Err(plan_datafusion_err!(
                         "Column name for {constraint_name} must be an identifier: {expr}"
                     ));

@@ -48,7 +48,7 @@ fn build_sorted_batches(
     let mut rows: Vec<(i64, i64)> = (0..num_rows)
         .map(|i| ((i % key_mod) as i64, i as i64))
         .collect();
-    rows.sort();
+    rows.sort_unstable();
 
     let keys: Vec<i64> = rows.iter().map(|(k, _)| *k).collect();
     let data: Vec<i64> = rows.iter().map(|(_, d)| *d).collect();
