@@ -124,6 +124,28 @@ pub(crate) struct RgPlanEntry {
     pub(crate) bytes: u64,
 }
 
+/// The initial per-file decoder state the opener builds and hands off to the
+/// [`PushDecoderStreamState`] stream driver.
+///
+/// Named rather than a bare tuple so the fields carried out of the decoder
+/// setup block stay self-documenting as more are added.
+pub(crate) struct InitialDecoderState {
+    /// The freshly built push decoder for this file.
+    pub(crate) decoder: ParquetPushDecoder,
+    /// The per-row-group plan, in the physical scan order the decoder reads.
+    pub(crate) rg_plan: VecDeque<RgPlanEntry>,
+    /// Whether a row selection is live for this scan. Runtime row-group
+    /// pruning is disabled when it is (see the opener for why).
+    pub(crate) has_row_selection: bool,
+    /// Whether the freshly built decoder carries a real (non-empty)
+    /// [`RowFilter`]. `false` when the first row group is fully matched and
+    /// the filter was suppressed at open time.
+    pub(crate) filter_installed: bool,
+    /// Cache that lets the stream rebuild the [`RowFilter`] at later
+    /// row-group boundaries. `None` when the scan has no pushdown predicate.
+    pub(crate) row_filter_context: Option<RowFilterContext>,
+}
+
 /// Runtime row-group pruner driven by a dynamic predicate (e.g. the
 /// threshold expression a `TopK` operator pushes down).
 ///
