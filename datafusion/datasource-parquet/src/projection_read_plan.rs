@@ -591,11 +591,11 @@ enum RootRead {
 /// - a root consumed through both casts and `get_field` accesses keeps the
 ///   union of both access kinds;
 /// - roots consumed only through `get_field` accesses keep the union of the
-///   leaves those accesses reach, as before;
+///   leaves those accesses reach;
 /// - any other referenced root, a cast that can't be safely clipped (see
-///   `nested_schema_pruning::clip_for_cast`), or a merged leaf set whose
-///   emitted Arrow type can't be derived safely, falls back to a full read of
-///   that root.
+///   `nested_schema_pruning::clip_for_cast`), an access that resolves to no
+///   leaf at all, or a merged leaf set whose emitted Arrow type can't be
+///   derived safely, falls back to a full read of that root.
 fn build_read_plan_with_cast_clipping(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
@@ -1629,6 +1629,43 @@ mod test {
                 ]
                 .into()
             ),
+        );
+    }
+
+    /// A `get_field` access that resolves to no Parquet leaf must fall back to
+    /// a full read of its root. Deriving the emitted type from the (empty)
+    /// leaf set would project an empty struct, a schema the reader cannot
+    /// produce, and select none of the root's leaves.
+    #[test]
+    fn build_read_plan_with_cast_clipping_falls_back_for_unresolvable_access() {
+        let (file_schema, metadata) = write_two_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        // `a` is clipped to `p`, while `b['nonexistent']` names no field of
+        // `b`, so nothing under root 1 resolves to a leaf.
+        let cast = CastColumnAccess {
+            root_index: 0,
+            target_type: DataType::Struct(
+                vec![Arc::new(Field::new("p", DataType::Int32, true))].into(),
+            ),
+        };
+        let read_plan = build_read_plan_with_cast_clipping(
+            &file_schema,
+            schema_descr,
+            &[],
+            &[access(1, &["nonexistent"])],
+            &[cast],
+        );
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [0, 2, 3]),
+            "a.p (leaf 0) plus every leaf of the fallen-back `b` (2, 3)"
+        );
+        assert_eq!(
+            read_plan.projected_schema.field_with_name("b").unwrap(),
+            file_schema.field(1),
+            "an unresolvable access must keep `b`'s full physical type"
         );
     }
 
