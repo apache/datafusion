@@ -35,6 +35,7 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
 };
+use crate::joins::utils::max_distinct_count;
 use crate::limit::LocalLimitExec;
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
@@ -63,13 +64,13 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, Column, IsNotNullExpr, Literal, lit,
+    BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
-    conjunction, split_conjunction,
+    conjunction, conjunction_opt, split_conjunction,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -359,16 +360,49 @@ impl FilterExec {
         } else {
             let null_rejecting_columns = collect_null_rejecting_columns(predicate);
 
-            if check_support(predicate, schema) {
+            // Estimate one top-level conjunct at a time: interval analysis rejects a whole
+            // predicate if any part is out of reach, and an expanded `IN` list is.
+            let (supported, rest): (Vec<_>, Vec<_>) = split_conjunction(predicate)
+                .into_iter()
+                .partition(|conjunct| check_support(conjunct, schema));
+            let split_anything = !rest.is_empty();
+
+            // An unrecognized conjunct contributes the default once, as the whole predicate
+            // used to.
+            let mut unanalyzed_selectivity = 1.0;
+            let mut has_unknown_conjunct = false;
+            for conjunct in rest {
+                match in_list_selectivity(
+                    conjunct,
+                    &input_stats.column_statistics,
+                    &input_num_rows,
+                ) {
+                    Some(selectivity) => unanalyzed_selectivity *= selectivity,
+                    None => has_unknown_conjunct = true,
+                }
+            }
+            if has_unknown_conjunct {
+                unanalyzed_selectivity *= default_selectivity as f64 / 100.0;
+            }
+
+            // Rebuilding re-associates the conjunction and interval propagation is
+            // shape sensitive, so pass the predicate through untouched if nothing split.
+            let analyzable = if split_anything {
+                conjunction_opt(supported.into_iter().cloned())
+            } else {
+                Some(Arc::clone(predicate))
+            };
+            if let Some(analyzable) = analyzable {
                 let input_analysis_ctx = AnalysisContext::try_from_statistics(
                     schema,
                     &input_stats.column_statistics,
                 )?;
-                let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
-                let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+                let analysis_ctx = analyze(&analyzable, input_analysis_ctx, schema)?;
+                let selectivity =
+                    analysis_ctx.selectivity.unwrap_or(1.0) * unanalyzed_selectivity;
                 let filtered_num_rows =
                     input_num_rows.with_estimated_selectivity(selectivity);
-                let cs = collect_new_statistics(
+                let mut cs = collect_new_statistics(
                     schema,
                     &input_stats.column_statistics,
                     analysis_ctx.boundaries,
@@ -376,12 +410,19 @@ impl FilterExec {
                     &null_rejecting_columns,
                     filtered_num_rows,
                 );
+                // An equality that was split off pins its column to one distinct value.
+                for idx in &eq_columns {
+                    if let Some(col_stat) = cs.get_mut(*idx)
+                        && col_stat.distinct_count != Precision::Exact(1)
+                    {
+                        col_stat.distinct_count =
+                            distinct_count_for_singleton_domain(filtered_num_rows);
+                    }
+                }
                 (selectivity, filtered_num_rows, cs)
             } else {
-                // Without interval boundaries, use the default selectivity and
-                // apply the row-count constraints that still follow from the
-                // filter predicate.
-                let selectivity = default_selectivity as f64 / 100.0;
+                // No boundaries to derive, so keep the input's value statistics.
+                let selectivity = unanalyzed_selectivity;
                 let filtered_num_rows =
                     input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
@@ -983,6 +1024,91 @@ impl EmbeddedProjection for FilterExec {
 ///
 /// Only AND conjunctions are traversed; OR is intentionally skipped
 /// since `a = 1 OR a = 2` does not pin NDV to 1.
+/// Estimates `col IN (a, b, c)`, and the `OR` chain a short list expands into, as
+/// `distinct literals / distinct values`. Interval arithmetic cannot narrow a column
+/// from a disjunction, so such a conjunct would otherwise only take the default.
+///
+/// `None` when the conjunct is not a list of literals over one column.
+fn in_list_selectivity(
+    conjunct: &Arc<dyn PhysicalExpr>,
+    column_statistics: &[ColumnStatistics],
+    num_rows: &Precision<usize>,
+) -> Option<f64> {
+    let mut column = None;
+    let mut values: Vec<ScalarValue> = vec![];
+    if let Some(in_list) = conjunct.downcast_ref::<InListExpr>() {
+        if in_list.negated() {
+            // `NOT IN` selects most of the column; left to the default.
+            return None;
+        }
+        column = Some(in_list.expr().downcast_ref::<Column>()?);
+        for value in in_list.list() {
+            push_literal(&mut values, value)?;
+        }
+    } else {
+        // Disjunctions only, so a plain `col = literal` keeps the estimate it has.
+        let binary = conjunct.downcast_ref::<BinaryExpr>()?;
+        if *binary.op() != Operator::Or {
+            return None;
+        }
+        collect_or_equalities(conjunct, &mut column, &mut values)?;
+    }
+
+    let column = column?;
+    if values.len() < 2 {
+        return None;
+    }
+    let stats = column_statistics.get(column.index())?;
+    let distinct = *max_distinct_count(num_rows, stats).get_value()?;
+    if distinct == 0 {
+        return None;
+    }
+    Some((values.len() as f64 / distinct as f64).min(1.0))
+}
+
+fn push_literal(
+    values: &mut Vec<ScalarValue>,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<()> {
+    let value = expr.downcast_ref::<Literal>()?.value();
+    if !values.contains(value) {
+        values.push(value.clone());
+    }
+    Some(())
+}
+
+/// Collects the literals of an `OR` chain of equalities over one column. `None`
+/// for anything else, so `a = 1 OR b = 2` is not mistaken for a list.
+fn collect_or_equalities<'a>(
+    expr: &'a Arc<dyn PhysicalExpr>,
+    column: &mut Option<&'a Column>,
+    values: &mut Vec<ScalarValue>,
+) -> Option<()> {
+    let binary = expr.downcast_ref::<BinaryExpr>()?;
+    match binary.op() {
+        Operator::Or => {
+            collect_or_equalities(binary.left(), column, values)?;
+            collect_or_equalities(binary.right(), column, values)
+        }
+        Operator::Eq => {
+            let (found, literal) = match (
+                binary.left().downcast_ref::<Column>(),
+                binary.right().downcast_ref::<Column>(),
+            ) {
+                (Some(col), None) => (col, binary.right()),
+                (None, Some(col)) => (col, binary.left()),
+                _ => return None,
+            };
+            if column.is_some_and(|current| current != found) {
+                return None;
+            }
+            *column = Some(found);
+            push_literal(values, literal)
+        }
+        _ => None,
+    }
+}
+
 fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize>, bool) {
     let mut eq_values: HashMap<usize, ScalarValue> = HashMap::new();
     let mut infeasible = false;
@@ -2763,9 +2889,9 @@ mod tests {
                         Arc::new(Literal::new(ScalarValue::Utf8(Some("b".to_string())))),
                     )),
                 )),
-                // Input NDV is 50, but the 20% default selectivity on 100 rows
-                // estimates 20 output rows, so NDV is capped at 20.
-                vec![Precision::Inexact(20)],
+                // The two listed values are 2 of the column's 50, so 4 of the 100 rows
+                // are expected and NDV is capped at 4, not collapsed to 1.
+                vec![Precision::Inexact(4)],
             ),
             (
                 "AND with mixed types (Utf8 + Int32)",
