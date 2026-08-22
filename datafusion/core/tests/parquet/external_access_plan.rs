@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::parquet::utils::MetricsFinder;
 use crate::parquet::{Scenario, create_data_batch};
 
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::Result;
@@ -216,6 +217,79 @@ async fn row_selection_extension_spanning_row_groups() {
 
     let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
     assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+}
+
+#[tokio::test]
+async fn bitmap_row_selection_extension_spanning_row_groups() {
+    // Repeat the cross-row-group case with a bitmap-backed selection.
+    let parquet_metrics = TestFull {
+        access_plan: None,
+        row_selection: Some(ParquetRowSelection::new(RowSelection::from_boolean_buffer(
+            BooleanBuffer::from(vec![
+                false, false, false, false, true, true, true, false, false, false,
+            ]),
+        ))),
+        expected_rows: 3,
+        expected_output: Some(&[
+            "+------+------------+",
+            "| utf8 | large_utf8 |",
+            "+------+------------+",
+            "|      |            |",
+            "| e    | e          |",
+            "| f    | f          |",
+            "+------+------------+",
+        ]),
+        predicate: None,
+    }
+    .run()
+    .await
+    .unwrap();
+
+    let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
+    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}",);
+}
+
+#[tokio::test]
+async fn bitmap_row_selection_extension_with_predicate() {
+    // Pruning removes row group 0, leaving the bitmap-selected rows in group 1.
+    let parquet_metrics = TestFull {
+        access_plan: None,
+        row_selection: Some(ParquetRowSelection::new(RowSelection::from_boolean_buffer(
+            BooleanBuffer::from(vec![
+                false, false, true, false, true, true, true, false, false, false,
+            ]),
+        ))),
+        expected_rows: 2,
+        expected_output: Some(&[
+            "+------+------------+",
+            "| utf8 | large_utf8 |",
+            "+------+------------+",
+            "| e    | e          |",
+            "| f    | f          |",
+            "+------+------------+",
+        ]),
+        predicate: Some(col("utf8").eq(lit("e"))),
+    }
+    .run()
+    .await
+    .unwrap();
+
+    // Verify that statistics pruned row group 0.
+    let row_groups_pruned_statistics = parquet_metrics
+        .sum_by_name("row_groups_pruned_statistics")
+        .unwrap();
+    if let MetricValue::PruningMetrics {
+        pruning_metrics, ..
+    } = row_groups_pruned_statistics
+    {
+        assert_eq!(
+            pruning_metrics.pruned(),
+            1,
+            "metrics : {parquet_metrics:#?}"
+        );
+    } else {
+        unreachable!("metrics `row_groups_pruned_statistics` should exist")
+    }
 }
 
 #[tokio::test]

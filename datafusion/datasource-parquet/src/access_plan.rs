@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::sort::reverse_row_selection;
+use arrow::array::BooleanBufferBuilder;
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, assert_eq_or_internal_err, exec_err};
 use datafusion_physical_expr::expressions::Column;
@@ -160,16 +162,69 @@ impl RowGroupAccess {
     }
 }
 
-/// Single-pass cursor over a file-level [`RowSelection`].
-///
-/// `take` returns the next selector fragment capped to the requested row count,
-/// splitting the current selector when it straddles a row group boundary.
-struct OverallRowSelectionCursor {
-    selector_iter: std::vec::IntoIter<RowSelector>,
-    current: Option<RowSelector>,
+/// Splits an overall selection into row groups in one pass.
+enum OverallRowSelectionCursor {
+    Mask { mask: BooleanBuffer, offset: usize },
+    Selectors(SelectorRowSelectionCursor),
 }
 
 impl OverallRowSelectionCursor {
+    fn new(selection: RowSelection) -> Self {
+        match selection.as_mask() {
+            Some(mask) => Self::Mask {
+                mask: mask.clone(),
+                offset: 0,
+            },
+            None => Self::Selectors(SelectorRowSelectionCursor::new(selection)),
+        }
+    }
+
+    /// Takes the next row group, or `None` if too few rows remain.
+    fn take_row_group(&mut self, row_group_rows: usize) -> Option<RowGroupAccess> {
+        match self {
+            Self::Mask { mask, offset } => {
+                if row_group_rows > mask.len() - *offset {
+                    return None;
+                }
+
+                let end = *offset + row_group_rows;
+                let row_group_mask = mask.slice(*offset, row_group_rows);
+                *offset = end;
+                let selected_rows = row_group_mask.count_set_bits();
+
+                Some(if selected_rows == 0 {
+                    RowGroupAccess::Skip
+                } else if selected_rows == row_group_rows {
+                    RowGroupAccess::Scan
+                } else {
+                    RowGroupAccess::Selection(RowSelection::from_boolean_buffer(
+                        row_group_mask,
+                    ))
+                })
+            }
+            Self::Selectors(cursor) => cursor.take_row_group(row_group_rows),
+        }
+    }
+
+    fn total_rows(self) -> usize {
+        match self {
+            Self::Mask { mask, .. } => mask.len(),
+            Self::Selectors(cursor) => cursor.total_rows(),
+        }
+    }
+}
+
+/// Cursor for a selector-backed selection.
+///
+/// `take` returns the next selector fragment capped to the requested row count,
+/// splitting the current selector when it straddles a row group boundary.
+struct SelectorRowSelectionCursor {
+    selector_iter: std::vec::IntoIter<RowSelector>,
+    current: Option<RowSelector>,
+    consumed_rows: usize,
+}
+
+impl SelectorRowSelectionCursor {
     fn new(selection: RowSelection) -> Self {
         let selectors: Vec<RowSelector> = selection.into();
         let mut selector_iter = selectors.into_iter();
@@ -177,6 +232,7 @@ impl OverallRowSelectionCursor {
         Self {
             selector_iter,
             current,
+            consumed_rows: 0,
         }
     }
 
@@ -189,6 +245,7 @@ impl OverallRowSelectionCursor {
     fn take(&mut self, max_rows: usize) -> Option<RowSelector> {
         let sel = self.current?;
         let row_count = sel.row_count.min(max_rows);
+        self.consumed_rows += row_count;
         self.current = if row_count < sel.row_count {
             Some(RowSelector {
                 row_count: sel.row_count - row_count,
@@ -204,9 +261,21 @@ impl OverallRowSelectionCursor {
         })
     }
 
-    fn remaining_rows(self) -> usize {
-        self.current.map_or(0, |s| s.row_count)
-            + self.selector_iter.map(|s| s.row_count).sum::<usize>()
+    fn take_row_group(&mut self, row_group_rows: usize) -> Option<RowGroupAccess> {
+        let mut builder = RowGroupAccessBuilder::new(row_group_rows);
+        while builder.remaining > 0 {
+            builder.push(self.take(builder.remaining)?);
+        }
+        Some(builder.into_access())
+    }
+
+    fn total_rows(self) -> usize {
+        self.consumed_rows
+            + self.current.map_or(0, |selector| selector.row_count)
+            + self
+                .selector_iter
+                .map(|selector| selector.row_count)
+                .sum::<usize>()
     }
 }
 
@@ -256,6 +325,82 @@ impl RowGroupAccessBuilder {
     }
 }
 
+/// Returns the selection length.
+pub(crate) fn row_selection_len(selection: &RowSelection) -> usize {
+    match selection.as_mask() {
+        Some(mask) => mask.len(),
+        None => selection.iter().map(|selector| selector.row_count).sum(),
+    }
+}
+
+/// Appends a selection to a bitmap without changing its selected rows.
+#[inline]
+fn append_selection_to_mask(mask: &mut BooleanBufferBuilder, selection: &RowSelection) {
+    match selection.as_mask() {
+        Some(selection_mask) => mask.append_buffer(selection_mask),
+        None => {
+            for selector in selection.iter() {
+                mask.append_n(selector.row_count, !selector.skip);
+            }
+        }
+    }
+}
+
+/// Builds a flat row selection while preserving the requested backing.
+enum OverallRowSelectionBuilder {
+    Mask(BooleanBufferBuilder),
+    Selectors(Vec<RowSelector>),
+}
+
+impl OverallRowSelectionBuilder {
+    fn new(mask_backed: bool, row_capacity: usize) -> Self {
+        if mask_backed {
+            Self::Mask(BooleanBufferBuilder::new(row_capacity))
+        } else {
+            Self::Selectors(Vec::new())
+        }
+    }
+
+    fn append(&mut self, access: RowGroupAccess, row_group_rows: usize) {
+        match (self, access) {
+            (_, RowGroupAccess::Skip) => {}
+            (Self::Mask(mask), RowGroupAccess::Scan) => {
+                mask.append_n(row_group_rows, true)
+            }
+            (Self::Mask(mask), RowGroupAccess::Selection(selection)) => {
+                append_selection_to_mask(mask, &selection)
+            }
+            (Self::Selectors(selectors), RowGroupAccess::Scan) => {
+                selectors.push(RowSelector::select(row_group_rows))
+            }
+            (Self::Selectors(selectors), RowGroupAccess::Selection(selection)) => {
+                let fragments: Vec<RowSelector> = selection.into();
+                selectors.extend(fragments);
+            }
+        }
+    }
+
+    fn finish(self) -> RowSelection {
+        match self {
+            Self::Mask(mut mask) => RowSelection::from_boolean_buffer(mask.finish()),
+            Self::Selectors(selectors) => selectors.into(),
+        }
+    }
+}
+
+/// Converts to bitmap backing if needed.
+fn into_mask_backed(selection: RowSelection) -> RowSelection {
+    match selection.as_mask() {
+        Some(_) => selection,
+        None => {
+            let total_rows = row_selection_len(&selection);
+            let mut mask = BooleanBufferBuilder::new(total_rows);
+            append_selection_to_mask(&mut mask, &selection);
+            RowSelection::from_boolean_buffer(mask.finish())
+        }
+    }
+}
+
 impl ParquetAccessPlan {
     /// Create a new `ParquetAccessPlan` that scans all row groups
     pub fn new_all(row_group_count: usize) -> Self {
@@ -298,35 +443,20 @@ impl ParquetAccessPlan {
         selection: RowSelection,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<Self> {
-        // Keep this as a single pass over the selector stream rather than
-        // repeatedly calling `RowSelection::split_off` per row group. The
-        // `split_off` version is simpler, but it clones/retains substantially
-        // more selector buffer capacity for highly fragmented selections.
+        let file_rows = row_group_meta_data
+            .iter()
+            .map(|rg| rg.num_rows() as usize)
+            .sum::<usize>();
+
         let mut cursor = OverallRowSelectionCursor::new(selection);
+        let row_groups = row_group_meta_data
+            .iter()
+            .map_while(|rg_meta| cursor.take_row_group(rg_meta.num_rows() as usize))
+            .collect::<Vec<_>>();
 
-        let mut selection_rows = 0usize;
-        let mut file_rows = 0usize;
-
-        let mut row_groups = Vec::with_capacity(row_group_meta_data.len());
-        for rg_meta in row_group_meta_data {
-            let rg_rows = rg_meta.num_rows() as usize;
-            file_rows += rg_rows;
-
-            let mut builder = RowGroupAccessBuilder::new(rg_rows);
-            while builder.remaining > 0 {
-                let Some(selector) = cursor.take(builder.remaining) else {
-                    break;
-                };
-                selection_rows += selector.row_count;
-                builder.push(selector);
-            }
-
-            row_groups.push(builder.into_access());
-        }
-
-        selection_rows += cursor.remaining_rows();
-
-        if selection_rows != file_rows {
+        // Count selector rows during traversal.
+        let selection_rows = cursor.total_rows();
+        if row_groups.len() != row_group_meta_data.len() || selection_rows != file_rows {
             return exec_err!(
                 "Invalid Parquet RowSelection. File has {file_rows} rows, \
                 but selection specifies {selection_rows} rows."
@@ -392,6 +522,11 @@ impl ParquetAccessPlan {
             RowGroupAccess::Skip => RowGroupAccess::Skip,
             RowGroupAccess::Scan => RowGroupAccess::Selection(selection),
             RowGroupAccess::Selection(existing_selection) => {
+                // Keep intersections bitmap-backed when the existing selection is.
+                let selection = match existing_selection.as_mask() {
+                    Some(_) => into_mask_backed(selection),
+                    None => selection,
+                };
                 RowGroupAccess::Selection(existing_selection.intersection(&selection))
             }
         }
@@ -418,6 +553,8 @@ impl ParquetAccessPlan {
     /// If there are any [`RowGroupAccess::Selection`], an overall row selection
     /// is returned for *all* the rows in the row groups that are not skipped.
     /// Thus it includes a `Select` selection for any [`RowGroupAccess::Scan`].
+    ///
+    /// The result is bitmap-backed if any row-group selection is bitmap-backed.
     ///
     /// # Errors
     ///
@@ -494,10 +631,7 @@ impl ParquetAccessPlan {
             let RowGroupAccess::Selection(selection) = rg else {
                 continue;
             };
-            let rows_in_selection = selection
-                .iter()
-                .map(|selection| selection.row_count)
-                .sum::<usize>();
+            let rows_in_selection = row_selection_len(selection);
 
             let row_group_row_count = rg_meta.num_rows();
             assert_eq_or_internal_err!(
@@ -509,26 +643,28 @@ impl ParquetAccessPlan {
             );
         }
 
-        let total_selection: RowSelection = self
-            .row_groups
-            .into_iter()
-            .zip(row_group_meta_data.iter())
-            .flat_map(|(rg, rg_meta)| {
-                match rg {
-                    RowGroupAccess::Skip => vec![],
-                    RowGroupAccess::Scan => {
-                        // need a row group access to scan the entire row group (need row group counts)
-                        vec![RowSelector::select(rg_meta.num_rows() as usize)]
-                    }
-                    RowGroupAccess::Selection(selection) => {
-                        let selection: Vec<RowSelector> = selection.into();
-                        selection
-                    }
-                }
-            })
-            .collect();
+        let mask_backed = self.row_groups.iter().any(|rg| {
+            matches!(rg, RowGroupAccess::Selection(selection) if selection.as_mask().is_some())
+        });
 
-        Ok(Some(total_selection))
+        let row_capacity = if mask_backed {
+            self.row_groups
+                .iter()
+                .zip(row_group_meta_data.iter())
+                .filter(|(rg, _)| rg.should_scan())
+                .map(|(_, rg_meta)| rg_meta.num_rows() as usize)
+                .sum()
+        } else {
+            0
+        };
+        let mut total_selection =
+            OverallRowSelectionBuilder::new(mask_backed, row_capacity);
+
+        for (access, rg_meta) in self.row_groups.into_iter().zip(row_group_meta_data) {
+            total_selection.append(access, rg_meta.num_rows() as usize);
+        }
+
+        Ok(Some(total_selection.finish()))
     }
 
     /// Return an iterator over the row group indexes that should be scanned
@@ -611,40 +747,32 @@ fn strip_empty_row_groups(
         return (row_group_indexes, None);
     };
 
+    let mask_backed = selection.as_mask().is_some();
+    let row_capacity = row_selection_len(&selection);
+    let mut kept_selection = OverallRowSelectionBuilder::new(mask_backed, row_capacity);
     let mut cursor = OverallRowSelectionCursor::new(selection);
     let mut kept_indexes = Vec::with_capacity(row_group_indexes.len());
-    let mut kept_selectors: Vec<RowSelector> = Vec::new();
 
     for &rg_idx in row_group_indexes.iter() {
         let rg_row_count = row_group_meta_data[rg_idx].num_rows() as usize;
-        // Pull this row group's fragments off the shared cursor in a single
-        // pass (no `split_off` tail reallocation).
-        let start = kept_selectors.len();
-        let mut selected = 0usize;
-        let mut taken = 0usize;
-        while taken < rg_row_count {
-            let Some(fragment) = cursor.take(rg_row_count - taken) else {
-                break;
-            };
-            taken += fragment.row_count;
-            if !fragment.skip {
-                selected += fragment.row_count;
-            }
-            kept_selectors.push(fragment);
+        let Some(access) = cursor.take_row_group(rg_row_count) else {
+            break;
+        };
+
+        // Empty row group: arrow-rs would silently skip it. Drop it so the
+        // plan stays 1:1 with the readers.
+        if !access.should_scan() {
+            continue;
         }
-        if selected > 0 {
-            kept_indexes.push(rg_idx);
-        } else {
-            // Empty row group: arrow-rs would silently skip it. Drop it and its
-            // fragments so the plan stays 1:1 with the readers.
-            kept_selectors.truncate(start);
-        }
+
+        kept_indexes.push(rg_idx);
+        kept_selection.append(access, rg_row_count);
     }
 
-    let result_selection = if kept_selectors.is_empty() {
+    let result_selection = if kept_indexes.is_empty() {
         None
     } else {
-        Some(RowSelection::from(kept_selectors))
+        Some(kept_selection.finish())
     };
 
     (kept_indexes, result_selection)
@@ -860,6 +988,7 @@ impl PreparedAccessPlan {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::buffer::BooleanBuffer;
     use datafusion_common::assert_contains;
     use parquet::basic::LogicalType;
     use parquet::file::metadata::ColumnChunkMetaData;
@@ -984,6 +1113,95 @@ mod test {
     }
 
     #[test]
+    fn test_mixed_backings_promote_to_mask() {
+        // Mixed backing produces a bitmap-backed overall selection.
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Selection(RowSelection::from_boolean_buffer(
+                BooleanBuffer::from(vec![
+                    true, false, false, false, false, false, false, false, false, false,
+                ]),
+            )),
+            RowGroupAccess::Selection(RowSelection::from(vec![
+                RowSelector::select(10),
+                RowSelector::skip(10),
+            ])),
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+        ]);
+
+        let row_selection = access_plan
+            .into_overall_row_selection(&ROW_GROUP_METADATA)
+            .unwrap()
+            .unwrap();
+
+        let mut expected = vec![true];
+        expected.extend(vec![false; 9]);
+        expected.extend(vec![true; 10]);
+        expected.extend(vec![false; 10]);
+        let expected = BooleanBuffer::from(expected);
+        assert_eq!(row_selection.as_mask(), Some(&expected));
+    }
+
+    #[test]
+    fn test_scan_selection_preserves_mask_backing() {
+        let mut access_plan = ParquetAccessPlan::new(vec![RowGroupAccess::Selection(
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+                true, true, false, false, true, true, false, false, true, true,
+            ])),
+        )]);
+
+        // Simulate selector-backed page pruning.
+        access_plan.scan_selection(
+            0,
+            RowSelection::from(vec![RowSelector::select(5), RowSelector::skip(5)]),
+        );
+        // Exercise the already bitmap-backed path.
+        access_plan.scan_selection(
+            0,
+            RowSelection::from_boolean_buffer(BooleanBuffer::new_set(10)),
+        );
+
+        let selection = access_plan
+            .into_overall_row_selection(&ROW_GROUP_METADATA[..1])
+            .unwrap()
+            .unwrap();
+        let expected = BooleanBuffer::from(vec![
+            true, true, false, false, true, false, false, false, false, false,
+        ]);
+        assert_eq!(selection.as_mask(), Some(&expected));
+    }
+
+    #[test]
+    fn test_scan_selection_preserves_selector_backing() {
+        let mut access_plan = ParquetAccessPlan::new(vec![RowGroupAccess::Selection(
+            RowSelection::from(vec![RowSelector::select(6), RowSelector::skip(4)]),
+        )]);
+
+        access_plan.scan_selection(
+            0,
+            RowSelection::from(vec![
+                RowSelector::skip(2),
+                RowSelector::select(5),
+                RowSelector::skip(3),
+            ]),
+        );
+
+        let selection = access_plan
+            .into_overall_row_selection(&ROW_GROUP_METADATA[..1])
+            .unwrap()
+            .unwrap();
+        assert_eq!(selection.as_mask(), None);
+        assert_eq!(
+            selection,
+            RowSelection::from(vec![
+                RowSelector::skip(2),
+                RowSelector::select(4),
+                RowSelector::skip(4),
+            ])
+        );
+    }
+
+    #[test]
     fn test_new_from_overall_row_selection() {
         let row_selection = RowSelection::from(vec![
             RowSelector::select(10),
@@ -1019,19 +1237,25 @@ mod test {
 
     #[test]
     fn test_new_from_overall_row_selection_invalid_row_count() {
-        let row_selection = RowSelection::from(vec![RowSelector::select(99)]);
+        for selection_rows in [99, 101] {
+            let row_selection =
+                RowSelection::from(vec![RowSelector::select(selection_rows)]);
 
-        let err = ParquetAccessPlan::try_new_from_overall_row_selection(
-            row_selection,
-            &ROW_GROUP_METADATA,
-        )
-        .unwrap_err()
-        .to_string();
+            let err = ParquetAccessPlan::try_new_from_overall_row_selection(
+                row_selection,
+                &ROW_GROUP_METADATA,
+            )
+            .unwrap_err()
+            .to_string();
 
-        assert_contains!(
-            err,
-            "Invalid Parquet RowSelection. File has 100 rows, but selection specifies 99 rows"
-        );
+            assert_contains!(
+                err,
+                format!(
+                    "Invalid Parquet RowSelection. File has 100 rows, \
+                     but selection specifies {selection_rows} rows"
+                )
+            );
+        }
     }
 
     #[test]
@@ -1065,6 +1289,71 @@ mod test {
                 RowGroupAccess::Skip,
             ])
         );
+    }
+
+    #[test]
+    fn test_new_from_overall_mask_preserves_bitmap_backing() {
+        let partial_mask = vec![
+            false, true, false, true, false, true, false, true, false, true, false, true,
+            false, true, false, true, false, true, false, true, false, true, false, true,
+            false, true, false, true, false, true,
+        ];
+        let mut file_mask = vec![true; 10];
+        file_mask.extend(vec![false; 20]);
+        file_mask.extend(&partial_mask);
+        file_mask.extend(vec![true; 40]);
+
+        let access_plan = ParquetAccessPlan::try_new_from_overall_row_selection(
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(file_mask)),
+            &ROW_GROUP_METADATA,
+        )
+        .unwrap();
+
+        assert_eq!(
+            access_plan,
+            ParquetAccessPlan::new(vec![
+                RowGroupAccess::Scan,
+                RowGroupAccess::Skip,
+                RowGroupAccess::Selection(RowSelection::from_boolean_buffer(
+                    BooleanBuffer::from(partial_mask.clone()),
+                )),
+                RowGroupAccess::Scan,
+            ])
+        );
+
+        // Skipped groups are omitted; scanned groups become set bits.
+        let overall = access_plan
+            .into_overall_row_selection(&ROW_GROUP_METADATA)
+            .unwrap()
+            .unwrap();
+        let mut expected_overall = vec![true; 10];
+        expected_overall.extend(partial_mask);
+        expected_overall.extend(vec![true; 40]);
+        let expected_overall = BooleanBuffer::from(expected_overall);
+        assert_eq!(overall.as_mask(), Some(&expected_overall));
+    }
+
+    #[test]
+    fn test_new_from_overall_mask_invalid_row_count() {
+        for selection_rows in [99, 101] {
+            let row_selection =
+                RowSelection::from_boolean_buffer(BooleanBuffer::new_set(selection_rows));
+
+            let err = ParquetAccessPlan::try_new_from_overall_row_selection(
+                row_selection,
+                &ROW_GROUP_METADATA,
+            )
+            .unwrap_err()
+            .to_string();
+
+            assert_contains!(
+                err,
+                format!(
+                    "Invalid Parquet RowSelection. File has 100 rows, \
+                     but selection specifies {selection_rows} rows"
+                )
+            );
+        }
     }
 
     #[test]
@@ -1527,6 +1816,31 @@ mod test {
         let result = result.expect("survivors keep a selection");
         assert_eq!(result.row_count(), 30); // 10 from RG 0 + 20 from RG 2
         assert_eq!(result.skipped_row_count(), 10); // RG 2's leading skip
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_preserves_mask_backing() {
+        // RG 1 and RG 3 select nothing. The surviving RG 0 and RG 2 masks must
+        // be concatenated without converting the selection to selectors.
+        let mut mask = vec![true; 10];
+        mask.extend(vec![false; 30]);
+        mask.extend(vec![true; 20]);
+        mask.extend(vec![false; 40]);
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(mask));
+
+        let (indexes, result) = strip_empty_row_groups(
+            vec![0, 1, 2, 3],
+            Some(selection),
+            &ROW_GROUP_METADATA,
+        );
+
+        assert_eq!(indexes, vec![0, 2]);
+        let result = result.expect("survivors keep a selection");
+        let mut expected = vec![true; 10];
+        expected.extend(vec![false; 10]);
+        expected.extend(vec![true; 20]);
+        let expected = BooleanBuffer::from(expected);
+        assert_eq!(result.as_mask(), Some(&expected));
     }
 
     #[test]

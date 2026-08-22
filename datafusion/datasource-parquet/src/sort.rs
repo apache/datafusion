@@ -17,8 +17,9 @@
 
 //! Sort-related utilities for Parquet scanning
 
+use crate::access_plan::row_selection_len;
 use arrow::datatypes::Schema;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -53,6 +54,31 @@ pub fn reverse_row_selection(
     row_groups_to_scan: &[usize],
 ) -> Result<RowSelection> {
     let rg_metadata = parquet_metadata.row_groups();
+
+    // Reverse bitmap slices without materializing selectors.
+    if row_selection.as_mask().is_some() {
+        let scanned_rows = row_groups_to_scan
+            .iter()
+            .map(|&rg_idx| rg_metadata[rg_idx].num_rows() as usize)
+            .sum::<usize>();
+        let selection_rows = row_selection_len(row_selection);
+        if selection_rows != scanned_rows {
+            return internal_err!(
+                "row selection specifies {selection_rows} rows but the scanned \
+                row groups contain {scanned_rows} rows"
+            );
+        }
+
+        let mut remaining = row_selection.clone();
+        let mut row_group_selections = Vec::with_capacity(row_groups_to_scan.len());
+
+        for &rg_idx in row_groups_to_scan {
+            let num_rows = rg_metadata[rg_idx].num_rows() as usize;
+            row_group_selections.push(remaining.split_off(num_rows));
+        }
+
+        return Ok(row_group_selections.into_iter().rev().collect());
+    }
 
     // Build a mapping of row group index to its row range, but ONLY for
     // the row groups that are actually being scanned.
@@ -244,6 +270,7 @@ fn file_min_value(file: &PartitionedFile, col_idx: usize) -> Option<ScalarValue>
 mod tests {
     use crate::ParquetAccessPlan;
     use crate::RowGroupAccess;
+    use arrow::buffer::BooleanBuffer;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::Bytes;
     use parquet::arrow::ArrowWriter;
@@ -356,6 +383,47 @@ mod tests {
             original_selected, reversed_selected,
             "Total selected rows should remain the same"
         );
+    }
+
+    #[test]
+    fn test_prepared_access_plan_reverse_preserves_bitmap_backing() {
+        let metadata = create_test_metadata(vec![4, 3, 5, 2]);
+        let first_mask = vec![true, false, true, false];
+        let third_mask = vec![false, true, true, false, true];
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Selection(RowSelection::from_boolean_buffer(
+                BooleanBuffer::from(first_mask.clone()),
+            )),
+            RowGroupAccess::Skip,
+            RowGroupAccess::Selection(RowSelection::from_boolean_buffer(
+                BooleanBuffer::from(third_mask.clone()),
+            )),
+            RowGroupAccess::Scan,
+        ]);
+
+        let prepared_plan = access_plan.prepare(metadata.row_groups()).unwrap();
+        assert!(
+            prepared_plan
+                .row_selection
+                .as_ref()
+                .unwrap()
+                .as_mask()
+                .is_some()
+        );
+
+        let reversed_plan = prepared_plan.reverse(&metadata).unwrap();
+        assert_eq!(reversed_plan.row_group_indexes, vec![3, 2, 0]);
+        let reversed_selection = reversed_plan.row_selection.unwrap();
+
+        // Fully scanned row group 3 becomes the leading set bits.
+        let expected = BooleanBuffer::from(
+            [true, true]
+                .into_iter()
+                .chain(third_mask)
+                .chain(first_mask)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(reversed_selection.as_mask(), Some(&expected));
     }
 
     #[test]
