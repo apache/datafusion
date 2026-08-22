@@ -380,26 +380,6 @@ impl ScalarUDFImpl for GetFieldFunc {
         "get_field"
     }
 
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        if args.len() < 2 {
-            return exec_err!(
-                "get_field requires at least 2 arguments, got {}",
-                args.len()
-            );
-        }
-
-        let base = &args[0];
-        let field_names: Vec<String> = args[1..]
-            .iter()
-            .map(|f| match f {
-                Expr::Literal(name, _) => name.to_string(),
-                other => other.schema_name().to_string(),
-            })
-            .collect();
-
-        Ok(format!("{}[{}]", base, field_names.join("][")))
-    }
-
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         if args.len() < 2 {
             return exec_err!(
