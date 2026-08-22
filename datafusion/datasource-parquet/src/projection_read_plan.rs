@@ -29,7 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::schema::types::SchemaDescriptor;
@@ -620,17 +620,9 @@ fn build_read_plan_with_cast_clipping(
             continue;
         }
 
+        // These offsets are positions in the arrow type; whether they can be
+        // trusted is checked once per root below, where they become leaves.
         let physical_type = file_schema.field(root).data_type();
-        let root_leaves = leaves_by_root.get(&root).map_or(&[][..], Vec::as_slice);
-
-        // Defensive: the arrow type's leaf count must agree with the
-        // Parquet schema (it can diverge if the file embeds a different
-        // arrow schema). If not, never risk a wrong mask: read the whole
-        // root.
-        if root_leaves.len() != count_leaves(physical_type) {
-            root_reads.insert(root, RootRead::Full);
-            continue;
-        }
 
         match clip_for_cast(physical_type, &access.target_type) {
             Some((kept_offsets, _pruned_type)) => {
@@ -674,12 +666,24 @@ fn build_read_plan_with_cast_clipping(
         offsets.insert(offset);
     }
 
+    // The Parquet reader emits projected columns in schema order, so `fields`
+    // must be pushed in ascending root order for the projected schema to line up
+    // with the batches it produces. `root_reads` is ordered, which gives that for
+    // free; the assert pins the property to the loop that depends on it.
+    debug_assert!(root_reads.keys().is_sorted());
     let mut leaf_indices: Vec<usize> = Vec::new();
     let mut fields = Vec::with_capacity(root_reads.len());
     for (root, read) in root_reads {
         let field = file_schema.field(root);
         let root_leaves = leaves_by_root.get(&root).map_or(&[][..], Vec::as_slice);
         match read {
+            // Only clip when the arrow type and the Parquet schema agree on
+            // how many leaves this root has: an offset is a position in the
+            // arrow type but is resolved through `root_leaves`, so if the
+            // counts differ it names the wrong leaf. A file that embeds its
+            // own arrow schema can disagree; such a root falls through to a
+            // full read. This now covers `get_field`-only roots too, which
+            // pruned by name and so never needed the check before.
             RootRead::Partial(offsets)
                 if root_leaves.len() == count_leaves(field.data_type()) =>
             {
@@ -701,11 +705,8 @@ fn build_read_plan_with_cast_clipping(
         leaf_indices.extend(root_leaves.iter().copied());
         fields.push(Arc::new(field.clone()));
     }
-    // `root_reads` visits roots in schema order, every root's leaves were
-    // collected in descriptor order, and partial offsets are a `BTreeSet`.
-    // Therefore the final mask is already sorted and deduplicated.
-    debug_assert!(leaf_indices.windows(2).all(|pair| pair[0] < pair[1]));
-
+    // `ProjectionMask::leaves` only flips flags in a `vec![false; num_columns]`,
+    // so `leaf_indices` needs no sorting or deduplication here.
     ParquetReadPlan {
         projection_mask: ProjectionMask::leaves(
             schema_descr,
@@ -914,8 +915,9 @@ fn leaf_under_tree(mut node: &StructAccessNode<'_>, path: &[String]) -> bool {
 ///
 /// 2. **Nested-access-only struct root.** Look up the column's node in the
 ///    access tree and call [`prune_struct_type`] on the field's `DataType`
-///    with that node. Wrap the pruned type in a new `Field` carrying the
-///    original name and nullability.
+///    with that node. Rebuild the field around the pruned type, preserving
+///    its name, nullability and metadata, so a root's projected field does
+///    not depend on which path built it (see [`field_with_type`]).
 ///
 /// Column order in the output schema follows ascending file-schema index
 /// (via the `BTreeSet` union), matching the order the Parquet reader
@@ -958,11 +960,7 @@ fn build_filter_schema(
             };
 
             let pruned_data_type = prune_struct_type(field.data_type(), node);
-            Arc::new(Field::new(
-                field.name(),
-                pruned_data_type,
-                field.is_nullable(),
-            ))
+            field_with_type(field, pruned_data_type)
         })
         .collect::<Vec<_>>();
 
@@ -996,9 +994,9 @@ fn build_filter_schema(
 ///        cloning `f` unchanged (`Arc::clone` — no new `Field`).
 ///      - **Present, child node's `selected_here` is `false`.** Some
 ///        access goes through this field to a deeper terminal. Recurse
-///        into `f.data_type()` with the matching child node, then wrap
-///        the pruned type in a fresh `Field` with `f`'s name and
-///        nullability.
+///        into `f.data_type()` with the matching child node, then rebuild
+///        `f` around the pruned type, preserving its name, nullability and
+///        metadata (see [`field_with_type`]).
 ///
 /// Field ordering is preserved (consumers must match the order the Parquet
 /// reader produces when projecting specific leaves). Iterating Arrow's
@@ -1030,7 +1028,7 @@ fn prune_struct_type(dt: &DataType, node: &StructAccessNode<'_>) -> DataType {
             } else {
                 // Recurse into nested struct.
                 let pruned = prune_struct_type(f.data_type(), child);
-                Arc::new(Field::new(f.name(), pruned, f.is_nullable()))
+                field_with_type(f, pruned)
             };
 
             Some(out)
@@ -1044,8 +1042,8 @@ fn prune_struct_type(dt: &DataType, node: &StructAccessNode<'_>) -> DataType {
 mod test {
     use super::*;
     use Column as PhysicalColumn;
-    use arrow::array::{Int32Array, RecordBatch, StringArray, StructArray};
-    use arrow::datatypes::Fields;
+    use arrow::array::{Array, Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow::datatypes::{Field, Fields};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{Expr, col};
     use datafusion_functions::core::get_field;
@@ -1053,6 +1051,7 @@ mod test {
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::metadata::ParquetMetaData;
+    use std::collections::HashMap;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -1142,6 +1141,15 @@ mod test {
     /// Schema: id (Int32), s (Struct{value: Int32, label: Utf8, pad: Utf8}).
     /// Parquet leaves: id=0, s.value=1, s.label=2, s.pad=3.
     fn write_id_struct_file() -> (SchemaRef, Arc<ParquetMetaData>) {
+        let (_file, schema, metadata) = write_id_struct_file_with_handle();
+        (schema, metadata)
+    }
+
+    /// [`write_id_struct_file`], but hands back the temp file so a test can
+    /// re-open it and decode through a projection mask. The file is deleted
+    /// when the returned handle drops.
+    fn write_id_struct_file_with_handle()
+    -> (NamedTempFile, SchemaRef, Arc<ParquetMetaData>) {
         let struct_fields: Fields = vec![
             Arc::new(Field::new("value", DataType::Int32, false)),
             Arc::new(Field::new("label", DataType::Utf8, false)),
@@ -1180,7 +1188,8 @@ mod test {
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
             .expect("reader builder");
-        (builder.schema().clone(), builder.metadata().clone())
+        let (schema, metadata) = (builder.schema().clone(), builder.metadata().clone());
+        (file, schema, metadata)
     }
 
     /// Writes a two-struct-root fixture so tests can combine a cast on one
@@ -1632,6 +1641,72 @@ mod test {
         );
     }
 
+    /// The planner-level companion above proves the *mask* and *projected
+    /// schema* are what we intend. This proves the decoder agrees: reading the
+    /// file through that exact mask must emit that exact schema, and both the
+    /// cast and the `get_field` must evaluate against the batch it produces.
+    ///
+    /// A mask/schema pair can be internally consistent and still be wrong — if
+    /// `fields` were pushed out of root order, or a clipped struct named leaves
+    /// the reader groups differently, only running the decoder catches it.
+    #[test]
+    fn build_projection_read_plan_mask_decodes_cast_and_get_field_on_one_root() {
+        let (file, file_schema, metadata) = write_id_struct_file_with_handle();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let narrow = DataType::Struct(
+            vec![Arc::new(Field::new("value", DataType::Int32, true))].into(),
+        );
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(CastExpr::new(
+                Arc::new(PhysicalColumn::new("s", 1)),
+                narrow.clone(),
+                None,
+            )),
+            get_field_of(&file_schema, "s", "label"),
+        ];
+
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .expect("reader builder")
+            .with_projection(read_plan.projection_mask.clone())
+            .build()
+            .expect("reader");
+        let batch = reader.next().expect("one batch").expect("decoded batch");
+
+        assert_eq!(
+            batch.schema().fields(),
+            read_plan.projected_schema.fields(),
+            "the decoder must emit exactly the schema the read plan promised",
+        );
+
+        // The batch carries only the projected roots, so the expressions have
+        // to be re-planned against it the way the scan's adapter would.
+        let projected = read_plan.projected_schema.as_ref();
+        let cast = Arc::new(CastExpr::new(
+            Arc::new(PhysicalColumn::new("s", projected.index_of("s").unwrap())),
+            narrow,
+            None,
+        ));
+        let label = get_field_of(projected, "s", "label");
+
+        let rows = batch.num_rows();
+        let cast_out = cast.evaluate(&batch).unwrap().into_array(rows).unwrap();
+        let cast_out = cast_out.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(cast_out.num_columns(), 1, "`pad` and `label` were pruned");
+        assert_eq!(
+            cast_out.column(0).as_ref(),
+            &Int32Array::from(vec![10, 20, 30]) as &dyn Array,
+        );
+
+        let label_out = label.evaluate(&batch).unwrap().into_array(rows).unwrap();
+        assert_eq!(
+            label_out.as_ref(),
+            &StringArray::from(vec!["a", "b", "c"]) as &dyn Array,
+        );
+    }
+
     /// A `get_field` access that resolves to no Parquet leaf must fall back to
     /// a full read of its root. Deriving the emitted type from the (empty)
     /// leaf set would project an empty struct, a schema the reader cannot
@@ -1666,6 +1741,205 @@ mod test {
             read_plan.projected_schema.field_with_name("b").unwrap(),
             file_schema.field(1),
             "an unresolvable access must keep `b`'s full physical type"
+        );
+    }
+
+    /// The single-entry metadata map this module's annotated fixture stamps
+    /// on a field, so the fixture and the tests asserting on it can't drift.
+    fn tag(value: &str) -> HashMap<String, String> {
+        HashMap::from([("tag".to_string(), value.to_string())])
+    }
+
+    /// Writes a fixture whose nested fields carry Arrow metadata, so tests can
+    /// check that a projected field keeps it.
+    ///
+    /// Schema: a (Struct{p: Int32, q: Utf8}),
+    ///         b [tag] (Struct{outer [tag] (Struct{x: Int32 [tag], y: Utf8}),
+    ///                         n: Utf8}).
+    /// Parquet leaves: a.p=0, a.q=1, b.outer.x=2, b.outer.y=3, b.n=4.
+    fn write_annotated_nested_file() -> (SchemaRef, Arc<ParquetMetaData>) {
+        let a_fields: Fields = vec![
+            Arc::new(Field::new("p", DataType::Int32, false)),
+            Arc::new(Field::new("q", DataType::Utf8, false)),
+        ]
+        .into();
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("x", DataType::Int32, false).with_metadata(tag("x"))),
+            Arc::new(Field::new("y", DataType::Utf8, false)),
+        ]
+        .into();
+        let b_fields: Fields = vec![
+            Arc::new(
+                Field::new("outer", DataType::Struct(outer_fields.clone()), false)
+                    .with_metadata(tag("outer")),
+            ),
+            Arc::new(Field::new("n", DataType::Utf8, false)),
+        ]
+        .into();
+
+        let schema = Arc::new(Schema::new(vec![
+            Arc::new(Field::new("a", DataType::Struct(a_fields.clone()), false)),
+            Arc::new(
+                Field::new("b", DataType::Struct(b_fields.clone()), false)
+                    .with_metadata(tag("b")),
+            ),
+        ]));
+
+        let ints = |values: [i32; 2]| Arc::new(Int32Array::from(values.to_vec())) as _;
+        let strs = |values: [&str; 2]| Arc::new(StringArray::from(values.to_vec())) as _;
+        let outer = Arc::new(StructArray::new(
+            outer_fields,
+            vec![ints([1, 2]), strs(["x0", "x1"])],
+            None,
+        )) as _;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StructArray::new(
+                    a_fields,
+                    vec![ints([3, 4]), strs(["q0", "q1"])],
+                    None,
+                )) as _,
+                Arc::new(StructArray::new(
+                    b_fields,
+                    vec![outer, strs(["n0", "n1"])],
+                    None,
+                )) as _,
+            ],
+        )
+        .unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .expect("reader builder");
+        (builder.schema().clone(), builder.metadata().clone())
+    }
+
+    /// A root's projected field must not depend on which builder produced it.
+    /// `get_field`-only projections go through `build_filter_schema`, while
+    /// the presence of a narrowing cast on an *unrelated* root routes the same
+    /// access through the cast-clipping path. Both rebuild the pruned root (and
+    /// the pruned `outer` field below it), so both must preserve field
+    /// metadata — otherwise `b`'s type would silently depend on `a`.
+    #[test]
+    fn build_projection_read_plan_preserves_field_metadata_on_both_paths() {
+        let (file_schema, metadata) = write_annotated_nested_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let literal =
+            |value: &str| Expr::Literal(ScalarValue::Utf8(Some(value.to_string())), None);
+        let b_outer_x = logical2physical(
+            &get_field().call(vec![col("b"), literal("outer"), literal("x")]),
+            &file_schema,
+        );
+
+        // Without a cast anywhere in the projection: `build_filter_schema`.
+        let plain = build_projection_read_plan(
+            vec![Arc::clone(&b_outer_x)],
+            &file_schema,
+            schema_descr,
+        );
+        // The same access beside a narrowing cast on `a`: cast-clipping path.
+        let with_cast = build_projection_read_plan(
+            vec![
+                cast_to_struct("a", 0, vec![("p", DataType::Int32)]),
+                b_outer_x,
+            ],
+            &file_schema,
+            schema_descr,
+        );
+
+        let expected_b = Field::new(
+            "b",
+            DataType::Struct(
+                vec![Arc::new(
+                    Field::new(
+                        "outer",
+                        DataType::Struct(
+                            vec![Arc::new(
+                                Field::new("x", DataType::Int32, false)
+                                    .with_metadata(tag("x")),
+                            )]
+                            .into(),
+                        ),
+                        false,
+                    )
+                    .with_metadata(tag("outer")),
+                )]
+                .into(),
+            ),
+            false,
+        )
+        .with_metadata(tag("b"));
+
+        let plain_b = plain.projected_schema.field_with_name("b").unwrap();
+        let cast_b = with_cast.projected_schema.field_with_name("b").unwrap();
+        assert_eq!(
+            plain_b, &expected_b,
+            "the pruned root and its pruned `outer` child must keep their metadata"
+        );
+        assert_eq!(
+            plain_b, cast_b,
+            "an unrelated cast on `a` must not change `b`'s projected field"
+        );
+    }
+
+    /// When the file embeds an arrow schema whose leaf count disagrees with
+    /// the Parquet schema, offsets cannot be trusted as positions in the arrow
+    /// type, so every affected root falls back to a full read — whether it was
+    /// reached through a cast or only through `get_field`.
+    #[test]
+    fn build_read_plan_with_cast_clipping_falls_back_when_leaf_counts_diverge() {
+        let (_, metadata) = write_two_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        // Each root has two leaves in the descriptor; this schema claims three.
+        let divergent = |name: &str, first: &str, second: &str| {
+            Field::new(
+                name,
+                DataType::Struct(
+                    vec![
+                        Arc::new(Field::new(first, DataType::Int32, false)),
+                        Arc::new(Field::new(second, DataType::Utf8, false)),
+                        Arc::new(Field::new("extra", DataType::Utf8, false)),
+                    ]
+                    .into(),
+                ),
+                false,
+            )
+        };
+        let file_schema =
+            Schema::new(vec![divergent("a", "p", "q"), divergent("b", "m", "n")]);
+
+        // `a` is reached by a narrowing cast, `b` only by `get_field`.
+        let read_plan = build_read_plan_with_cast_clipping(
+            &file_schema,
+            schema_descr,
+            &[],
+            &[access(1, &["m"])],
+            &[CastColumnAccess {
+                root_index: 0,
+                target_type: DataType::Struct(
+                    vec![Arc::new(Field::new("p", DataType::Int32, true))].into(),
+                ),
+            }],
+        );
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [0, 1, 2, 3]),
+            "neither root may be clipped against a leaf count it disagrees with"
+        );
+        assert_eq!(
+            read_plan.projected_schema.fields(),
+            file_schema.fields(),
+            "a root that falls back keeps its physical arrow field"
         );
     }
 
