@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::consumer::from_substrait_literal;
+use crate::logical_plan::consumer::from_substrait_literal_with_expected_field;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
 use datafusion::common::{
@@ -157,21 +157,16 @@ pub async fn from_read_rel(
                     }
 
                     let mut row_exprs = vec![];
-                    let mut name_idx = 0;
-                    for expression in &row.fields {
-                        // Top-level names are provided through schema
-                        // Each expression consumes at least one name, and Literals may consume additional names.
-                        name_idx += 1;
+                    for (expression, expected_field) in
+                        row.fields.iter().zip(substrait_schema.fields())
+                    {
                         let expr = match expression.rex_type.as_ref() {
                             Some(substrait::proto::expression::RexType::Literal(lit)) => {
-                                // Values literals need 'named_struct.names' so nested struct fields keep their names from the ReadRel base schema.
-                                // This is important for nested struct fields to retain their names.
                                 Expr::Literal(
-                                    from_substrait_literal(
+                                    from_substrait_literal_with_expected_field(
                                         consumer,
                                         lit,
-                                        &named_struct.names,
-                                        &mut name_idx,
+                                        expected_field,
                                     )?,
                                     None,
                                 )
@@ -184,19 +179,11 @@ pub async fn from_read_rel(
                         };
                         row_exprs.push(expr);
                     }
-
-                    if name_idx != named_struct.names.len() {
-                        return substrait_err!(
-                            "Names list must match exactly to nested schema, but found {} uses for {} names",
-                            name_idx,
-                            named_struct.names.len()
-                        );
-                    }
                     exprs.push(row_exprs);
                 }
                 exprs
             } else {
-                convert_literal_rows(consumer, vt, named_struct)?
+                convert_literal_rows(consumer, vt, &substrait_schema)?
             };
 
             Ok(LogicalPlan::Values(Values {
@@ -254,38 +241,35 @@ pub async fn from_read_rel(
 /// Converts Substrait literal rows from a VirtualTable into DataFusion expressions.
 ///
 /// This function processes the deprecated `values` field of VirtualTable, converting
-/// each literal value into a `Expr::Literal` while tracking and validating the name
-/// indices against the provided named struct schema.
+/// each literal value into a `Expr::Literal` using the matching field from the schema.
 fn convert_literal_rows(
     consumer: &impl SubstraitConsumer,
     vt: &substrait::proto::read_rel::VirtualTable,
-    named_struct: &substrait::proto::NamedStruct,
+    schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Vec<Expr>>> {
     #[expect(deprecated)]
     vt.values
         .iter()
         .map(|row| {
-            let mut name_idx = 0;
+            if row.fields.len() != schema.fields().len() {
+                return substrait_err!(
+                    "Field count mismatch: expected {} fields but found {} in virtual table row",
+                    schema.fields().len(),
+                    row.fields.len()
+                );
+            }
             let lits = row
                 .fields
                 .iter()
-                .map(|lit| {
-                    name_idx += 1; // top-level names are provided through schema
-                    Ok(Expr::Literal(from_substrait_literal(
+                .zip(schema.fields())
+                .map(|(lit, expected_field)| {
+                    Ok(Expr::Literal(from_substrait_literal_with_expected_field(
                         consumer,
                         lit,
-                        &named_struct.names,
-                        &mut name_idx,
+                        expected_field,
                     )?, None))
                 })
                 .collect::<datafusion::common::Result<_>>()?;
-            if name_idx != named_struct.names.len() {
-                return substrait_err!(
-                    "Names list must match exactly to nested schema, but found {} uses for {} names",
-                    name_idx,
-                    named_struct.names.len()
-                );
-            }
             Ok(lits)
         })
         .collect::<datafusion::common::Result<_>>()
@@ -363,5 +347,128 @@ fn apply_projection(
             Ok(LogicalPlan::TableScan(scan))
         }
         _ => plan_err!("DataFrame passed to apply_projection must be a TableScan"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use crate::logical_plan::producer::{
+        DefaultSubstraitProducer, to_substrait_named_struct,
+    };
+    use datafusion::arrow::array::Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::ScalarValue;
+    use datafusion::prelude::SessionContext;
+    use substrait::proto::expression::Literal;
+    use substrait::proto::expression::RexType;
+    use substrait::proto::expression::literal::{
+        List, LiteralType, Struct as LiteralStruct,
+    };
+    use substrait::proto::expression::nested::Struct as ExpressionStruct;
+    use substrait::proto::read_rel::VirtualTable;
+
+    fn list_literal() -> Literal {
+        Literal {
+            nullable: false,
+            type_variation_reference: 0,
+            literal_type: Some(LiteralType::List(List {
+                values: vec![Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::I32(1)),
+                }],
+            })),
+        }
+    }
+
+    fn list_schema() -> datafusion::common::Result<DFSchema> {
+        let list_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        DFSchema::try_from(Schema::new(vec![Field::new("list", list_type, false)]))
+    }
+
+    #[test]
+    fn deprecated_literal_rows_use_expected_fields() -> datafusion::common::Result<()> {
+        let schema = list_schema()?;
+        let list_type = schema.field(0).data_type();
+        #[expect(deprecated)]
+        let virtual_table = VirtualTable {
+            values: vec![LiteralStruct {
+                fields: vec![list_literal()],
+            }],
+            ..Default::default()
+        };
+
+        let rows = convert_literal_rows(&test_consumer(), &virtual_table, &schema)?;
+        let Expr::Literal(ScalarValue::List(list), _) = &rows[0][0] else {
+            panic!("expected list literal")
+        };
+        assert_eq!(list.data_type(), list_type);
+
+        #[expect(deprecated)]
+        let mismatched_table = VirtualTable {
+            values: vec![LiteralStruct { fields: vec![] }],
+            ..Default::default()
+        };
+        let err = convert_literal_rows(&test_consumer(), &mismatched_table, &schema)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Field count mismatch"),
+            "got: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn expression_rows_use_expected_fields() -> datafusion::common::Result<()> {
+        let schema = list_schema()?;
+        let state = SessionContext::new().state();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+        let base_schema =
+            to_substrait_named_struct(&mut producer, &DFSchemaRef::new(schema.clone()))?;
+        let expression = Expression {
+            rex_type: Some(RexType::Literal(list_literal())),
+        };
+        let virtual_table = VirtualTable {
+            expressions: vec![ExpressionStruct {
+                fields: vec![expression],
+            }],
+            ..Default::default()
+        };
+        let read = ReadRel {
+            base_schema: Some(base_schema.clone()),
+            read_type: Some(ReadType::VirtualTable(virtual_table)),
+            ..Default::default()
+        };
+
+        let plan = from_read_rel(&test_consumer(), &read).await?;
+        let LogicalPlan::Values(values) = plan else {
+            panic!("expected Values plan")
+        };
+        let Expr::Literal(ScalarValue::List(list), _) = &values.values[0][0] else {
+            panic!("expected list literal")
+        };
+        assert_eq!(list.data_type(), schema.field(0).data_type());
+
+        let mismatched_read = ReadRel {
+            base_schema: Some(base_schema),
+            read_type: Some(ReadType::VirtualTable(VirtualTable {
+                expressions: vec![ExpressionStruct { fields: vec![] }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let err = from_read_rel(&test_consumer(), &mismatched_read)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Field count mismatch"),
+            "got: {err}"
+        );
+
+        Ok(())
     }
 }
