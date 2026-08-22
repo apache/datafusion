@@ -263,14 +263,17 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 }
 
-/// Get the key of a url for object store registration.
-/// The credential info will be removed
+/// Get the key of a URL for object store registration.
+///
+/// Usernames are preserved because they may identify an object store namespace.
+/// Passwords are omitted because they are credentials rather than store identity.
 fn get_url_key(url: &Url) -> String {
-    format!(
-        "{}://{}",
-        url.scheme(),
-        &url[url::Position::BeforeHost..url::Position::AfterPort],
-    )
+    let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
+
+    match url.username() {
+        "" => format!("{}://{host}", url.scheme()),
+        username => format!("{}://{username}@{host}", url.scheme()),
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +332,57 @@ mod tests {
 
         let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
         let key = get_url_key(&url.url);
-        assert_eq!(key.as_str(), "s3://host:123");
+        assert_eq!(key.as_str(), "s3://username@host:123");
+
+        for scheme in ["abfs", "abfss", "custom"] {
+            let url = ObjectStoreUrl::parse(format!(
+                "{scheme}://container@account.dfs.core.windows.net"
+            ))
+            .unwrap();
+            let key = get_url_key(&url.url);
+            assert_eq!(
+                key,
+                format!("{scheme}://container@account.dfs.core.windows.net")
+            );
+
+            let url = ObjectStoreUrl::parse(format!(
+                "{scheme}://container:secret@account.dfs.core.windows.net"
+            ))
+            .unwrap();
+            let key = get_url_key(&url.url);
+            assert_eq!(
+                key,
+                format!("{scheme}://container@account.dfs.core.windows.net")
+            );
+        }
+    }
+
+    #[test]
+    fn test_userinfo_namespaces_are_registered_separately() {
+        use object_store::memory::InMemory;
+
+        for scheme in ["abfs", "abfss", "custom"] {
+            let registry = DefaultObjectStoreRegistry::new();
+            let url_c1 = Url::parse(&format!(
+                "{scheme}://container1@account.dfs.core.windows.net/"
+            ))
+            .unwrap();
+            let url_c2 = Url::parse(&format!(
+                "{scheme}://container2@account.dfs.core.windows.net/"
+            ))
+            .unwrap();
+
+            let store_c1: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let store_c2: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+
+            registry.register_store(&url_c1, Arc::clone(&store_c1));
+            registry.register_store(&url_c2, Arc::clone(&store_c2));
+
+            let actual_c1 = registry.get_store(&url_c1).unwrap();
+            let actual_c2 = registry.get_store(&url_c2).unwrap();
+
+            assert!(Arc::ptr_eq(&actual_c1, &store_c1));
+            assert!(Arc::ptr_eq(&actual_c2, &store_c2));
+        }
     }
 }
