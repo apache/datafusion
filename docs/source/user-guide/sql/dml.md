@@ -136,3 +136,114 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 | 2     |
 +-------+
 ```
+
+## DELETE
+
+Removes rows from a table.
+
+<pre>
+DELETE FROM <i><b>table_name</i></b> [ WHERE <i><b>condition</i></b> ]
+</pre>
+
+`DELETE` returns the number of removed rows in a column named `count`.
+
+If you omit the `WHERE` clause, DataFusion removes all rows.
+
+DataFusion removes a row only if the condition is true for that row. SQL three-valued logic applies: if the condition evaluates to `NULL`, the row remains. For example, `WHERE value > 15` keeps a row with a `NULL` value, because `NULL > 15` is `NULL`.
+
+Not all tables support `DELETE`. See [Table support for DELETE and UPDATE](#table-support-for-delete-and-update).
+
+### Examples
+
+Remove the rows that match a condition:
+
+```sql
+> DELETE FROM target_table WHERE id > 1;
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
+
+Remove all rows:
+
+```sql
+> DELETE FROM target_table;
++-------+
+| count |
++-------+
+| 3     |
++-------+
+```
+
+## UPDATE
+
+Changes the values of existing rows.
+
+<pre>
+UPDATE <i><b>table_name</i></b> SET <i><b>column</i></b> = <i><b>expression</i></b> [, ...] [ WHERE <i><b>condition</i></b> ]
+</pre>
+
+`UPDATE` returns the number of changed rows in a column named `count`.
+
+If you omit the `WHERE` clause, DataFusion changes all rows. The three-valued logic of `DELETE` also applies here.
+
+Each assignment expression reads the row values from before the statement. `SET a = b, b = a` therefore exchanges the two values.
+
+Not all tables support `UPDATE`. See [Table support for DELETE and UPDATE](#table-support-for-delete-and-update).
+
+### Examples
+
+Set one column in the rows that match a condition:
+
+```sql
+> UPDATE target_table SET name = 'Baz' WHERE id = 2;
++-------+
+| count |
++-------+
+| 1     |
++-------+
+```
+
+Set two columns, one from an expression:
+
+```sql
+> UPDATE target_table SET value = value * 2, name = 'Doubled' WHERE id < 3;
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
+
+## Table support for DELETE and UPDATE
+
+The table provider does the work for `DELETE` and `UPDATE`. Support is therefore a property of each table:
+
+- `CREATE TABLE` makes an in-memory table. In-memory tables support both statements.
+- `CREATE EXTERNAL TABLE` makes a file-based table. File-based tables support neither statement.
+- Views support neither statement.
+- A custom table provider supports a statement only if it implements the matching hook. See [Custom Table Provider](../../library-user-guide/custom-table-providers.md#row-level-dml-delete-and-update).
+
+A table that gives no support returns an error:
+
+```text
+DELETE operation on table 'my_external_table'
+caused by
+This feature is not implemented: DELETE not supported for Base table
+```
+
+### Limitations
+
+:::{warning}
+Do not use a subquery in the condition of a `DELETE` or an `UPDATE`. A scalar subquery, such as `WHERE id = (SELECT max(id) FROM other)`, returns an error. An `IN` or an `EXISTS` subquery is worse: the statement applies to **all** rows of the table. The optimizer rewrites the subquery into a join, and the condition then no longer reaches the table provider.
+:::
+
+:::{warning}
+`EXPLAIN` executes a `DELETE` or an `UPDATE` on an in-memory table. The provider changes the rows while DataFusion plans the statement. Use a copy of the table if you want to read the plan only.
+:::
+
+DataFusion ignores a `LIMIT` clause in a `DELETE` statement. The statement removes all rows that match the condition.
+
+`UPDATE ... FROM`, which reads the new values from a second table, returns a "not implemented" error. See [issue #19950](https://github.com/apache/datafusion/issues/19950).
