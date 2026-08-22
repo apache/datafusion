@@ -30,9 +30,8 @@ use datafusion_common::hash_utils::{create_hashes, with_hashes};
 #[cfg(feature = "proto")]
 use datafusion_common::internal_err;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::{
-    DynHash, PhysicalExpr, PhysicalExprRef,
-};
+use datafusion_expr_common::dyn_eq::DynHash;
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use crate::joins::Map;
 
