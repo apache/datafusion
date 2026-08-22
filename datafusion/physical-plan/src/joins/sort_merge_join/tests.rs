@@ -5985,3 +5985,179 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
 
     Ok(())
 }
+
+/// Number of distinct join keys used by the streamed-order regression tests.
+const ORDER_KEYS: i32 = 7;
+
+/// Streamed side of the streamed-order tests: one row per key, ascending.
+fn order_unique_side(names: [&str; 3]) -> RecordBatch {
+    let keys: Vec<i32> = (0..ORDER_KEYS).collect();
+    build_table_i32((names[0], &keys), (names[1], &keys), (names[2], &keys))
+}
+
+/// Buffered side of the streamed-order tests.
+///
+/// Keys 0..5 carry 20 rows each — wide enough that the deferred-filter gate
+/// fires once per key and leaves a partial batch sitting in `output` — while
+/// keys 5 and 6 carry a single row each, so their output only ever leaves
+/// through the final flush. Mixing the two paths is what exposes reordering
+/// between them.
+fn order_skewed_side(names: [&str; 3]) -> RecordBatch {
+    let (mut a, mut b, mut c) = (vec![], vec![], vec![]);
+    for k in 0..ORDER_KEYS {
+        for j in 0..if k < 5 { 20 } else { 1 } {
+            a.push(k * 100 + j);
+            b.push(k);
+            c.push(j);
+        }
+    }
+    build_table_i32((names[0], &a), (names[1], &b), (names[2], &c))
+}
+
+/// Run a deferred-filtered outer join over the skew shape above and return
+/// the streamed key column of the output, concatenated across batches.
+///
+/// The filter is `<filter_column> < filter_lt` over the intermediate schema.
+async fn collect_streamed_keys(
+    join_type: JoinType,
+    filter_column: ColumnIndex,
+    filter_lt: i32,
+) -> Result<Vec<i32>> {
+    // RIGHT streams its *right* input (`maintains_input_order = [false, true]`),
+    // so the duplicate groups always belong on whichever side is buffered.
+    let (left, right) = if join_type == Right {
+        (
+            order_skewed_side(["a1", "b1", "c1"]),
+            order_unique_side(["a2", "b2", "c2"]),
+        )
+    } else {
+        (
+            order_unique_side(["a1", "b1", "c1"]),
+            order_skewed_side(["a2", "b2", "c2"]),
+        )
+    };
+
+    let (left_schema, right_schema) = (left.schema(), right.schema());
+    let left = TestMemoryExec::try_new_exec(&[vec![left]], left_schema, None)?;
+    let right = TestMemoryExec::try_new_exec(&[vec![right]], right_schema, None)?;
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(filter_lt)))),
+        )) as PhysicalExprRef,
+        vec![filter_column],
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)])),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        join_type,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    // A small batch size keeps the gate firing often enough to interleave the
+    // two output paths.
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(8)),
+    );
+    let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+    // Output is always [left cols.., right cols..], so the streamed key is
+    // `a2` at index 3 for RIGHT and `a1` at index 0 otherwise.
+    let key_col = if join_type == Right { 3 } else { 0 };
+    Ok(batches
+        .iter()
+        .flat_map(|b| {
+            b.column(key_col)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect())
+}
+
+/// `a1 < 0`, which never passes — so every streamed row is emitted
+/// null-joined by the deferred-filtering pipeline.
+fn never_passing_filter() -> (ColumnIndex, i32) {
+    (
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        },
+        0,
+    )
+}
+
+/// Regression test: deferred-filtered outer joins must not reorder their
+/// output.
+///
+/// `LEFT JOIN` advertises `maintains_input_order = [true, false]`, so the
+/// output must stay ordered on the streamed side. The final flush used to
+/// emit its batch directly instead of through the `output` coalescer, so any
+/// rows still buffered there from an earlier flush were emitted *after* it.
+#[tokio::test]
+async fn left_join_with_filter_preserves_streamed_order() -> Result<()> {
+    let (filter_column, filter_lt) = never_passing_filter();
+    let streamed_keys = collect_streamed_keys(Left, filter_column, filter_lt).await?;
+
+    assert_eq!(
+        streamed_keys,
+        (0..ORDER_KEYS).collect::<Vec<_>>(),
+        "LEFT JOIN output must stay ordered on the streamed side"
+    );
+    Ok(())
+}
+
+/// Mirror of [`left_join_with_filter_preserves_streamed_order`] for
+/// `RIGHT JOIN`, which advertises `maintains_input_order = [false, true]` and
+/// therefore streams its *right* input.
+#[tokio::test]
+async fn right_join_with_filter_preserves_streamed_order() -> Result<()> {
+    let (filter_column, filter_lt) = never_passing_filter();
+    let streamed_keys = collect_streamed_keys(Right, filter_column, filter_lt).await?;
+
+    assert_eq!(
+        streamed_keys,
+        (0..ORDER_KEYS).collect::<Vec<_>>(),
+        "RIGHT JOIN output must stay ordered on the streamed side"
+    );
+    Ok(())
+}
+
+/// Same shape, but with a filter that passes for *some* rows. The all-fail
+/// cases above only exercise the null-joined path; here matched rows survive
+/// the filter too, so the output mixes filter-passing and null-joined rows.
+#[tokio::test]
+async fn left_join_with_partial_filter_preserves_streamed_order() -> Result<()> {
+    // `c2 < 3`: keys 0..5 keep three of their twenty buffered rows, keys 5
+    // and 6 keep their single row.
+    let filter_column = ColumnIndex {
+        index: 2,
+        side: JoinSide::Right,
+    };
+    let streamed_keys = collect_streamed_keys(Left, filter_column, 3).await?;
+
+    let expected: Vec<i32> = (0..ORDER_KEYS)
+        .flat_map(|k| std::iter::repeat_n(k, if k < 5 { 3 } else { 1 }))
+        .collect();
+    assert_eq!(
+        streamed_keys, expected,
+        "LEFT JOIN output must stay ordered on the streamed side, \
+         with every surviving match present exactly once"
+    );
+    Ok(())
+}
