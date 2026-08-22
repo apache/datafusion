@@ -689,14 +689,11 @@ impl TableProvider for ForeignTableProvider {
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         unsafe {
-            let pushdown_fn = match self.0.supports_filters_pushdown {
-                Some(func) => func,
-                None => {
-                    return Ok(vec![
-                        TableProviderFilterPushDown::Unsupported;
-                        filters.len()
-                    ]);
-                }
+            let Some(pushdown_fn) = self.0.supports_filters_pushdown else {
+                return Ok(vec![
+                    TableProviderFilterPushDown::Unsupported;
+                    filters.len()
+                ]);
             };
 
             let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();

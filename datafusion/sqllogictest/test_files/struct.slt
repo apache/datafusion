@@ -1732,4 +1732,3 @@ drop view leaf_view;
 
 statement ok
 drop table leaf_base;
-

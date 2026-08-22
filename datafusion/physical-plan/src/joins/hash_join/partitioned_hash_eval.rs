@@ -30,9 +30,8 @@ use datafusion_common::hash_utils::{create_hashes, with_hashes};
 #[cfg(feature = "proto")]
 use datafusion_common::internal_err;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::{
-    DynHash, PhysicalExpr, PhysicalExprRef,
-};
+use datafusion_expr_common::dyn_eq::DynHash;
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use crate::joins::Map;
 
@@ -208,14 +207,25 @@ impl PhysicalExpr for HashExpr {
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
-        let on_columns = ctx.encode_children_expressions(&self.on_columns)?;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            on_columns,
+            random_state,
+            description,
+        } = self;
+
+        let on_columns = ctx.encode_children_expressions(on_columns)?;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
                 protobuf::PhysicalHashExprNode {
                     on_columns,
-                    seed0: self.seed(),
-                    description: self.description.clone(),
+                    // only the seed is serialized; `RandomState` is rebuilt
+                    // from it by `SeededRandomState::with_seed` on decode
+                    seed0: random_state.seed(),
+                    description: description.clone(),
                 },
             )),
         }))
@@ -239,15 +249,24 @@ impl HashExpr {
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_proto_models::protobuf;
-        let hash_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::HashExpr(h)) => h,
-            _ => return internal_err!("PhysicalExprNode is not a HashExpr"),
+        let Some(protobuf::physical_expr_node::ExprType::HashExpr(hash_expr)) =
+            &node.expr_type
+        else {
+            return internal_err!("PhysicalExprNode is not a HashExpr");
         };
-        let on_columns = ctx.decode_children_expressions(&hash_expr.on_columns)?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::PhysicalHashExprNode {
+            on_columns,
+            seed0,
+            description,
+        } = hash_expr;
+
+        let on_columns = ctx.decode_children_expressions(on_columns)?;
         Ok(Arc::new(HashExpr::new(
             on_columns,
-            SeededRandomState::with_seed(hash_expr.seed0),
-            hash_expr.description.clone(),
+            SeededRandomState::with_seed(*seed0),
+            description.clone(),
         )))
     }
 }
@@ -393,6 +412,18 @@ impl PhysicalExpr for HashTableLookupExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here, forcing a decision about whether the lit(true)
+        // replacement below is still the right thing to emit.
+        let Self {
+            // deliberately not serialized: the whole expression is replaced
+            // with lit(true), see the comment below
+            on_columns: _,
+            random_state: _,
+            map: _,
+            description: _,
+        } = self;
 
         // HashTableLookupExpr holds a runtime Arc<Map> (the build-side hash
         // table) that cannot be serialized, so it is replaced with lit(true).

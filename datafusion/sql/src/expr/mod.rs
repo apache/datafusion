@@ -393,11 +393,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 value,
                 uses_odbc_syntax: _,
             }) => {
-                let value = match value.into_string() {
-                    Some(value) => value,
-                    None => {
-                        return plan_err!("Typed literal requires a string payload");
-                    }
+                let Some(value) = value.into_string() else {
+                    return plan_err!("Typed literal requires a string payload");
                 };
 
                 Ok(Expr::Cast(Cast::new_from_field(

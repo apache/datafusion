@@ -1246,13 +1246,13 @@ mod tests {
         let other_custom_val = new_custom_counter("Hello", 1);
 
         // Not equal since the name differs.
-        assert!(other_custom_val != custom_val);
+        assert_ne!(other_custom_val, custom_val);
 
         // Should work even though the name differs
         custom_val.aggregate(&other_custom_val);
 
         let expected_val = new_custom_counter("Hi", 2);
-        assert!(expected_val == custom_val);
+        assert_eq!(expected_val, custom_val);
     }
 
     #[test]
@@ -1262,7 +1262,7 @@ mod tests {
 
         custom_val.aggregate(&other_custom_val);
 
-        assert!(custom_val != other_custom_val);
+        assert_ne!(custom_val, other_custom_val);
 
         if let MetricValue::Custom { value, .. } = custom_val {
             let counter = value

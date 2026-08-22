@@ -1822,4 +1822,38 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn infer_schema_rejects_duplicate_field_names() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![10, 20, 30])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![100, 200, 300])) as ArrayRef,
+            ],
+        )?;
+
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (meta, _files) = store_parquet(vec![batch], false).await?;
+
+        let ctx = SessionContext::new().state();
+        let error = ParquetFormat::default()
+            .infer_schema(&ctx, &store, &meta)
+            .await
+            .expect_err("duplicate field names must not infer a schema")
+            .to_string();
+
+        assert!(
+            error.contains("duplicate unqualified field name") && error.contains("value"),
+            "unexpected error: {error}"
+        );
+
+        Ok(())
+    }
 }

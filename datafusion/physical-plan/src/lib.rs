@@ -93,6 +93,9 @@ pub mod placeholder_row;
 pub mod projection;
 #[cfg(feature = "proto")]
 pub mod proto;
+/// Shared test helpers for the colocated `try_to_proto` / `try_from_proto` unit tests
+#[cfg(all(test, feature = "proto"))]
+pub(crate) mod proto_test_util;
 pub mod recursive_query;
 pub mod repartition;
 pub mod scalar_subquery;

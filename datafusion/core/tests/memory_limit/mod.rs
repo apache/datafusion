@@ -24,6 +24,7 @@ use std::sync::{Arc, LazyLock};
 mod memory_limit_validation;
 mod repartition_mem_limit;
 mod union_nullable_spill;
+mod view_spill_compaction;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
