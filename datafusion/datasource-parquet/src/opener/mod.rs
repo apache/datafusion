@@ -1856,7 +1856,7 @@ mod test {
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
-    use arrow::array::{RecordBatch, record_batch};
+    use arrow::array::{Array, RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -2688,7 +2688,25 @@ mod test {
             .with_projection(projection)
             .build();
 
-        open_files_and_assert_row_count(&morselizer, files.files, 3).await;
+        for (file, expected_file_name) in files
+            .files
+            .into_iter()
+            .zip(["file1.parquet", "file2.parquet"])
+        {
+            let mut stream = open_file(&morselizer, file).await.unwrap();
+            let batch = stream.next().await.unwrap().unwrap();
+            assert!(stream.next().await.is_none());
+
+            let file_names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .expect("file column should be Utf8");
+            assert_eq!(file_names.len(), 3);
+            for row in 0..file_names.len() {
+                assert_eq!(file_names.value(row), expected_file_name);
+            }
+        }
 
         assert_eq!(
             morselizer.pruning_setup_cache.len(),
