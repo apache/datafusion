@@ -23,7 +23,7 @@
 //! produces joined `RecordBatch`es.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
@@ -89,16 +89,16 @@ pub(super) struct StreamedBatch {
 }
 
 impl StreamedBatch {
-    fn new(batch: RecordBatch, on_column: &[Arc<dyn PhysicalExpr>]) -> Self {
-        let join_arrays = join_arrays(&batch, on_column);
-        StreamedBatch {
+    fn try_new(batch: RecordBatch, on_column: &[Arc<dyn PhysicalExpr>]) -> Result<Self> {
+        let join_arrays = join_arrays(&batch, on_column)?;
+        Ok(StreamedBatch {
             batch,
             idx: 0,
             join_arrays,
             output_indices: vec![],
             num_output_rows: 0,
             buffered_batch_idx: None,
-        }
+        })
     }
 
     fn new_empty(schema: SchemaRef) -> Self {
@@ -213,12 +213,12 @@ pub(super) struct BufferedBatch {
 }
 
 impl BufferedBatch {
-    fn new(
+    fn try_new(
         batch: RecordBatch,
         range: Range<usize>,
         on_column: &[PhysicalExprRef],
-    ) -> Self {
-        let join_arrays = join_arrays(&batch, on_column);
+    ) -> Result<Self> {
+        let join_arrays = join_arrays(&batch, on_column)?;
 
         // Estimation is calculated as
         //   inner batch size
@@ -238,7 +238,7 @@ impl BufferedBatch {
             + size_of::<usize>();
 
         let num_rows = batch.num_rows();
-        BufferedBatch {
+        Ok(BufferedBatch {
             batch: BufferedBatchState::InMemory(batch),
             range,
             join_arrays,
@@ -248,7 +248,7 @@ impl BufferedBatch {
             reserved_amount: 0,
             join_filter_status: vec![FilterState::Unvisited; num_rows],
             num_rows,
-        }
+        })
     }
 }
 
@@ -414,8 +414,7 @@ impl JoinedRecordBatches {
 
     /// Clears batches without touching metadata (for early return when no filtering needed)
     fn clear_batches(&mut self, schema: &SchemaRef, batch_size: usize) {
-        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size)
-            .with_biggest_coalesce_batch_size(Option::from(batch_size / 2));
+        self.joined_batches = new_output_coalescer(Arc::clone(schema), batch_size);
     }
 
     /// Asserts that if batches is empty, metadata is also empty
@@ -517,8 +516,7 @@ impl JoinedRecordBatches {
     }
 
     fn clear(&mut self, schema: &SchemaRef, batch_size: usize) {
-        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size)
-            .with_biggest_coalesce_batch_size(Option::from(batch_size / 2));
+        self.joined_batches = new_output_coalescer(Arc::clone(schema), batch_size);
         self.filter_metadata = FilterMetadata::new();
         self.debug_assert_empty_consistency();
     }
@@ -571,12 +569,10 @@ impl MaterializingSortMergeJoinStream {
             deferred_filtering: needs_deferred_filtering(&filter, join_type),
             filter,
             joined_record_batches: JoinedRecordBatches {
-                joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size)
-                    .with_biggest_coalesce_batch_size(Option::from(batch_size / 2)),
+                joined_batches: new_output_coalescer(Arc::clone(&schema), batch_size),
                 filter_metadata: FilterMetadata::new(),
             },
-            output: BatchCoalescer::new(schema, batch_size)
-                .with_biggest_coalesce_batch_size(Option::from(batch_size / 2)),
+            output: new_output_coalescer(schema, batch_size),
             batch_size,
             join_type,
             join_metrics,
@@ -800,14 +796,28 @@ impl MaterializingSortMergeJoinStream {
         // Ensure required spilled batches are restored to memory before
         // processing, as this path invokes freeze_all().
         self.restore_spilled_batches_for_freeze().await?;
-        if let Some(batch) = self.process_filtered_batches()? {
+        self.stage_filtered_output()?;
+        self.emit_completed_output(emitter).await;
+        Ok(())
+    }
+
+    /// Emit every completed batch of the deferred-filtering output buffer.
+    ///
+    /// All deferred-filtered output must leave through this single buffer:
+    /// emitting a batch around it would reorder it ahead of rows still
+    /// buffered here, breaking the streamed-side ordering the operator
+    /// advertises via `maintains_input_order`.
+    async fn emit_completed_output(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) {
+        while let Some(record_batch) = self.output.next_completed_batch() {
             // While the emitted batch is in the consumer's hands the join
             // isn't doing any work.
             self.stop_join_time();
-            emitter.emit(batch).await;
+            emitter.emit(record_batch).await;
             self.start_join_time();
         }
-        Ok(())
     }
 
     /// Restore every spilled buffered batch that the next freeze needs.
@@ -849,12 +859,15 @@ impl MaterializingSortMergeJoinStream {
             .debug_assert_metadata_aligned();
 
         if self.deferred_filtering {
-            // Filtered joins must concat and filter ALL remaining data at once
+            // Filtered joins must concat and filter ALL remaining data at
+            // once. The result is staged in `output` rather than emitted
+            // directly: `output` may still hold rows from earlier flushes,
+            // and those precede these on the streamed side.
             if !self.joined_record_batches.joined_batches.is_empty() {
                 let record_batch = self.filter_joined_batch()?;
-                self.stop_join_time();
-                emitter.emit(record_batch).await;
-                self.start_join_time();
+                self.output
+                    .push_batch(record_batch)
+                    .expect("Failed to push output batch");
             }
         } else if !self.joined_record_batches.joined_batches.is_empty() {
             // For non-filtered joins, finish buffered data first, then emit
@@ -868,11 +881,7 @@ impl MaterializingSortMergeJoinStream {
         // Drain the double-buffering coalescer used by filtered joins.
         if !self.output.is_empty() {
             self.output.finish_buffered_batch()?;
-            while let Some(record_batch) = self.output.next_completed_batch() {
-                self.stop_join_time();
-                emitter.emit(record_batch).await;
-                self.start_join_time();
-            }
+            self.emit_completed_output(emitter).await;
         }
 
         Ok(())
@@ -916,11 +925,12 @@ impl MaterializingSortMergeJoinStream {
         self.streamed_batch.num_output_rows()
     }
 
-    /// Process accumulated batches for filtered joins
+    /// Process accumulated batches for filtered joins.
     ///
-    /// Freezes unfrozen pairs, applies deferred filtering, and returns a
-    /// completed output batch if one is ready.
-    fn process_filtered_batches(&mut self) -> Result<Option<RecordBatch>> {
+    /// Freezes unfrozen pairs, applies deferred filtering and stages the
+    /// result in [`Self::output`]. Completed batches are emitted separately
+    /// by [`Self::emit_completed_output`].
+    fn stage_filtered_output(&mut self) -> Result<()> {
         self.freeze_all()?;
 
         self.joined_record_batches
@@ -932,17 +942,9 @@ impl MaterializingSortMergeJoinStream {
             self.output
                 .push_batch(out_filtered_batch)
                 .expect("Failed to push output batch");
-
-            if self.output.has_completed_batch() {
-                let record_batch = self
-                    .output
-                    .next_completed_batch()
-                    .expect("Failed to get output batch");
-                return Ok(Some(record_batch));
-            }
         }
 
-        Ok(None)
+        Ok(())
     }
 
     /// Identifies which buffered batches are needed for the upcoming freeze operation
@@ -1054,7 +1056,7 @@ impl MaterializingSortMergeJoinStream {
                         self.join_metrics.input_batches().add(1);
                         self.join_metrics.input_rows().add(batch.num_rows());
                         self.streamed_batch =
-                            StreamedBatch::new(batch, &self.on_streamed);
+                            StreamedBatch::try_new(batch, &self.on_streamed)?;
                         self.rebuild_streamed_buffered_cmp()?;
                         // Every incoming streamed batch gets a unique id.
                         self.streamed_batch_counter += 1;
@@ -1242,7 +1244,7 @@ impl MaterializingSortMergeJoinStream {
 
                     if batch.num_rows() > 0 {
                         let buffered_batch =
-                            BufferedBatch::new(batch, 0..1, &self.on_buffered);
+                            BufferedBatch::try_new(batch, 0..1, &self.on_buffered)?;
                         self.allocate_reservation(buffered_batch)?;
                         self.streamed_buffered_cmp = None;
                         return Ok(true);
@@ -1297,7 +1299,7 @@ impl MaterializingSortMergeJoinStream {
                         self.join_metrics.input_rows().add(batch.num_rows());
                         if batch.num_rows() > 0 {
                             let buffered_batch =
-                                BufferedBatch::new(batch, 0..0, &self.on_buffered);
+                                BufferedBatch::try_new(batch, 0..0, &self.on_buffered)?;
                             self.allocate_reservation(buffered_batch)?;
                             self.buffered_equality_cmp = None;
                         }
@@ -1665,20 +1667,19 @@ impl MaterializingSortMergeJoinStream {
 
         // Multiple source batches: map each buffered_batch_idx to a
         // contiguous source index, reserving source 0 for a null sentinel.
-        let mut batch_idx_to_source: HashMap<usize, usize> = HashMap::new();
+        // A group spans only a handful of buffered batches, so a linear
+        // scan beats hashing here.
         let mut source_batches: Vec<usize> = Vec::new();
-        for (batch_idx, _, _) in matched_chunks {
-            batch_idx_to_source.entry(*batch_idx).or_insert_with(|| {
-                let idx = source_batches.len() + 1;
-                source_batches.push(*batch_idx);
-                idx
-            });
-        }
-
         let mut interleave_indices: Vec<(usize, usize)> =
             Vec::with_capacity(total_matched_rows);
         for (batch_idx, _, right) in matched_chunks {
-            let source = batch_idx_to_source[batch_idx];
+            let source = match source_batches.iter().position(|b| b == batch_idx) {
+                Some(pos) => pos + 1,
+                None => {
+                    source_batches.push(*batch_idx);
+                    source_batches.len()
+                }
+            };
             for i in 0..right.len() {
                 if right.is_null(i) {
                     interleave_indices.push((0, 0));
@@ -1987,14 +1988,23 @@ impl BufferedData {
     }
 }
 
-/// Get join array refs of given batch and join columns
-fn join_arrays(batch: &RecordBatch, on_column: &[PhysicalExprRef]) -> Vec<ArrayRef> {
+/// Build the `BatchCoalescer` used for staging join output.
+///
+/// `biggest_coalesce_batch_size` lets batches larger than half the target
+/// pass through without being copied into the coalescer's buffer.
+fn new_output_coalescer(schema: SchemaRef, batch_size: usize) -> BatchCoalescer {
+    BatchCoalescer::new(schema, batch_size)
+        .with_biggest_coalesce_batch_size(Some(batch_size / 2))
+}
+
+/// Evaluate the join key expressions against `batch`.
+fn join_arrays(
+    batch: &RecordBatch,
+    on_column: &[PhysicalExprRef],
+) -> Result<Vec<ArrayRef>> {
+    let num_rows = batch.num_rows();
     on_column
         .iter()
-        .map(|c| {
-            let num_rows = batch.num_rows();
-            let c = c.evaluate(batch).unwrap();
-            c.into_array(num_rows).unwrap()
-        })
+        .map(|c| c.evaluate(batch)?.into_array(num_rows))
         .collect()
 }

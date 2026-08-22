@@ -5985,3 +5985,97 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
 
     Ok(())
 }
+
+/// Regression test: deferred-filtered outer joins must not reorder their
+/// output.
+///
+/// `LEFT JOIN` advertises `maintains_input_order = [true, false]`, so the
+/// output must stay ordered on the streamed side. The final flush used to
+/// emit its batch directly instead of through the `output` coalescer, so any
+/// rows still buffered there from an earlier flush were emitted *after* it.
+///
+/// The shape below reproduces that: the first five keys each match a large
+/// buffered group, so the deferred-filter gate fires once per key and pushes
+/// a single-row batch into `output` (too small to complete a batch), while
+/// the last two keys match a single row each and so never trip the gate —
+/// leaving their rows for the final flush.
+#[tokio::test]
+async fn left_join_with_filter_preserves_streamed_order() -> Result<()> {
+    let num_keys = 7i32;
+
+    let keys: Vec<i32> = (0..num_keys).collect();
+    let left = build_table_i32(("a1", &keys), ("b1", &keys), ("c1", &keys));
+
+    let mut r_a = vec![];
+    let mut r_b = vec![];
+    let mut r_c = vec![];
+    for k in 0..num_keys {
+        let dup = if k < 5 { 20 } else { 1 };
+        for j in 0..dup {
+            r_a.push(k * 100 + j);
+            r_b.push(k);
+            r_c.push(j);
+        }
+    }
+    let right = build_table_i32(("a2", &r_a), ("b2", &r_b), ("c2", &r_c));
+
+    let left_schema = left.schema();
+    let right_schema = right.schema();
+    let left = TestMemoryExec::try_new_exec(&[vec![left]], left_schema, None)?;
+    let right = TestMemoryExec::try_new_exec(&[vec![right]], right_schema, None)?;
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+
+    // A filter that never passes, so every streamed row is emitted
+    // null-joined by the deferred-filtering pipeline.
+    let intermediate_schema = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        )) as PhysicalExprRef,
+        vec![ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        }],
+        Arc::new(intermediate_schema),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        Left,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(8)),
+    );
+    let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+    let streamed_keys: Vec<i32> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect();
+
+    assert_eq!(
+        streamed_keys, keys,
+        "LEFT JOIN output must stay ordered on the streamed side"
+    );
+    Ok(())
+}
