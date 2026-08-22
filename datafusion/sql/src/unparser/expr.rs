@@ -443,10 +443,7 @@ impl Unparser<'_> {
             }
             Expr::ScalarSubquery(subq) => {
                 let sub_statement = self.plan_to_sql(subq.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -457,10 +454,7 @@ impl Unparser<'_> {
                 let inexpr = Box::new(self.expr_to_sql_inner(insubq.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -475,10 +469,7 @@ impl Unparser<'_> {
                 let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -500,10 +491,7 @@ impl Unparser<'_> {
             }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -1219,14 +1207,11 @@ impl Unparser<'_> {
     where
         i64: From<T::Native>,
     {
-        let time_unit = match T::DATA_TYPE {
-            DataType::Timestamp(unit, _) => unit,
-            _ => {
-                return Err(internal_datafusion_err!(
-                    "Expected Timestamp, got {:?}",
-                    T::DATA_TYPE
-                ));
-            }
+        let DataType::Timestamp(time_unit, _) = T::DATA_TYPE else {
+            return Err(internal_datafusion_err!(
+                "Expected Timestamp, got {:?}",
+                T::DATA_TYPE
+            ));
         };
 
         let ts = if let Some(tz) = tz {

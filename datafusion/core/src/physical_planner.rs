@@ -620,14 +620,11 @@ impl DefaultPhysicalPlanner {
                             .await?;
                     }
 
-                    let plan = match maybe_plan {
-                        Some(plan) => plan,
-                        None => {
-                            return plan_err!(
-                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
-                                scan.table_name
-                            );
-                        }
+                    let Some(plan) = maybe_plan else {
+                        return plan_err!(
+                            "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                            scan.table_name
+                        );
                     };
 
                     self.ensure_schema_matches(projected_schema, &plan, || {
@@ -1221,7 +1218,8 @@ impl DefaultPhysicalPlanner {
                     .config()
                     .options()
                     .optimizer
-                    .default_filter_selectivity;
+                    .default_filter_selectivity
+                    .get();
                 let filter_exec: Arc<dyn ExecutionPlan> =
                     Arc::new(filter.with_default_selectivity(selectivity)?);
                 filter_exec
@@ -2056,7 +2054,9 @@ fn create_cube_physical_expr(
     for null_count in 1..=num_of_exprs {
         for null_idx in (0..num_of_exprs).combinations(null_count) {
             let mut next_group: Vec<bool> = vec![false; num_of_exprs];
-            null_idx.into_iter().for_each(|i| next_group[i] = true);
+            for i in null_idx {
+                next_group[i] = true;
+            }
             groups.push(next_group);
         }
     }

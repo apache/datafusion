@@ -878,13 +878,13 @@ impl PhysicalExpr for BinaryExpr {
                 strictly_order_preserving: false,
             }),
             Operator::And => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.and(&r_order),
                 range: l_range.and(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,
             }),
             Operator::Or => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.or(&r_order),
                 range: l_range.or(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,

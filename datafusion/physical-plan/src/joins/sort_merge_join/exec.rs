@@ -704,10 +704,31 @@ impl ExecutionPlan for SortMergeJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
-        let on = self
-            .on()
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            sort_options,
+            null_equality,
+            // derived from the children's schemas by `try_new` on decode
+            schema: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            left_sort_exprs: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            right_sort_exprs: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+        let on = on
             .iter()
             .map(|(left, right)| {
                 Ok(protobuf::JoinOn {
@@ -717,16 +738,13 @@ impl ExecutionPlan for SortMergeJoinExec {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_type = crate::joins::proto::join_type_to_proto(self.join_type());
-        let null_equality =
-            crate::joins::proto::null_equality_to_proto(self.null_equality());
-        let filter = self
-            .filter()
+        let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+        let null_equality = crate::joins::proto::null_equality_to_proto(*null_equality);
+        let filter = filter
             .as_ref()
             .map(|filter| crate::joins::proto::join_filter_to_proto(filter, ctx))
             .transpose()?;
-        let sort_options = self
-            .sort_options()
+        let sort_options = sort_options
             .iter()
             .map(|options| protobuf::SortExprNode {
                 expr: None,
@@ -771,20 +789,25 @@ impl SortMergeJoinExec {
             protobuf::physical_plan_node::PhysicalPlanType::SortMergeJoin,
             "SortMergeJoinExec",
         );
-        let left = ctx.decode_required_child(
-            sort_join.left.as_deref(),
-            "SortMergeJoinExec",
-            "left",
-        )?;
-        let right = ctx.decode_required_child(
-            sort_join.right.as_deref(),
-            "SortMergeJoinExec",
-            "right",
-        )?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::SortMergeJoinExecNode {
+            left,
+            right,
+            on,
+            join_type,
+            filter,
+            sort_options,
+            null_equality,
+        } = &**sort_join;
+
+        let left =
+            ctx.decode_required_child(left.as_deref(), "SortMergeJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "SortMergeJoinExec", "right")?;
         let left_schema = left.schema();
         let right_schema = right.schema();
-        let on = sort_join
-            .on
+        let on = on
             .iter()
             .map(|columns| {
                 let left = ctx.decode_required_expr(
@@ -803,16 +826,13 @@ impl SortMergeJoinExec {
             })
             .collect::<Result<JoinOn>>()?;
 
-        let join_type = crate::joins::proto::join_type_from_proto(
-            sort_join.join_type,
-            "SortMergeJoinExec",
-        )?;
+        let join_type =
+            crate::joins::proto::join_type_from_proto(*join_type, "SortMergeJoinExec")?;
         let null_equality = crate::joins::proto::null_equality_from_proto(
-            sort_join.null_equality,
+            *null_equality,
             "SortMergeJoinExec",
         )?;
-        let filter = sort_join
-            .filter
+        let filter = filter
             .as_ref()
             .map(|filter| {
                 crate::joins::proto::join_filter_from_proto(
@@ -822,8 +842,7 @@ impl SortMergeJoinExec {
                 )
             })
             .transpose()?;
-        let sort_options = sort_join
-            .sort_options
+        let sort_options = sort_options
             .iter()
             .map(|options| SortOptions {
                 descending: !options.asc,
