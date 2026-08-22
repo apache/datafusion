@@ -36,6 +36,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
@@ -225,13 +226,17 @@ impl ExecutionPlan for CoalesceBatchesExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let reservation =
+            MemoryConsumer::new(format!("CoalesceBatchesOutput[{partition}]"))
+                .register(context.memory_pool());
         Ok(Box::pin(CoalesceBatchesStream {
             input: self.input.execute(partition, context)?,
-            coalescer: LimitedBatchCoalescer::new(
+            coalescer: LimitedBatchCoalescer::new_with_reservation(
                 self.input.schema(),
                 self.target_batch_size,
                 self.fetch,
-            ),
+                reservation,
+            )?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             completed: false,
         }))
