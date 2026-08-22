@@ -922,7 +922,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently experimental. Physical planner will opt for PiecewiseMergeJoin when there is only one range filter.</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.optimizer.hash_join_single_partition_threshold</p></td>
-<td><p>1048576</p></td>
+<td><p>4194304</p></td>
 <td><p>The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.optimizer.hash_join_single_partition_threshold_rows</p></td>
