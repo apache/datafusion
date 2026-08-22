@@ -341,6 +341,50 @@ select array_agg(c1 order by c2 desc, c3) from agg_order;
 ----
 [5, 6, 7, 8, 9, 1, 2, 3, 4, 10]
 
+# test multi-column ordered array_agg with NULL ordering values
+statement ok
+CREATE TABLE array_agg_order_null_table (
+  g VARCHAR,
+  v VARCHAR,
+  v_nullable VARCHAR,
+  k1 INT,
+  k2 INT
+) AS VALUES
+  ('x', 'a', 'a', 2, NULL),
+  ('x', 'b', NULL, 2, 1),
+  ('x', 'c', 'c', NULL, 2),
+  ('y', 'd', 'd', 1, 2),
+  ('y', 'e', NULL, 1, NULL),
+  ('y', 'f', 'f', NULL, NULL);
+
+query ?
+SELECT array_agg(v ORDER BY k1 DESC NULLS LAST, k2 ASC NULLS FIRST)
+FROM array_agg_order_null_table;
+----
+[a, b, e, d, f, c]
+
+query T?
+SELECT
+  g,
+  array_agg(v ORDER BY k1 DESC NULLS LAST, k2 ASC NULLS FIRST)
+FROM array_agg_order_null_table
+GROUP BY g
+ORDER BY g;
+----
+x [a, b, c]
+y [e, d, f]
+
+query ?
+SELECT array_agg(
+  v_nullable ORDER BY k1 DESC NULLS LAST, k2 ASC NULLS FIRST
+) IGNORE NULLS
+FROM array_agg_order_null_table;
+----
+[a, d, f, c]
+
+statement ok
+DROP TABLE array_agg_order_null_table;
+
 query TT
 explain select array_agg(c1 order by c2 desc, c3) from agg_order;
 ----
