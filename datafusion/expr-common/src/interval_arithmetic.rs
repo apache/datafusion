@@ -1243,6 +1243,20 @@ fn prev_value(value: ScalarValue) -> ScalarValue {
     value_transition!(MIN, false, value)
 }
 
+/// Returns the previous distinct value of `value`, or `None` if `value` is
+/// null, already at the type minimum, or a type that has no predecessor.
+pub fn checked_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
+    if value.is_null() {
+        return None;
+    }
+    let predecessor = prev_value(value.clone());
+    if predecessor.is_null() || predecessor == *value {
+        None
+    } else {
+        Some(predecessor)
+    }
+}
+
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
     fn one() -> Self;
 }
@@ -2261,7 +2275,8 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, handle_overflow, next_value, prev_value, satisfy_greater,
+            Interval, checked_predecessor, handle_overflow, next_value, prev_value,
+            satisfy_greater,
         },
         operator::Operator,
     };
@@ -2356,6 +2371,29 @@ mod tests {
         });
 
         Ok(())
+    }
+
+    #[test]
+    fn test_checked_predecessor() {
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(10))),
+            Some(ScalarValue::Int64(Some(9)))
+        );
+        assert_eq!(checked_predecessor(&ScalarValue::Int64(None)), None);
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(i64::MIN))),
+            None
+        );
+        assert_eq!(
+            checked_predecessor(&ScalarValue::TimestampNanosecond(Some(i64::MIN), None)),
+            None
+        );
+        // Types without a discrete predecessor return the same value from
+        // `prev_value`, which `checked_predecessor` treats as absent.
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Utf8(Some("a".into()))),
+            None
+        );
     }
 
     #[test]
