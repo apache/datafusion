@@ -27,7 +27,8 @@ use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
-    DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
+    DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
+    RowGroupPruner,
 };
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
@@ -1435,7 +1436,11 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, rg_plan, has_row_selection) = {
+        let InitialDecoderState {
+            decoder,
+            rg_plan,
+            has_row_selection,
+        } = {
             let pushdown_predicate = prepared
                 .pushdown_filters
                 .then_some(prepared.predicate.as_ref())
@@ -1494,7 +1499,11 @@ impl RowGroupsPrunedParquetOpen {
                 }
             }
 
-            (builder.build()?, rg_plan, has_row_selection)
+            InitialDecoderState {
+                decoder: builder.build()?,
+                rg_plan,
+                has_row_selection,
+            }
         };
 
         let predicate_cache_inner_records =
