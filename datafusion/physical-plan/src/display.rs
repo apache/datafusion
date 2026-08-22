@@ -793,9 +793,8 @@ impl PgJsonExecutionPlanVisitor<'_> {
             MetricValue::SpillCount(c)
             | MetricValue::OutputBatches(c)
             | MetricValue::SpilledRows(c) => serde_json::Value::from(c.value()),
-            MetricValue::SpilledBytes(c) | MetricValue::OutputBytes(c) => {
-                serde_json::Value::from(c.value())
-            }
+            MetricValue::SpilledBytes(c) => serde_json::Value::from(c.value()),
+            MetricValue::OutputBytes(c) => serde_json::Value::from(c.value()),
             MetricValue::CurrentMemoryUsage(g) => serde_json::Value::from(g.value()),
             MetricValue::ElapsedCompute(t) => {
                 // Emit as float milliseconds to align with PG's

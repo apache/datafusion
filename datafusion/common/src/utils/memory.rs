@@ -186,6 +186,11 @@ impl RecordBatchMemoryCounter {
         self.memory_usage - previous_memory_usage
     }
 
+    /// Increase the memory usage by n
+    pub fn add(&mut self, n: usize) {
+        self.memory_usage += n;
+    }
+
     /// Total memory of the unique buffers of all batches counted so far.
     pub fn memory_usage(&self) -> usize {
         self.memory_usage
