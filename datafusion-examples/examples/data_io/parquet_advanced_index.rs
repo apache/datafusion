@@ -406,7 +406,8 @@ impl IndexedFile {
         let file_size = path.metadata()?.len();
 
         let file = File::open(path).map_err(|e| {
-            DataFusionError::from(e).context(format!("Error opening file {path:?}"))
+            DataFusionError::from(e)
+                .context(format!("Error opening file {}", path.display()))
         })?;
 
         let options = ArrowReaderOptions::new()
@@ -583,7 +584,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         let metadata = self
             .metadata
             .get(&filename)
-            .expect("metadata for file not found: {filename}");
+            .unwrap_or_else(|| panic!("metadata for file not found: {filename}"));
         Ok(Box::new(ParquetReaderWithCache {
             filename,
             metadata: Arc::clone(metadata),

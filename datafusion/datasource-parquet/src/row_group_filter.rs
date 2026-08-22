@@ -46,6 +46,22 @@ pub struct RowGroupAccessPlanFilter {
     access_plan: ParquetAccessPlan,
 }
 
+/// Returns true if this row group belongs to `range`.
+///
+/// A row group belongs to the range containing its first dictionary/data page,
+/// so the ranges a file is split into for parallelism partition its row groups
+/// with none shared and none left over.
+///
+/// Note: don't use the location of metadata
+/// <https://github.com/apache/datafusion/issues/5995>
+pub(crate) fn row_group_in_range(metadata: &RowGroupMetaData, range: &FileRange) -> bool {
+    let col = metadata.column(0);
+    let offset = col
+        .dictionary_page_offset()
+        .unwrap_or_else(|| col.data_page_offset());
+    range.contains(offset)
+}
+
 impl RowGroupAccessPlanFilter {
     /// Create a new `RowGroupPlanBuilder` for pruning out the groups to scan
     /// based on metadata and statistics
@@ -233,16 +249,7 @@ impl RowGroupAccessPlanFilter {
                 continue;
             }
 
-            // Skip the row group if the first dictionary/data page are not
-            // within the range.
-            //
-            // note don't use the location of metadata
-            // <https://github.com/apache/datafusion/issues/5995>
-            let col = metadata.column(0);
-            let offset = col
-                .dictionary_page_offset()
-                .unwrap_or_else(|| col.data_page_offset());
-            if !range.contains(offset) {
+            if !row_group_in_range(metadata, range) {
                 self.access_plan.skip(idx);
             }
         }

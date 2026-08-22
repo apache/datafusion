@@ -330,8 +330,8 @@ impl<'a> ArrayWrapper<'a> {
 /// Primitive and string element types take a per-type fast path; nested (and any
 /// other) element types fall back to the per-row `eq` kernel, which allocates a
 /// `BooleanArray` per row.
-fn array_has_dispatch_for_array<'a>(
-    haystack: ArrayWrapper<'a>,
+fn array_has_dispatch_for_array(
+    haystack: ArrayWrapper<'_>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());

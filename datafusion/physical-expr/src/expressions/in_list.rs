@@ -43,7 +43,7 @@ mod result;
 mod static_filter;
 mod strategy;
 
-use static_filter::StaticFilter;
+use static_filter::StaticFilterRef;
 use strategy::instantiate_static_filter;
 
 /// InList
@@ -51,7 +51,7 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
-    static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+    static_filter: Option<StaticFilterRef>,
 }
 
 impl Debug for InListExpr {
@@ -148,7 +148,7 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
-        static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+        static_filter: Option<StaticFilterRef>,
     ) -> Self {
         Self {
             expr,
@@ -222,8 +222,8 @@ impl InListExpr {
     /// Create a new InList expression, using a static filter when possible.
     ///
     /// This validates data types and attempts to create a static filter for constant
-    /// list expressions. Uses specialized StaticFilter implementations for better
-    /// performance (e.g., Int32StaticFilter for Int32).
+    /// list expressions. Uses specialized branchless, bitmap, or hash-set filters
+    /// when the list's physical representation supports them.
     ///
     /// Returns an error if data types don't match. If the list contains non-constant
     /// expressions, falls back to dynamic evaluation at runtime.
@@ -2592,7 +2592,7 @@ mod tests {
         // Create IN list with Int32 literals: (100, 200, 300)
         let list = vec![lit(100i32), lit(200i32), lit(300i32)];
 
-        // Create InListExpr via in_list() - this uses Int32StaticFilter for Int32 lists
+        // Create InListExpr via in_list(), which selects a primitive static filter.
         let expr = in_list(col_a, list, &false, &schema)?;
 
         // Create dictionary-encoded batch with values [100, 200, 500]
