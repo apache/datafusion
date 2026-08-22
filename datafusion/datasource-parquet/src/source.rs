@@ -1119,15 +1119,12 @@ impl ParquetSource {
         use datafusion_execution::object_store::ObjectStoreUrl;
         use datafusion_proto_models::protobuf;
 
-        let scan = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) => {
-                scan
-            }
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not a ParquetScan"
-                );
-            }
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not a ParquetScan"
+            );
         };
 
         let base_conf = scan.base_conf.as_ref().ok_or_else(|| {

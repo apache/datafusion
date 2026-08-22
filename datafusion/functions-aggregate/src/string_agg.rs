@@ -74,7 +74,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 +--------------------------+
 | names_list               |
 +--------------------------+
-| Charlie, Bob, Alice |
+| Charlie, Bob, Alice      |
 +--------------------------+
 ```"#,
     argument(
@@ -748,7 +748,7 @@ mod tests {
     fn some_str_sorted(value: ScalarValue, sep: &str) -> String {
         let value = some_str(value);
         let mut parts: Vec<&str> = value.split(sep).collect();
-        parts.sort();
+        parts.sort_unstable();
         parts.join(sep)
     }
 

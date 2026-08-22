@@ -56,6 +56,91 @@ impl AggregateArgumentMetrics {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum AccumulatorPhase {
+    Update,
+    Merge,
+    State,
+    ConvertToState,
+    Evaluate,
+}
+
+#[derive(Clone)]
+pub(crate) struct AggregateAccumulatorMetrics {
+    update_times: Option<Vec<Time>>,
+    merge_times: Option<Vec<Time>>,
+    state_times: Option<Vec<Time>>,
+    convert_to_state_times: Option<Vec<Time>>,
+    evaluate_times: Option<Vec<Time>>,
+}
+
+impl AggregateAccumulatorMetrics {
+    pub(crate) fn new<T>(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        aggregate_labels: impl IntoIterator<Item = T>,
+        phases: &[AccumulatorPhase],
+    ) -> Self
+    where
+        T: Into<String>,
+    {
+        let aggregate_labels = aggregate_labels
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<String>>();
+        let new_phase_metrics = |phase| {
+            aggregate_labels
+                .iter()
+                .enumerate()
+                .map(|(idx, label)| {
+                    MetricBuilder::new(metrics)
+                        .with_new_label("aggregate", label.clone())
+                        .subset_time(format!("agg_expr_{idx}_{phase}_time"), partition)
+                })
+                .collect()
+        };
+
+        Self {
+            update_times: phases
+                .contains(&AccumulatorPhase::Update)
+                .then(|| new_phase_metrics("update")),
+            merge_times: phases
+                .contains(&AccumulatorPhase::Merge)
+                .then(|| new_phase_metrics("merge")),
+            state_times: phases
+                .contains(&AccumulatorPhase::State)
+                .then(|| new_phase_metrics("state")),
+            convert_to_state_times: phases
+                .contains(&AccumulatorPhase::ConvertToState)
+                .then(|| new_phase_metrics("convert_to_state")),
+            evaluate_times: phases
+                .contains(&AccumulatorPhase::Evaluate)
+                .then(|| new_phase_metrics("evaluate")),
+        }
+    }
+
+    pub(crate) fn time<R>(
+        &self,
+        index: usize,
+        phase: AccumulatorPhase,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        let times = match phase {
+            AccumulatorPhase::Update => self.update_times.as_ref(),
+            AccumulatorPhase::Merge => self.merge_times.as_ref(),
+            AccumulatorPhase::State => self.state_times.as_ref(),
+            AccumulatorPhase::ConvertToState => self.convert_to_state_times.as_ref(),
+            AccumulatorPhase::Evaluate => self.evaluate_times.as_ref(),
+        };
+        debug_assert!(
+            times.is_some_and(|times| index < times.len()),
+            "aggregate accumulator metric index {index} for uninitialized phase"
+        );
+        let _timer = times.and_then(|times| times.get(index)).map(Time::timer);
+        f()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct GroupByMetrics {
     /// Time spent calculating the group IDs from the evaluated grouping columns.
@@ -97,6 +182,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
@@ -121,15 +207,18 @@ mod tests {
         assert!(emitting_time.unwrap().as_usize() > 0);
     }
 
-    fn aggregate_argument_metric_names_and_labels(
+    fn aggregate_metric_names_and_labels(
         metrics: &MetricsSet,
+        suffix: &str,
     ) -> Vec<(String, String)> {
         metrics
             .iter()
             .filter_map(|metric| match metric.value() {
                 MetricValue::Time { name, .. }
-                    if name.starts_with("agg_expr_")
-                        && name.ends_with("_arguments_time") =>
+                    if name
+                        .strip_prefix("agg_expr_")
+                        .and_then(|name| name.split_once('_'))
+                        .is_some_and(|(_, metric)| metric == suffix) =>
                 {
                     let aggregate_label = metric
                         .labels()
@@ -142,6 +231,37 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn assert_aggregate_metric_labels(metrics: &MetricsSet, suffix: &str) {
+        let mut metric_names_and_labels =
+            aggregate_metric_names_and_labels(metrics, suffix);
+        metric_names_and_labels.sort();
+        assert_eq!(
+            metric_names_and_labels,
+            vec![
+                (format!("agg_expr_0_{suffix}"), "SUM(a)".to_string()),
+                (format!("agg_expr_1_{suffix}"), "SUM(b)".to_string()),
+            ]
+        );
+    }
+
+    fn assert_aggregate_metric_times_positive(metrics: &MetricsSet, suffix: &str) {
+        let mut found = false;
+        for metric in metrics.iter().filter(|metric| {
+            matches!(
+                metric.value(),
+                MetricValue::Time { name, .. }
+                    if name
+                        .strip_prefix("agg_expr_")
+                        .and_then(|name| name.split_once('_'))
+                        .is_some_and(|(_, phase)| phase == suffix)
+            )
+        }) {
+            found = true;
+            assert!(metric.value().as_usize() > 0);
+        }
+        assert!(found, "expected aggregate metrics ending in {suffix}");
     }
 
     fn sum_aggregate(
@@ -283,27 +403,24 @@ mod tests {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(10 * 1024 * 1024, 1.0)
             .build_arc()?;
-        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let task_ctx =
+            Arc::new(
+                TaskContext::default()
+                    .with_runtime(runtime)
+                    .with_session_config(SessionConfig::new().set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    )),
+            );
         let _result =
             collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
 
         let metrics = aggregate_exec.metrics().unwrap();
-        let mut metric_names_and_labels =
-            aggregate_argument_metric_names_and_labels(&metrics);
-        metric_names_and_labels.sort();
-        assert_eq!(
-            metric_names_and_labels,
-            vec![
-                (
-                    "agg_expr_0_arguments_time".to_string(),
-                    "SUM(a)".to_string(),
-                ),
-                (
-                    "agg_expr_1_arguments_time".to_string(),
-                    "SUM(b)".to_string(),
-                ),
-            ]
-        );
+        assert_aggregate_metric_labels(&metrics, "arguments_time");
+        assert_aggregate_metric_labels(&metrics, "update_time");
+        assert_aggregate_metric_labels(&metrics, "state_time");
+        assert_aggregate_metric_times_positive(&metrics, "update_time");
+        assert_aggregate_metric_times_positive(&metrics, "state_time");
 
         Ok(())
     }
@@ -313,6 +430,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
+            Field::new("c", DataType::Float64, false),
         ]));
 
         let batches = (0..3)
@@ -326,6 +444,11 @@ mod tests {
                             (i + 1) as f64,
                             (i + 2) as f64,
                         ])),
+                        Arc::new(Float64Array::from(vec![
+                            (i + 3) as f64,
+                            (i + 4) as f64,
+                            (i + 5) as f64,
+                        ])),
                     ],
                 )
                 .unwrap()
@@ -338,14 +461,17 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates = vec![sum_aggregate(&schema, "b", "SUM(b)")?];
+        let aggregates = vec![
+            sum_aggregate(&schema, "b", "SUM(b)")?,
+            sum_aggregate(&schema, "c", "SUM(c)")?,
+        ];
 
         // Create partial aggregate
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregates.clone(),
-            vec![None],
+            vec![None, None],
             partial_input,
             Arc::clone(&schema),
         )?);
@@ -355,17 +481,38 @@ mod tests {
             AggregateMode::Final,
             group_by.as_final(),
             aggregates,
-            vec![None],
+            vec![None, None],
             partial_aggregate,
             schema,
         )?);
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+            ),
+        );
         let _result =
             collect(Arc::clone(&final_aggregate) as _, Arc::clone(&task_ctx)).await?;
 
         let metrics = final_aggregate.metrics().unwrap();
         assert_groupby_metrics(&metrics);
+        assert_eq!(
+            aggregate_metric_names_and_labels(&metrics, "merge_time"),
+            vec![
+                ("agg_expr_0_merge_time".to_string(), "SUM(b)".to_string()),
+                ("agg_expr_1_merge_time".to_string(), "SUM(c)".to_string()),
+            ]
+        );
+        assert_eq!(
+            aggregate_metric_names_and_labels(&metrics, "evaluate_time"),
+            vec![
+                ("agg_expr_0_evaluate_time".to_string(), "SUM(b)".to_string()),
+                ("agg_expr_1_evaluate_time".to_string(), "SUM(c)".to_string()),
+            ]
+        );
+        assert_aggregate_metric_times_positive(&metrics, "merge_time");
+        assert_aggregate_metric_times_positive(&metrics, "evaluate_time");
 
         Ok(())
     }

@@ -407,12 +407,8 @@ mod tests {
 
     #[test]
     fn test_prepared_access_plan_reverse_empty_selection() {
-        // Test: all rows are skipped in every RG. With the strip-empty
-        // pass in `prepare()`, every RG whose selection segment selects
-        // zero rows is dropped from the prepared plan entirely (arrow-rs
-        // would silently skip them at read time anyway, and the rest of
-        // DataFusion relies on the plan being 1:1 with the readers the
-        // decoder hands back).
+        // Test: all rows are skipped. After `strip_empty_row_groups`, every row
+        // group's selection is empty, so the whole plan strips to nothing.
         let metadata = create_test_metadata(vec![100, 100, 100]);
 
         let mut access_plan = ParquetAccessPlan::new_all(3);
@@ -431,11 +427,16 @@ mod tests {
         );
         assert!(prepared_plan.row_selection.is_none());
 
+        // All row groups are empty after pruning, so they are stripped and the
+        // prepared plan is empty (rather than carrying a selection that skips
+        // every row).
+        assert!(prepared_plan.row_group_indexes.is_empty());
+        assert!(prepared_plan.row_selection.is_none());
+
+        // Reversing an empty plan stays empty.
         let reversed_plan = prepared_plan
             .reverse(&metadata)
             .expect("Failed to reverse PreparedAccessPlan");
-
-        // No rows survive in either direction.
         assert!(reversed_plan.row_group_indexes.is_empty());
         assert!(reversed_plan.row_selection.is_none());
     }

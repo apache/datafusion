@@ -1022,7 +1022,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
             Some(pos) => {
                 let mut type_signatures: Vec<TypeSignature> = vec![];
                 // Generate all valid signatures
-                for n in pos..defaults.len() + 1 {
+                for n in pos..=defaults.len() {
                     if n == 0 {
                         type_signatures.push(TypeSignature::Nullary)
                     } else {

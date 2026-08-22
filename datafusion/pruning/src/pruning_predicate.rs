@@ -1110,11 +1110,8 @@ impl<'a> PruningExpressionBuilder<'a> {
             scalar_expr,
             df_schema,
         )?;
-        let field = match schema.column_with_name(column.name()) {
-            Some((_, f)) => f,
-            _ => {
-                return plan_err!("Field not found in schema");
-            }
+        let Some((_, field)) = schema.column_with_name(column.name()) else {
+            return plan_err!("Field not found in schema");
         };
 
         Ok(Self {
