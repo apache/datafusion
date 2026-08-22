@@ -36,6 +36,7 @@ mod projection_pushdown;
 mod pushdown_sort;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
+mod sort_exec_topk_metrics;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
 mod window_optimize;
