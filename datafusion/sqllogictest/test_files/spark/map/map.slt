@@ -1,0 +1,150 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Spark map function tests
+# Based on: https://spark.apache.org/docs/latest/api/sql/index.html#map
+#
+# NOTE: map(k1, v1, k2, v2, ...) variadic syntax is handled by the built-in
+# NestedFunctionPlanner::plan_make_map, which splits alternating args into
+# key/value arrays and calls the built-in MapFunc.
+# The Spark Map UDF is only reached via the two-array syntax: map([keys], [values]).
+
+# Spark doctests
+query ?
+SELECT map(1, 'a', 2, 'b');
+----
+{1: a, 2: b}
+
+query ?
+SELECT map(1.0, 'a', 2.0, 'b');
+----
+{1.0: a, 2.0: b}
+
+# Test with NULL values
+query ?
+SELECT map(1, 'a', 2, NULL);
+----
+{1: a, 2: NULL}
+
+query ?
+SELECT map(1, NULL, 2, 'b');
+----
+{1: NULL, 2: b}
+
+# Test with boolean keys
+query ?
+SELECT map(true, 'yes', false, 'no');
+----
+{true: yes, false: no}
+
+# Test with duplicate keys
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: 1
+SELECT map(1, 'a', 2, 'b', 1, 'c');
+
+# Test empty map
+query error DataFusion error: Error during planning: Function 'map' expected at least one argument but received 0
+SELECT map();
+
+# Test error: odd number of arguments (error from built-in planner)
+query error DataFusion error: Error during planning: make_map requires an even number of arguments
+SELECT map(1, 'a', 2);
+
+query error DataFusion error: Error during planning: make_map requires an even number of arguments
+SELECT map(1);
+
+# Test element_at with map
+query ?
+SELECT element_at(map(1, 'a', 2, 'b'), 5);
+----
+[NULL]
+
+query ?
+SELECT element_at(map(1, 'a', 2, 'b'), 1);
+----
+[a]
+
+# Test map subscript operator (returns scalar, not map, so use query T)
+query T
+SELECT map(1, 'a', 2, 'b')[5];
+----
+NULL
+
+query T
+SELECT map(1, 'a', 2, 'b')[1];
+----
+a
+
+query T
+SELECT map(1, 'a', 2, 'b')[2];
+----
+b
+
+# Test with map_keys
+query ?
+SELECT map_keys(map(1, 'a', 2, 'b'));
+----
+[1, 2]
+
+# Test with map_values
+query ?
+SELECT map_values(map(1, 'a', 2, 'b'));
+----
+[a, b]
+
+# Test with complex types (nested struct values)
+query ?
+SELECT map('a', struct(1, 2, 3), 'b', struct(4, 5, 6));
+----
+{a: {c0: 1, c1: 2, c2: 3}, b: {c0: 4, c1: 5, c2: 6}}
+
+# Test with nested function calls
+query ?
+SELECT
+    map(
+        'outer_key1',
+        map('inner_a', 1, 'inner_b', 2),
+        'outer_key2',
+        map('inner_x', 10, 'inner_y', 20, 'inner_z', 30)
+    ) AS nested_map;
+----
+{outer_key1: {inner_a: 1, inner_b: 2}, outer_key2: {inner_x: 10, inner_y: 20, inner_z: 30}}
+
+# Multi-row tests: map per row with different key-value pairs
+query ?
+SELECT map(k1, v1, k2, v2)
+FROM (VALUES
+    (1, 'a', 2, 'b'),
+    (10, 'x', 20, 'y'),
+    (100, 'foo', 200, 'bar')
+) AS t(k1, v1, k2, v2);
+----
+{1: a, 2: b}
+{10: x, 20: y}
+{100: foo, 200: bar}
+
+# Multi-row with NULLs and multiple pairs per row
+query ?
+SELECT map(k1, v1, k2, v2, k3, v3)
+FROM (VALUES
+    (1, 'a', 2, 'b', 3, 'c'),
+    (4, NULL, 5, 'e', 6, 'f'),
+    (7, 'g', 8, 'h', 9, NULL)
+) AS t(k1, v1, k2, v2, k3, v3);
+----
+{1: a, 2: b, 3: c}
+{4: NULL, 5: e, 6: f}
+{7: g, 8: h, 9: NULL}
