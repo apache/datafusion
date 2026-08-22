@@ -85,6 +85,21 @@ impl QueryBuilder {
     pub fn is_distinct_union(&self) -> bool {
         self.distinct_union
     }
+    /// Whether this query carries clauses that are scoped to a single query
+    /// rather than to a set operation. When such a query is used as an operand
+    /// of a set operation (e.g. a branch of a `UNION`), it must be wrapped in
+    /// parentheses so these clauses bind to the operand and not to the whole
+    /// set operation.
+    pub fn has_operand_scoped_clauses(&self) -> bool {
+        self.with.is_some()
+            || self.order_by_kind.is_some()
+            || self.limit.is_some()
+            || self.offset.is_some()
+            || self.fetch.is_some()
+            || self.for_clause.is_some()
+            || !self.limit_by.is_empty()
+            || !self.locks.is_empty()
+    }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
         let order_by = self
             .order_by_kind
