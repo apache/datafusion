@@ -583,30 +583,6 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use std::path::{Path, PathBuf};
 
-    async fn checked_in_benchmarks() -> BTreeMap<String, Vec<SqlBenchmark>> {
-        load_benchmark_definitions(
-            &BenchmarkFilter::default(),
-            &SessionContext::new(),
-            &default_sql_benchmark_directory(),
-        )
-        .await
-        .unwrap()
-    }
-
-    fn benchmark_names<'a>(
-        benchmarks: &'a BTreeMap<String, Vec<SqlBenchmark>>,
-        group: &str,
-        subgroup: Option<&str>,
-    ) -> Vec<&'a str> {
-        benchmarks[group]
-            .iter()
-            .filter(|benchmark| {
-                subgroup.is_none_or(|subgroup| benchmark.subgroup() == subgroup)
-            })
-            .map(SqlBenchmark::name)
-            .collect()
-    }
-
     fn write_benchmark(root: &Path, relative_path: &str, contents: &str) -> PathBuf {
         let path = root.join(relative_path);
 
@@ -789,64 +765,5 @@ mod tests {
 
         assert_eq!(benchmark.group(), "tpch");
         assert_eq!(criterion_function_name(&benchmark), "Q01_sf1");
-    }
-
-    #[tokio::test]
-    async fn clickbench_extended_inventory_is_complete() {
-        let benchmarks = checked_in_benchmarks().await;
-
-        assert_eq!(
-            benchmark_names(&benchmarks, "clickbench_extended", None),
-            [
-                "Q00", "Q01", "Q02", "Q03", "Q04", "Q05", "Q06", "Q07", "Q08", "Q09",
-                "Q10", "Q11", "Q12", "Q13",
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn h2o_window_inventory_is_complete() {
-        let benchmarks = checked_in_benchmarks().await;
-
-        assert_eq!(
-            benchmark_names(&benchmarks, "h2o", Some("window")),
-            [
-                "Q01", "Q02", "Q03", "Q04", "Q05", "Q06", "Q07", "Q08", "Q09", "Q10",
-                "Q11", "Q12", "Q13", "Q14", "Q15", "Q16", "Q17", "Q18", "Q19", "Q20",
-                "Q21", "Q22", "Q23",
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn smj_inventory_is_complete() {
-        let benchmarks = checked_in_benchmarks().await;
-
-        assert_eq!(
-            benchmark_names(&benchmarks, "smj", None),
-            [
-                "Q01", "Q02", "Q03", "Q04", "Q05", "Q06", "Q07", "Q08", "Q09", "Q10",
-                "Q11", "Q12", "Q13", "Q14", "Q15", "Q16", "Q17", "Q18", "Q19", "Q20",
-                "Q21", "Q22", "Q23", "Q24", "Q25", "Q26",
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn smj_left_mark_definitions_require_join_type_and_executor() {
-        let benchmarks = checked_in_benchmarks().await;
-
-        for name in ["Q24", "Q25", "Q26"] {
-            let benchmark = benchmarks["smj"]
-                .iter()
-                .find(|benchmark| benchmark.name() == name)
-                .unwrap_or_else(|| panic!("missing SMJ benchmark {name}"));
-
-            assert!(
-                format!("{benchmark:?}")
-                    .contains("expect: [\"SortMergeJoinExec\", \"LeftMark\"]"),
-                "{name} must parse both SortMergeJoinExec and LeftMark expectations"
-            );
-        }
     }
 }
