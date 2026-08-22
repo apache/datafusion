@@ -152,3 +152,7 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "bounded_window"
+
+[[bench]]
+harness = false
+name = "single_group_by_intern"

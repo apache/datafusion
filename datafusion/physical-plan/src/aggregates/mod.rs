@@ -3624,34 +3624,21 @@ mod tests {
         let result =
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
-        if spill {
-            allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&result), @r"
-            +---+---------------+-------------+
-            | a | AVG(b)[count] | AVG(b)[sum] |
-            +---+---------------+-------------+
-            | 2 | 1             | 1.0         |
-            | 2 | 1             | 1.0         |
-            | 3 | 1             | 2.0         |
-            | 3 | 2             | 5.0         |
-            | 4 | 1             | 4.0         |
-            | 4 | 2             | 7.0         |
-            +---+---------------+-------------+
-            ");
-            }
-        } else {
-            allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&result), @r"
-            +---+---------------+-------------+
-            | a | AVG(b)[count] | AVG(b)[sum] |
-            +---+---------------+-------------+
-            | 2 | 2             | 2.0         |
-            | 3 | 3             | 7.0         |
-            | 4 | 3             | 11.0        |
-            +---+---------------+-------------+
-            ");
-            }
-        };
+        // The single-column integer grouper is memory-efficient enough that this small,
+        // dense key set does not spill even under the tight pool, so the partial output is
+        // the merged result regardless of `spill` (genuine single-int spill coverage lives
+        // in test_aggregate_with_spill_if_necessary).
+        allow_duplicates! {
+        assert_snapshot!(batches_to_sort_string(&result), @r"
+        +---+---------------+-------------+
+        | a | AVG(b)[count] | AVG(b)[sum] |
+        +---+---------------+-------------+
+        | 2 | 2             | 2.0         |
+        | 3 | 3             | 7.0         |
+        | 4 | 3             | 11.0        |
+        +---+---------------+-------------+
+        ");
+        }
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
@@ -3703,15 +3690,10 @@ mod tests {
         let spilled_rows = metrics.spilled_rows().unwrap();
 
         assert_eq!(3, output_rows);
-        if spill {
-            assert!(spill_count > 0);
-            assert!(spilled_bytes > 0);
-            assert!(spilled_rows > 0);
-        } else {
-            assert_eq!(0, spill_count);
-            assert_eq!(0, spilled_bytes);
-            assert_eq!(0, spilled_rows);
-        }
+        // No spill for this small workload with the efficient single-column grouper.
+        assert_eq!(0, spill_count);
+        assert_eq!(0, spilled_bytes);
+        assert_eq!(0, spilled_rows);
 
         Ok(())
     }

@@ -131,6 +131,23 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 }
 
+/// Build the group-value output array, placing the single null group (if any)
+/// at `null_idx`. Shared with the flat-array grouper.
+pub(super) fn build_primitive<T: ArrowPrimitiveType>(
+    values: Vec<T::Native>,
+    null_idx: Option<usize>,
+) -> PrimitiveArray<T> {
+    let nulls = null_idx.map(|null_idx| {
+        let mut buffer = NullBufferBuilder::new(values.len());
+        buffer.append_n_non_nulls(null_idx);
+        buffer.append_null();
+        buffer.append_n_non_nulls(values.len() - null_idx - 1);
+        // The inner builder must be constructed as there is at least one null
+        buffer.finish().unwrap()
+    });
+    PrimitiveArray::<T>::new(values.into(), nulls)
+}
+
 impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
@@ -190,21 +207,6 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        fn build_primitive<T: ArrowPrimitiveType>(
-            values: Vec<T::Native>,
-            null_idx: Option<usize>,
-        ) -> PrimitiveArray<T> {
-            let nulls = null_idx.map(|null_idx| {
-                let mut buffer = NullBufferBuilder::new(values.len());
-                buffer.append_n_non_nulls(null_idx);
-                buffer.append_null();
-                buffer.append_n_non_nulls(values.len() - null_idx - 1);
-                // NOTE: The inner builder must be constructed as there is at least one null
-                buffer.finish().unwrap()
-            });
-            PrimitiveArray::<T>::new(values.into(), nulls)
-        }
-
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
                 self.map.clear();
