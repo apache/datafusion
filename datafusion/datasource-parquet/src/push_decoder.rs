@@ -53,7 +53,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::ParquetMetaData;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -61,6 +61,7 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::metrics::ByteProgress;
 use crate::row_group_filter::RowGroupPruningStatistics;
 
 /// Shared options applied to the [`ParquetPushDecoderBuilder`] for a file
@@ -109,6 +110,11 @@ impl DecoderBuilderConfig<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
     pub(crate) rg_index: usize,
+    /// On-disk size of this row group, credited to the `bytes_processed` metric documented on
+    /// [`ParquetFileMetrics`] once the scan is done with it.
+    ///
+    /// [`ParquetFileMetrics`]: crate::ParquetFileMetrics
+    pub(crate) bytes: u64,
 }
 
 /// Runtime row-group pruner driven by a dynamic predicate (e.g. the
@@ -272,6 +278,10 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
     /// Count of row groups skipped at runtime by [`Self::row_group_pruner`].
     pub(crate) row_groups_pruned_dynamic: Count,
+    /// How much of this file range the scan has finished with. Credited a row
+    /// group at a time as they are decoded or skipped, and topped up to the
+    /// full range when the stream is dropped.
+    pub(crate) byte_progress: ByteProgress,
 }
 
 impl PushDecoderStreamState {
@@ -342,6 +352,20 @@ impl PushDecoderStreamState {
                 .as_ref()
                 .expect("decoder present")
                 .is_at_row_group_boundary();
+            // Only the runtime pruner rebuilds the decoder from `rg_plan`, so
+            // only it needs `rg_plan` kept in sync with the decoder frontier.
+            // arrow-rs silently finishes row groups whose post-predicate
+            // selection is empty without handing back a reader, so without this
+            // sync `rg_plan` trails the decoder by one and a rebuild re-reads an
+            // already-delivered row group (#24352). Gating on the pruner also
+            // avoids the O(remaining row groups) cost of `peek_next_row_group()`
+            // on ordinary scans that never rebuild.
+            if at_boundary
+                && self.row_group_pruner.is_some()
+                && let Err(e) = self.sync_rg_plan_to_decoder_frontier()
+            {
+                return Some((Err(e), self));
+            }
             if at_boundary && !self.rg_plan.is_empty() {
                 let mut pruned_count = 0usize;
                 if let Some(pruner) = self.row_group_pruner.as_mut() {
@@ -350,6 +374,7 @@ impl PushDecoderStreamState {
                         if pruner.should_prune(&[entry.rg_index]) {
                             pruned_count += 1;
                             self.row_groups_pruned_dynamic.add(1);
+                            self.byte_progress.credit(entry.bytes);
                         } else {
                             kept.push_back(entry);
                         }
@@ -403,7 +428,15 @@ impl PushDecoderStreamState {
                     // Pop the RG this reader is for (we already filtered
                     // pruned ones in step 2, so `rg_plan.front()` is the RG
                     // the decoder is about to read).
-                    self.rg_plan.pop_front();
+                    //
+                    // Its bytes are credited here rather than once the reader
+                    // is drained: the decoder has already fetched them, and a
+                    // reader that is abandoned mid-row-group (`LIMIT`, early
+                    // stop) would otherwise never credit them until the file
+                    // closes.
+                    if let Some(entry) = self.rg_plan.pop_front() {
+                        self.byte_progress.credit(entry.bytes);
+                    }
                     self.active_reader = Some(reader);
                 }
                 Ok(DecodeResult::Finished) => return None,
@@ -412,6 +445,63 @@ impl PushDecoderStreamState {
                 }
             }
         }
+    }
+
+    /// Keep `rg_plan.front()` aligned with the row group the decoder will emit
+    /// next. `try_next_reader` silently finishes row groups whose post-predicate
+    /// selection is empty (no reader handed back), which would otherwise leave
+    /// `rg_plan` trailing the decoder by one — a later prune/rebuild would then
+    /// re-include an already-delivered row group (#24352).
+    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<()> {
+        match self
+            .decoder
+            .as_ref()
+            .expect("decoder present")
+            .peek_next_row_group()
+            .map_err(DataFusionError::from)?
+        {
+            Some(actual) => Self::advance_rg_plan_to(
+                &mut self.rg_plan,
+                actual,
+                &mut self.byte_progress,
+            )?,
+            // Decoder has nothing left to emit — drain our plan so the stream
+            // finishes cleanly, crediting what it will now never read.
+            None => {
+                for entry in self.rg_plan.drain(..) {
+                    self.byte_progress.credit(entry.bytes);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Pop entries off `rg_plan` until its front is `target`.
+    ///
+    /// `target` is the RG the decoder will emit next and must still be in the
+    /// plan. A missing `target` means the decoder's frontier and `rg_plan` have
+    /// diverged; we surface that as an internal error rather than silently
+    /// draining the plan, which would truncate the scan. Kept free-standing on
+    /// `rg_plan` (rather than `&mut self`) so the pop/guard logic is
+    /// unit-testable without constructing a full stream state.
+    fn advance_rg_plan_to(
+        rg_plan: &mut VecDeque<RgPlanEntry>,
+        target: usize,
+        byte_progress: &mut ByteProgress,
+    ) -> Result<()> {
+        while let Some(front) = rg_plan.front() {
+            if front.rg_index == target {
+                return Ok(());
+            }
+            // Popped here means arrow-rs finished this row group without
+            // handing back a reader, so the scan is done with its bytes.
+            let popped = rg_plan.pop_front().expect("front present");
+            byte_progress.credit(popped.bytes);
+        }
+        internal_err!(
+            "push decoder frontier RG {target} is not in rg_plan; \
+             decoder and plan have diverged"
+        )
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
@@ -606,5 +696,51 @@ mod tests {
         assert!(!pruner.should_prune(&[0]));
         assert!(!pruner.should_prune(&[1]));
         assert!(!pruner.should_prune(&[2]));
+    }
+
+    /// A plan whose row group `i` is `100 * (i + 1)` bytes.
+    fn rg_plan(indexes: impl IntoIterator<Item = usize>) -> VecDeque<RgPlanEntry> {
+        indexes
+            .into_iter()
+            .map(|rg_index| RgPlanEntry {
+                rg_index,
+                bytes: 100 * (rg_index as u64 + 1),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn advance_rg_plan_to_pops_up_to_target() {
+        let mut plan = rg_plan([0usize, 1, 2, 3]);
+        let bytes_processed = Count::new();
+        let mut byte_progress = ByteProgress::new(1_000, Count::clone(&bytes_processed));
+
+        PushDecoderStreamState::advance_rg_plan_to(&mut plan, 2, &mut byte_progress)
+            .unwrap();
+
+        assert_eq!(
+            plan.iter().map(|e| e.rg_index).collect::<Vec<_>>(),
+            vec![2, 3],
+            "must pop the entries before `target` and stop at it",
+        );
+        assert_eq!(
+            bytes_processed.value(),
+            300,
+            "row groups finished without a reader must still credit their bytes",
+        );
+    }
+
+    #[test]
+    fn advance_rg_plan_to_errors_when_target_absent() {
+        let mut plan = rg_plan([0usize, 1, 2]);
+        let mut byte_progress = ByteProgress::new(1_000, Count::new());
+
+        let err =
+            PushDecoderStreamState::advance_rg_plan_to(&mut plan, 5, &mut byte_progress)
+                .expect_err("a target absent from the plan must be an internal error");
+        assert!(
+            err.to_string().contains("diverged"),
+            "expected a divergence internal error, got: {err}",
+        );
     }
 }

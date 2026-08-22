@@ -278,19 +278,30 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let required_ordering = optional_ordering_try_to_proto(
-            self.required_ordering.as_ref(),
-            &ctx.expr_ctx(),
-        )?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `GlobalLimitExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            skip,
+            fetch,
+            required_ordering,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let required_ordering =
+            optional_ordering_try_to_proto(required_ordering.as_ref(), &ctx.expr_ctx())?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
                     protobuf::GlobalLimitExecNode {
                         input: Some(Box::new(input)),
-                        skip: self.skip() as u32,
-                        fetch: match self.fetch() {
-                            Some(n) => n as i64,
+                        skip: *skip as u32,
+                        fetch: match fetch {
+                            Some(n) => *n as i64,
                             _ => -1, // no limit
                         },
                         required_ordering,
@@ -314,21 +325,27 @@ impl GlobalLimitExec {
             protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit,
             "GlobalLimitExec",
         );
-        let input = ctx.decode_required_child(
-            limit.input.as_deref(),
-            "GlobalLimitExec",
-            "input",
-        )?;
-        let fetch = if limit.fetch >= 0 {
-            Some(limit.fetch as usize)
+        // Destructure exhaustively so that a new field on
+        // `GlobalLimitExecNode` is a compile error here rather than a silently
+        // dropped field.
+        let protobuf::GlobalLimitExecNode {
+            input,
+            skip,
+            fetch,
+            required_ordering,
+        } = &**limit;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "GlobalLimitExec", "input")?;
+        let fetch = if *fetch >= 0 {
+            Some(*fetch as usize)
         } else {
             None
         };
         let required_ordering = optional_ordering_try_from_proto(
-            &limit.required_ordering,
+            required_ordering,
             &ctx.expr_ctx(input.schema().as_ref()),
         )?;
-        let mut exec = GlobalLimitExec::new(input, limit.skip as usize, fetch);
+        let mut exec = GlobalLimitExec::new(input, *skip as usize, fetch);
         exec.set_required_ordering(required_ordering);
         Ok(Arc::new(exec))
     }
@@ -538,17 +555,27 @@ impl ExecutionPlan for LocalLimitExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let required_ordering = optional_ordering_try_to_proto(
-            self.required_ordering.as_ref(),
-            &ctx.expr_ctx(),
-        )?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `LocalLimitExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            fetch,
+            required_ordering,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let required_ordering =
+            optional_ordering_try_to_proto(required_ordering.as_ref(), &ctx.expr_ctx())?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
                     protobuf::LocalLimitExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch() as u32,
+                        fetch: *fetch as u32,
                         required_ordering,
                     },
                 )),
@@ -570,13 +597,20 @@ impl LocalLimitExec {
             protobuf::physical_plan_node::PhysicalPlanType::LocalLimit,
             "LocalLimitExec",
         );
+        // Destructure exhaustively so that a new field on `LocalLimitExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::LocalLimitExecNode {
+            input,
+            fetch,
+            required_ordering,
+        } = &**limit;
         let input =
-            ctx.decode_required_child(limit.input.as_deref(), "LocalLimitExec", "input")?;
+            ctx.decode_required_child(input.as_deref(), "LocalLimitExec", "input")?;
         let required_ordering = optional_ordering_try_from_proto(
-            &limit.required_ordering,
+            required_ordering,
             &ctx.expr_ctx(input.schema().as_ref()),
         )?;
-        let mut exec = LocalLimitExec::new(input, limit.fetch as usize);
+        let mut exec = LocalLimitExec::new(input, *fetch as usize);
         exec.set_required_ordering(required_ordering);
         Ok(Arc::new(exec))
     }

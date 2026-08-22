@@ -48,6 +48,8 @@ pub trait ListingTableConfigExt {
 
 #[async_trait]
 impl ListingTableConfigExt for ListingTableConfig {
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn infer_options<'life0, 'async_trait>(
         self,
         state: &'life0 dyn Session,
@@ -59,6 +61,8 @@ impl ListingTableConfigExt for ListingTableConfig {
         infer_options_boxed(self, state)
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn infer<'life0, 'async_trait>(
         self,
         state: &'life0 dyn Session,
@@ -72,18 +76,18 @@ impl ListingTableConfigExt for ListingTableConfig {
 }
 
 /// Body of [`ListingTableConfigExt::infer`].
-fn infer_boxed<'a>(
+fn infer_boxed(
     config: ListingTableConfig,
-    state: &'a dyn Session,
-) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>> {
+    state: &dyn Session,
+) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
     Box::pin(async move { config.infer_options(state).await?.infer_schema(state).await })
 }
 
 /// Body of [`ListingTableConfigExt::infer_options`].
-fn infer_options_boxed<'a>(
+fn infer_options_boxed(
     config: ListingTableConfig,
-    state: &'a dyn Session,
-) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>> {
+    state: &dyn Session,
+) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
     Box::pin(async move {
         let store = if let Some(url) = config.table_paths.first() {
             state.runtime_env().object_store(url)?

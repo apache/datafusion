@@ -2010,6 +2010,24 @@ SELECT (SELECT v FROM sq_empty);
 ----
 NULL
 
+# A zero-row scalar subquery is nullable even when its projected expression is not.
+query I
+SELECT (SELECT 1 WHERE FALSE);
+----
+NULL
+
+# Its nullability must prevent SimplifyExpressions from folding IS NULL to false.
+query B
+SELECT (SELECT 1 WHERE FALSE) IS NULL;
+----
+true
+
+# The same holds for the opposite fold direction.
+query B
+SELECT (SELECT 1 WHERE FALSE) IS NOT NULL;
+----
+false
+
 # Scalar subquery returning zero rows in arithmetic → NULL propagation
 query I
 SELECT x + (SELECT v FROM sq_empty) FROM sq_main;
@@ -2033,6 +2051,25 @@ query I
 SELECT (SELECT max(v) FROM sq_values);
 ----
 3
+
+# An ungrouped aggregate produces exactly one row even on empty input, so the
+# subquery's result is not nullable and SimplifyExpressions folds IS NULL to
+# false. The query result alone cannot show the fold (a non-empty subquery
+# never evaluates to NULL at runtime), so pin the simplified plan.
+query TT
+EXPLAIN SELECT (SELECT count(*) FROM sq_empty) IS NULL;
+----
+logical_plan
+01)Projection: Boolean(false) AS count(*) IS NULL
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[false as count(*) IS NULL]
+02)--PlaceholderRowExec
+
+query B
+SELECT (SELECT count(*) FROM sq_empty) IS NULL;
+----
+false
 
 # Multiple scalar subqueries, one returns multiple rows → error
 query error DataFusion error: Execution error: Scalar subquery returned more than one row
@@ -2350,6 +2387,21 @@ SELECT (SELECT v FROM sq_empty);
 ----
 NULL
 
+# A zero-row scalar subquery is nullable even when its projected expression is
+# not. The rewrite to a left join already produces a nullable column here, so
+# this pins both paths to the same result.
+query I
+SELECT (SELECT 1 WHERE FALSE);
+----
+NULL
+
+# SimplifyExpressions runs before ScalarSubqueryToJoin, so this fold is still
+# governed by Expr::ScalarSubquery nullability on this path.
+query B
+SELECT (SELECT 1 WHERE FALSE) IS NULL;
+----
+true
+
 # Scalar subquery returning zero rows in arithmetic → NULL propagation
 query I
 SELECT x + (SELECT v FROM sq_empty) FROM sq_main;
@@ -2626,6 +2678,7 @@ SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null) ORDER 
 
 # The null-aware anti join must be planned as a CollectLeft HashJoinExec even with
 # prefer_hash_join = false: SortMergeJoinExec is not null-aware and must not be used.
+# This test has no usable size statistics, so JoinSelection keeps LeftAnti.
 query TT
 EXPLAIN SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
 ----
@@ -2657,3 +2710,30 @@ DROP TABLE nia_right_no_null;
 
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
+
+# Regression test for #24139: CTE inside a correlated scalar subquery causing a schema error
+statement ok
+CREATE TABLE metrics (host VARCHAR, bytes_sent DOUBLE, ts BIGINT) AS VALUES
+    ('a', 100.0, 1),
+    ('b', 200.0, 2),
+    ('a', 300.0, 3),
+    ('b', 400.0, 4);
+
+query TR
+SELECT m.host, m.bytes_sent
+FROM metrics m
+WHERE m.bytes_sent > (
+    WITH avg_per_host AS (
+        SELECT avg(bytes_sent) AS avg_bytes
+        FROM metrics
+        WHERE host = m.host
+    )
+    SELECT avg_bytes FROM avg_per_host
+)
+ORDER BY m.host;
+----
+a 300
+b 400
+
+statement ok
+DROP TABLE metrics;

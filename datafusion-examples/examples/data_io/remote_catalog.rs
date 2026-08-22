@@ -237,7 +237,7 @@ impl TableProvider for RemoteTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -257,7 +257,7 @@ impl TableProvider for RemoteTable {
         let exec = MemorySourceConfig::try_new_exec(
             &[batches],
             self.schema.clone(),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?;
         Ok(exec)
     }

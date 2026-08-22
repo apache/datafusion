@@ -238,9 +238,9 @@ pub async fn load_benchmark_definitions_for_query(
 }
 
 pub fn sort_benchmarks(benchmarks: &mut BTreeMap<String, Vec<SqlBenchmark>>) {
-    benchmarks
-        .values_mut()
-        .for_each(|benchmarks| benchmarks.sort_by(|a, b| a.name().cmp(b.name())));
+    for benchmarks in benchmarks.values_mut() {
+        benchmarks.sort_by(|a, b| a.name().cmp(b.name()));
+    }
 }
 
 /// Applies benchmark, subgroup, and query filters to discovered benchmark groups.

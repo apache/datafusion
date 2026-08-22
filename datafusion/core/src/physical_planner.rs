@@ -154,6 +154,8 @@ pub struct DefaultPhysicalPlanner {
 #[async_trait]
 impl PhysicalPlanner for DefaultPhysicalPlanner {
     /// Create a physical plan from a logical plan
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
         &'life0 self,
         logical_plan: &'life1 LogicalPlan,
@@ -618,14 +620,11 @@ impl DefaultPhysicalPlanner {
                             .await?;
                     }
 
-                    let plan = match maybe_plan {
-                        Some(plan) => plan,
-                        None => {
-                            return plan_err!(
-                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
-                                scan.table_name
-                            );
-                        }
+                    let Some(plan) = maybe_plan else {
+                        return plan_err!(
+                            "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                            scan.table_name
+                        );
                     };
 
                     self.ensure_schema_matches(projected_schema, &plan, || {
@@ -1241,9 +1240,7 @@ impl DefaultPhysicalPlanner {
                     physical_partitioning,
                 )?)
             }
-            LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
-            }) => {
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let sort_exprs = create_physical_sort_exprs(
@@ -1602,11 +1599,13 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
+                        // PWMJ supports classic joins and Left Semi/Anti existence joins.
+                        // Right Semi/Anti and Mark joins are not implemented yet (they
+                        // would require swapping the inputs so the marked side is buffered),
+                        // so exclude them here and let them fall back to NestedLoopJoin.
                         && !matches!(
                             join_type,
-                            JoinType::LeftSemi
-                                | JoinType::RightSemi
-                                | JoinType::LeftAnti
+                            JoinType::RightSemi
                                 | JoinType::RightAnti
                                 | JoinType::LeftMark
                                 | JoinType::RightMark
@@ -2054,7 +2053,9 @@ fn create_cube_physical_expr(
     for null_count in 1..=num_of_exprs {
         for null_idx in (0..num_of_exprs).combinations(null_count) {
             let mut next_group: Vec<bool> = vec![false; num_of_exprs];
-            null_idx.into_iter().for_each(|i| next_group[i] = true);
+            for i in null_idx {
+                next_group[i] = true;
+            }
             groups.push(next_group);
         }
     }
@@ -3534,7 +3535,7 @@ mod tests {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _projection: Option<&Vec<usize>>,
+            _projection: Option<&[usize]>,
             _filters: &[Expr],
             _limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -5522,7 +5523,7 @@ digraph {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _projection: Option<&Vec<usize>>,
+            _projection: Option<&[usize]>,
             _filters: &[Expr],
             _limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
