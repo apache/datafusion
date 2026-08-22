@@ -23,7 +23,7 @@ use crate::error::{_internal_err, Result};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
-    Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
+    Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode,
 };
 use std::{fmt::Display, sync::Arc};
 
@@ -432,6 +432,23 @@ impl LogicalType for NativeType {
                     *mode,
                 )
             }
+            // There is no mode to preserve with null origin, so pick dense encoding
+            (Self::Union(to_fields), Null) => Union(
+                to_fields
+                    .iter()
+                    .map(|(type_id, field)| {
+                        Ok((
+                            *type_id,
+                            Arc::new(Field::new(
+                                field.name.clone(),
+                                field.logical_type.default_cast_for(&Null)?,
+                                field.nullable,
+                            )),
+                        ))
+                    })
+                    .collect::<Result<UnionFields>>()?,
+                UnionMode::Dense,
+            ),
             _ => {
                 return _internal_err!(
                     "Unavailable default cast for native type {} from physical type {}",
@@ -644,5 +661,114 @@ mod tests {
             false,
         ))));
         assert_snapshot!(map, @"Map(non-null String)");
+    }
+
+    #[test]
+    fn test_default_cast_for_null_origin() {
+        // Native types with several physical types: pick a canonical one
+        assert_eq!(
+            NativeType::String
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
+            DataType::Utf8View
+        );
+        assert_eq!(
+            NativeType::Binary
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
+            DataType::BinaryView
+        );
+        assert_eq!(
+            NativeType::Date.default_cast_for(&DataType::Null).unwrap(),
+            DataType::Date32
+        );
+
+        // Decimals pick the narrowest physical type holding the precision
+        assert_eq!(
+            NativeType::Decimal(9, 2)
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
+            DataType::Decimal32(9, 2)
+        );
+        assert_eq!(
+            NativeType::Decimal(18, 2)
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
+            DataType::Decimal64(18, 2)
+        );
+        assert_eq!(
+            NativeType::Decimal(38, 10)
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
+            DataType::Decimal128(38, 10)
+        );
+        assert_eq!(
+            NativeType::Decimal(50, 2)
+                .default_cast_for(&DataType::Null)
+                .unwrap(),
+            DataType::Decimal256(50, 2)
+        );
+
+        // nested types
+        let list = NativeType::List(Arc::new(LogicalField::from(&Field::new(
+            "item",
+            DataType::Int32,
+            true,
+        ))));
+        assert_eq!(
+            list.default_cast_for(&DataType::Null).unwrap(),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
+        );
+
+        let struct_type = NativeType::Struct(LogicalFields::from(&Fields::from(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, true),
+        ])));
+        assert_eq!(
+            struct_type.default_cast_for(&DataType::Null).unwrap(),
+            DataType::Struct(Fields::from(vec![
+                // The logical `String` field resolves to its canonical type
+                Field::new("name", DataType::Utf8View, false),
+                Field::new("age", DataType::Int32, true),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_default_cast_for_union() {
+        let origin_fields = UnionFields::try_new(
+            vec![3, 7],
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, false),
+            ],
+        )
+        .unwrap();
+        let union_type = NativeType::Union(LogicalUnionFields::from(&origin_fields));
+
+        // From a `Null` origin there are only type ids, but no mode or string
+        let expected_fields = UnionFields::try_new(
+            vec![3, 7],
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8View, false),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            union_type.default_cast_for(&DataType::Null).unwrap(),
+            DataType::Union(expected_fields, UnionMode::Dense)
+        );
+
+        // From a union origin both the mode and the encodings are preserved
+        assert_eq!(
+            union_type
+                .default_cast_for(&DataType::Union(
+                    origin_fields.clone(),
+                    UnionMode::Sparse
+                ))
+                .unwrap(),
+            DataType::Union(origin_fields, UnionMode::Sparse)
+        );
     }
 }
