@@ -177,6 +177,14 @@ pub enum FFI_MetricValue {
         name: SString,
         gauge: u64,
     },
+    BytesCount {
+        name: SString,
+        count: u64,
+    },
+    BytesGauge {
+        name: SString,
+        gauge: u64,
+    },
 }
 
 // -----------------------------------------------------------------------------
@@ -436,6 +444,14 @@ impl From<&MetricValue> for FFI_MetricValue {
                 name: SString::from(name.as_ref()),
                 gauge: gauge.value() as u64,
             },
+            MetricValue::BytesCount { name, count } => Self::BytesCount {
+                name: SString::from(name.as_ref()),
+                count: count.value() as u64,
+            },
+            MetricValue::BytesGauge { name, gauge } => Self::BytesGauge {
+                name: SString::from(name.as_ref()),
+                gauge: gauge.value() as u64,
+            },
             MetricValue::Time { name, time } => Self::Time {
                 name: SString::from(name.as_ref()),
                 time_ns: time.value() as u64,
@@ -493,6 +509,14 @@ impl From<FFI_MetricValue> for MetricValue {
                 gauge: gauge_from_value(gauge),
             },
             FFI_MetricValue::PeakMemoryUsage { name, gauge } => Self::PeakMemoryUsage {
+                name: Cow::Owned(name.into()),
+                gauge: gauge_from_value(gauge),
+            },
+            FFI_MetricValue::BytesCount { name, count } => Self::BytesCount {
+                name: Cow::Owned(name.into()),
+                count: count_from_value(count),
+            },
+            FFI_MetricValue::BytesGauge { name, gauge } => Self::BytesGauge {
                 name: Cow::Owned(name.into()),
                 gauge: gauge_from_value(gauge),
             },
@@ -644,6 +668,20 @@ mod tests {
         assert_value_roundtrip(MetricValue::PeakMemoryUsage {
             name: Cow::Borrowed("peak_mem_used"),
             gauge: peak_memory,
+        });
+
+        let bytes_count = Count::new();
+        bytes_count.add(55);
+        assert_value_roundtrip(MetricValue::BytesCount {
+            name: Cow::Borrowed("bytes_scanned"),
+            count: bytes_count,
+        });
+
+        let bytes_gauge = Gauge::new();
+        bytes_gauge.add(66);
+        assert_value_roundtrip(MetricValue::BytesGauge {
+            name: Cow::Borrowed("stream_memory_usage"),
+            gauge: bytes_gauge,
         });
 
         let time = Time::new();

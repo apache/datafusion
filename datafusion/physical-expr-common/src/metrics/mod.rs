@@ -125,7 +125,9 @@ impl Display for Metric {
         }
 
         // and now the value
-        write!(f, "={}", self.value)
+        write!(f, "=")?;
+
+        write!(f, "{}", self.value)
     }
 }
 
@@ -299,6 +301,7 @@ impl MetricsSet {
     pub fn sum_by_name(&self, metric_name: &str) -> Option<MetricValue> {
         self.sum(|m| match m.value() {
             MetricValue::Count { name, .. } => name == metric_name,
+            MetricValue::BytesCount { name, .. } => name == metric_name,
             MetricValue::Time { name, .. } => name == metric_name,
             MetricValue::OutputRows(_) => false,
             MetricValue::ElapsedCompute(_) => false,
@@ -309,6 +312,7 @@ impl MetricsSet {
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
+            MetricValue::BytesGauge { name, .. } => name == metric_name,
             MetricValue::PeakMemoryUsage { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
@@ -771,6 +775,72 @@ mod tests {
         };
 
         assert_eq!(metrics.sum(|_| true), Some(expected_sum));
+    }
+
+    #[test]
+    fn test_bytes_counter_and_gauge_use_byte_units() {
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // A dedicated byte counter/gauge (like `bytes_scanned` or
+        // `stream_memory_usage`) must render with human_readable_size's
+        // 1024-based units (KB/MB/GB), not human_readable_count's 1000-based
+        // units (K/M/B) - see #24203. 3 GiB, chosen to clear
+        // human_readable_size's >= 2x-tier threshold for GB (below that it
+        // falls back to a large MB value).
+        let three_gib = 3 * 1024 * 1024 * 1024;
+        let bytes_scanned =
+            MetricBuilder::new(&metrics).bytes_counter("bytes_scanned", 0);
+        bytes_scanned.add(three_gib);
+
+        let stream_memory_usage =
+            MetricBuilder::new(&metrics).bytes_gauge("stream_memory_usage", 0);
+        stream_memory_usage.add(three_gib);
+
+        // ParquetSink uses the global (non-partitioned) builder for
+        // `bytes_written`, distinct from `bytes_scanned`'s partitioned
+        // `bytes_counter` above - cover that path too.
+        let bytes_written =
+            MetricBuilder::new(&metrics).global_bytes_counter("bytes_written");
+        bytes_written.add(three_gib);
+
+        // A generic (non-byte) Count/Gauge tagged Bytes must NOT be
+        // reinterpreted based on category - only the dedicated
+        // BytesCount/BytesGauge variants get byte formatting. This is the
+        // explicit-typing fix for #24203, replacing an earlier approach that
+        // reinterpreted any Bytes-category Count/Gauge at Display time.
+        let generic_bytes_gauge = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("right_input_rows", 0);
+        generic_bytes_gauge.add(three_gib);
+
+        let rendered: Vec<String> = metrics
+            .clone_inner()
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "bytes_scanned{partition=0}=3.0 GB"),
+            "bytes_scanned should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "stream_memory_usage{partition=0}=3.0 GB"),
+            "stream_memory_usage should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|s| s == "bytes_written=3.0 GB"),
+            "bytes_written (global_bytes_counter, no partition) should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "right_input_rows{partition=0}=3.22 B"),
+            "a generic Gauge must keep count-formatting even when tagged Bytes, got: {rendered:?}"
+        );
     }
 
     #[test]

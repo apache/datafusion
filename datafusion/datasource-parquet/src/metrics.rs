@@ -227,8 +227,7 @@ impl ParquetFileMetrics {
         let bytes_scanned = builder
             .clone()
             .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_scanned", partition);
+            .bytes_counter("bytes_scanned", partition);
 
         let metadata_load_time = builder
             .clone()
@@ -349,8 +348,7 @@ impl ParquetFileMetrics {
         MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_processed", partition)
+            .bytes_counter("bytes_processed", partition)
     }
 
     /// Record pages whose page-index pruning was skipped because the containing
