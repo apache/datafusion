@@ -46,12 +46,8 @@ pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti)
 }
 
-// Returns boolean to check if the join type needs to record buffered side matches, so that
-// the buffered rows left unmatched can be emitted in the final pass.
-//
-// No bitmap is involved for any join type: both streams only ever mark a contiguous suffix
-// of the buffered side, so the boundary is tracked as a single index
-// (`BufferedSideData::min_marked`).
+// Returns boolean to check if the join type needs to record
+// buffered side matches for classic joins
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::Full | JoinType::Left)
 }
