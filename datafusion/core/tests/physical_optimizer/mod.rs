@@ -32,6 +32,7 @@ mod limit_pushdown;
 mod limited_distinct_aggregation;
 mod output_requirements;
 mod partition_statistics;
+mod partitioned_topk_metrics;
 mod projection_pushdown;
 mod pushdown_sort;
 mod replace_with_order_preserving_variants;
