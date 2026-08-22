@@ -1,0 +1,13 @@
+load sql_benchmarks/aggregate/init/load.sql
+
+name ${NAME}
+group aggregate
+
+assert B
+SELECT COUNT(*) = ${AGGREGATE_ROWS:-1000000} FROM aggregate_data;
+----
+true
+
+run sql_benchmarks/aggregate/queries/${SUBGROUP}/q${QPAD}.sql
+
+cleanup sql_benchmarks/aggregate/init/cleanup.sql
