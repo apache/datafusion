@@ -1048,8 +1048,8 @@ mod test {
     use datafusion_expr::{Expr, col};
     use datafusion_functions::core::get_field;
     use datafusion_physical_expr::planner::logical2physical;
-    use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
     use parquet::file::metadata::ParquetMetaData;
     use std::collections::HashMap;
     use tempfile::NamedTempFile;
@@ -1600,57 +1600,15 @@ mod test {
 
     /// A root reached by both a narrowing cast and a disjoint `get_field`
     /// access shares the union of their leaves.
+    ///
+    /// The plan is then run through the decoder: reading the file with the
+    /// mask it produced must emit exactly the schema it promised, and both
+    /// expressions must evaluate against the resulting batch. A mask/schema
+    /// pair can be internally consistent and still be wrong — if `fields` were
+    /// pushed out of root order, or a clipped struct named leaves the reader
+    /// groups differently, only decoding catches it.
     #[test]
     fn build_projection_read_plan_unions_cast_and_get_field_on_one_root() {
-        let (file_schema, metadata) = write_id_struct_file();
-        let schema_descr = metadata.file_metadata().schema_descr();
-
-        let narrow = DataType::Struct(
-            vec![Arc::new(Field::new("value", DataType::Int32, true))].into(),
-        );
-        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(CastExpr::new(
-                Arc::new(PhysicalColumn::new("s", 1)),
-                narrow,
-                None,
-            )),
-            logical2physical(
-                &get_field().call(vec![
-                    col("s"),
-                    Expr::Literal(ScalarValue::Utf8(Some("label".to_string())), None),
-                ]),
-                &file_schema,
-            ),
-        ];
-
-        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
-
-        let expected_mask = ProjectionMask::leaves(schema_descr, [1, 2]);
-        assert_eq!(read_plan.projection_mask, expected_mask);
-
-        let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
-        assert_eq!(
-            s_field.data_type(),
-            &DataType::Struct(
-                vec![
-                    Arc::new(Field::new("value", DataType::Int32, false)),
-                    Arc::new(Field::new("label", DataType::Utf8, false)),
-                ]
-                .into()
-            ),
-        );
-    }
-
-    /// The planner-level companion above proves the *mask* and *projected
-    /// schema* are what we intend. This proves the decoder agrees: reading the
-    /// file through that exact mask must emit that exact schema, and both the
-    /// cast and the `get_field` must evaluate against the batch it produces.
-    ///
-    /// A mask/schema pair can be internally consistent and still be wrong — if
-    /// `fields` were pushed out of root order, or a clipped struct named leaves
-    /// the reader groups differently, only running the decoder catches it.
-    #[test]
-    fn build_projection_read_plan_mask_decodes_cast_and_get_field_on_one_root() {
         let (file, file_schema, metadata) = write_id_struct_file_with_handle();
         let schema_descr = metadata.file_metadata().schema_descr();
 
@@ -1668,6 +1626,20 @@ mod test {
 
         let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
 
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1, 2])
+        );
+        let expected_s = DataType::Struct(
+            vec![
+                Arc::new(Field::new("value", DataType::Int32, false)),
+                Arc::new(Field::new("label", DataType::Utf8, false)),
+            ]
+            .into(),
+        );
+        let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
+        assert_eq!(s_field.data_type(), &expected_s);
+
         let mut reader = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
             .expect("reader builder")
             .with_projection(read_plan.projection_mask.clone())
@@ -1678,17 +1650,17 @@ mod test {
         assert_eq!(
             batch.schema().fields(),
             read_plan.projected_schema.fields(),
-            "the decoder must emit exactly the schema the read plan promised",
+            "the decoder must emit exactly the schema the read plan promised"
         );
 
         // The batch carries only the projected roots, so the expressions have
         // to be re-planned against it the way the scan's adapter would.
         let projected = read_plan.projected_schema.as_ref();
-        let cast = Arc::new(CastExpr::new(
+        let cast = CastExpr::new(
             Arc::new(PhysicalColumn::new("s", projected.index_of("s").unwrap())),
             narrow,
             None,
-        ));
+        );
         let label = get_field_of(projected, "s", "label");
 
         let rows = batch.num_rows();
@@ -1697,13 +1669,13 @@ mod test {
         assert_eq!(cast_out.num_columns(), 1, "`pad` and `label` were pruned");
         assert_eq!(
             cast_out.column(0).as_ref(),
-            &Int32Array::from(vec![10, 20, 30]) as &dyn Array,
+            &Int32Array::from(vec![10, 20, 30]) as &dyn Array
         );
 
         let label_out = label.evaluate(&batch).unwrap().into_array(rows).unwrap();
         assert_eq!(
             label_out.as_ref(),
-            &StringArray::from(vec!["a", "b", "c"]) as &dyn Array,
+            &StringArray::from(vec!["a", "b", "c"]) as &dyn Array
         );
     }
 
@@ -1750,14 +1722,20 @@ mod test {
         HashMap::from([("tag".to_string(), value.to_string())])
     }
 
-    /// Writes a fixture whose nested fields carry Arrow metadata, so tests can
-    /// check that a projected field keeps it.
+    /// A fixture whose nested fields carry Arrow metadata, so tests can check
+    /// that a projected field keeps it.
+    ///
+    /// Only the schema and its Parquet descriptor are needed here, so this
+    /// converts the Arrow schema directly instead of round-tripping a written
+    /// file. The two therefore agree on leaf counts by construction, which the
+    /// clipping guard requires — if they diverged, every root would fall back
+    /// and the tests below would pass vacuously.
     ///
     /// Schema: a (Struct{p: Int32, q: Utf8}),
     ///         b [tag] (Struct{outer [tag] (Struct{x: Int32 [tag], y: Utf8}),
     ///                         n: Utf8}).
     /// Parquet leaves: a.p=0, a.q=1, b.outer.x=2, b.outer.y=3, b.n=4.
-    fn write_annotated_nested_file() -> (SchemaRef, Arc<ParquetMetaData>) {
+    fn annotated_nested_schema() -> (SchemaRef, SchemaDescriptor) {
         let a_fields: Fields = vec![
             Arc::new(Field::new("p", DataType::Int32, false)),
             Arc::new(Field::new("q", DataType::Utf8, false)),
@@ -1785,40 +1763,10 @@ mod test {
             ),
         ]));
 
-        let ints = |values: [i32; 2]| Arc::new(Int32Array::from(values.to_vec())) as _;
-        let strs = |values: [&str; 2]| Arc::new(StringArray::from(values.to_vec())) as _;
-        let outer = Arc::new(StructArray::new(
-            outer_fields,
-            vec![ints([1, 2]), strs(["x0", "x1"])],
-            None,
-        )) as _;
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(StructArray::new(
-                    a_fields,
-                    vec![ints([3, 4]), strs(["q0", "q1"])],
-                    None,
-                )) as _,
-                Arc::new(StructArray::new(
-                    b_fields,
-                    vec![outer, strs(["n0", "n1"])],
-                    None,
-                )) as _,
-            ],
-        )
-        .unwrap();
-
-        let file = NamedTempFile::new().expect("temp file");
-        let mut writer =
-            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
-                .expect("writer");
-        writer.write(&batch).expect("write batch");
-        writer.close().expect("close writer");
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
-            .expect("reader builder");
-        (builder.schema().clone(), builder.metadata().clone())
+        let schema_descr = ArrowSchemaConverter::new()
+            .convert(&schema)
+            .expect("parquet descriptor");
+        (schema, schema_descr)
     }
 
     /// A root's projected field must not depend on which builder produced it.
@@ -1829,8 +1777,8 @@ mod test {
     /// metadata — otherwise `b`'s type would silently depend on `a`.
     #[test]
     fn build_projection_read_plan_preserves_field_metadata_on_both_paths() {
-        let (file_schema, metadata) = write_annotated_nested_file();
-        let schema_descr = metadata.file_metadata().schema_descr();
+        let (file_schema, schema_descr) = annotated_nested_schema();
+        let schema_descr = &schema_descr;
 
         let literal =
             |value: &str| Expr::Literal(ScalarValue::Utf8(Some(value.to_string())), None);
