@@ -19,7 +19,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll};
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use itertools::Itertools;
@@ -615,6 +615,7 @@ impl ExecutionPlan for FilterExec {
             context.task_id()
         );
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let flush_when_input_pending = self.input.boundedness().is_unbounded();
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
@@ -626,6 +627,7 @@ impl ExecutionPlan for FilterExec {
                 self.batch_size,
                 self.fetch,
             ),
+            flush_when_input_pending,
         }))
     }
 
@@ -1306,6 +1308,8 @@ struct FilterExecStream {
     projection: Option<ProjectionRef>,
     /// Batch coalescer to combine small batches
     batch_coalescer: LimitedBatchCoalescer,
+    /// Emit buffered rows when an unbounded input has no batch ready.
+    flush_when_input_pending: bool,
 }
 
 /// The metrics for `FilterExec`
@@ -1383,15 +1387,22 @@ impl Stream for FilterExecStream {
             }
 
             // Attempt to pull the next batch from the input stream.
-            match ready!(self.input.poll_next_unpin(cx)) {
-                None => {
+            match self.input.poll_next_unpin(cx) {
+                Poll::Pending => {
+                    if self.flush_when_input_pending && !self.batch_coalescer.is_empty() {
+                        self.batch_coalescer.flush()?;
+                        continue;
+                    }
+                    return Poll::Pending;
+                }
+                Poll::Ready(None) => {
                     self.batch_coalescer.finish()?;
                     // Release the input pipeline's resources.
                     let input_schema = self.input.schema();
                     self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
                     // continue draining the coalescer
                 }
-                Some(Ok(batch)) => {
+                Poll::Ready(Some(Ok(batch))) => {
                     let timer = elapsed_compute.timer();
                     let status = self.predicate.as_ref()
                         .evaluate(&batch)
@@ -1423,9 +1434,7 @@ impl Stream for FilterExecStream {
                     timer.done();
 
                     match status {
-                        PushBatchStatus::Continue => {
-                            // Keep pushing more batches
-                        }
+                        PushBatchStatus::Continue => {}
                         PushBatchStatus::LimitReached => {
                             // limit was reached, so stop early
                             self.batch_coalescer.finish()?;
@@ -1439,7 +1448,7 @@ impl Stream for FilterExecStream {
                 }
 
                 // Error case
-                other => return Poll::Ready(other),
+                Poll::Ready(other) => return Poll::Ready(other),
             }
         }
     }
@@ -1516,9 +1525,163 @@ mod tests {
     use crate::empty::EmptyExec;
     use crate::expressions::*;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
+    use crate::stream::RecordBatchStreamAdapter;
+    use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test;
     use crate::test::exec::StatisticsExec;
+    use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+    use futures::stream::poll_fn;
+    use std::fmt::{Debug, Formatter};
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use tokio::sync::mpsc::{Receiver, Sender, channel};
+
+    struct ChannelPartition {
+        schema: SchemaRef,
+        receiver: Mutex<Option<Receiver<Result<RecordBatch>>>>,
+    }
+
+    impl Debug for ChannelPartition {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("ChannelPartition").finish_non_exhaustive()
+        }
+    }
+
+    impl PartitionStream for ChannelPartition {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            let mut receiver = self
+                .receiver
+                .lock()
+                .expect("channel receiver lock poisoned")
+                .take()
+                .expect("channel partition can only be executed once");
+            let input = poll_fn(move |cx| receiver.poll_recv(cx));
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                input,
+            ))
+        }
+    }
+
+    fn int32_batch(schema: &SchemaRef, values: Vec<i32>) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(Int32Array::from(values))],
+        )?)
+    }
+
+    fn unbounded_int32_filter(
+        schema: &SchemaRef,
+    ) -> Result<(Sender<Result<RecordBatch>>, SendableRecordBatchStream)> {
+        let (tx, rx) = channel(2);
+        let source = Arc::new(StreamingTableExec::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(ChannelPartition {
+                schema: Arc::clone(schema),
+                receiver: Mutex::new(Some(rx)),
+            })],
+            None,
+            vec![],
+            true,
+            None,
+        )?);
+        let predicate =
+            binary(col("value", schema)?, Operator::GtEq, lit(10_i32), schema)?;
+        let filter = Arc::new(FilterExec::try_new(predicate, source)?);
+        let output = crate::execute_stream(filter, Arc::new(TaskContext::default()))?;
+        Ok((tx, output))
+    }
+
+    #[tokio::test]
+    async fn unbounded_filter_emits_while_input_is_open() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let (tx, mut output) = unbounded_int32_filter(&schema)?;
+
+        tx.send(Ok(int32_batch(&schema, vec![5, 10, 15])?))
+            .await
+            .expect("query stream should remain open");
+        let first = tokio::time::timeout(Duration::from_secs(5), output.next())
+            .await
+            .expect("unbounded filter withheld the first batch")
+            .expect("unbounded filter ended unexpectedly")?;
+        assert_eq!(first, int32_batch(&schema, vec![10, 15])?);
+
+        tx.send(Ok(int32_batch(&schema, vec![1, 5])?))
+            .await
+            .expect("query stream should accept a filtered-out batch");
+        tx.send(Ok(int32_batch(&schema, vec![20])?))
+            .await
+            .expect("query stream should accept another batch");
+        let second = tokio::time::timeout(Duration::from_secs(5), output.next())
+            .await
+            .expect("unbounded filter withheld the second batch")
+            .expect("unbounded filter ended unexpectedly")?;
+        assert_eq!(second, int32_batch(&schema, vec![20])?);
+
+        drop(tx);
+        assert!(output.next().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unbounded_filter_coalesces_immediately_ready_batches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let (tx, mut output) = unbounded_int32_filter(&schema)?;
+
+        tx.send(Ok(int32_batch(&schema, vec![5, 10, 15])?))
+            .await
+            .expect("query stream should remain open");
+        tx.send(Ok(int32_batch(&schema, vec![1, 20])?))
+            .await
+            .expect("query stream should remain open");
+
+        let batch = tokio::time::timeout(Duration::from_secs(5), output.next())
+            .await
+            .expect("unbounded filter withheld ready rows")
+            .expect("unbounded filter ended unexpectedly")?;
+        assert_eq!(batch, int32_batch(&schema, vec![10, 15, 20])?);
+
+        drop(tx);
+        assert!(output.next().await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bounded_filter_still_coalesces_small_batches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let input = test::TestMemoryExec::try_new_exec(
+            &[vec![
+                int32_batch(&schema, vec![5, 10, 15])?,
+                int32_batch(&schema, vec![1, 20])?,
+            ]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let predicate =
+            binary(col("value", &schema)?, Operator::GtEq, lit(10_i32), &schema)?;
+        let filter = Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let output = crate::collect(filter, Arc::new(TaskContext::default())).await?;
+        assert_eq!(output, vec![int32_batch(&schema, vec![10, 15, 20])?]);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {
