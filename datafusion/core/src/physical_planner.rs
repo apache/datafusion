@@ -1218,7 +1218,8 @@ impl DefaultPhysicalPlanner {
                     .config()
                     .options()
                     .optimizer
-                    .default_filter_selectivity;
+                    .default_filter_selectivity
+                    .get();
                 let filter_exec: Arc<dyn ExecutionPlan> =
                     Arc::new(filter.with_default_selectivity(selectivity)?);
                 filter_exec

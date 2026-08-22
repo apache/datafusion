@@ -28,7 +28,8 @@ use crate::decoder_projection::DecoderProjection;
 use crate::metrics::ByteProgress;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
-    DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
+    DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
+    RowGroupPruner,
 };
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
@@ -1458,7 +1459,11 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, rg_plan, has_row_selection) = {
+        let InitialDecoderState {
+            decoder,
+            rg_plan,
+            has_row_selection,
+        } = {
             let pushdown_predicate = prepared
                 .pushdown_filters
                 .then_some(prepared.predicate.as_ref())
@@ -1520,7 +1525,11 @@ impl RowGroupsPrunedParquetOpen {
                 }
             }
 
-            (builder.build()?, rg_plan, has_row_selection)
+            InitialDecoderState {
+                decoder: builder.build()?,
+                rg_plan,
+                has_row_selection,
+            }
         };
 
         // Track how much of this file range the scan has finished with. Credit
