@@ -770,6 +770,55 @@ caused by
 Invalid or Unsupported Configuration: value must be greater than 0
 
 
+# default_null_ordering is an enum; reject typos instead of silently
+# falling back to the default (nulls_max).
+statement ok
+SET datafusion.sql_parser.default_null_ordering = 'nulls_first'
+
+query TT
+SHOW datafusion.sql_parser.default_null_ordering
+----
+datafusion.sql_parser.default_null_ordering nulls_first
+
+statement ok
+SET datafusion.sql_parser.default_null_ordering = 'NULLS_LAST'
+
+query TT
+SHOW datafusion.sql_parser.default_null_ordering
+----
+datafusion.sql_parser.default_null_ordering nulls_last
+
+statement error
+SET datafusion.sql_parser.default_null_ordering = 'nulls_mx'
+----
+DataFusion error: Error setting config datafusion.sql_parser.default_null_ordering
+caused by
+Invalid or Unsupported Configuration: Invalid default_null_ordering: 'nulls_mx'. Expected one of: nulls_max, nulls_min, nulls_first, nulls_last
+
+
+statement error
+SET datafusion.sql_parser.default_null_ordering = ''
+----
+DataFusion error: Error setting config datafusion.sql_parser.default_null_ordering
+caused by
+Invalid or Unsupported Configuration: Invalid default_null_ordering: ''. Expected one of: nulls_max, nulls_min, nulls_first, nulls_last
+
+
+# The previous valid value remains active after a rejected SET.
+query TT
+SHOW datafusion.sql_parser.default_null_ordering
+----
+datafusion.sql_parser.default_null_ordering nulls_last
+
+statement ok
+RESET datafusion.sql_parser.default_null_ordering
+
+query TT
+SHOW datafusion.sql_parser.default_null_ordering
+----
+datafusion.sql_parser.default_null_ordering nulls_max
+
+
 # max_buffered_batches_per_output_file is halved to size an internal channel
 # capacity, so 0 and 1 both round down to a zero-capacity channel and must be
 # rejected, not just 0.
