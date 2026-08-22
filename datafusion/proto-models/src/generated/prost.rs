@@ -746,12 +746,14 @@ pub struct CrossJoinNode {
 pub struct LimitNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    /// The number of rows to skip before fetch; non-positive means don't skip any
-    #[prost(int64, tag = "2")]
-    pub skip: i64,
-    /// Maximum number of rows to fetch; negative means no limit
-    #[prost(int64, tag = "3")]
-    pub fetch: i64,
+    /// The number of rows to skip before fetch;
+    /// If it is Literal and non-positive means don't skip any
+    #[prost(message, optional, boxed, tag = "4")]
+    pub skip: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    /// Maximum number of rows to fetch;
+    /// If it is Literal and negative means no limit
+    #[prost(message, optional, boxed, tag = "5")]
+    pub fetch: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SelectionExecNode {
