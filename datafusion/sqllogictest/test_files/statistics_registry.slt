@@ -162,7 +162,7 @@ statement ok
 set datafusion.optimizer.use_statistics_registry = false;
 
 statement ok
-set datafusion.optimizer.hash_join_single_partition_threshold = 1048576;
+set datafusion.optimizer.hash_join_single_partition_threshold = 4194304;
 
 statement ok
 set datafusion.optimizer.hash_join_single_partition_threshold_rows = 131072;
