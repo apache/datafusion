@@ -61,6 +61,7 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use crate::replace_filter_top1::ReplaceFilterTop1;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -316,6 +317,7 @@ impl Optimizer {
             Arc::new(ExtractLeafExpressions::new()),
             Arc::new(PushDownLeafProjections::new()),
             Arc::new(OptimizeProjections::new()),
+            Arc::new(ReplaceFilterTop1::new()),
         ];
 
         Self::with_rules(rules)
