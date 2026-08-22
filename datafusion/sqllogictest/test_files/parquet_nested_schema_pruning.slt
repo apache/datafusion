@@ -131,7 +131,7 @@ Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignor
 query TT
 explain analyze select s['x'] from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=PLACEHOLDER<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=75.0 B<slt:ignore>]
 
 # Mixed access -- the whole (narrowed) column and a subfield of it -- still
 # reads only the narrow schema's leaves.
