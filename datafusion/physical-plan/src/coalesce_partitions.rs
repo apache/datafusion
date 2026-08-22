@@ -26,12 +26,17 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
+};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions, validate_child_count,
+};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
@@ -151,25 +156,44 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
-        plan.fetch = self.fetch;
-        Ok(Arc::new(plan))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
+                plan.fetch = self.fetch;
+                Ok(Arc::new(plan))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -304,8 +328,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self.input
             .with_preserve_order(preserve_order)
             .and_then(|new_input| {
-                Arc::new(self.clone())
-                    .with_new_children(vec![new_input])
+                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
                     .ok()
             })
     }
@@ -361,13 +384,24 @@ impl ExecutionPlan for CoalescePartitionsExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CoalescePartitionsExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            fetch,
+        } = self;
+        let input = ctx.encode_child(input)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
                     protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch().map(|f| f as u32),
+                        fetch: fetch.map(|f| f as u32),
                     },
                 )),
             ),
@@ -394,14 +428,17 @@ impl CoalescePartitionsExec {
             protobuf::physical_plan_node::PhysicalPlanType::Merge,
             "CoalescePartitionsExec",
         );
+        // Destructure exhaustively so that a new field on
+        // `CoalescePartitionsExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::CoalescePartitionsExecNode { input, fetch } = &**merge;
         let input = ctx.decode_required_child(
-            merge.input.as_deref(),
+            input.as_deref(),
             "CoalescePartitionsExec",
             "input",
         )?;
         Ok(Arc::new(
-            CoalescePartitionsExec::new(input)
-                .with_fetch(merge.fetch.map(|f| f as usize)),
+            CoalescePartitionsExec::new(input).with_fetch(fetch.map(|f| f as usize)),
         ))
     }
 }

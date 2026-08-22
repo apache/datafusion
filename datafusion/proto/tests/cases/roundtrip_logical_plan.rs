@@ -116,7 +116,7 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
-use datafusion_proto::{FromProto, protobuf};
+use datafusion_proto::protobuf;
 
 use crate::cases::{
     MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF, MyHigherOrderUdfNode,
@@ -495,9 +495,7 @@ async fn roundtrip_create_external_table_legacy_location() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = DFSchema::empty();
     let create_external_table = protobuf::CreateExternalTableNode {
-        name: Some(protobuf::TableReference::from_proto(TableReference::bare(
-            "t",
-        ))),
+        name: Some(protobuf::TableReference::from(TableReference::bare("t"))),
         location: "legacy.csv".to_string(),
         locations: vec![],
         file_type: "CSV".to_string(),

@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::array::{Array, BooleanArray};
 use datafusion_common::Result;
+
+pub(super) type StaticFilterRef = Arc<dyn StaticFilter + Send + Sync>;
 
 /// Trait for InList static filters.
 ///

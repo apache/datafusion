@@ -35,13 +35,13 @@ pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
+use datafusion_physical_expr::projection::ProjectionExpr;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
@@ -267,6 +267,26 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// joins).
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
+    /// Returns a clone of the existing plan with the children replaced,
+    /// skipping recomputation of plan properties when the options indicate
+    /// the new children's properties are unchanged.
+    ///
+    /// Callers should typically call [`replace_children_if_necessary`] and
+    /// not invoke this method directly.
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        #[expect(deprecated)]
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                self.with_new_children_and_same_properties(children)
+            }
+            ChildrenPropertiesMode::Recompute => self.with_new_children(children),
+        }
+    }
+
     /// Apply a closure `f` to each root expression that this node owns and uses
     /// during execution, either by evaluating it or updating it dynamically.
     ///
@@ -331,27 +351,98 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
 
-    /// Returns a new `ExecutionPlan` where all existing children were replaced
-    /// by the `children`, in order
+    /// Deprecated.
+    ///
+    /// DataFusion will remove this method in the future in favor of
+    /// [`ExecutionPlan::replace_children`].
+    ///
+    /// Note that this method is still required by the trait; implementations
+    /// should delegate to [`ExecutionPlan::replace_children`] with
+    /// [`ChildrenPropertiesMode::Recompute`].
+    ///
+    /// # Example Implementation
+    /// ```
+    /// # #![allow(deprecated)]
+    /// # use std::fmt;
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::Result;
+    /// # use datafusion_common::tree_node::TreeNodeRecursion;
+    /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    /// # use datafusion_physical_expr::PhysicalExpr;
+    /// # use datafusion_physical_plan::{
+    /// #     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    /// #     PlanProperties, ReplaceChildrenOptions,
+    /// # };
+    /// # #[derive(Debug)]
+    /// # struct MyExec {
+    /// #     input: Arc<dyn ExecutionPlan>,
+    /// # }
+    /// # impl DisplayAs for MyExec {
+    /// #     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+    /// #         write!(f, "MyExec")
+    /// #     }
+    /// # }
+    /// impl ExecutionPlan for MyExec {
+    ///     // ...
+    /// #    fn name(&self) -> &'static str {
+    /// #        "MyExec"
+    /// #    }
+    /// #    fn properties(&self) -> &Arc<PlanProperties> {
+    /// #        self.input.properties()
+    /// #    }
+    /// #    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+    /// #        vec![&self.input]
+    /// #    }
+    /// #    fn apply_expressions(
+    /// #        &self,
+    /// #        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    /// #    ) -> Result<TreeNodeRecursion> {
+    /// #        Ok(TreeNodeRecursion::Continue)
+    /// #    }
+    /// #    fn execute(
+    /// #        &self,
+    /// #        _partition: usize,
+    /// #        _context: Arc<TaskContext>,
+    /// #    ) -> Result<SendableRecordBatchStream> {
+    /// #        unimplemented!()
+    /// #    }
+    ///     fn replace_children(
+    ///         self: Arc<Self>,
+    ///         mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ///         _options: ReplaceChildrenOptions,
+    ///     ) -> Result<Arc<dyn ExecutionPlan>> {
+    ///         Ok(Arc::new(MyExec {
+    ///             input: children.swap_remove(0),
+    ///         }))
+    ///     }
+    ///
+    ///     fn with_new_children(
+    ///         self: Arc<Self>,
+    ///         children: Vec<Arc<dyn ExecutionPlan>>,
+    ///     ) -> Result<Arc<dyn ExecutionPlan>> {
+    ///         // call into `replace_children` with `ReplaceChildrenOptions`
+    ///         self.replace_children(
+    ///             children,
+    ///             ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+    ///         )
+    ///     }
+    /// }
+    /// ```
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use `ExecutionPlan::replace_children` with `ReplaceChildrenOptions`"
+    )]
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Fast-path used by [`with_new_children_if_necessary`] when the new
-    /// `children` are known to have the same [`PlanProperties`] as the current
-    /// children. Implementations should swap the children in without
-    /// recomputing this plan's `PlanProperties` (typically by cloning `self`
-    /// and replacing the child pointers).
-    ///
-    /// The default implementation falls back to
-    /// [`ExecutionPlan::with_new_children`] which is always correct but
-    /// forfeits the fast-path: implementations that own an expensive
-    /// `PlanProperties` (e.g. projection mapping, complex equivalence
-    /// classes) should override this method.
-    ///
-    /// Callers should route through [`with_new_children_if_necessary`] and
-    /// not invoke this method directly.
+    /// Deprecated. Implement [`ExecutionPlan::replace_children`] instead.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use `ExecutionPlan::replace_children` with `ReplaceChildrenOptions`"
+    )]
+    #[expect(deprecated)]
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -362,11 +453,11 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Reset any internal state within this [`ExecutionPlan`].
     ///
     /// This method is called when an [`ExecutionPlan`] needs to be re-executed,
-    /// such as in recursive queries. Unlike [`ExecutionPlan::with_new_children`], this method
+    /// such as in recursive queries. Unlike [`ExecutionPlan::replace_children`], this method
     /// ensures that any stateful components (e.g., [`DynamicFilterPhysicalExpr`])
     /// are reset to their initial state.
     ///
-    /// The default implementation simply calls [`ExecutionPlan::with_new_children`] with the existing children,
+    /// The default implementation simply calls [`ExecutionPlan::replace_children`] with the existing children,
     /// effectively creating a new instance of the [`ExecutionPlan`] with the same children but without
     /// necessarily resetting any internal state. Implementations that require resetting of some
     /// internal state should override this method to provide the necessary logic.
@@ -375,13 +466,16 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// it will be called from within a walk of the execution plan tree so that it will be called on each child later
     /// or was already called on each child.
     ///
-    /// Note to implementers: unlike [`ExecutionPlan::with_new_children`] this method does not accept new children as an argument,
+    /// Note to implementers: unlike [`ExecutionPlan::replace_children`] this method does not accept new children as an argument,
     /// thus it is expected that any cached plan properties will remain valid after the reset.
     ///
     /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
-        self.with_new_children(children)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
@@ -390,7 +484,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// If the `ExecutionPlan` does not support changing its partitioning,
     /// returns `Ok(None)` (the default).
     ///
-    /// It is the `ExecutionPlan` can increase its partitioning, but not to the
+    /// If the `ExecutionPlan` can increase its partitioning, but not to
     /// `target_partitions`, it may return an ExecutionPlan with fewer
     /// partitions. This might happen, for example, if each new partition would
     /// be too small to be efficiently processed individually.
@@ -511,7 +605,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///         partition: usize,
     ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
-    ///         // use functions from futures crate convert the batch into a stream
+    ///         // use functions from futures crate to convert the batch into a stream
     ///         let fut = futures::future::ready(Ok(self.batch.clone()));
     ///         let stream = futures::stream::once(fut);
     ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -743,7 +837,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///    up the plan that `DataSourceExec` can actually bind the filters.
     ///
     /// The default implementation bars all parent filters from being pushed down and adds no new filters.
-    /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    /// This is the safest option, making filter pushdown opt-in on a per-node basis.
     ///
     /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
     /// Depending on the phase the operator may or may not be allowed to modify the plan.
@@ -936,6 +1030,72 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// Options for [`ExecutionPlan::replace_children`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplaceChildrenOptions {
+    /// Describes how plan properties should be handled for the replacement
+    /// children.
+    pub children_properties: ChildrenPropertiesMode,
+}
+
+impl ReplaceChildrenOptions {
+    /// Create new options for [`ExecutionPlan::replace_children`].
+    pub const fn new(children_properties: ChildrenPropertiesMode) -> Self {
+        Self {
+            children_properties,
+        }
+    }
+}
+
+/// Indicates whether the plan properties of the new children must be recomputed.
+///
+/// Part of [`ReplaceChildrenOptions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildrenPropertiesMode {
+    /// The plan properties of the new children are identical to the properties
+    /// of the existing children, so we can skip recomputation.
+    Keep,
+    /// The plan properties of the new children are different from the properties
+    /// of the existing children, so we must recompute the properties from scratch.
+    Recompute,
+}
+
+/// Allows a type to be treated as a reference to an
+/// [`Arc<dyn PhysicalExpr>`].
+///
+/// Used by [`apply_expression_roots`].
+pub trait AsPhysicalExprRef {
+    /// Returns the referenced physical expression.
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr>;
+}
+
+/// Allows an [`Arc<dyn PhysicalExpr>`] to be treated as a reference to itself.
+///
+/// This is needed because `Arc<dyn PhysicalExpr>` does not implement
+/// `AsRef<Arc<dyn PhysicalExpr>>`.
+impl AsPhysicalExprRef for Arc<dyn PhysicalExpr> {
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        self
+    }
+}
+
+/// Allows a [`ProjectionExpr`] to be treated as a reference to its
+/// [`Arc<dyn PhysicalExpr>`].
+impl AsPhysicalExprRef for ProjectionExpr {
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        self.as_ref()
+    }
+}
+
+impl<T> AsPhysicalExprRef for &T
+where
+    T: AsPhysicalExprRef + ?Sized,
+{
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        (*self).as_physical_expr_ref()
+    }
+}
+
 /// Applies `f` to a shallow sequence of physical expression roots.
 ///
 /// [`TreeNodeRecursion::Stop`] stops iteration and is returned immediately.
@@ -947,10 +1107,10 @@ pub fn apply_expression_roots<I>(
 ) -> Result<TreeNodeRecursion>
 where
     I: IntoIterator,
-    I::Item: Borrow<Arc<dyn PhysicalExpr>>,
+    I::Item: AsPhysicalExprRef,
 {
     for root in roots {
-        match f(root.borrow())? {
+        match f(root.as_physical_expr_ref())? {
             TreeNodeRecursion::Stop => return Ok(TreeNodeRecursion::Stop),
             TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {}
         }
@@ -1318,12 +1478,10 @@ pub(crate) fn emission_type_from_children<'a>(
     }
 }
 
-/// Stores certain, often expensive to compute, plan properties used in query
-/// optimization.
+/// Stores plan properties used in query optimization.
 ///
-/// These properties are stored a single structure to permit this information to
-/// be computed once and then those cached results used multiple times without
-/// recomputation (aka a cache)
+/// Serves as a cache for these properties, which are often
+/// expensive to compute.
 #[derive(Debug, Clone)]
 pub struct PlanProperties {
     /// See [ExecutionPlanProperties::equivalence_properties]
@@ -1527,19 +1685,19 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 ///
 /// 1. **Same child pointers** — if every `children[i]` is `Arc::ptr_eq` to the
 ///    corresponding existing child, the original `plan` is returned
-///    unchanged (no allocation, no [`ExecutionPlan::with_new_children`]
+///    unchanged (no allocation, no [`ExecutionPlan::replace_children`]
 ///    call).
 /// 2. **Same child properties** — if the children's `PlanProperties` Arcs
 ///    match (via [`has_same_children_properties`]), the plan's own
 ///    `PlanProperties` cache can be reused. This calls
-///    [`ExecutionPlan::with_new_children_and_same_properties`], which
-///    swaps the child pointers without recomputing `PlanProperties`.
+///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesMode::Keep`],
+///    which swaps the child pointers without recomputing `PlanProperties`.
 /// 3. **Full recompute** — otherwise, delegate to
-///    [`ExecutionPlan::with_new_children`], which recomputes
-///    `PlanProperties` from scratch.
+///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesMode::Recompute`],
+///    which recomputes `PlanProperties` from scratch.
 ///
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
-pub fn with_new_children_if_necessary(
+pub fn replace_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1560,11 +1718,25 @@ pub fn with_new_children_if_necessary(
         }
         // Layer 2: same child properties → reuse `PlanProperties` cache.
         if has_same_children_properties(plan.as_ref(), &children)? {
-            return plan.with_new_children_and_same_properties(children);
+            return plan.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+            );
         }
     }
     // Layer 3: full recompute.
-    plan.with_new_children(children)
+    plan.replace_children(
+        children,
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+    )
+}
+
+#[deprecated(since = "55.0.0", note = "Use `replace_children_if_necessary`")]
+pub fn with_new_children_if_necessary(
+    plan: Arc<dyn ExecutionPlan>,
+    children: Vec<Arc<dyn ExecutionPlan>>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    replace_children_if_necessary(plan, children)
 }
 
 /// Return a [`DisplayableExecutionPlan`] wrapper around an
@@ -1619,6 +1791,13 @@ pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
+    // Avoid `JoinSet::spawn` for single partition
+    if plan.output_partitioning().partition_count() == 1 {
+        let stream = plan.execute(0, context)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        return Ok(vec![batches]);
+    }
+
     let streams = execute_stream_partitioned(plan, context)?;
 
     let mut join_set = JoinSet::new();
@@ -1828,9 +2007,9 @@ pub fn has_same_children_properties(
 /// the same as plan already has. Could be used to implement fast-path for method
 /// [`ExecutionPlan::with_new_children`].
 ///
-/// New call sites should route through [`with_new_children_if_necessary`],
+/// New call sites should route through [`replace_children_if_necessary`],
 /// which applies this check together with the child-pointer short-circuit
-/// (see [`with_new_children_if_necessary`] for the layered policy). This
+/// (see [`replace_children_if_necessary`] for the layered policy). This
 /// macro remains for direct-caller sites that have not been migrated yet.
 #[macro_export]
 macro_rules! check_if_same_properties {
@@ -1842,6 +2021,22 @@ macro_rules! check_if_same_properties {
             return ::std::sync::Arc::clone(&$plan)
                 .with_new_children_and_same_properties($children);
         }
+    };
+}
+
+/// Helper macro to validate that replacement children match a plan's existing
+/// child count.
+///
+/// This is useful for [`ExecutionPlan::replace_children`] implementations that
+/// need to preserve the same child-count validation behavior.
+#[macro_export]
+macro_rules! validate_child_count {
+    ($plan: expr, $children: expr) => {
+        datafusion_common::assert_eq_or_internal_err!(
+            $children.len(),
+            $plan.children().len(),
+            "Wrong number of children"
+        );
     };
 }
 
@@ -1936,9 +2131,10 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
@@ -1948,6 +2144,16 @@ mod tests {
             _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -2043,11 +2249,22 @@ mod tests {
             Ok(TreeNodeRecursion::Continue)
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -2100,11 +2317,22 @@ mod tests {
             self.0.apply_expressions(f)
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
@@ -2165,11 +2393,22 @@ mod tests {
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }
-        fn with_new_children(
+
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
         fn execute(
             &self,
@@ -2234,38 +2473,59 @@ mod tests {
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }
-        fn with_new_children(
+
+        fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
+            options: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.recompute_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            // Full recompute: allocate a fresh `PlanProperties` Arc so this
-            // path is observable via `Arc::ptr_eq` on properties.
-            let new_input = children.swap_remove(0);
-            let cache = Arc::new(PlanProperties::new(
-                EquivalenceProperties::new(Arc::new(Schema::empty())),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Final,
-                Boundedness::Bounded,
-            ));
-            Ok(Arc::new(Self {
-                input: new_input,
-                cache,
-                recompute_calls: Arc::clone(&self.recompute_calls),
-                fast_path_calls: Arc::clone(&self.fast_path_calls),
-            }))
+            match options.children_properties {
+                ChildrenPropertiesMode::Keep => {
+                    self.fast_path_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(Arc::new(Self {
+                        input: children.swap_remove(0),
+                        ..Self::clone(&*self)
+                    }))
+                }
+                ChildrenPropertiesMode::Recompute => {
+                    self.recompute_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    // Full recompute: allocate a fresh `PlanProperties` Arc so this
+                    // path is observable via `Arc::ptr_eq` on properties.
+                    let new_input = children.swap_remove(0);
+                    let cache = Arc::new(PlanProperties::new(
+                        EquivalenceProperties::new(Arc::new(Schema::empty())),
+                        Partitioning::UnknownPartitioning(1),
+                        EmissionType::Final,
+                        Boundedness::Bounded,
+                    ));
+                    Ok(Arc::new(Self {
+                        input: new_input,
+                        cache,
+                        recompute_calls: Arc::clone(&self.recompute_calls),
+                        fast_path_calls: Arc::clone(&self.fast_path_calls),
+                    }))
+                }
+            }
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
         fn with_new_children_and_same_properties(
             self: Arc<Self>,
-            mut children: Vec<Arc<dyn ExecutionPlan>>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.fast_path_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(Arc::new(Self {
-                input: children.swap_remove(0),
-                ..Self::clone(&*self)
-            }))
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+            )
         }
         fn execute(
             &self,
@@ -2363,9 +2623,9 @@ mod tests {
     }
 
     /// Cover the three short-circuit layers of
-    /// [`with_new_children_if_necessary`].
+    /// [`replace_children_if_necessary`].
     #[test]
-    fn test_with_new_children_if_necessary_layers() -> Result<()> {
+    fn test_replace_children_if_necessary_layers() -> Result<()> {
         use std::sync::atomic::Ordering;
 
         // Two leaves that share the same `PlanProperties` Arc but sit behind
@@ -2395,7 +2655,7 @@ mod tests {
         let orig_props = Arc::clone(parent.properties());
 
         // Layer 1: same child pointer → returns the original plan Arc verbatim.
-        let out = with_new_children_if_necessary(
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_a)],
         )?;
@@ -2408,7 +2668,7 @@ mod tests {
         // Arc is reused (not reallocated).
         assert!(!Arc::ptr_eq(&leaf_a, &leaf_b));
         assert!(Arc::ptr_eq(leaf_a.properties(), leaf_b.properties()));
-        let out = with_new_children_if_necessary(
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_b)],
         )?;
@@ -2418,7 +2678,7 @@ mod tests {
 
         // Layer 3: child's `PlanProperties` Arc differs → full recompute.
         assert!(!Arc::ptr_eq(leaf_a.properties(), leaf_c.properties()));
-        let out = with_new_children_if_necessary(
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_c)],
         )?;
@@ -2436,7 +2696,7 @@ mod tests {
     /// `with_new_children`, so downstream / external `ExecutionPlan`
     /// implementations keep the semantics-preserving path.
     #[test]
-    fn test_with_new_children_if_necessary_default_fallback() -> Result<()> {
+    fn test_replace_children_if_necessary_default_fallback() -> Result<()> {
         use std::sync::atomic::Ordering;
 
         let leaf_props = Arc::new(PlanProperties::new(
@@ -2455,10 +2715,20 @@ mod tests {
         let parent = Arc::new(WithChildrenTestParentDefault::new(Arc::clone(&leaf_a)));
         let parent_dyn: Arc<dyn ExecutionPlan> = Arc::clone(&parent) as _;
 
-        // Distinct child Arc but same `PlanProperties` Arc — the helper
-        // enters the "same properties" branch and calls the trait method,
-        // whose default forwards to `with_new_children`.
-        let out = with_new_children_if_necessary(
+        // Using the same child means we return the original plan Arc verbatim, so even when
+        // the `replace_children` `ChildrenPropertiesMode::Keep` path is not defined,
+        // we do not recompute.
+        let out = replace_children_if_necessary(
+            Arc::clone(&parent_dyn),
+            vec![Arc::clone(&leaf_a)],
+        )?;
+        assert!(Arc::ptr_eq(&out, &parent_dyn));
+        assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 0);
+
+        // Using a distinct child but the same `PlanProperties` Arc means the helper
+        // attempts to enter the Keep branch. If it does not exist, we fall back
+        // to recomputation.
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_b)],
         )?;

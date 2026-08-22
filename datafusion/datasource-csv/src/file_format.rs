@@ -41,6 +41,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
+    ensure_unique_field_names,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -397,12 +398,24 @@ impl FileFormat for CsvFormat {
                     )
                 })?;
             records_to_read -= records_read;
-            schemas.push(schema);
+            schemas.push((&object.location, schema));
             if records_to_read == 0 {
                 break;
             }
         }
 
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing CSV file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
+
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
     }
@@ -923,6 +936,54 @@ impl CsvSink {
             Arc::new(data_sink),
             sort_order,
         )))
+    }
+}
+
+/// Encode a [`CsvFormatFactory`]'s options as their protobuf form.
+///
+/// The reverse direction is `From<&protobuf::CsvOptions> for CsvOptions` in
+/// `datafusion-proto-models`: `CsvOptions` is a `datafusion-common` type, so
+/// that half cannot live here.
+#[cfg(feature = "proto")]
+impl From<&CsvFormatFactory> for datafusion_proto_models::protobuf::CsvOptions {
+    fn from(factory: &CsvFormatFactory) -> Self {
+        if let Some(options) = &factory.options {
+            datafusion_proto_models::protobuf::CsvOptions {
+                has_header: options.has_header.map_or(vec![], |v| vec![v as u8]),
+                delimiter: vec![options.delimiter],
+                quote: vec![options.quote],
+                terminator: options.terminator.map_or(vec![], |v| vec![v]),
+                escape: options.escape.map_or(vec![], |v| vec![v]),
+                double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
+                compression: options.compression as i32,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
+                date_format: options.date_format.clone().unwrap_or_default(),
+                datetime_format: options.datetime_format.clone().unwrap_or_default(),
+                timestamp_format: options.timestamp_format.clone().unwrap_or_default(),
+                timestamp_tz_format: options
+                    .timestamp_tz_format
+                    .clone()
+                    .unwrap_or_default(),
+                time_format: options.time_format.clone().unwrap_or_default(),
+                null_value: options.null_value.clone().unwrap_or_default(),
+                null_regex: options.null_regex.clone().unwrap_or_default(),
+                comment: options.comment.map_or(vec![], |v| vec![v]),
+                newlines_in_values: options
+                    .newlines_in_values
+                    .map_or(vec![], |v| vec![v as u8]),
+                truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
+                compression_level: options.compression_level,
+                quote_style: options.quote_style as i32,
+                ignore_leading_whitespace: options
+                    .ignore_leading_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+                ignore_trailing_whitespace: options
+                    .ignore_trailing_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+            }
+        } else {
+            datafusion_proto_models::protobuf::CsvOptions::default()
+        }
     }
 }
 

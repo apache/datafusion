@@ -1107,9 +1107,7 @@ impl SessionContext {
     }
 
     fn set_variable(&self, stmt: SetVariable) -> Result<()> {
-        let SetVariable {
-            variable, value, ..
-        } = stmt;
+        let SetVariable { variable, value } = stmt;
 
         // Check if this is a runtime configuration
         if variable.starts_with("datafusion.runtime.") {
@@ -1551,9 +1549,7 @@ impl SessionContext {
     }
 
     fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
-        let Execute {
-            name, parameters, ..
-        } = execute;
+        let Execute { name, parameters } = execute;
         let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
             exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
@@ -2959,8 +2955,8 @@ mod tests {
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
-            ("1m", Duration::from_secs(60)),
-            ("1m0s", Duration::from_secs(60)),
+            ("1m", Duration::from_mins(1)),
+            ("1m0s", Duration::from_mins(1)),
             ("1m1s", Duration::from_secs(61)),
         ] {
             let have =
@@ -2985,6 +2981,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
+    )]
     fn test_parse_duration_with_overflow_check() {
         const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
 
@@ -2996,7 +2996,7 @@ mod tests {
             ),
             (
                 "307445734561825860m",
-                Duration::from_secs(307445734561825860 * 60),
+                Duration::from_mins(307445734561825860),
             ),
             (
                 "307445734561825860m10s",

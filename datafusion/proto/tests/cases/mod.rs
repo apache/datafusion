@@ -33,6 +33,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 mod plans;
+mod public_conversions;
 mod roundtrip_logical_plan;
 mod serialize;
 mod stack_safety;
@@ -213,9 +214,8 @@ impl HigherOrderUDFImpl for MyHigherOrderUDF {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> datafusion_common::Result<LambdaParametersProgress> {
-        let list = match fields.first() {
-            Some(ValueOrLambda::Value(field)) => field,
-            _ => return plan_err!("higher_order_udf expects a list as first argument"),
+        let Some(ValueOrLambda::Value(list)) = fields.first() else {
+            return plan_err!("higher_order_udf expects a list as first argument");
         };
         let element = match list.data_type() {
             DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),

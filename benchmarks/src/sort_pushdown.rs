@@ -122,7 +122,7 @@ impl RunOpt {
                 }
             }
         }
-        ids.sort();
+        ids.sort_unstable();
         ids
     }
 

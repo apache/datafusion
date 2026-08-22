@@ -16,7 +16,7 @@
 // under the License.
 
 //! Serialization / Deserialization to Bytes
-use crate::logical_plan::to_proto::serialize_expr;
+use crate::logical_plan::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
@@ -105,6 +105,37 @@ impl Serializeable for Expr {
         logical_plan::from_proto::parse_expr(&protobuf, ctx, &extension_codec)
             .map_err(|e| plan_datafusion_err!("Error parsing protobuf into Expr: {e}"))
     }
+}
+
+/// Serialize logical expressions as protobuf bytes using the provided
+/// extension codec.
+pub fn logical_exprs_to_bytes_with_extension_codec<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<Bytes> {
+    Ok(protobuf::LogicalExprList {
+        expr: serialize_exprs(exprs, extension_codec)?,
+    }
+    .encode_to_vec()
+    .into())
+}
+
+/// Deserialize logical expressions from protobuf bytes using the provided
+/// extension codec.
+pub fn logical_exprs_from_bytes_with_extension_codec(
+    bytes: &[u8],
+    ctx: &TaskContext,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<Expr>> {
+    let protobuf = protobuf::LogicalExprList::decode(bytes).map_err(|e| {
+        plan_datafusion_err!("Error decoding expressions as protobuf: {e}")
+    })?;
+
+    Ok(logical_plan::from_proto::parse_exprs(
+        protobuf.expr.iter(),
+        ctx,
+        extension_codec,
+    )?)
 }
 
 /// Serialize a LogicalPlan as bytes

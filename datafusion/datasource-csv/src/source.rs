@@ -316,13 +316,7 @@ impl FileSource for CsvSource {
             &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots(
-            self.projection
-                .source
-                .iter()
-                .map(|proj_expr| &proj_expr.expr),
-            f,
-        )
+        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
     /// Emit a `CsvScan` node wrapping the shared base config and CSV options.
@@ -599,13 +593,10 @@ impl CsvSource {
         use datafusion_datasource::source::DataSourceExec;
         use datafusion_proto_models::protobuf;
 
-        let scan = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => scan,
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not a CsvScan"
-                );
-            }
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!("PhysicalPlanNode is not a CsvScan");
         };
 
         let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
