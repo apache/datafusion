@@ -45,6 +45,9 @@ on:
       - 'datafusion/expr*/**/*.rs'
       - 'datafusion/optimizer/**/*.rs'
       - 'datafusion/sql/**/*.rs'
+      # aggregate_fuzz / window_fuzz exercise these crates
+      - 'datafusion/functions-aggregate/**/*.rs'
+      - 'datafusion/functions-window/**/*.rs'
       - 'datafusion-testing'
   workflow_dispatch:
     inputs:
