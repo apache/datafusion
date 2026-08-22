@@ -18,7 +18,7 @@
 use crate::aggregates::group_values::multi_group_by::GroupColumn;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, Int64Array,
-    PrimitiveArray,
+    PrimitiveArray, downcast_dictionary_array,
 };
 use arrow::compute::take;
 use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType, Field};
@@ -57,6 +57,8 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     val_to_inner: Vec<usize>,
     /// Reusable hash buffer for the dictionary values array.
     val_hashes: Vec<u64>,
+    /// Value hash for each inner slot, so `take_n` can update `value_dedup` without rehashing.
+    slot_hash: Vec<u64>,
     _phantom: PhantomData<K>,
 }
 
@@ -73,6 +75,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             random_state: AGGREGATION_HASH_SEED,
             val_to_inner: Vec::default(),
             val_hashes: Vec::default(),
+            slot_hash: Vec::default(),
             _phantom: PhantomData,
         }
     }
@@ -193,6 +196,10 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
                     |&(entry_hash, _)| entry_hash,
                     &mut self.value_dedup_size,
                 );
+                if self.slot_hash.len() <= slot {
+                    self.slot_hash.resize(slot + 1, 0);
+                }
+                self.slot_hash[slot] = hash;
                 Ok(slot)
             }
         }
@@ -447,6 +454,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             + self.group_to_inner.capacity() * size_of::<usize>()
             + self.val_to_inner.capacity() * size_of::<usize>()
             + self.val_hashes.capacity() * size_of::<u64>()
+            + self.slot_hash.capacity() * size_of::<u64>()
             + self.null_array.get_array_memory_size()
             + size_of::<Self>()
     }
@@ -479,6 +487,9 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             Int64Array::from_iter(emit_new_to_old.iter().map(|&i| i as i64));
         let compact_emit_values =
             take(&*all_inner_values, &emit_indices, None).expect("take emit values");
+        // take() keeps the original view buffers while gc releases unreferenced ones
+        let gced_compact_emit_values = gc_taken_values(compact_emit_values);
+
         let emitted_keys: PrimitiveArray<K> = self.group_to_inner[..n]
             .iter()
             .map(|&old| {
@@ -489,8 +500,10 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 }
             })
             .collect();
-        let emitted: ArrayRef =
-            Arc::new(DictionaryArray::<K>::new(emitted_keys, compact_emit_values));
+        let emitted: ArrayRef = Arc::new(DictionaryArray::<K>::new(
+            emitted_keys,
+            gced_compact_emit_values,
+        ));
 
         // Null deferred to last so null_inner_slot is always the highest index
         // and check_key_overflow can subtract it without a false overflow.
@@ -515,28 +528,56 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             new_to_old.push(old);
         }
 
-        self.value_dedup = HashTable::new();
-        self.value_dedup_size = 0;
+        // Subset leftover values and gc view/nested buffers so dropped strings are freed
+        let leftover_non_null_len = new_to_old.len() - null_old_slot.is_some() as usize;
+        let leftover_values = if leftover_non_null_len == 0 {
+            None
+        } else {
+            let leftover_indices = Int64Array::from_iter(
+                new_to_old[..leftover_non_null_len]
+                    .iter()
+                    .map(|&i| i as i64),
+            );
+            let taken = take(&*all_inner_values, &leftover_indices, None)
+                .expect("take leftover values");
+            Some(gc_taken_values(taken))
+        };
+
+        // Drop fully-emitted slots from value_dedup and remap leftover slots in place
+        let old_hashes = std::mem::take(&mut self.slot_hash);
+        for &old in &emit_new_to_old {
+            if old_to_new[old] != usize::MAX {
+                continue;
+            }
+            let hash = old_hashes[old];
+            if let Ok(entry) = self.value_dedup.find_entry(hash, |&(entry_hash, slot)| {
+                entry_hash == hash && slot == old
+            }) {
+                entry.remove();
+            }
+        }
         self.null_inner_slot = None;
-
-        self.hash_values(&all_inner_values);
-
+        self.slot_hash.resize(leftover_non_null_len, 0);
         for (new_slot, &old_slot) in new_to_old.iter().enumerate() {
             if all_inner_values.is_null(old_slot) {
                 self.inner
                     .append_val(&self.null_array, 0)
                     .expect("append null failed in take_n");
                 self.null_inner_slot = Some(new_slot);
-            } else {
-                self.inner
-                    .append_val(&all_inner_values, old_slot)
-                    .expect("append value failed in take_n");
-                self.value_dedup.insert_accounted(
-                    (self.val_hashes[old_slot], new_slot),
-                    |&(entry_hash, _)| entry_hash,
-                    &mut self.value_dedup_size,
-                );
+                continue;
             }
+            let hash = old_hashes[old_slot];
+            if let Some((_, slot)) =
+                self.value_dedup.find_mut(hash, |&(entry_hash, slot)| {
+                    entry_hash == hash && slot == old_slot
+                })
+            {
+                *slot = new_slot;
+            }
+            self.slot_hash[new_slot] = hash;
+            self.inner
+                .append_val(leftover_values.as_ref().unwrap(), new_slot)
+                .expect("append value failed in take_n");
         }
 
         self.group_to_inner = remaining.iter().map(|&old| old_to_new[old]).collect();
@@ -544,6 +585,52 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
 
         emitted
     }
+}
+
+/// Compact view buffers after `take` and subset nested dictionary values the same way.
+fn gc_taken_values(array: ArrayRef) -> ArrayRef {
+    match array.data_type() {
+        DataType::Utf8View => Arc::new(array.as_string_view().gc()) as ArrayRef,
+        DataType::BinaryView => Arc::new(array.as_binary_view().gc()) as ArrayRef,
+        DataType::Dictionary(_, _) => {
+            let arr = array.as_ref();
+            downcast_dictionary_array!(
+                arr => gc_dictionary(arr),
+                _ => array
+            )
+        }
+        _ => array,
+    }
+}
+
+/// Keep only values referenced by keys then gc those values
+fn gc_dictionary<K: ArrowDictionaryKeyType>(array: &DictionaryArray<K>) -> ArrayRef {
+    let keys = array.keys();
+    let values = array.values();
+    let mut old_to_new = vec![usize::MAX; values.len()];
+    let mut used = Vec::new();
+    for i in 0..keys.len() {
+        if keys.is_null(i) {
+            continue;
+        }
+        let old = keys.value(i).as_usize();
+        if old_to_new[old] == usize::MAX {
+            old_to_new[old] = used.len();
+            used.push(old as i64);
+        }
+    }
+    let taken = take(&**values, &Int64Array::from(used), None).expect("take dict values");
+    let compact_values = gc_taken_values(taken);
+    let new_keys: PrimitiveArray<K> = (0..keys.len())
+        .map(|i| {
+            if keys.is_null(i) {
+                None
+            } else {
+                Some(K::Native::usize_as(old_to_new[keys.value(i).as_usize()]))
+            }
+        })
+        .collect();
+    Arc::new(DictionaryArray::<K>::new(new_keys, compact_values))
 }
 
 #[cfg(test)]
