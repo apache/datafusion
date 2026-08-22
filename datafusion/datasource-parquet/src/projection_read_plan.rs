@@ -249,13 +249,10 @@ impl<'schema> PushdownChecker<'schema> {
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        let idx = match self.file_schema.index_of(column_name) {
-            Ok(idx) => idx,
-            Err(_) => {
-                // Column does not exist in the file schema, so we can't push this down.
-                self.projected_columns = true;
-                return Some(TreeNodeRecursion::Jump);
-            }
+        let Ok(idx) = self.file_schema.index_of(column_name) else {
+            // Column does not exist in the file schema, so we can't push this down.
+            self.projected_columns = true;
+            return Some(TreeNodeRecursion::Jump);
         };
 
         // Duplicates are handled by dedup() in into_sorted_columns()

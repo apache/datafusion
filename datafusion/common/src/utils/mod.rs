@@ -1032,7 +1032,7 @@ pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    result.sort();
+    result.sort_unstable();
     result
 }
 

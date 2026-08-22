@@ -1254,7 +1254,7 @@ mod tests {
         let mut res = Vec::with_capacity(len);
         for i in 0..len {
             let start = i.saturating_sub(n_sliding_window);
-            expected.push(*data[start..i + 1].iter().min().unwrap());
+            expected.push(*data[start..=i].iter().min().unwrap());
 
             moving_min.push(data[i]);
             if i > n_sliding_window {
@@ -1273,7 +1273,7 @@ mod tests {
         let mut res = Vec::with_capacity(len);
         for i in 0..len {
             let start = i.saturating_sub(n_sliding_window);
-            expected.push(*data[start..i + 1].iter().max().unwrap());
+            expected.push(*data[start..=i].iter().max().unwrap());
 
             moving_max.push(data[i]);
             if i > n_sliding_window {

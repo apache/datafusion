@@ -182,23 +182,6 @@ impl ExprSimplifier {
     /// representing the number of simplification cycles performed, which can be useful for testing
     /// optimizations.
     ///
-    /// See [Self::simplify] for details and usage examples.
-    #[deprecated(
-        since = "48.0.0",
-        note = "Use `simplify_with_cycle_count_transformed` instead"
-    )]
-    #[expect(unused_mut)]
-    pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
-        let (transformed, cycle_count) =
-            self.simplify_with_cycle_count_transformed(expr)?;
-        Ok((transformed.data, cycle_count))
-    }
-
-    /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
-    /// constants and applying algebraic simplifications. Additionally returns a `u32`
-    /// representing the number of simplification cycles performed, which can be useful for testing
-    /// optimizations.
-    ///
     /// # Returns
     ///
     /// A tuple containing:
@@ -3790,17 +3773,25 @@ mod tests {
 
     #[test]
     fn simplify_scalar_subquery_is_null() {
-        let subquery = LogicalPlanBuilder::empty(false)
+        let possibly_empty = LogicalPlanBuilder::empty(false)
             .project(vec![lit(1)])
             .unwrap()
             .build()
             .unwrap();
-        let scalar_subquery = scalar_subquery(Arc::new(subquery));
+        let possibly_empty = scalar_subquery(Arc::new(possibly_empty));
 
         assert_eq!(
-            simplify(scalar_subquery.clone().is_null()),
-            scalar_subquery.is_null()
+            simplify(possibly_empty.clone().is_null()),
+            possibly_empty.is_null()
         );
+
+        let always_one = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let always_one = scalar_subquery(Arc::new(always_one));
+        assert_eq!(simplify(always_one.is_null()), lit(false));
     }
 
     #[test]

@@ -4032,17 +4032,6 @@ impl ScalarValue {
         }
     }
 
-    #[deprecated(
-        since = "46.0.0",
-        note = "This function is obsolete. Use `to_array` instead"
-    )]
-    pub fn raw_data(&self) -> Result<ArrayRef> {
-        match self {
-            ScalarValue::List(arr) => Ok(arr.to_owned()),
-            _ => _internal_err!("ScalarValue is not a list"),
-        }
-    }
-
     /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value
@@ -8569,7 +8558,7 @@ mod tests {
             let array = array.downcast::<Int64Array>().unwrap();
             assert_eq!(
                 array.into_iter().collect::<Vec<_>>(),
-                expected_values[i..i + 1]
+                expected_values[i..=i]
             );
         }
     }

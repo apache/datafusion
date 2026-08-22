@@ -445,7 +445,7 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
         return 0;
     }
 
-    debug_assert!(indices.null_count() == 0);
+    debug_assert_eq!(indices.null_count(), 0);
 
     let values_buf = indices.values();
     let values = values_buf.as_ref();

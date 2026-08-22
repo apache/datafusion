@@ -1907,6 +1907,65 @@ impl ExecutionOptions {
     }
 }
 
+/// Format used to display `Duration` values in query output. Mirrors
+/// [`arrow::util::display::DurationFormat`].
+///
+/// See [`FormatOptions::duration_format`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigDurationFormat {
+    /// Format durations in a human readable form, e.g. `1h2m3s450ms`.
+    #[default]
+    Pretty,
+    /// Format durations as an ISO 8601 duration string, e.g. `PT1H2M3.45S`.
+    Iso8601,
+}
+
+impl FromStr for ConfigDurationFormat {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "pretty" => Ok(Self::Pretty),
+            "iso8601" => Ok(Self::Iso8601),
+            _ => _config_err!(
+                "Invalid duration format: {s}. Valid values are pretty or iso8601"
+            ),
+        }
+    }
+}
+
+impl ConfigField for ConfigDurationFormat {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ConfigDurationFormat::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for ConfigDurationFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Pretty => "pretty",
+            Self::Iso8601 => "iso8601",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl From<ConfigDurationFormat> for arrow::util::display::DurationFormat {
+    fn from(value: ConfigDurationFormat) -> Self {
+        match value {
+            ConfigDurationFormat::Pretty => arrow::util::display::DurationFormat::Pretty,
+            ConfigDurationFormat::Iso8601 => {
+                arrow::util::display::DurationFormat::ISO8601
+            }
+        }
+    }
+}
+
 config_namespace! {
     /// Options controlling the format of output when printing record batches
     /// Copies [`arrow::util::display::FormatOptions`]
@@ -1927,7 +1986,7 @@ config_namespace! {
         /// Time format for time arrays
         pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
         /// Duration format. Can be either `"pretty"` or `"ISO8601"`
-        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        pub duration_format: ConfigDurationFormat, default = ConfigDurationFormat::Pretty
         /// Show types in visual representation batches
         pub types_info: bool, default = false
     }
@@ -1936,17 +1995,6 @@ config_namespace! {
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
-        let duration_format = match options.duration_format.as_str() {
-            "pretty" => arrow::util::display::DurationFormat::Pretty,
-            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
-            _ => {
-                return _config_err!(
-                    "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    options.duration_format
-                );
-            }
-        };
-
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -1955,7 +2003,7 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
             .with_timestamp_format(options.timestamp_format.as_deref())
             .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
             .with_time_format(options.time_format.as_deref())
-            .with_duration_format(duration_format)
+            .with_duration_format(options.duration_format.into())
             .with_types_info(options.types_info))
     }
 }
