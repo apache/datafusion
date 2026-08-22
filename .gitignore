@@ -78,3 +78,5 @@ profile.json.gz
 
 # Claude Code personal settings
 .claude/settings.local.json
+
+.codex/config.toml
