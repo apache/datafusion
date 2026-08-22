@@ -24,7 +24,7 @@ use arrow::array::{
     GenericByteArray, GenericStringArray, OffsetSizeTrait, types::GenericStringType,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
+use arrow::datatypes::{ArrowNativeType, ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
@@ -183,6 +183,12 @@ where
         let input_null = array.is_null(rhs_row);
         if let Some(result) = nulls_equal_to(exist_null, input_null) {
             return result;
+        }
+        let lhs_len = (self.offsets[lhs_row + 1] - self.offsets[lhs_row]).as_usize();
+        let rhs_offsets = array.offsets();
+        let rhs_len = (rhs_offsets[rhs_row + 1] - rhs_offsets[rhs_row]).as_usize();
+        if lhs_len != rhs_len {
+            return false;
         }
         // Otherwise, we need to check their values
         self.value(lhs_row) == (array.value(rhs_row).as_ref() as &[u8])
