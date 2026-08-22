@@ -23,7 +23,7 @@ use std::ops::Deref;
 use std::vec::IntoIter;
 
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, HashSet, JoinType};
+use crate::{DFSchema, HashSet, JoinType, NullEquality};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -144,6 +144,13 @@ pub struct FunctionalDependence {
     /// such as after LEFT JOIN or RIGHT JOIN operations, this property may
     /// change.
     pub nullable: bool,
+    /// The NULL-comparison semantics under which this dependency holds. The
+    /// conservative default, [`NullEquality::NullEqualsNothing`], means it
+    /// holds only across rows whose determinant contains no NULLs; e.g. a
+    /// nullable `UNIQUE` constraint permits multiple NULL rows that may differ.
+    /// [`NullEquality::NullEqualsNull`] means it also holds when NULL
+    /// determinant values are treated as equal; e.g. a `GROUP BY` key.
+    pub null_equality: NullEquality,
     // The functional dependency mode:
     pub mode: Dependency,
 }
@@ -168,6 +175,8 @@ impl FunctionalDependence {
             source_indices,
             target_indices,
             nullable,
+            // Assume the dependency does not hold across NULL rows by default:
+            null_equality: NullEquality::NullEqualsNothing,
             // Start with the least restrictive mode by default:
             mode: Dependency::Multi,
         }
@@ -176,6 +185,25 @@ impl FunctionalDependence {
     pub fn with_mode(mut self, mode: Dependency) -> Self {
         self.mode = mode;
         self
+    }
+
+    pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
+        self.null_equality = null_equality;
+        self
+    }
+
+    /// Returns `true` if this dependency remains usable for operations that
+    /// treat NULL determinant values as equal (`GROUP BY`, `DISTINCT` and
+    /// sorting, which place all NULL keys together): it must hold under
+    /// NULLs-are-equal semantics, have a non-nullable determinant (e.g. a
+    /// `PRIMARY KEY`), or have no nullable source field in the given `schema`.
+    pub fn is_valid_across_nulls(&self, schema: &DFSchema) -> bool {
+        self.null_equality == NullEquality::NullEqualsNull
+            || !self.nullable
+            || self
+                .source_indices
+                .iter()
+                .all(|&source_idx| !schema.field(source_idx).is_nullable())
     }
 }
 
@@ -301,6 +329,7 @@ impl FunctionalDependencies {
             source_indices,
             target_indices,
             nullable,
+            null_equality,
             mode,
         } in &self.deps
         {
@@ -321,7 +350,8 @@ impl FunctionalDependencies {
                     new_target_indices,
                     *nullable,
                 )
-                .with_mode(*mode);
+                .with_mode(*mode)
+                .with_null_equality(*null_equality);
                 projected_func_dependencies.push(new_func_dependence);
             }
         }
@@ -386,7 +416,11 @@ impl FunctionalDependencies {
     fn downgrade_dependencies(&mut self) {
         // Delete nullable dependencies, since they are no longer valid:
         self.deps.retain(|item| !item.nullable);
-        self.deps.iter_mut().for_each(|item| item.nullable = true);
+        // Survivors become nullable, and the new NULLs are not equal to one another:
+        self.deps.iter_mut().for_each(|item| {
+            item.nullable = true;
+            item.null_equality = NullEquality::NullEqualsNothing;
+        });
     }
 
     /// This function ensures that functional dependencies involving uniquely
@@ -432,6 +466,7 @@ pub fn aggregate_functional_dependencies(
     for FunctionalDependence {
         source_indices,
         nullable,
+        null_equality,
         mode,
         ..
     } in &func_dependencies.deps
@@ -470,13 +505,22 @@ pub fn aggregate_functional_dependencies(
         };
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
+            // GROUP BY treats NULLs as equal: a determinant covering the
+            // complete grouping key gets at most one output row per NULL too.
+            let output_null_equality =
+                if new_source_indices.len() == group_by_expr_names.len() {
+                    NullEquality::NullEqualsNull
+                } else {
+                    *null_equality
+                };
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
                     new_source_indices,
                     target_indices.clone(),
                     *nullable,
                 )
-                .with_mode(mode),
+                .with_mode(mode)
+                .with_null_equality(output_null_equality),
             );
         }
     }
@@ -501,9 +545,10 @@ pub fn aggregate_functional_dependencies(
             // Add a new functional dependency associated with the whole table:
             // Use nullable property of the GROUP BY expression:
             aggregate_func_dependencies.push(
-                // Use nullable property of the GROUP BY expression:
                 FunctionalDependence::new(source_indices, target_indices, nullable)
-                    .with_mode(Dependency::Single),
+                    .with_mode(Dependency::Single)
+                    // Grouping collapses NULL keys into a single group:
+                    .with_null_equality(NullEquality::NullEqualsNull),
             );
         }
     }
@@ -617,15 +662,15 @@ pub fn get_required_sort_exprs_indices(
         };
 
         // A sort expression is removable if its value is functionally determined
-        // by fields that already appear earlier in the sort order: if the earlier
-        // fields are fixed, this one's value is fixed too, so it adds no ordering
-        // information.
+        // by fields that already appear earlier in the sort order (and the
+        // dependency remains valid across NULL rows).
         let removable = dependencies.deps.iter().any(|dependency| {
             dependency.target_indices.contains(&field_idx)
                 && dependency
                     .source_indices
                     .iter()
                     .all(|source_idx| known_field_indices.contains(source_idx))
+                && dependency.is_valid_across_nulls(schema)
         });
 
         if removable {
