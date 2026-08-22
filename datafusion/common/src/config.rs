@@ -765,14 +765,18 @@ const fn filter_selectivity_default(value: u8) -> ConfigFilterSelectivity {
 }
 
 impl ConfigFilterSelectivity {
-    /// Creates a [`ConfigFilterSelectivity`], returning a configuration error
-    /// if `value` is greater than 100.
-    pub fn try_new(value: u8) -> Result<Self> {
-        if value <= 100 {
-            Ok(Self(value))
+    fn try_from_i64(value: i64) -> Result<Self> {
+        if (0..=100).contains(&value) {
+            Ok(Self(value as u8))
         } else {
             _config_err!("value must be between 0 and 100, got {value}")
         }
+    }
+
+    /// Creates a [`ConfigFilterSelectivity`], returning a configuration error
+    /// if `value` is greater than 100.
+    pub fn try_new(value: u8) -> Result<Self> {
+        Self::try_from_i64(i64::from(value))
     }
 
     /// Returns the wrapped `u8`.
@@ -791,7 +795,7 @@ impl FromStr for ConfigFilterSelectivity {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_new(default_config_transform(s)?)
+        Self::try_from_i64(default_config_transform::<i64>(s)?)
     }
 }
 
