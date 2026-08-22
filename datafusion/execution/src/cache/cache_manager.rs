@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::cache::default_cache::DefaultCache;
-pub use crate::cache::{Cache, CacheValue, SchemaFingerprint, TableScopedPath};
+pub use crate::cache::{
+    Cache, CacheStatistics, CacheValue, SchemaFingerprint, TableScopedPath,
+};
 use datafusion_common::HashMap;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, Statistics};
@@ -407,6 +409,30 @@ impl CacheManager {
     pub fn get_metadata_cache_limit(&self) -> usize {
         self.file_metadata_cache.cache_limit()
     }
+
+    /// Aggregate counters for the file statistics cache.
+    ///
+    /// Returns `None` if the cache is disabled or if the configured
+    /// implementation does not track statistics. See [`CacheStatistics`].
+    pub fn get_file_statistic_cache_statistics(&self) -> Option<CacheStatistics> {
+        self.file_statistic_cache.as_ref()?.statistics()
+    }
+
+    /// Aggregate counters for the list files cache.
+    ///
+    /// Returns `None` if the cache is disabled or if the configured
+    /// implementation does not track statistics. See [`CacheStatistics`].
+    pub fn get_list_files_cache_statistics(&self) -> Option<CacheStatistics> {
+        self.list_files_cache.as_ref()?.statistics()
+    }
+
+    /// Aggregate counters for the file embedded metadata cache.
+    ///
+    /// Returns `None` if the configured implementation does not track
+    /// statistics. See [`CacheStatistics`].
+    pub fn get_file_metadata_cache_statistics(&self) -> Option<CacheStatistics> {
+        self.file_metadata_cache.statistics()
+    }
 }
 
 #[derive(Clone)]
@@ -575,5 +601,49 @@ mod tests {
             Some(Duration::from_mins(1)),
             "TTL should be overridden to 60 seconds when set in config"
         );
+    }
+
+    /// The counters must be reachable from the `CacheManager` for the caches
+    /// whose byte budgets are the ones users actually hit.
+    #[test]
+    fn test_cache_statistics_reachable_from_cache_manager() {
+        let cache_manager =
+            CacheManager::try_new(&CacheManagerConfig::default()).unwrap();
+
+        // The default caches are all instrumented and start at zero.
+        assert_eq!(
+            cache_manager.get_file_metadata_cache_statistics(),
+            Some(CacheStatistics::default())
+        );
+        assert_eq!(
+            cache_manager.get_file_statistic_cache_statistics(),
+            Some(CacheStatistics::default())
+        );
+        assert_eq!(
+            cache_manager.get_list_files_cache_statistics(),
+            Some(CacheStatistics::default())
+        );
+
+        // A miss on the metadata cache is visible through the manager.
+        assert!(
+            cache_manager
+                .get_file_metadata_cache()
+                .get(&Path::from("missing.parquet"))
+                .is_none()
+        );
+        let stats = cache_manager
+            .get_file_metadata_cache_statistics()
+            .expect("default metadata cache is instrumented");
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.hit_rate(), Some(0.0));
+
+        // A disabled cache has no statistics to report.
+        let config = CacheManagerConfig::default()
+            .with_file_statistics_cache_limit(0)
+            .with_list_files_cache_limit(0);
+        let cache_manager = CacheManager::try_new(&config).unwrap();
+        assert_eq!(cache_manager.get_file_statistic_cache_statistics(), None);
+        assert_eq!(cache_manager.get_list_files_cache_statistics(), None);
     }
 }
