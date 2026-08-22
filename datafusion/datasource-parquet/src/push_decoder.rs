@@ -62,7 +62,7 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 use crate::ParquetFileMetrics;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
-use crate::metrics::ByteProgress;
+use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::row_filter::{
     PrebuiltRowFilterCandidate, prebuild_row_filter_candidates, row_filter_from_prebuilt,
 };
@@ -292,9 +292,10 @@ pub(crate) struct PushDecoderStreamState {
     /// Whether the currently-installed decoder is running with a non-empty
     /// row filter. Toggled per RG by the `fully_matched` skip path.
     pub(crate) filter_installed: bool,
-    /// Count of row groups for which the per-row [`RowFilter`] was
-    /// suppressed because the upcoming RG is `fully_matched`.
-    pub(crate) row_filter_skipped_fully_matched: Count,
+    /// Lazily-registered counter of suppression events for the per-row
+    /// [`RowFilter`] (registered on first use so scans that never suppress
+    /// don't carry a zero-valued counter).
+    pub(crate) row_filter_skipped_fully_matched: RowFilterSkippedFullyMatchedMetric,
     /// How much of this file range the scan has finished with. Credited a row
     /// group at a time as they are decoded or skipped, and topped up to the
     /// full range when the stream is dropped.
@@ -664,7 +665,7 @@ impl PushDecoderStreamState {
                 // Skip per-row filtering for the upcoming fully-matched RG.
                 builder = builder.with_row_filter(RowFilter::new(vec![]));
                 self.filter_installed = false;
-                self.row_filter_skipped_fully_matched.add(1);
+                self.row_filter_skipped_fully_matched.add_one();
             }
         }
         self.decoder = Some(builder.build().map_err(DataFusionError::from)?);

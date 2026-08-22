@@ -25,7 +25,7 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
-use crate::metrics::ByteProgress;
+use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
@@ -1457,6 +1457,15 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
+        // Lazily-registered suppression counter shared by the open-time first-RG
+        // skip below and the stream's per-RG toggle (registered on first use so
+        // scans that never suppress don't carry a zero-valued counter).
+        let mut row_filter_skipped_fully_matched =
+            RowFilterSkippedFullyMatchedMetric::new(
+                &prepared.metrics,
+                prepared.partition_index,
+                &prepared.file_name,
+            );
         let (decoder, rg_plan, has_row_selection, filter_installed, row_filter_context) = {
             let pushdown_predicate = prepared
                 .pushdown_filters
@@ -1553,10 +1562,7 @@ impl RowGroupsPrunedParquetOpen {
                     builder = builder.with_row_filter(
                         parquet::arrow::arrow_reader::RowFilter::new(vec![]),
                     );
-                    prepared
-                        .file_metrics
-                        .row_filter_skipped_fully_matched
-                        .add(1);
+                    row_filter_skipped_fully_matched.add_one();
                 } else {
                     builder = builder.with_row_filter(row_filter);
                     filter_installed = true;
@@ -1649,11 +1655,6 @@ impl RowGroupsPrunedParquetOpen {
             .file_metrics
             .row_groups_pruned_dynamic_filter
             .clone();
-        let row_filter_skipped_fully_matched = prepared
-            .file_metrics
-            .row_filter_skipped_fully_matched
-            .clone();
-
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
