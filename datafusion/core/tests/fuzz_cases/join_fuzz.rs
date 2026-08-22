@@ -20,7 +20,7 @@ use std::time::SystemTime;
 
 use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
-use arrow::array::{ArrayRef, BinaryArray, Int32Array};
+use arrow::array::{Array, ArrayRef, BinaryArray, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -1423,7 +1423,7 @@ fn pwmj_parts_exec(
     MemorySourceConfig::try_new_exec(&partitions, pwmj_kv_schema(), None).unwrap()
 }
 
-fn pwmj_existence_plan(
+fn pwmj_plan(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
     op: Operator,
@@ -1483,14 +1483,17 @@ fn pwmj_nlj_oracle_plan(
     )
 }
 
-/// Executes every output partition concurrently and returns the surviving left `id`s, sorted.
+/// Executes every output partition concurrently and returns the join's rows as
+/// `(left id, right id)` pairs, sorted so partition interleaving does not affect the
+/// comparison. `None` means the join filled that side with NULLs, or -- for the existence
+/// joins, whose output carries the left side only -- that the side is absent entirely.
 ///
 /// Concurrent rather than one partition at a time: the partitions share the watermark and race
 /// to be the one that runs the final pass, which is the part a sequential drain cannot reach.
-async fn pwmj_collect_ids(
+async fn pwmj_collect_id_pairs(
     plan: Arc<dyn ExecutionPlan>,
     task_ctx: Arc<TaskContext>,
-) -> Vec<i32> {
+) -> Vec<(Option<i32>, Option<i32>)> {
     let streams = (0..plan.output_partitioning().partition_count())
         .map(|partition| plan.execute(partition, Arc::clone(&task_ctx)).unwrap())
         .collect::<Vec<_>>();
@@ -1500,30 +1503,63 @@ async fn pwmj_collect_ids(
         }))
         .await;
 
-    let mut ids = Vec::new();
+    let id_column = |batch: &RecordBatch, col: usize| {
+        batch
+            .column(col)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .clone()
+    };
+
+    let mut pairs = Vec::new();
     for batches in per_partition {
         for batch in batches.unwrap().unwrap() {
-            let col = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            ids.extend((0..col.len()).map(|i| col.value(i)));
+            let left = id_column(&batch, 0);
+            // Left is (id, k), so the right side's `id` follows it -- when there is one.
+            let right = (batch.num_columns() > 2).then(|| id_column(&batch, 2));
+            for row in 0..batch.num_rows() {
+                pairs.push((
+                    left.is_valid(row).then(|| left.value(row)),
+                    right
+                        .as_ref()
+                        .filter(|r| r.is_valid(row))
+                        .map(|r| r.value(row)),
+                ));
+            }
         }
     }
-    ids.sort_unstable();
-    ids
+    pairs.sort_unstable();
+    pairs
 }
 
+/// Differential test for every join type `PiecewiseMergeJoin` supports, against a
+/// `NestedLoopJoin` oracle.
+///
+/// `Left`/`Full` are the ones with teeth: their unmatched buffered rows are derived from the
+/// shared `min_marked` watermark rather than materialized per row, and that encoding is only
+/// valid because every match marks a *suffix* of the buffered side. The dimensions the
+/// cheaper tests do not reach are the ones that matter here -- `pwmj.slt` and the unit tests
+/// both run the streamed side at a single partition and the default batch size, so neither
+/// covers several partitions racing to run the final pass, nor the mid-scan resume path a
+/// small batch size forces.
 #[tokio::test(flavor = "multi_thread")]
-async fn fuzz_pwmj_existence_matches_nested_loop() {
-    // A small batch size splits the final-pass output across several coalesced batches even
-    // for these tiny inputs, covering that boundary too.
+async fn fuzz_pwmj_matches_nested_loop() {
+    // A small batch size splits output across several coalesced batches even for these tiny
+    // inputs, covering that boundary too.
     let task_ctx = Arc::new(
         TaskContext::default()
             .with_session_config(SessionConfig::new().with_batch_size(3)),
     );
     let ops = [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq];
+    let join_types = [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftSemi,
+        JoinType::LeftAnti,
+    ];
 
     for seed in 0..60u64 {
         let mut rng = StdRng::seed_from_u64(seed);
@@ -1545,9 +1581,9 @@ async fn fuzz_pwmj_existence_matches_nested_loop() {
         let right_keys = gen_keys(right_len, &mut rng);
 
         for op in ops {
-            for join_type in [JoinType::LeftSemi, JoinType::LeftAnti] {
-                let got = pwmj_collect_ids(
-                    pwmj_existence_plan(
+            for join_type in join_types {
+                let got = pwmj_collect_id_pairs(
+                    pwmj_plan(
                         pwmj_single_exec(&left_ids, &left_keys),
                         pwmj_parts_exec(&right_ids, &right_keys, nparts),
                         op,
@@ -1556,7 +1592,7 @@ async fn fuzz_pwmj_existence_matches_nested_loop() {
                     Arc::clone(&task_ctx),
                 )
                 .await;
-                let want = pwmj_collect_ids(
+                let want = pwmj_collect_id_pairs(
                     pwmj_nlj_oracle_plan(
                         pwmj_single_exec(&left_ids, &left_keys),
                         pwmj_single_exec(&right_ids, &right_keys),
