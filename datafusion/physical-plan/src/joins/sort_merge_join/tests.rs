@@ -6079,3 +6079,187 @@ async fn left_join_with_filter_preserves_streamed_order() -> Result<()> {
     );
     Ok(())
 }
+
+/// Mirror of [`left_join_with_filter_preserves_streamed_order`] for
+/// `RIGHT JOIN`, which advertises `maintains_input_order = [false, true]`
+/// and therefore streams its *right* input. The buffered (left) side carries
+/// the duplicate groups here, and the streamed key lands in the output after
+/// the buffered columns.
+#[tokio::test]
+async fn right_join_with_filter_preserves_streamed_order() -> Result<()> {
+    let num_keys = 7i32;
+
+    // Buffered (left) side: large groups for the first five keys, so the
+    // deferred-filter gate fires once per key; single rows for the last two,
+    // whose output only leaves through the final flush.
+    let mut l_a = vec![];
+    let mut l_b = vec![];
+    let mut l_c = vec![];
+    for k in 0..num_keys {
+        let dup = if k < 5 { 20 } else { 1 };
+        for j in 0..dup {
+            l_a.push(k * 100 + j);
+            l_b.push(k);
+            l_c.push(j);
+        }
+    }
+    let left = build_table_i32(("a1", &l_a), ("b1", &l_b), ("c1", &l_c));
+
+    // Streamed (right) side: one row per key, in key order.
+    let keys: Vec<i32> = (0..num_keys).collect();
+    let right = build_table_i32(("a2", &keys), ("b2", &keys), ("c2", &keys));
+
+    let left_schema = left.schema();
+    let right_schema = right.schema();
+    let left = TestMemoryExec::try_new_exec(&[vec![left]], left_schema, None)?;
+    let right = TestMemoryExec::try_new_exec(&[vec![right]], right_schema, None)?;
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+
+    // A filter that never passes, so every streamed row is emitted
+    // null-joined by the deferred-filtering pipeline.
+    let intermediate_schema = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        )) as PhysicalExprRef,
+        vec![ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        }],
+        Arc::new(intermediate_schema),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        Right,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(8)),
+    );
+    let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+    // Output layout for RIGHT JOIN is [left cols.., right cols..], so the
+    // streamed key `a2` sits at index 3.
+    let streamed_keys: Vec<i32> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(3)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect();
+
+    assert_eq!(
+        streamed_keys, keys,
+        "RIGHT JOIN output must stay ordered on the streamed side"
+    );
+    Ok(())
+}
+
+/// Same shape as [`left_join_with_filter_preserves_streamed_order`], but with
+/// a filter that passes for *some* rows. The all-fail case only exercises the
+/// null-joined path; here matched rows survive the filter too, so the output
+/// mixes filter-passing and null-joined rows and must still be non-decreasing
+/// on the streamed key.
+#[tokio::test]
+async fn left_join_with_partial_filter_preserves_streamed_order() -> Result<()> {
+    let num_keys = 7i32;
+
+    let keys: Vec<i32> = (0..num_keys).collect();
+    let left = build_table_i32(("a1", &keys), ("b1", &keys), ("c1", &keys));
+
+    let mut r_a = vec![];
+    let mut r_b = vec![];
+    let mut r_c = vec![];
+    for k in 0..num_keys {
+        let dup = if k < 5 { 20 } else { 1 };
+        for j in 0..dup {
+            r_a.push(k * 100 + j);
+            r_b.push(k);
+            r_c.push(j);
+        }
+    }
+    let right = build_table_i32(("a2", &r_a), ("b2", &r_b), ("c2", &r_c));
+
+    let left_schema = left.schema();
+    let right_schema = right.schema();
+    let left = TestMemoryExec::try_new_exec(&[vec![left]], left_schema, None)?;
+    let right = TestMemoryExec::try_new_exec(&[vec![right]], right_schema, None)?;
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+
+    // `c2 < 3`: keys 0..5 keep three of their twenty buffered rows, keys 5
+    // and 6 keep their single row.
+    let intermediate_schema = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+        )) as PhysicalExprRef,
+        vec![ColumnIndex {
+            index: 2,
+            side: JoinSide::Right,
+        }],
+        Arc::new(intermediate_schema),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        Left,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(8)),
+    );
+    let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+    let streamed_keys: Vec<i32> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect();
+
+    assert!(
+        streamed_keys.windows(2).all(|w| w[0] <= w[1]),
+        "LEFT JOIN output must stay ordered on the streamed side, got {streamed_keys:?}"
+    );
+    // Every streamed key must still be represented exactly once per
+    // surviving match: 3 per key for keys 0..5, 1 each for keys 5 and 6.
+    let expected: Vec<i32> = (0..num_keys)
+        .flat_map(|k| std::iter::repeat_n(k, if k < 5 { 3 } else { 1 }))
+        .collect();
+    assert_eq!(streamed_keys, expected);
+    Ok(())
+}

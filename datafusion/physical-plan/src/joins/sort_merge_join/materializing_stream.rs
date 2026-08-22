@@ -1642,7 +1642,7 @@ impl MaterializingSortMergeJoinStream {
     /// gathers columns across sources. A null-row sentinel at source index 0
     /// handles null right indices (unmatched streamed rows).
     fn materialize_right_columns(
-        &mut self,
+        &self,
         matched_chunks: &[(usize, UInt64Array, UInt64Array)],
         total_matched_rows: usize,
     ) -> Result<Vec<ArrayRef>> {
@@ -1666,25 +1666,92 @@ impl MaterializingSortMergeJoinStream {
         }
 
         // Multiple source batches: map each buffered_batch_idx to a
-        // contiguous source index, reserving source 0 for a null sentinel.
+        // contiguous source index. A null sentinel array is prepended as
+        // source 0 only when some right index is actually null (an
+        // unmatched streamed row inside an otherwise matched chunk);
+        // `interleave` walks a null buffer for *every* output row as soon as
+        // any input is nullable, so an always-present sentinel would tax the
+        // common all-matched case.
+        let needs_null_sentinel = matched_chunks
+            .iter()
+            .any(|(_, _, right)| right.null_count() > 0);
+        let source_offset = usize::from(needs_null_sentinel);
+
         // A group spans only a handful of buffered batches, so a linear
-        // scan beats hashing here.
+        // scan beats hashing here. Measured over 8192 rows in 2048 chunks,
+        // against a `HashMap<usize, usize>` built in one pass and read back
+        // in a second (what this used to do):
+        //
+        //   distinct sources |  hashmap  |  linear scan
+        //   -----------------+-----------+-------------
+        //                  4 |  21.5 us  |   5.0 us
+        //                 16 |  22.0 us  |   9.4 us
+        //                 32 |  22.4 us  |  13.6 us
+        //                 64 |  22.9 us  |  23.5 us
+        //                128 |  24.1 us  |  44.8 us
+        //
+        // `std::collections::HashMap` hashes with SipHash-1-3, so a single
+        // `usize` lookup costs several ns of serial latency before the probe
+        // begins, while a scan over a handful of `usize` is one L1-resident
+        // cache line with a perfectly predicted trip count. The map is also
+        // purely additive state: `source_batches` has to be built regardless
+        // (`source_data` is gathered from it), so hashing means maintaining
+        // two containers holding the same keys.
+        //
+        // The crossover is ~32 distinct sources. That bound follows from how
+        // pairs accumulate, not from any assumption about key skew:
+        //
+        //   1. `pair_streamed_row_with_group` appends exactly one pair per
+        //      buffered row and re-checks `num_unfrozen_pairs() < batch_size`
+        //      before each append, so at most `batch_size` pairs accumulate
+        //      between two `freeze_streamed()` calls.
+        //   2. `BufferedData::scanning_advance` walks the group's rows in
+        //      order, so those pairs cover a *contiguous run* of buffered
+        //      rows.
+        //   3. So the distinct `buffered_batch_idx` values seen here are the
+        //      batches spanned by at most `batch_size` consecutive buffered
+        //      rows: `len(source_batches) <= batch_size / R + 1`, where `R`
+        //      is the smallest buffered batch in that run.
+        //
+        // The assumption is therefore not "key groups are narrow" — a group
+        // of any width still only contributes `batch_size` rows per freeze —
+        // but "buffered batches are not tiny relative to `batch_size`".
+        // Exceeding 32 sources needs `R < batch_size / 31`, i.e. under ~264
+        // rows per batch at the default `batch_size` of 8192. The buffered
+        // side of a merge join is sorted input, and every operator that
+        // normally feeds it emits ~`batch_size` batches: `SortExec` chunks
+        // its output with `sort_batch_chunked(.., batch_size)`, and
+        // `FilterExec` and `RepartitionExec` each embed a
+        // `LimitedBatchCoalescer` targeting `batch_size`.
+        //
+        // If something does feed tiny batches, this degrades gradually rather
+        // than falling off a cliff, and never affects correctness: at 4
+        // sources this loop is ~13% of the cost of the `interleave` calls it
+        // feeds (3 columns, 8192 rows), so even the 128-source case above
+        // leaves `interleave` the dominant term.
         let mut source_batches: Vec<usize> = Vec::new();
         let mut interleave_indices: Vec<(usize, usize)> =
             Vec::with_capacity(total_matched_rows);
         for (batch_idx, _, right) in matched_chunks {
             let source = match source_batches.iter().position(|b| b == batch_idx) {
-                Some(pos) => pos + 1,
+                Some(pos) => pos + source_offset,
                 None => {
                     source_batches.push(*batch_idx);
-                    source_batches.len()
+                    source_batches.len() - 1 + source_offset
                 }
             };
-            for i in 0..right.len() {
-                if right.is_null(i) {
-                    interleave_indices.push((0, 0));
-                } else {
-                    interleave_indices.push((source, right.value(i) as usize));
+            if right.null_count() == 0 {
+                // Hot path: no per-row null check, and `values()` avoids
+                // the bounds check `value(i)` would repeat.
+                interleave_indices
+                    .extend(right.values().iter().map(|&idx| (source, idx as usize)));
+            } else {
+                for i in 0..right.len() {
+                    if right.is_null(i) {
+                        interleave_indices.push((0, 0));
+                    } else {
+                        interleave_indices.push((source, right.value(i) as usize));
+                    }
                 }
             }
         }
@@ -1692,33 +1759,36 @@ impl MaterializingSortMergeJoinStream {
         let num_right_cols = self.buffered_schema.fields().len();
 
         // Read each source batch once (spilled batches require disk I/O).
-        let source_data_result: Result<Vec<RecordBatch>> = source_batches
+        let source_data: Vec<&RecordBatch> = source_batches
             .iter()
-            .map(|&idx| {
-                let bb = &self.buffered_data.batches[idx];
-                match &bb.batch {
-                    BufferedBatchState::InMemory(batch) => Ok(batch.clone()),
-                    BufferedBatchState::Spilled(_) => {
-                        internal_err!("Buffered batch should have been unspilled before fetching columns")
-                    }
-                }
+            .map(|&idx| match &self.buffered_data.batches[idx].batch {
+                BufferedBatchState::InMemory(batch) => Ok(batch),
+                BufferedBatchState::Spilled(_) => internal_err!(
+                    "Buffered batch should have been unspilled before fetching columns"
+                ),
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
-        let source_data = source_data_result?;
+        // One single-row null array per column, built up front so the
+        // per-column `source_arrays` can borrow them.
+        let null_arrays: Vec<ArrayRef> = if needs_null_sentinel {
+            self.buffered_schema
+                .fields()
+                .iter()
+                .map(|f| new_null_array(f.data_type(), 1))
+                .collect()
+        } else {
+            vec![]
+        };
 
+        let mut source_arrays: Vec<&dyn Array> =
+            Vec::with_capacity(source_data.len() + source_offset);
         let mut right_columns = Vec::with_capacity(num_right_cols);
         for col_idx in 0..num_right_cols {
-            let dtype = self.buffered_schema.field(col_idx).data_type();
-            let null_array = new_null_array(dtype, 1);
+            source_arrays.clear();
+            source_arrays.extend(null_arrays.get(col_idx).map(|a| a.as_ref()));
+            source_arrays.extend(source_data.iter().map(|d| d.column(col_idx).as_ref()));
 
-            let mut source_arrays: Vec<&dyn Array> =
-                Vec::with_capacity(source_batches.len() + 1);
-            source_arrays.push(null_array.as_ref());
-
-            for data in &source_data {
-                source_arrays.push(data.column(col_idx).as_ref());
-            }
             right_columns.push(interleave(&source_arrays, &interleave_indices)?);
         }
 
