@@ -747,6 +747,84 @@ impl ConstEvaluator {
     }
 }
 
+/// Position of the single pushdown-eligible CASE argument; every other
+/// argument must be a metadata-free literal.
+fn case_pushdown_target(args: &[Expr]) -> Option<usize> {
+    let mut case_position = None;
+    for (position, arg) in args.iter().enumerate() {
+        match arg {
+            Expr::Literal(_, None) => {}
+            Expr::Case(case) if case_pushdown_eligible(case) => {
+                if case_position.replace(position).is_some() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    case_position
+}
+
+fn case_pushdown_eligible(case: &Case) -> bool {
+    if case.expr.is_some() || case.when_then_expr.is_empty() {
+        return false;
+    }
+    let mut output_type: Option<DataType> = None;
+    let mut literal_of_common_type = |e: &Expr| -> bool {
+        match e {
+            Expr::Literal(s, None) => {
+                let data_type = s.data_type();
+                if data_type == DataType::Null {
+                    return true;
+                }
+                match &output_type {
+                    Some(t) => *t == data_type,
+                    None => {
+                        output_type = Some(data_type);
+                        true
+                    }
+                }
+            }
+            _ => false,
+        }
+    };
+    case.when_then_expr
+        .iter()
+        .all(|(_, then)| literal_of_common_type(then))
+        && case
+            .else_expr
+            .as_deref()
+            .is_none_or(&mut literal_of_common_type)
+}
+
+/// Constant-folds `f(...)` with `branch` substituted at `case_position`;
+/// `None` means the fold failed. Untyped NULLs fold as typed NULLs of
+/// `output_type`, matching the physical CASE behavior.
+fn fold_case_branch(
+    const_evaluator: &mut ConstEvaluator,
+    func: &Arc<datafusion_expr::ScalarUDF>,
+    args: &[Expr],
+    case_position: usize,
+    output_type: &DataType,
+    branch: &Expr,
+) -> Result<Option<Expr>> {
+    let branch = match branch {
+        Expr::Literal(s, _) if s.data_type() == DataType::Null => {
+            Expr::Literal(ScalarValue::try_new_null(output_type)?, None)
+        }
+        other => other.clone(),
+    };
+    let mut branch_args = args.to_vec();
+    branch_args[case_position] = branch;
+    let call =
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(func), branch_args));
+    match const_evaluator.evaluate_to_scalar(call) {
+        ConstSimplifyResult::Simplified(s, m)
+        | ConstSimplifyResult::NotSimplified(s, m) => Ok(Some(Expr::Literal(s, m))),
+        ConstSimplifyResult::SimplifyRuntimeError(_, _) => Ok(None),
+    }
+}
+
 /// Simplifies [`Expr`]s by applying algebraic transformation rules
 ///
 /// Example transformations that are applied:
@@ -1452,6 +1530,98 @@ impl TreeNodeRewriter for Simplifier<'_> {
                             right,
                         }))
                     }),
+                }))
+            }
+
+            // Push an immutable scalar function into the branches of a CASE with
+            // literal outputs, eagerly folding each branch; if any branch fails
+            // to fold, the expression is left untouched:
+            // f(CASE WHEN X THEN "a" ELSE "b" END) --> CASE WHEN X THEN f("a") ELSE f("b") END
+            Expr::ScalarFunction(ScalarFunction { func, args })
+                if func.signature().volatility == Volatility::Immutable
+                    && case_pushdown_target(&args).is_some() =>
+            {
+                // The function's own simplify() gets the first shot (arrow_cast
+                // must rewrite itself into a Cast); push down only if it declines.
+                let args = match func.simplify(args, info)? {
+                    ExprSimplifyResult::Simplified(expr) => {
+                        return Ok(Transformed::yes(expr));
+                    }
+                    ExprSimplifyResult::Original(args) => args,
+                };
+                let Some(case_position) = case_pushdown_target(&args) else {
+                    return internal_err!(
+                        "case pushdown guard guaranteed a CASE argument"
+                    );
+                };
+                let Expr::Case(case) = &args[case_position] else {
+                    return internal_err!(
+                        "case pushdown guard guaranteed a CASE argument"
+                    );
+                };
+                let case = case.clone();
+
+                // Types the untyped-NULL branches and the implicit-NULL ELSE;
+                // all-NULL outputs leave nothing to type from.
+                let output_type = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, then)| then.as_ref())
+                    .chain(case.else_expr.as_deref())
+                    .find_map(|e| match e {
+                        Expr::Literal(s, _) if s.data_type() != DataType::Null => {
+                            Some(s.data_type())
+                        }
+                        _ => None,
+                    });
+                let Some(output_type) = output_type else {
+                    return Ok(Transformed::no(Expr::ScalarFunction(ScalarFunction {
+                        func,
+                        args,
+                    })));
+                };
+
+                let mut const_evaluator =
+                    ConstEvaluator::try_new(Some(Arc::clone(info.config_options())))?;
+
+                let mut folded = Vec::with_capacity(case.when_then_expr.len() + 1);
+                let implicit_null =
+                    Expr::Literal(ScalarValue::try_new_null(&output_type)?, None);
+                let branches = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, then)| then.as_ref())
+                    .chain(std::iter::once(
+                        case.else_expr.as_deref().unwrap_or(&implicit_null),
+                    ));
+                for branch in branches {
+                    match fold_case_branch(
+                        &mut const_evaluator,
+                        &func,
+                        &args,
+                        case_position,
+                        &output_type,
+                        branch,
+                    )? {
+                        Some(lit) => folded.push(lit),
+                        None => {
+                            return Ok(Transformed::no(Expr::ScalarFunction(
+                                ScalarFunction { func, args },
+                            )));
+                        }
+                    }
+                }
+
+                let folded_else = folded.pop().map(Box::new);
+                Transformed::yes(Expr::Case(Case {
+                    expr: None,
+                    when_then_expr: case
+                        .when_then_expr
+                        .into_iter()
+                        .map(|(when, _)| when)
+                        .zip(folded.into_iter().map(Box::new))
+                        .collect(),
+                    else_expr: folded_else,
                 }))
             }
 
@@ -4013,6 +4183,351 @@ mod tests {
                     lit(true)
                 ))
         );
+    }
+
+    /// Parses Utf8 to Int64; -1 for NULL (not null-propagating), error on junk.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ParseIntUdf {
+        signature: Signature,
+    }
+
+    impl ParseIntUdf {
+        fn new(volatility: Volatility) -> Self {
+            Self {
+                signature: Signature::variadic_any(volatility),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for ParseIntUdf {
+        fn name(&self) -> &str {
+            "parse_int_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            match args.args.first() {
+                Some(ColumnarValue::Scalar(ScalarValue::Utf8(None))) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))))
+                }
+                Some(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))) => {
+                    match s.parse::<i64>() {
+                        Ok(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))),
+                        Err(_) => datafusion_common::exec_err!(
+                            "parse_int_udf: invalid integer {s:?}"
+                        ),
+                    }
+                }
+                _ => {
+                    datafusion_common::exec_err!("parse_int_udf: expected a Utf8 scalar")
+                }
+            }
+        }
+    }
+
+    fn parse_int(args: Vec<Expr>) -> Expr {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(ParseIntUdf::new(
+                Volatility::Immutable,
+            ))),
+            args,
+        ))
+    }
+
+    /// `CASE WHEN c2_non_null THEN then ELSE els END` (no ELSE when `els` is None).
+    fn case_on_c2(then: &str, els: Option<&str>) -> Expr {
+        Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("c2_non_null")), Box::new(lit(then)))],
+            els.map(|e| Box::new(lit(e))),
+        ))
+    }
+
+    #[test]
+    fn simplify_case_pushdown_folds_literal_branches() {
+        // f(CASE WHEN c2 THEN '1' ELSE '2' END)
+        // --> CASE WHEN c2 THEN f('1') ELSE f('2') END
+        // --> CASE WHEN c2 THEN 1 ELSE 2 END
+        assert_eq!(
+            simplify(parse_int(vec![case_on_c2("1", Some("2"))])),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2_non_null")), Box::new(lit(1i64)))],
+                Some(Box::new(lit(2i64))),
+            ))
+        );
+    }
+
+    #[test]
+    fn simplify_case_pushdown_bails_out_when_a_branch_fails_to_fold() {
+        // A failing fold must leave the expression untouched: the physical
+        // CASE evaluates branch expressions even on empty batches.
+        let expr = parse_int(vec![case_on_c2("3", Some("garbage"))]);
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_case_pushdown_requires_homogeneous_literal_types() {
+        // Mixed-type branch literals would change what type `f` observes.
+        let case = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("c2_non_null")), Box::new(lit("1")))],
+            Some(Box::new(lit(2i64))),
+        ));
+        let expr = parse_int(vec![case]);
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_case_pushdown_types_untyped_null_branches() {
+        // Untyped NULL THEN and the missing ELSE fold as f(typed NULL) = -1.
+        let case = Expr::Case(Case::new(
+            None,
+            vec![
+                (
+                    Box::new(col("c2_non_null")),
+                    Box::new(lit(ScalarValue::Null)),
+                ),
+                (Box::new(col("c2")), Box::new(lit("5"))),
+            ],
+            None,
+        ));
+        assert_eq!(
+            simplify(parse_int(vec![case])),
+            Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("c2_non_null")), Box::new(lit(-1i64))),
+                    (Box::new(col("c2")), Box::new(lit(5i64))),
+                ],
+                Some(Box::new(lit(-1i64))),
+            ))
+        );
+    }
+
+    #[test]
+    fn simplify_case_pushdown_skips_literals_with_metadata() {
+        // Literals carrying field metadata could change what `f` observes.
+        let metadata = FieldMetadata::from(std::collections::BTreeMap::from([(
+            "k".to_string(),
+            "v".to_string(),
+        )]));
+        let case = Expr::Case(Case::new(
+            None,
+            vec![(
+                Box::new(col("c2_non_null")),
+                Box::new(Expr::Literal(ScalarValue::from("1"), Some(metadata))),
+            )],
+            Some(Box::new(lit("2"))),
+        ));
+        let expr = parse_int(vec![case]);
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_case_pushdown_materializes_implicit_null_else() {
+        // No ELSE: the implicit NULL branch becomes f(NULL) = -1.
+        assert_eq!(
+            simplify(parse_int(vec![case_on_c2("5", None)])),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2_non_null")), Box::new(lit(5i64)))],
+                Some(Box::new(lit(-1i64))),
+            ))
+        );
+    }
+
+    #[test]
+    fn simplify_case_pushdown_skips_volatile_functions() {
+        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(ParseIntUdf::new(
+                Volatility::Volatile,
+            ))),
+            vec![case_on_c2("1", Some("2"))],
+        ));
+        assert_eq!(simplify(volatile.clone()), volatile);
+    }
+
+    #[test]
+    fn simplify_case_pushdown_multi_argument_guards() {
+        // Extra literal argument: still pushed and folded.
+        assert_eq!(
+            simplify(parse_int(vec![case_on_c2("1", Some("2")), lit("9")])),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c2_non_null")), Box::new(lit(1i64)))],
+                Some(Box::new(lit(2i64))),
+            ))
+        );
+        // Non-literal sibling argument: not rewritten.
+        let with_column = parse_int(vec![case_on_c2("1", Some("2")), col("c1")]);
+        assert_eq!(simplify(with_column.clone()), with_column);
+        // Two CASE arguments: not rewritten.
+        let with_two_cases =
+            parse_int(vec![case_on_c2("1", Some("2")), case_on_c2("3", Some("4"))]);
+        assert_eq!(simplify(with_two_cases.clone()), with_two_cases);
+    }
+
+    #[test]
+    fn simplify_case_pushdown_leaves_non_literal_branches() {
+        // A branch referencing a column is not a literal output: no rewrite.
+        let case = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("c2_non_null")), Box::new(col("c1")))],
+            Some(Box::new(lit("2"))),
+        ));
+        let expr = parse_int(vec![case]);
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_case_pushdown_after_inner_simplification() {
+        // WHEN-true collapses the CASE first, then the function folds outright.
+        let case = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(true)), Box::new(lit("7")))],
+            Some(Box::new(lit("8"))),
+        ));
+        assert_eq!(simplify(parse_int(vec![case])), lit(7i64));
+    }
+
+    #[test]
+    fn simplify_case_pushdown_interacts_with_eq_rule() {
+        // The folded CASE feeds the Eq/NotEq pushdown within the same pass.
+        let expr = binary_expr(
+            parse_int(vec![case_on_c2("1", Some("2"))]),
+            Operator::Eq,
+            lit(1i64),
+        );
+        assert_eq!(simplify(expr), col("c2_non_null"));
+    }
+
+    #[test]
+    fn simplify_case_pushdown_does_not_apply_to_cast() {
+        // Cast is outside the rule: folding CAST('garbage') fails fast at plan time.
+        let expr = Expr::Cast(Cast::new(
+            Box::new(case_on_c2("1", Some("garbage"))),
+            DataType::Int64,
+        ));
+        let simplified = simplify(expr);
+        assert_contains!(format!("{simplified}"), "CASE");
+        assert_contains!(format!("{simplified}"), "garbage");
+    }
+
+    /// Counts how many input rows the UDF is invoked over.
+    #[derive(Debug)]
+    struct RowCountingUdf {
+        signature: Signature,
+        rows_seen: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl PartialEq for RowCountingUdf {
+        fn eq(&self, other: &Self) -> bool {
+            self.signature == other.signature
+        }
+    }
+
+    impl Eq for RowCountingUdf {}
+
+    impl Hash for RowCountingUdf {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.signature.hash(state);
+        }
+    }
+
+    impl ScalarUDFImpl for RowCountingUdf {
+        fn name(&self) -> &str {
+            "row_counting_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            use std::sync::atomic::Ordering;
+            match &args.args[0] {
+                ColumnarValue::Scalar(_) => {
+                    self.rows_seen.fetch_add(args.number_rows, Ordering::SeqCst);
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(0))))
+                }
+                ColumnarValue::Array(array) => {
+                    self.rows_seen.fetch_add(array.len(), Ordering::SeqCst);
+                    Ok(ColumnarValue::Array(Arc::new(
+                        arrow::array::Int64Array::from(vec![0i64; array.len()]),
+                    )))
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn simplify_case_pushdown_eliminates_per_row_invocations() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let rows_seen = Arc::new(AtomicUsize::new(0));
+        let udf = Arc::new(ScalarUDF::new_from_impl(RowCountingUdf {
+            signature: Signature::variadic_any(Volatility::Immutable),
+            rows_seen: Arc::clone(&rows_seen),
+        }));
+        let case = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(col("flag")), Box::new(lit("1")))],
+            Some(Box::new(lit("2"))),
+        ));
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![case]));
+
+        let num_rows = 8192;
+        let df_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("flag", DataType::Boolean, false)].into(),
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let flags = arrow::array::BooleanArray::from_iter(
+            (0..num_rows).map(|i| Some(i % 2 == 0)),
+        );
+        let batch =
+            RecordBatch::try_new(Arc::clone(df_schema.inner()), vec![Arc::new(flags)])
+                .unwrap();
+
+        let props = ExecutionProps::new();
+        let planning_context = PhysicalPlanningContext::default();
+
+        // Without the rewrite the function is invoked over every row.
+        let physical =
+            create_physical_expr(&expr, &df_schema, &props, &planning_context).unwrap();
+        physical.evaluate(&batch).unwrap();
+        assert_eq!(rows_seen.swap(0, Ordering::SeqCst), num_rows);
+
+        // Simplification invokes it exactly once per branch (constant folding),
+        // independent of row count.
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::builder()
+                .with_schema(Arc::clone(&df_schema))
+                .build(),
+        );
+        let simplified = simplifier.simplify(expr).unwrap();
+        assert_eq!(rows_seen.swap(0, Ordering::SeqCst), 2);
+
+        // The simplified expression never invokes the function at runtime.
+        let physical =
+            create_physical_expr(&simplified, &df_schema, &props, &planning_context)
+                .unwrap();
+        physical.evaluate(&batch).unwrap();
+        assert_eq!(rows_seen.load(Ordering::SeqCst), 0);
     }
 
     #[test]
