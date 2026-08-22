@@ -763,6 +763,14 @@ Invalid or Unsupported Configuration: value must be greater than 0
 
 
 statement error
+SET datafusion.execution.parquet.maximum_parallel_row_group_writers = 0
+----
+DataFusion error: Error setting config datafusion.execution.parquet.maximum_parallel_row_group_writers
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
 SET datafusion.sql_parser.recursion_limit = 0
 ----
 DataFusion error: Error setting config datafusion.sql_parser.recursion_limit

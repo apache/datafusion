@@ -26,8 +26,8 @@
 use std::sync::Arc;
 
 use datafusion_common::config::{
-    CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
-    ParquetOptions, TableParquetOptions,
+    ConfigNonZeroUsize, CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
+    ParquetColumnOptions, ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
@@ -409,9 +409,15 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv) => *ndv,
                 }),
             allow_single_file_parallelism: proto.allow_single_file_parallelism,
-            maximum_parallel_row_group_writers: proto
+            maximum_parallel_row_group_writers: match proto
                 .maximum_parallel_row_group_writers
-                as usize,
+            {
+                // Proto3 decodes an omitted scalar field as zero. Preserve the
+                // documented logical default for payloads written before this
+                // field was populated.
+                0 => ParquetOptions::default().maximum_parallel_row_group_writers,
+                value => ConfigNonZeroUsize::try_new(value as usize)?,
+            },
             maximum_buffered_record_batches_per_stream: proto
                 .maximum_buffered_record_batches_per_stream
                 as usize,
