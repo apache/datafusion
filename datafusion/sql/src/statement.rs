@@ -33,7 +33,6 @@ use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
     ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema, exec_err,
@@ -2507,8 +2506,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             self.plan_from_tables(vec![source_table_with_joins], &mut planner_context)?;
 
         // 3. Build a combined schema for resolving expressions in ON and WHEN clauses
-        let combined_schema =
-            Arc::new(target_schema.as_ref().join(source_plan.schema())?);
+        let combined_schema = Arc::new(MergeIntoOp::expression_schema_for(
+            &target_qualifier,
+            &target_table_source.schema(),
+            source_plan.schema(),
+        )?);
 
         // 4. Convert the ON condition from sqlparser Expr to datafusion Expr
         let on_expr = self.sql_to_expr(*on, &combined_schema, &mut planner_context)?;
@@ -2527,61 +2529,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // 6. Build the MERGE operation. Column references to the target may be
-        // qualified with the SQL alias (`MERGE INTO target AS t ... t.col`).
-        // Canonicalize those to the real target table qualifier so the stored
-        // plan is independent of the alias: this lets the analyzer passes and
-        // proto deserialization rebuild the target schema from `table_name`
-        // alone, without carrying the alias as extra state.
-        let mut merge_op = MergeIntoOp {
-            on: on_expr,
-            clauses: df_clauses,
-        };
-        if target_qualifier != target_table_ref {
-            // Target references in correlated subqueries are represented as
-            // `OuterReferenceColumn`s inside the embedded logical plan. The
-            // alias canonicalization below only rewrites top-level expression
-            // columns, so accepting such a subquery would leave the target
-            // alias in the public MERGE representation. Reject this case until
-            // the alias can be rewritten scope-safely inside subquery plans.
-            for expr in merge_op.exprs() {
-                if Self::has_outer_reference_to_qualifier(expr, &target_qualifier)? {
-                    return not_impl_err!(
-                        "MERGE subqueries correlated to target alias \
-                         '{target_qualifier}' are not supported"
-                    );
-                }
-            }
-
-            // Canonicalizing target columns to `target_table_ref` is only safe
-            // when the source does not already use that qualifier. If it does
-            // (e.g. `MERGE INTO target AS t USING source AS target`), the two
-            // namespaces would collapse and later resolution could silently
-            // pick the source column for a target reference. Reject that
-            // collision rather than change the meaning of the condition.
-            if source_plan.schema().iter().any(|(qualifier, _)| {
-                qualifier.is_some_and(|q| q.resolved_eq(&target_table_ref))
-            }) {
-                return plan_err!(
-                    "MERGE source may not use the target table name '{target_table_ref}' \
-                     as a qualifier while the target is aliased as '{target_qualifier}'; \
-                     use a different source alias"
-                );
-            }
-            let canonical = merge_op
-                .exprs()
-                .into_iter()
-                .cloned()
-                .map(|expr| {
-                    Self::canonicalize_target_qualifier(
-                        expr,
-                        &target_qualifier,
-                        &target_table_ref,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-            merge_op = merge_op.with_new_exprs(canonical)?;
-        }
+        // 6. Preserve the target's visible qualifier in the public MERGE
+        // representation. It is a scope-local SQL name, distinct from the
+        // provider identity stored in `DmlStatement::table_name`.
+        let merge_op = MergeIntoOp::new(target_qualifier, on_expr, df_clauses);
 
         Ok(LogicalPlan::Dml(DmlStatement::new(
             target_table_ref,
@@ -2589,70 +2540,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             WriteOp::MergeInto(Box::new(merge_op)),
             Arc::new(source_plan),
         )))
-    }
-
-    /// Rewrite every [`Expr::Column`] qualified with `from` to instead use
-    /// `to`, leaving all other columns untouched. Used to canonicalize MERGE
-    /// target-alias references to the real target table qualifier.
-    fn canonicalize_target_qualifier(
-        expr: Expr,
-        from: &TableReference,
-        to: &TableReference,
-    ) -> Result<Expr> {
-        expr.transform(|expr| match expr {
-            Expr::Column(col) if col.relation.as_ref() == Some(from) => Ok(
-                Transformed::yes(Expr::Column(Column::new(Some(to.clone()), col.name))),
-            ),
-            other => Ok(Transformed::no(other)),
-        })
-        .map(|transformed| transformed.data)
-    }
-
-    /// Return true if an expression contains a subquery whose embedded plan
-    /// has an outer reference qualified by `qualifier`.
-    fn has_outer_reference_to_qualifier(
-        expr: &Expr,
-        qualifier: &TableReference,
-    ) -> Result<bool> {
-        let mut found = false;
-        expr.apply(|expr| {
-            let subquery = match expr {
-                Expr::Exists(exists) => Some(&exists.subquery),
-                Expr::InSubquery(in_subquery) => Some(&in_subquery.subquery),
-                Expr::SetComparison(set_comparison) => Some(&set_comparison.subquery),
-                Expr::ScalarSubquery(subquery) => Some(subquery),
-                _ => None,
-            };
-
-            if let Some(subquery) = subquery {
-                subquery.subquery.apply_with_subqueries(|plan| {
-                    plan.apply_expressions(|expr| {
-                        expr.apply(|expr| {
-                            if let Expr::OuterReferenceColumn(_, column) = expr
-                                && column.relation.as_ref() == Some(qualifier)
-                            {
-                                found = true;
-                                Ok(TreeNodeRecursion::Stop)
-                            } else {
-                                Ok(TreeNodeRecursion::Continue)
-                            }
-                        })
-                    })?;
-                    Ok(if found {
-                        TreeNodeRecursion::Stop
-                    } else {
-                        TreeNodeRecursion::Continue
-                    })
-                })?;
-            }
-
-            Ok(if found {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })?;
-        Ok(found)
     }
 
     fn merge_target_column_name(
