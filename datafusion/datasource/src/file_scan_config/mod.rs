@@ -2220,7 +2220,7 @@ mod tests {
             Precision::Exact(90)
         );
 
-        // With an unknown null count it is not.
+        // With an unknown null count it is not exact.
         let mut unknown_nulls = statistics.clone();
         unknown_nulls.column_statistics[2].null_count = Precision::Absent;
         let unique = config_with_constraints(
