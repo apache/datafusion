@@ -408,7 +408,6 @@ impl<'a> DFParquetMetadata<'a> {
             })
             .unwrap_or(schema);
 
-        // Promote before force_view_types so dict columns survive the Utf8->Utf8View pass.
         let should_promote =
             self.enable_rle_to_dictionary || self.rle_column_allowlist.is_some();
         let schema = if should_promote {
@@ -450,10 +449,10 @@ impl<'a> DFParquetMetadata<'a> {
                             return Arc::clone(field);
                         }
                         let dict_value_type = match field.data_type() {
-                            DataType::Utf8 => Some(DataType::Utf8),
-                            DataType::LargeUtf8 => Some(DataType::LargeUtf8),
-                            DataType::Binary => Some(DataType::Binary),
-                            DataType::LargeBinary => Some(DataType::LargeBinary),
+                            DataType::Utf8 | DataType::LargeUtf8 => Some(DataType::Utf8),
+                            DataType::Binary | DataType::LargeBinary => {
+                                Some(DataType::Binary)
+                            }
                             _ => None,
                         };
                         dict_value_type.map_or_else(
