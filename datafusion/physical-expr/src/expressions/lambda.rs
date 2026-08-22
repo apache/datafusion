@@ -31,7 +31,9 @@ use arrow::{
 };
 use datafusion_common::{
     HashMap, plan_err,
-    tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor},
+    tree_node::{
+        Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
+    },
 };
 use datafusion_common::{HashSet, Result, internal_err};
 use datafusion_expr::ColumnarValue;
@@ -91,6 +93,12 @@ impl LambdaExpr {
             ..
         } = visitor;
 
+        // Capture projection is *only* outer-batch columns (and captured
+        // outer lambda variables). This lambda's own parameters are appended
+        // after those captures by `LambdaArgument::new` and must not share
+        // the outer-batch index space — otherwise a later projection rewrite
+        // that changes the input schema width can make a stale param index
+        // look like a real input column (see #24372).
         let mut projection = used_indices.into_iter().collect::<Vec<_>>();
 
         projection.sort_unstable();
@@ -102,38 +110,32 @@ impl LambdaExpr {
             .map(|(new_idx, original)| (original, new_idx))
             .collect::<HashMap<_, _>>();
 
-        let projected_body = Arc::clone(&body)
-            .transform_down(|e| {
-                if let Some(column) = e.downcast_ref::<Column>() {
-                    let original = column.index();
-                    let projected = *column_index_map.get(&original).unwrap();
-                    if projected != original {
-                        return Ok(Transformed::yes(Arc::new(Column::new(
-                            column.name(),
-                            projected,
-                        ))));
-                    }
-                } else if let Some(lambda_variable) = e.downcast_ref::<LambdaVariable>() {
-                    let original = lambda_variable.index();
-                    let projected = *column_index_map.get(&original).unwrap();
-                    if projected != original {
-                        return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
-                            projected,
-                            Arc::clone(lambda_variable.field()),
-                        ))));
-                    }
-                }
-                Ok(Transformed::no(e))
-            })
-            .expect("closure should be infallible")
-            .data;
-
-        let used_param_indices = params
+        let used_param_indices: Vec<usize> = params
             .iter()
             .enumerate()
             .filter(|(_, name)| used_param_names.contains(*name))
             .map(|(i, _)| i)
             .collect();
+
+        // Own params occupy slots after the captured columns:
+        // `captures ++ used_params`. Bind them by name so a stale
+        // planner-assigned combined-schema index cannot leak into the
+        // capture projection after a schema-boundary rewrite.
+        let n_captures = projection.len();
+        let param_name_to_projected: HashMap<String, usize> = used_param_indices
+            .iter()
+            .enumerate()
+            .map(|(pos, param_i)| (params[*param_i].clone(), n_captures + pos))
+            .collect();
+
+        let projected_body = Arc::clone(&body)
+            .rewrite(&mut ProjectLambdaBody {
+                column_index_map: &column_index_map,
+                param_name_to_projected: &param_name_to_projected,
+                shadow_stack: Vec::new(),
+            })
+            .expect("rewriter is infallible")
+            .data;
 
         Self {
             params,
@@ -197,9 +199,12 @@ impl LambdaExpr {
 
 /// Walks the body of a [`LambdaExpr`] and collects, on a single pass:
 ///
-/// * `used_indices` — every `Column` / `LambdaVariable` index referenced
-///   anywhere in the tree (including inside nested lambdas). This drives
-///   the `projection` used to slice the outer batch.
+/// * `used_indices` — every outer-batch `Column` index, plus indices of
+///   captured *outer* `LambdaVariable`s (not this lambda's own params).
+///   This drives the `projection` used to slice the outer batch. Own
+///   parameters are deliberately excluded so their planner-assigned
+///   combined-schema indexes cannot be mistaken for input columns after
+///   a later projection rewrite changes the input schema width (#24372).
 /// * `used_param_names` — the subset of *this* lambda's `own_params` that
 ///   the body actually references.
 ///
@@ -230,12 +235,15 @@ impl TreeNodeVisitor<'_> for CollectUsedVisitor<'_> {
         if let Some(col) = node.downcast_ref::<Column>() {
             self.used_indices.insert(col.index());
         } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
-            self.used_indices.insert(var.index());
-
             let name = var.name();
             let shadowed = self.shadow_stack.iter().any(|frame| frame.contains(name));
             if !shadowed && self.own_params.contains(name) {
                 self.used_param_names.insert(name.to_string());
+            } else if !shadowed {
+                // Captured outer lambda variable. Keep its index in the
+                // outer-batch projection. Nested lambdas' own params are
+                // shadowed here and remapped by the inner LambdaExpr.
+                self.used_indices.insert(var.index());
             }
         } else if let Some(nested) = node.downcast_ref::<LambdaExpr>() {
             self.shadow_stack
@@ -250,6 +258,72 @@ impl TreeNodeVisitor<'_> for CollectUsedVisitor<'_> {
             self.shadow_stack.pop();
         }
         Ok(TreeNodeRecursion::Continue)
+    }
+}
+
+/// Rewrites a lambda body so captured columns occupy `0..n_captures` and
+/// this lambda's own parameters occupy `n_captures..`. Nested lambdas are
+/// tracked on `shadow_stack` so an inner parameter that reuses a name is
+/// not remapped as if it were this lambda's param.
+struct ProjectLambdaBody<'a> {
+    column_index_map: &'a HashMap<usize, usize>,
+    param_name_to_projected: &'a HashMap<String, usize>,
+    shadow_stack: Vec<HashSet<String>>,
+}
+
+impl TreeNodeRewriter for ProjectLambdaBody<'_> {
+    type Node = Arc<dyn PhysicalExpr>;
+
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if let Some(nested) = node.downcast_ref::<LambdaExpr>() {
+            self.shadow_stack
+                .push(nested.params.iter().cloned().collect());
+            return Ok(Transformed::no(node));
+        }
+
+        if let Some(column) = node.downcast_ref::<Column>() {
+            let original = column.index();
+            let projected = *self.column_index_map.get(&original).unwrap();
+            if projected != original {
+                return Ok(Transformed::yes(Arc::new(Column::new(
+                    column.name(),
+                    projected,
+                ))));
+            }
+            return Ok(Transformed::no(node));
+        }
+
+        if let Some(lambda_variable) = node.downcast_ref::<LambdaVariable>() {
+            let name = lambda_variable.name();
+            let shadowed = self.shadow_stack.iter().any(|frame| frame.contains(name));
+            if shadowed {
+                // Nested lambda's own param: the inner LambdaExpr remaps it.
+                return Ok(Transformed::no(node));
+            }
+            let projected =
+                if let Some(&projected) = self.param_name_to_projected.get(name) {
+                    projected
+                } else {
+                    // Captured outer lambda variable: still lives in the same
+                    // index space as the outer-batch columns.
+                    *self.column_index_map.get(&lambda_variable.index()).unwrap()
+                };
+            if projected != lambda_variable.index() {
+                return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                    projected,
+                    Arc::clone(lambda_variable.field()),
+                ))));
+            }
+        }
+
+        Ok(Transformed::no(node))
+    }
+
+    fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if node.downcast_ref::<LambdaExpr>().is_some() {
+            self.shadow_stack.pop();
+        }
+        Ok(Transformed::no(node))
     }
 }
 
@@ -354,6 +428,7 @@ fn check_async_udf(body: &Arc<dyn PhysicalExpr>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::PhysicalExpr;
     use crate::expressions::{Column, LambdaVariable, NoOp, lambda::lambda};
     use arrow::{
         array::RecordBatch,
@@ -388,7 +463,8 @@ mod tests {
         let lambda =
             LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
 
-        assert_eq!(lambda.projection(), &[1]);
+        // Own params are not part of the outer-batch capture projection.
+        assert!(lambda.projection().is_empty());
         assert_eq!(lambda.used_param_indices(), &[1]);
     }
 
@@ -438,7 +514,7 @@ mod tests {
         let lambda =
             LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
 
-        assert_eq!(lambda.projection(), &[0, 1]);
+        assert!(lambda.projection().is_empty());
         assert_eq!(lambda.used_param_indices(), &[0, 1]);
     }
 
@@ -458,7 +534,7 @@ mod tests {
         // indices the inner LambdaExpr::new would produce: sorted referenced
         // indices, so the names alone matter here — what matters for
         // shadow tracking is the names, not the indices.
-        let inner_body: Arc<dyn crate::PhysicalExpr> =
+        let inner_body: Arc<dyn PhysicalExpr> =
             Arc::new(crate::expressions::BinaryExpr::new(
                 Arc::new(crate::expressions::BinaryExpr::new(
                     Arc::new(LambdaVariable::new(1, Arc::clone(&outer_k_field))),
@@ -477,7 +553,7 @@ mod tests {
         // regular column reference so the walk has something non-trivial
         // to descend through. The outer body references the inner lambda
         // via `inner_lambda`.
-        let outer_body: Arc<dyn crate::PhysicalExpr> =
+        let outer_body: Arc<dyn PhysicalExpr> =
             Arc::new(crate::expressions::BinaryExpr::new(
                 Arc::new(Column::new("col", 0)),
                 datafusion_expr::Operator::Plus,
@@ -493,6 +569,119 @@ mod tests {
             &[1],
             "only outer's `v` (index 1) should be reported as used; `k` (index 0) is \
              shadowed inside the nested lambda"
+        );
+    }
+
+    /// Reconstructs nested lambdas through [`ProjectLambdaBody`] and asserts
+    /// the `captures ++ used_params` index layout at both levels.
+    ///
+    /// `(k, v) -> col + (k, v2) -> k + v2 + v` covers:
+    /// 1. an outer captured column (`col` at a non-zero planner index),
+    /// 2. an outer parameter captured by the inner lambda (`v`),
+    /// 3. an inner parameter that shadows an outer name (`k`).
+    ///
+    /// The inner body is built with stale combined-schema indexes so each
+    /// `LambdaExpr::new` has to rebase, matching a projection rewrite that
+    /// changes the input schema width.
+    #[test]
+    fn test_nested_lambda_project_lambda_body_rebasing() {
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+        let v2_field = Arc::new(Field::new("v2", DataType::Int32, true));
+
+        // Planner combined schema: a@0, b@1, col@2, outer k@3, outer v@4,
+        // inner k@5, inner v2@6. Inner body: k + v2 + v.
+        let inner_body: Arc<dyn PhysicalExpr> =
+            Arc::new(crate::expressions::BinaryExpr::new(
+                Arc::new(crate::expressions::BinaryExpr::new(
+                    Arc::new(LambdaVariable::new(5, Arc::clone(&k_field))),
+                    datafusion_expr::Operator::Plus,
+                    Arc::new(LambdaVariable::new(6, Arc::clone(&v2_field))),
+                )),
+                datafusion_expr::Operator::Plus,
+                Arc::new(LambdaVariable::new(4, Arc::clone(&v_field))),
+            ));
+        let inner_lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v2".to_string()], inner_body)
+                .unwrap();
+
+        // Inner reconstruction: capture outer `v`@4, then own params `k`, `v2`.
+        assert_eq!(inner_lambda.projection(), &[4]);
+        assert_eq!(inner_lambda.used_param_indices(), &[0, 1]);
+        assert_eq!(
+            inner_lambda.projected_body().as_ref().to_string(),
+            "k@1 + v2@2 + v@0",
+            "inner projected body should be captures(v) ++ params(k, v2)"
+        );
+
+        let outer_body: Arc<dyn PhysicalExpr> =
+            Arc::new(crate::expressions::BinaryExpr::new(
+                Arc::new(Column::new("col", 2)),
+                datafusion_expr::Operator::Plus,
+                Arc::new(inner_lambda),
+            ));
+        let outer_lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], outer_body)
+                .unwrap();
+
+        // Outer reconstruction: capture `col`@2, then used param `v` (`k` is
+        // shadowed by the inner lambda, so it is not a used outer param).
+        assert_eq!(outer_lambda.projection(), &[2]);
+        assert_eq!(outer_lambda.used_param_indices(), &[1]);
+        assert_eq!(
+            outer_lambda.projected_body().as_ref().to_string(),
+            "col@0 + (k, v2) -> k@5 + v2@6 + v@1",
+            "outer projected body should rebase col@2 -> col@0 and rewrite the \
+             nested capture of `v` onto the outer captures++params slot"
+        );
+
+        let reconstructed_inner = outer_lambda
+            .projected_body()
+            .children()
+            .into_iter()
+            .find_map(|c| c.downcast_ref::<LambdaExpr>())
+            .expect("outer projected body should still wrap the nested lambda");
+
+        // Inner reconstruction after the outer rewrite: capture the remapped
+        // outer `v`@1, then own params. Shadowed inner `k` stays an inner param.
+        assert_eq!(reconstructed_inner.projection(), &[1]);
+        assert_eq!(reconstructed_inner.used_param_indices(), &[0, 1]);
+        assert_eq!(
+            reconstructed_inner.projected_body().as_ref().to_string(),
+            "k@1 + v2@2 + v@0",
+            "inner projected body should rebase the outer-remapped `v`@1 back \
+             onto capture slot 0, with shadowed `k` and `v2` as own params"
+        );
+        assert_eq!(
+            reconstructed_inner.body().as_ref().to_string(),
+            "k@5 + v2@6 + v@1",
+            "inner original body should keep shadowed `k`/`v2` planner indexes \
+             and the outer-rebased capture of `v`"
+        );
+    }
+
+    /// A planner-assigned combined-schema index that would collide with a
+    /// real input column after a later projection rewrite must not appear
+    /// in the capture projection. See #24372.
+    #[test]
+    fn test_own_param_index_not_captured_from_outer_batch() {
+        let x_field = Arc::new(Field::new("x", DataType::Int64, true));
+        // Planned against a 1-column input, so param `x` sat at index 1.
+        // After collapse the input is wider, and index 1 is a real column.
+        let body = Arc::new(LambdaVariable::new(1, Arc::clone(&x_field)));
+
+        let lambda = LambdaExpr::try_new(vec!["x".to_string()], body).unwrap();
+
+        assert!(
+            lambda.projection().is_empty(),
+            "own param must not be treated as an outer-batch capture, got {:?}",
+            lambda.projection()
+        );
+        assert_eq!(lambda.used_param_indices(), &[0]);
+        assert_eq!(
+            lambda.projected_body().as_ref().to_string(),
+            "x@0",
+            "own param should be rebased to slot 0 of the captures++params batch"
         );
     }
 }
