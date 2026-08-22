@@ -326,10 +326,65 @@ impl RowGroupAccessBuilder {
 }
 
 /// Returns the selection length.
-fn row_selection_len(selection: &RowSelection) -> usize {
+pub(crate) fn row_selection_len(selection: &RowSelection) -> usize {
     match selection.as_mask() {
         Some(mask) => mask.len(),
         None => selection.iter().map(|selector| selector.row_count).sum(),
+    }
+}
+
+/// Appends a selection to a bitmap without changing its selected rows.
+#[inline]
+fn append_selection_to_mask(mask: &mut BooleanBufferBuilder, selection: &RowSelection) {
+    match selection.as_mask() {
+        Some(selection_mask) => mask.append_buffer(selection_mask),
+        None => {
+            for selector in selection.iter() {
+                mask.append_n(selector.row_count, !selector.skip);
+            }
+        }
+    }
+}
+
+/// Builds a flat row selection while preserving the requested backing.
+enum OverallRowSelectionBuilder {
+    Mask(BooleanBufferBuilder),
+    Selectors(Vec<RowSelector>),
+}
+
+impl OverallRowSelectionBuilder {
+    fn new(mask_backed: bool, row_capacity: usize) -> Self {
+        if mask_backed {
+            Self::Mask(BooleanBufferBuilder::new(row_capacity))
+        } else {
+            Self::Selectors(Vec::new())
+        }
+    }
+
+    fn append(&mut self, access: RowGroupAccess, row_group_rows: usize) {
+        match (self, access) {
+            (_, RowGroupAccess::Skip) => {}
+            (Self::Mask(mask), RowGroupAccess::Scan) => {
+                mask.append_n(row_group_rows, true)
+            }
+            (Self::Mask(mask), RowGroupAccess::Selection(selection)) => {
+                append_selection_to_mask(mask, &selection)
+            }
+            (Self::Selectors(selectors), RowGroupAccess::Scan) => {
+                selectors.push(RowSelector::select(row_group_rows))
+            }
+            (Self::Selectors(selectors), RowGroupAccess::Selection(selection)) => {
+                let fragments: Vec<RowSelector> = selection.into();
+                selectors.extend(fragments);
+            }
+        }
+    }
+
+    fn finish(self) -> RowSelection {
+        match self {
+            Self::Mask(mut mask) => RowSelection::from_boolean_buffer(mask.finish()),
+            Self::Selectors(selectors) => selectors.into(),
+        }
     }
 }
 
@@ -340,9 +395,7 @@ fn into_mask_backed(selection: RowSelection) -> RowSelection {
         None => {
             let total_rows = row_selection_len(&selection);
             let mut mask = BooleanBufferBuilder::new(total_rows);
-            for selector in selection.iter() {
-                mask.append_n(selector.row_count, !selector.skip);
-            }
+            append_selection_to_mask(&mut mask, &selection);
             RowSelection::from_boolean_buffer(mask.finish())
         }
     }
@@ -590,55 +643,28 @@ impl ParquetAccessPlan {
             );
         }
 
-        // Preserve bitmap backing across mixed row-group selections.
-        let any_selection_mask_backed = self.row_groups.iter().any(|rg| {
+        let mask_backed = self.row_groups.iter().any(|rg| {
             matches!(rg, RowGroupAccess::Selection(selection) if selection.as_mask().is_some())
         });
 
-        let total_selection = if any_selection_mask_backed {
-            let total_rows = self
-                .row_groups
+        let row_capacity = if mask_backed {
+            self.row_groups
                 .iter()
                 .zip(row_group_meta_data.iter())
                 .filter(|(rg, _)| rg.should_scan())
                 .map(|(_, rg_meta)| rg_meta.num_rows() as usize)
-                .sum();
-            let mut mask = BooleanBufferBuilder::new(total_rows);
-
-            for (rg, rg_meta) in self.row_groups.into_iter().zip(row_group_meta_data) {
-                match rg {
-                    RowGroupAccess::Skip => {}
-                    RowGroupAccess::Scan => {
-                        mask.append_n(rg_meta.num_rows() as usize, true)
-                    }
-                    RowGroupAccess::Selection(selection) => match selection.as_mask() {
-                        Some(buffer) => mask.append_buffer(buffer),
-                        None => {
-                            for selector in selection.iter() {
-                                mask.append_n(selector.row_count, !selector.skip);
-                            }
-                        }
-                    },
-                }
-            }
-
-            RowSelection::from_boolean_buffer(mask.finish())
+                .sum()
         } else {
-            // Keep selector backing when possible.
-            self.row_groups
-                .into_iter()
-                .zip(row_group_meta_data.iter())
-                .flat_map(|(rg, rg_meta)| match rg {
-                    RowGroupAccess::Skip => vec![],
-                    RowGroupAccess::Scan => {
-                        vec![RowSelector::select(rg_meta.num_rows() as usize)]
-                    }
-                    RowGroupAccess::Selection(selection) => selection.into(),
-                })
-                .collect()
+            0
         };
+        let mut total_selection =
+            OverallRowSelectionBuilder::new(mask_backed, row_capacity);
 
-        Ok(Some(total_selection))
+        for (access, rg_meta) in self.row_groups.into_iter().zip(row_group_meta_data) {
+            total_selection.append(access, rg_meta.num_rows() as usize);
+        }
+
+        Ok(Some(total_selection.finish()))
     }
 
     /// Return an iterator over the row group indexes that should be scanned
@@ -721,40 +747,32 @@ fn strip_empty_row_groups(
         return (row_group_indexes, None);
     };
 
+    let mask_backed = selection.as_mask().is_some();
+    let row_capacity = row_selection_len(&selection);
+    let mut kept_selection = OverallRowSelectionBuilder::new(mask_backed, row_capacity);
     let mut cursor = OverallRowSelectionCursor::new(selection);
     let mut kept_indexes = Vec::with_capacity(row_group_indexes.len());
-    let mut kept_selectors: Vec<RowSelector> = Vec::new();
 
     for &rg_idx in row_group_indexes.iter() {
         let rg_row_count = row_group_meta_data[rg_idx].num_rows() as usize;
-        // Pull this row group's fragments off the shared cursor in a single
-        // pass (no `split_off` tail reallocation).
-        let start = kept_selectors.len();
-        let mut selected = 0usize;
-        let mut taken = 0usize;
-        while taken < rg_row_count {
-            let Some(fragment) = cursor.take(rg_row_count - taken) else {
-                break;
-            };
-            taken += fragment.row_count;
-            if !fragment.skip {
-                selected += fragment.row_count;
-            }
-            kept_selectors.push(fragment);
+        let Some(access) = cursor.take_row_group(rg_row_count) else {
+            break;
+        };
+
+        // Empty row group: arrow-rs would silently skip it. Drop it so the
+        // plan stays 1:1 with the readers.
+        if !access.should_scan() {
+            continue;
         }
-        if selected > 0 {
-            kept_indexes.push(rg_idx);
-        } else {
-            // Empty row group: arrow-rs would silently skip it. Drop it and its
-            // fragments so the plan stays 1:1 with the readers.
-            kept_selectors.truncate(start);
-        }
+
+        kept_indexes.push(rg_idx);
+        kept_selection.append(access, rg_row_count);
     }
 
-    let result_selection = if kept_selectors.is_empty() {
+    let result_selection = if kept_indexes.is_empty() {
         None
     } else {
-        Some(RowSelection::from(kept_selectors))
+        Some(kept_selection.finish())
     };
 
     (kept_indexes, result_selection)
@@ -1798,6 +1816,31 @@ mod test {
         let result = result.expect("survivors keep a selection");
         assert_eq!(result.row_count(), 30); // 10 from RG 0 + 20 from RG 2
         assert_eq!(result.skipped_row_count(), 10); // RG 2's leading skip
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_preserves_mask_backing() {
+        // RG 1 and RG 3 select nothing. The surviving RG 0 and RG 2 masks must
+        // be concatenated without converting the selection to selectors.
+        let mut mask = vec![true; 10];
+        mask.extend(vec![false; 30]);
+        mask.extend(vec![true; 20]);
+        mask.extend(vec![false; 40]);
+        let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from(mask));
+
+        let (indexes, result) = strip_empty_row_groups(
+            vec![0, 1, 2, 3],
+            Some(selection),
+            &ROW_GROUP_METADATA,
+        );
+
+        assert_eq!(indexes, vec![0, 2]);
+        let result = result.expect("survivors keep a selection");
+        let mut expected = vec![true; 10];
+        expected.extend(vec![false; 10]);
+        expected.extend(vec![true; 20]);
+        let expected = BooleanBuffer::from(expected);
+        assert_eq!(result.as_mask(), Some(&expected));
     }
 
     #[test]

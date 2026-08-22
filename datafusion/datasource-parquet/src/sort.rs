@@ -17,8 +17,9 @@
 
 //! Sort-related utilities for Parquet scanning
 
+use crate::access_plan::row_selection_len;
 use arrow::datatypes::Schema;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -56,6 +57,18 @@ pub fn reverse_row_selection(
 
     // Reverse bitmap slices without materializing selectors.
     if row_selection.as_mask().is_some() {
+        let scanned_rows = row_groups_to_scan
+            .iter()
+            .map(|&rg_idx| rg_metadata[rg_idx].num_rows() as usize)
+            .sum::<usize>();
+        let selection_rows = row_selection_len(row_selection);
+        if selection_rows != scanned_rows {
+            return internal_err!(
+                "row selection specifies {selection_rows} rows but the scanned \
+                row groups contain {scanned_rows} rows"
+            );
+        }
+
         let mut remaining = row_selection.clone();
         let mut row_group_selections = Vec::with_capacity(row_groups_to_scan.len());
 
@@ -63,13 +76,6 @@ pub fn reverse_row_selection(
             let num_rows = rg_metadata[rg_idx].num_rows() as usize;
             row_group_selections.push(remaining.split_off(num_rows));
         }
-
-        // No rows should remain after splitting all row groups.
-        debug_assert_eq!(
-            remaining.row_count() + remaining.skipped_row_count(),
-            0,
-            "row selection covers more rows than the scanned row groups"
-        );
 
         return Ok(row_group_selections.into_iter().rev().collect());
     }
