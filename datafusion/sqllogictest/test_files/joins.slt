@@ -2896,6 +2896,18 @@ join (values (10, 1)) t2
 ----
 1 1
 
+# A filter-rejected match in a left join must produce a null-extended row after
+# the filter columns have been projected away.
+query II rowsort
+select t1.column2 as left_b1, t2.column2 as right_b1
+from (values (100, 1, 0), (5, 2, 0)) t1
+left join (values (10, 1), (20, 2)) t2
+  on t1.column2 = t2.column2
+ and t1.column1 > t2.column1;
+----
+1 1
+2 NULL
+
 ####
 # Config teardown
 ####
