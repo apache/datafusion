@@ -257,5 +257,75 @@ set datafusion.optimizer.enable_coalesce_first_last = false;
 statement ok
 DROP TABLE t3;
 
+# classify() gate: declined paths must stay declined even with the rule on.
+# Group p=1's a is NULL at o=2 and b is NULL at o=3, so DESC hits NULL b first.
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# IGNORE NULLS can't go through one struct (whole-row null != per-value null),
+# so this must stay two separate first_values, not one struct aggregate.
+query TT
+EXPLAIN SELECT first_value(a ORDER BY o DESC) IGNORE NULLS AS fa,
+               first_value(b ORDER BY o DESC) IGNORE NULLS AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+logical_plan
+01)Projection: first_value(t.a) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(t.b) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.a) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST], first_value(t.b) IGNORE NULLS ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+query II
+SELECT first_value(a ORDER BY o DESC) IGNORE NULLS AS fa,
+       first_value(b ORDER BY o DESC) IGNORE NULLS AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+30 200
+
+# DISTINCT can't share the single struct scan.
+query TT
+EXPLAIN SELECT first_value(DISTINCT a ORDER BY o DESC) AS fa,
+               first_value(DISTINCT b ORDER BY o DESC) AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+logical_plan
+01)Projection: first_value(DISTINCT t.a) ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(DISTINCT t.b) ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(DISTINCT t.a) ORDER BY [t.o DESC NULLS FIRST], first_value(DISTINCT t.b) ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+# FILTER can't share the single struct scan.
+query TT
+EXPLAIN SELECT first_value(a ORDER BY o DESC) FILTER (WHERE a IS NOT NULL) AS fa,
+               first_value(b ORDER BY o DESC) AS fb
+FROM t WHERE p = 1 GROUP BY p;
+----
+logical_plan
+01)Projection: first_value(t.a) FILTER (WHERE t.a IS NOT NULL) ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(t.b) ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.a) FILTER (WHERE t.a IS NOT NULL) ORDER BY [t.o DESC NULLS FIRST], first_value(t.b) ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+# GROUPING SETS adds a synthetic grouping-id column, so this rule leaves it alone.
+query TT
+EXPLAIN SELECT first_value(a ORDER BY o DESC) AS fa,
+               first_value(b ORDER BY o DESC) AS fb
+FROM t WHERE p = 1 GROUP BY CUBE(p);
+----
+logical_plan
+01)Projection: first_value(t.a) ORDER BY [t.o DESC NULLS FIRST] AS fa, first_value(t.b) ORDER BY [t.o DESC NULLS FIRST] AS fb
+02)--Aggregate: groupBy=[[CUBE (t.p)]], aggr=[[first_value(t.a) ORDER BY [t.o DESC NULLS FIRST], first_value(t.b) ORDER BY [t.o DESC NULLS FIRST]]]
+03)----Filter: t.p = Int32(1)
+04)------TableScan: t projection=[p, a, b, o]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
 statement ok
 DROP TABLE t;
