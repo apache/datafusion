@@ -60,6 +60,7 @@ use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
+use crate::query_fusion::QueryFusion;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -291,6 +292,7 @@ impl Optimizer {
             Arc::new(RewriteSetComparison::new()),
             Arc::new(OptimizeUnions::new()),
             Arc::new(UnionsToFilter::new()),
+            Arc::new(QueryFusion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
