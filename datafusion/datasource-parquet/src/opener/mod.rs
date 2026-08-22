@@ -3876,44 +3876,6 @@ mod test {
             ))
         }
 
-        #[tokio::test]
-        async fn test_input_file_name_projection() {
-            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-            let path = "dir/input_file_name.parquet";
-            let (file_schema, data_size) = write_grouped_file(&store, path, 1, 3).await;
-
-            let projection = ProjectionExprs::new([
-                ProjectionExpr::new(Arc::new(Column::new("value", 0)), "value"),
-                ProjectionExpr::new(input_file_name_expr(), "file_name"),
-            ]);
-
-            let morselizer = ParquetMorselizerBuilder::new()
-                .with_store(Arc::clone(&store))
-                .with_schema(file_schema)
-                .with_projection(projection)
-                .build();
-
-            let file =
-                PartitionedFile::new(path.to_string(), u64::try_from(data_size).unwrap());
-            let mut stream = open_file(&morselizer, file).await.unwrap();
-            let batch = stream.next().await.unwrap().unwrap();
-            assert!(stream.next().await.is_none());
-
-            assert_eq!(batch.num_columns(), 2);
-            assert_eq!(batch.schema().field(0).name(), "value");
-            assert_eq!(batch.schema().field(1).name(), "file_name");
-
-            let file_names = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("file_name column should be Utf8");
-            assert_eq!(file_names.len(), 3);
-            for i in 0..file_names.len() {
-                assert_eq!(file_names.value(i), path);
-            }
-        }
-
         /// Collect every `Int64` value from the given column in every batch
         /// of a stream. Used to verify the `row_number` column end to end.
         async fn collect_int64_values(
@@ -4031,6 +3993,44 @@ mod test {
             let stream = open_file(&morselizer, file).await.unwrap();
             let row_numbers = collect_int64_values(stream, 0).await;
             assert_eq!(row_numbers, vec![0, 1, 2, 3]);
+        }
+
+        #[tokio::test]
+        async fn test_input_file_name_projection() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let path = "dir/input_file_name.parquet";
+            let (file_schema, data_size) = write_grouped_file(&store, path, 1, 3).await;
+
+            let projection = ProjectionExprs::new([
+                ProjectionExpr::new(Arc::new(Column::new("value", 0)), "value"),
+                ProjectionExpr::new(input_file_name_expr(), "file_name"),
+            ]);
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(file_schema)
+                .with_projection(projection)
+                .build();
+
+            let file =
+                PartitionedFile::new(path.to_string(), u64::try_from(data_size).unwrap());
+            let mut stream = open_file(&morselizer, file).await.unwrap();
+            let batch = stream.next().await.unwrap().unwrap();
+            assert!(stream.next().await.is_none());
+
+            assert_eq!(batch.num_columns(), 2);
+            assert_eq!(batch.schema().field(0).name(), "value");
+            assert_eq!(batch.schema().field(1).name(), "file_name");
+
+            let file_names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("file_name column should be Utf8");
+            assert_eq!(file_names.len(), 3);
+            for i in 0..file_names.len() {
+                assert_eq!(file_names.value(i), path);
+            }
         }
 
         #[tokio::test]
