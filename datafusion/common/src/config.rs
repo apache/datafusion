@@ -748,6 +748,92 @@ impl Display for ConfigMinTwoUsize {
     }
 }
 
+/// Used for [`OptimizerOptions::default_filter_selectivity`] to represent
+/// an integer percentage value, when valid values are 0 to 100 inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigFilterSelectivity(u8);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use
+/// [`ConfigFilterSelectivity::try_new`].
+const fn filter_selectivity_default(value: u8) -> ConfigFilterSelectivity {
+    if value <= 100 {
+        ConfigFilterSelectivity(value)
+    } else {
+        panic!("value must be between 0 and 100")
+    }
+}
+
+impl ConfigFilterSelectivity {
+    fn try_from_i64(value: i64) -> Result<Self> {
+        if (0..=100).contains(&value) {
+            Ok(Self(value as u8))
+        } else {
+            _config_err!("value must be between 0 and 100, got {value}")
+        }
+    }
+
+    /// Creates a [`ConfigFilterSelectivity`], returning a configuration error
+    /// if `value` is greater than 100.
+    pub fn try_new(value: u8) -> Result<Self> {
+        Self::try_from_i64(i64::from(value))
+    }
+
+    /// Returns the wrapped `u8`.
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<ConfigFilterSelectivity> for u8 {
+    fn from(value: ConfigFilterSelectivity) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigFilterSelectivity {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from_i64(default_config_transform::<i64>(s)?)
+    }
+}
+
+impl ConfigField for ConfigFilterSelectivity {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigFilterSelectivity::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigFilterSelectivity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -1728,7 +1814,7 @@ config_namespace! {
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
-        pub default_filter_selectivity: u8, default = 20
+        pub default_filter_selectivity: ConfigFilterSelectivity, default = filter_selectivity_default(20)
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
