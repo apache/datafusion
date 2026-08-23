@@ -23,7 +23,7 @@ use arrow::{
         BatchCoalescer, FilterBuilder, interleave_record_batch, prep_null_mask_filter,
         take_record_batch,
     },
-    row::{OwnedRow, RowConverter, Rows, SortField},
+    row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use std::mem::size_of;
@@ -1272,8 +1272,20 @@ pub(crate) struct PartitionedTopK {
     partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
     /// Encoder for the partition key.
     partition_converter: RowConverter,
-    /// One heap per distinct partition key seen so far.
-    heaps: HashMap<OwnedRow, TopKHeap>,
+    /// Scratch row buffer for partition-key encoding. Reused across
+    /// `insert_batch` calls (cleared + appended each batch).
+    partition_scratch_rows: Rows,
+    /// One heap per distinct partition key seen so far. Keyed by the
+    /// row-encoded PARTITION BY bytes (a byte-comparable encoding, so the
+    /// `Vec<u8>` hashes, compares, and sorts identically to an
+    /// `OwnedRow`) which lets `insert_batch` look partitions up with
+    /// `entry_ref` — allocating a key only on first sight of a partition
+    /// rather than once per row.
+    heaps: HashMap<Vec<u8>, TopKHeap>,
+    /// Scratch map reused across `insert_batch` calls to group a batch's
+    /// row indices by partition key. Drained (not reallocated) each batch
+    /// so its backing table is allocated once, not per batch.
+    partition_groups: HashMap<Vec<u8>, Vec<u32>>,
     k: usize,
     batch_size: usize,
 }
@@ -1301,6 +1313,8 @@ impl PartitionedTopK {
             row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
 
         let partition_converter = RowConverter::new(partition_sort_fields)?;
+        let partition_scratch_rows = partition_converter
+            .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
 
         Ok(Self {
             schema,
@@ -1311,7 +1325,9 @@ impl PartitionedTopK {
             scratch_rows,
             partition_exprs,
             partition_converter,
+            partition_scratch_rows,
             heaps: HashMap::new(),
+            partition_groups: HashMap::new(),
             k,
             batch_size,
         })
@@ -1335,15 +1351,26 @@ impl PartitionedTopK {
             .iter()
             .map(|e| e.evaluate(batch).and_then(|v| v.into_array(num_rows)))
             .collect::<Result<_>>()?;
-        let pk_rows = self.partition_converter.convert_columns(&pk_arrays)?;
+        self.partition_scratch_rows.clear();
+        self.partition_converter
+            .append(&mut self.partition_scratch_rows, &pk_arrays)?;
 
         // 2. Demultiplex row indices by partition key (per-batch).
-        let mut groups: HashMap<OwnedRow, Vec<u32>> = HashMap::new();
-        for i in 0..num_rows {
-            groups
-                .entry(pk_rows.row(i).owned())
-                .or_default()
-                .push(i as u32);
+        //    `partition_groups` is a reused scratch map: taken out here and
+        //    drained below, so its backing table is allocated once for the
+        //    operator, not once per batch. `entry_ref` owns the key only on
+        //    Vacant, so it allocates one `Vec<u8>` per distinct partition
+        //    rather than one per row.
+        let mut groups = std::mem::take(&mut self.partition_groups);
+        groups.clear();
+        {
+            let pk_rows = &self.partition_scratch_rows;
+            for i in 0..num_rows {
+                groups
+                    .entry_ref(pk_rows.row(i).as_ref())
+                    .or_default()
+                    .push(i as u32);
+            }
         }
 
         // 3. Evaluate ORDER BY columns on the full batch and encode ONCE.
@@ -1360,7 +1387,7 @@ impl PartitionedTopK {
         //    qualifying rows into the partition's heap.
         let k = self.k;
         let mut replacements: usize = 0;
-        for (pk, indices) in groups {
+        for (pk, indices) in groups.drain() {
             let heap = self.heaps.entry(pk).or_insert_with(|| TopKHeap::new(k));
 
             // Once a heap is full, most rows at high partition cardinality
@@ -1396,6 +1423,10 @@ impl PartitionedTopK {
             heap.maybe_compact()?;
         }
 
+        // Return the drained scratch map (capacity retained) for the next
+        // batch to reuse.
+        self.partition_groups = groups;
+
         if replacements > 0 {
             self.metrics.row_replacements.add(replacements);
         }
@@ -1416,13 +1447,15 @@ impl PartitionedTopK {
             scratch_rows: _,
             partition_exprs: _,
             partition_converter: _,
+            partition_scratch_rows: _,
             mut heaps,
+            partition_groups: _,
             k: _,
             batch_size,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer();
 
-        let mut sorted_pks: Vec<OwnedRow> = heaps.keys().cloned().collect();
+        let mut sorted_pks: Vec<Vec<u8>> = heaps.keys().cloned().collect();
         sorted_pks.sort();
 
         let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
@@ -1450,24 +1483,39 @@ impl PartitionedTopK {
     /// Total memory currently held by this operator, including all
     /// per-partition heaps.
     fn size(&self) -> usize {
+        // Per partition: the heap plus the encoded partition key owned by
+        // the map. The key bytes are a heap allocation the table slot
+        // doesn't cover.
+        let heaps_contents: usize = self
+            .heaps
+            .iter()
+            .map(|(pk, heap)| pk.capacity() + heap.size())
+            .sum();
         size_of::<Self>()
             + self.row_converter.size()
             + self.partition_converter.size()
             + self.scratch_rows.size()
-            + self.heaps.values().map(|h| h.size()).sum::<usize>()
-            + self.heaps.capacity() * (size_of::<OwnedRow>() + size_of::<TopKHeap>())
+            + self.partition_scratch_rows.size()
+            + heaps_contents
+            + self.heaps.capacity() * (size_of::<Vec<u8>>() + size_of::<TopKHeap>())
+            + self.partition_groups.capacity()
+                * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
     }
 }
 
-/// A run of rows from a single source [`RecordBatch`] that tied at the
-/// boundary when inserted. Stored as `(batch, indices)` and materialized
-/// at emit time via [`take_record_batch`].
+/// Rows that tied at the boundary when inserted, materialized into a
+/// batch holding *only* those rows.
+///
+/// The rows are gathered eagerly rather than kept as `(source_batch,
+/// indices)`: a tie entry lives until the boundary moves, so holding the
+/// source batch would pin an entire input batch — and charge for it —
+/// for as long as a single row of it stays tied. With ties spread across
+/// many input batches that makes retained memory grow with the *input*
+/// size instead of with `K + ties`.
 #[derive(Debug)]
 struct TieEntry {
+    /// The tied rows, and nothing else. Always non-empty by construction.
     batch: RecordBatch,
-    /// Indices into `batch` of the rows tied at the (then-current)
-    /// boundary. Always non-empty by construction.
-    row_indices: Vec<u32>,
     /// `get_record_batch_memory_size(&batch)` captured at push time so
     /// `RankPartitionState::size()` doesn't recurse through `batch`'s
     /// columns on every `try_resize` call.
@@ -1489,12 +1537,14 @@ struct RankPartitionState {
 impl RankPartitionState {
     fn size(&self) -> usize {
         let ties_buffer = self.ties.capacity() * size_of::<TieEntry>();
-        let ties_contents: usize = self
-            .ties
-            .iter()
-            .map(|t| t.row_indices.capacity() * size_of::<u32>() + t.batch_bytes)
-            .sum();
+        let ties_contents: usize = self.ties.iter().map(|t| t.batch_bytes).sum();
         self.heap.size() + ties_buffer + ties_contents
+    }
+
+    /// Push `batch`'s rows onto the tie list, charging exactly their bytes.
+    fn push_ties(&mut self, batch: RecordBatch) {
+        let batch_bytes = get_record_batch_memory_size(&batch);
+        self.ties.push(TieEntry { batch, batch_bytes });
     }
 }
 
@@ -1540,8 +1590,17 @@ pub(crate) struct PartitionedTopKRank {
     /// `insert_batch` calls (cleared + appended each batch) so we
     /// avoid allocating a fresh `Rows` buffer every batch.
     partition_scratch_rows: Rows,
-    /// One rank state per distinct partition key seen so far.
-    states: HashMap<OwnedRow, RankPartitionState>,
+    /// One rank state per distinct partition key seen so far. Keyed by
+    /// the row-encoded PARTITION BY bytes (a byte-comparable encoding, so
+    /// the `Vec<u8>` hashes, compares, and sorts identically to an
+    /// `OwnedRow`) which lets `insert_batch` look partitions up with
+    /// `entry_ref` — allocating a key only on first sight of a partition
+    /// rather than once per row.
+    states: HashMap<Vec<u8>, RankPartitionState>,
+    /// Scratch map reused across `insert_batch` calls to group a batch's
+    /// row indices by partition key. Drained (not reallocated) each batch
+    /// so its backing table is allocated once, not per batch.
+    partition_groups: HashMap<Vec<u8>, Vec<u32>>,
     k: usize,
     batch_size: usize,
 }
@@ -1584,6 +1643,7 @@ impl PartitionedTopKRank {
             partition_converter,
             partition_scratch_rows,
             states: HashMap::new(),
+            partition_groups: HashMap::new(),
             k,
             batch_size,
         })
@@ -1602,12 +1662,6 @@ impl PartitionedTopKRank {
             return Ok(());
         }
 
-        // Captured once so the per-tie push from this batch can reuse
-        // it (computing `get_record_batch_memory_size` is O(cols ×
-        // buffer walk) and we'd otherwise pay it per push and again
-        // per `try_resize` call).
-        let input_batch_bytes = get_record_batch_memory_size(batch);
-
         // 1. Evaluate + encode partition columns into the reusable
         //    scratch (cleared then appended).
         let pk_arrays: Vec<ArrayRef> = self
@@ -1618,15 +1672,23 @@ impl PartitionedTopKRank {
         self.partition_scratch_rows.clear();
         self.partition_converter
             .append(&mut self.partition_scratch_rows, &pk_arrays)?;
-        let pk_rows = &self.partition_scratch_rows;
 
         // 2. Demultiplex row indices by partition key (per-batch).
-        let mut groups: HashMap<OwnedRow, Vec<u32>> = HashMap::new();
-        for i in 0..num_rows {
-            groups
-                .entry(pk_rows.row(i).owned())
-                .or_default()
-                .push(i as u32);
+        //    `partition_groups` is a reused scratch map: taken out here and
+        //    drained below, so its backing table is allocated once for the
+        //    operator, not once per batch. `entry_ref` owns the key only on
+        //    Vacant, so it allocates one `Vec<u8>` per distinct partition
+        //    rather than one per row.
+        let mut groups = std::mem::take(&mut self.partition_groups);
+        groups.clear();
+        {
+            let pk_rows = &self.partition_scratch_rows;
+            for i in 0..num_rows {
+                groups
+                    .entry_ref(pk_rows.row(i).as_ref())
+                    .or_default()
+                    .push(i as u32);
+            }
         }
 
         // 3. Evaluate ORDER BY columns on the full batch and encode ONCE.
@@ -1643,22 +1705,45 @@ impl PartitionedTopKRank {
         let k = self.k;
         let mut replacements: usize = 0;
 
-        for (pk, indices) in groups {
+        for (pk, indices) in groups.drain() {
             let state = self.states.entry(pk).or_insert_with(|| RankPartitionState {
                 heap: TopKHeap::new(k),
                 ties: Vec::new(),
             });
 
-            // Equal indices for THIS batch only. Coalesced into a single
-            // tie entry at the end of the partition's loop. Discarded if
-            // the boundary moves up mid-loop (those rows were tied to the
-            // old boundary, which is now strictly worse than the new K-th).
+            // Once the heap is full, a group whose rows are *all* strictly
+            // worse than the boundary changes neither the heap nor the
+            // ties. Bail before the gather below — at high partition
+            // cardinality this is the common case.
+            if let Some(max_row) = state.heap.max() {
+                let boundary = max_row.row();
+                if indices
+                    .iter()
+                    .all(|&i| self.scratch_rows.row(i as usize).as_ref() > boundary)
+                {
+                    continue;
+                }
+            }
+
+            // Gather this partition's rows into their own batch, as
+            // `PartitionedTopK` does. Registering the whole input batch
+            // instead would pin it — and charge for it — once per
+            // partition key present in the batch, so a batch spanning P
+            // partitions would be counted P times over.
+            let indices_arr = UInt32Array::from(indices);
+            let sub_batch = take_record_batch(batch, &indices_arr)?;
+
+            // Indices *into `sub_batch`* of rows from this batch that tied
+            // at the boundary. Coalesced into a single tie entry at the end
+            // of the partition's loop. Discarded if the boundary moves up
+            // mid-loop (those rows were tied to the old boundary, which is
+            // now strictly worse than the new K-th).
             let mut equal_indices: Vec<u32> = Vec::new();
             // Lazy-registered: only attached if at least one row reaches
             // the heap from this batch in this partition.
-            let mut entry: Option<RecordBatchEntry> = None;
+            let mut heap_entry: Option<RecordBatchEntry> = None;
 
-            for &orig_idx in &indices {
+            for (sub_idx, &orig_idx) in indices_arr.values().iter().enumerate() {
                 let row = self.scratch_rows.row(orig_idx as usize);
 
                 // Classify against the current K-th-best (the heap top).
@@ -1671,21 +1756,21 @@ impl PartitionedTopKRank {
 
                 match classification {
                     Some(Ordering::Equal) => {
-                        equal_indices.push(orig_idx);
+                        equal_indices.push(sub_idx as u32);
                         continue;
                     }
                     Some(Ordering::Greater) => continue,
                     Some(Ordering::Less) | None => {
                         // Heap path: heap not yet full, or row strictly
                         // better than the current boundary.
-                        let entry_ref = entry.get_or_insert_with(|| {
-                            state.heap.register_batch(batch.clone())
+                        let entry_ref = heap_entry.get_or_insert_with(|| {
+                            state.heap.register_batch(sub_batch.clone())
                         });
                         if let Some(EvictedRow {
                             batch: evicted_batch,
                             index: evicted_index,
                             row_bytes: evicted_bytes,
-                        }) = state.heap.add(entry_ref, row, orig_idx as usize)
+                        }) = state.heap.add(entry_ref, row, sub_idx)
                         {
                             // Compare the new boundary (post-eviction heap
                             // top) against the evicted row's bytes — both
@@ -1705,16 +1790,14 @@ impl PartitionedTopKRank {
                                 state.ties.clear();
                                 equal_indices.clear();
                             } else {
-                                // Boundary unchanged — evicted row is tied
-                                // at the (unchanged) boundary; push as a
-                                // single-row entry.
-                                let batch_bytes =
-                                    get_record_batch_memory_size(&evicted_batch);
-                                state.ties.push(TieEntry {
-                                    batch: evicted_batch,
-                                    row_indices: vec![evicted_index as u32],
-                                    batch_bytes,
-                                });
+                                // Boundary unchanged — the evicted row is
+                                // still tied at the boundary. Gather just
+                                // that row: holding `evicted_batch` would
+                                // keep a whole heap batch alive for one row,
+                                // and one such entry per input batch would
+                                // again make memory grow with the input.
+                                let one = UInt32Array::from(vec![evicted_index as u32]);
+                                state.push_ties(take_record_batch(&evicted_batch, &one)?);
                             }
                         }
                         replacements += 1;
@@ -1722,20 +1805,33 @@ impl PartitionedTopKRank {
                 }
             }
 
-            if let Some(e) = entry {
+            let registered_with_heap = heap_entry.is_some();
+            if let Some(e) = heap_entry {
                 state.heap.insert_batch_entry(e);
                 state.heap.maybe_compact()?;
             }
 
             // Commit this batch's ties as a single entry.
             if !equal_indices.is_empty() {
-                state.ties.push(TieEntry {
-                    batch: batch.clone(),
-                    row_indices: equal_indices,
-                    batch_bytes: input_batch_bytes,
-                });
+                // No row of this group reached the heap, so `sub_batch` is
+                // not registered there and reusing it here cannot
+                // double-charge it. Combined with every row having tied,
+                // `sub_batch` already *is* exactly the tie rows — the
+                // gather below would just copy it.
+                let tie_batch = if !registered_with_heap
+                    && equal_indices.len() == sub_batch.num_rows()
+                {
+                    sub_batch
+                } else {
+                    take_record_batch(&sub_batch, &UInt32Array::from(equal_indices))?
+                };
+                state.push_ties(tie_batch);
             }
         }
+
+        // Return the drained scratch map (capacity retained) for the next
+        // batch to reuse.
+        self.partition_groups = groups;
 
         if replacements > 0 {
             self.metrics.row_replacements.add(replacements);
@@ -1761,12 +1857,13 @@ impl PartitionedTopKRank {
             partition_converter: _,
             partition_scratch_rows: _,
             mut states,
+            partition_groups: _,
             k: _,
             batch_size,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer();
 
-        let mut sorted_pks: Vec<OwnedRow> = states.keys().cloned().collect();
+        let mut sorted_pks: Vec<Vec<u8>> = states.keys().cloned().collect();
         sorted_pks.sort();
 
         let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
@@ -1779,10 +1876,8 @@ impl PartitionedTopKRank {
                 coalescer.push_batch(batch)?;
             }
             for tie in ties {
-                let indices = UInt32Array::from(tie.row_indices);
-                let tie_batch = take_record_batch(&tie.batch, &indices)?;
-                (&tie_batch).record_output(&metrics.baseline);
-                coalescer.push_batch(tie_batch)?;
+                (&tie.batch).record_output(&metrics.baseline);
+                coalescer.push_batch(tie.batch)?;
             }
         }
         coalescer.finish_buffered_batch()?;
@@ -1800,14 +1895,24 @@ impl PartitionedTopKRank {
 
     /// Total memory currently held, including all per-partition states.
     fn size(&self) -> usize {
+        // Per partition: the state plus the encoded partition key owned by
+        // the map. The key bytes are a heap allocation the table slot
+        // doesn't cover.
+        let states_contents: usize = self
+            .states
+            .iter()
+            .map(|(pk, state)| pk.capacity() + state.size())
+            .sum();
         size_of::<Self>()
             + self.row_converter.size()
             + self.partition_converter.size()
             + self.scratch_rows.size()
             + self.partition_scratch_rows.size()
-            + self.states.values().map(|s| s.size()).sum::<usize>()
+            + states_contents
             + self.states.capacity()
-                * (size_of::<OwnedRow>() + size_of::<RankPartitionState>())
+                * (size_of::<Vec<u8>>() + size_of::<RankPartitionState>())
+            + self.partition_groups.capacity()
+                * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
     }
 }
 
@@ -2074,8 +2179,24 @@ impl PartitionedTopKDenseRank {
             // value don't re-allocate.
             let mut runs = std::mem::take(&mut self.ob_runs);
             runs.clear();
+            // Once the partition tracks its full K distinct ob values, the
+            // largest of them is an admission boundary that only ever
+            // improves: case B (which can raise the max) is closed, and
+            // case C replaces the max with something strictly smaller. So a
+            // row above today's boundary is above every later one too, and
+            // is neither tracked now nor admissible later — skip it before
+            // it costs a bucket. Rows *equal* to the boundary must still go
+            // through: the boundary key is itself a tracked group.
+            let boundary: Option<&[u8]> = if state.groups.len() == k {
+                state.keys.peek().map(Vec::as_slice)
+            } else {
+                None
+            };
             for &orig_idx in &indices {
                 let ob_row = self.scratch_rows.row(orig_idx as usize);
+                if boundary.is_some_and(|b| ob_row.as_ref() > b) {
+                    continue;
+                }
                 runs.entry_ref(ob_row.as_ref()).or_default().push(orig_idx);
             }
 
@@ -2948,6 +3069,215 @@ mod tests {
             &ExecutionPlanMetricsSet::new(),
         )?;
         Ok((schema, state))
+    }
+
+    /// `PartitionedTopKRank` must not charge (or pin) a whole input batch
+    /// once per partition key that batch touches.
+    ///
+    /// Regression: the heap used to be handed `batch.clone()` — the full
+    /// input batch — rather than a gather of just that partition's rows,
+    /// so a batch spanning P partitions was counted P times over. With 500
+    /// partitions in one batch that reported ~516x the batch size, against
+    /// ~15x for the equivalent `ROW_NUMBER` state on identical input.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_size_is_not_per_partition_batch() -> Result<()> {
+        const P: i32 = 500; // distinct partitions, all inside one batch
+        const ROWS: i32 = 4000;
+
+        // Distinct values throughout: no ties, so RANK retains exactly what
+        // ROW_NUMBER does and the two sizes are directly comparable.
+        let pks: Vec<i32> = (0..ROWS).map(|i| i % P).collect();
+        let vals: Vec<i32> = (0..ROWS).map(|i| i / P).collect();
+
+        let (schema, mut rn) = build_partitioned_topk(2)?;
+        rn.insert_batch(&pk_val_batch(&schema, pks.clone(), vals.clone())?)?;
+        let rn_size = rn.size();
+
+        let (schema, mut rk) = build_partitioned_topk_rank(2)?;
+        rk.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+        let rk_size = rk.size();
+
+        assert!(
+            rk_size <= rn_size * 2,
+            "RANK reported {rk_size} bytes for the same retained rows that \
+             ROW_NUMBER reported {rn_size} bytes for; a per-partition factor \
+             has crept back in"
+        );
+        Ok(())
+    }
+
+    /// A boundary tie must retain only the tied rows, not the batch they
+    /// arrived in.
+    ///
+    /// Regression: `TieEntry` used to hold the source `RecordBatch` plus
+    /// indices, so one tied row pinned — and was charged for — a whole
+    /// input batch, for as long as the boundary held. Across a stream of
+    /// batches that made retained memory grow with the *input* size rather
+    /// than with `K + ties`.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_ties_do_not_pin_input_batches() -> Result<()> {
+        let (schema, mut rk) = build_partitioned_topk_rank(1)?;
+
+        // Each batch carries exactly one row tied at the boundary and 999
+        // rows that are strictly worse and must be dropped.
+        let mut vals = vec![100; 1000];
+        vals[0] = 7;
+        let batch = pk_val_batch(&schema, vec![1; 1000], vals)?;
+
+        rk.insert_batch(&batch)?;
+        let after_first = rk.size();
+        for _ in 0..7 {
+            rk.insert_batch(&batch)?;
+        }
+        let after_eight = rk.size();
+
+        // Seven more batches retain seven more single rows. Growth must be
+        // on the order of those rows, not of the seven 1000-row batches
+        // (~8 KB each) they arrived in.
+        let growth = after_eight - after_first;
+        assert!(
+            growth < 2000,
+            "tie list grew {growth} bytes over 7 batches that contributed \
+             1 row each; it is holding the source batches"
+        );
+        Ok(())
+    }
+
+    /// Randomized differential test for `PartitionedTopKRank`.
+    ///
+    /// The operator's retention rule is subtle — a K-bounded heap plus a
+    /// boundary-tie list that must be discarded the moment the K-th-best
+    /// ORDER BY value improves — and it is driven by the interleaving of
+    /// partitions, ties, and batch boundaries. This compares it against a
+    /// brute-force `RANK() <= K` over the same rows for many random
+    /// shapes.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_matches_bruteforce() -> Result<()> {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        for seed in 0..64u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let k = rng.random_range(1..5usize);
+            let n_partitions = rng.random_range(1..4i32);
+            // A small value domain relative to K so ties at, above, and
+            // below the boundary all occur frequently.
+            let n_values = rng.random_range(1..6i32);
+            let n_batches = rng.random_range(1..5usize);
+
+            let (schema, mut state) = build_partitioned_topk_rank(k)?;
+            let mut all_rows: Vec<(i32, i32)> = Vec::new();
+
+            for _ in 0..n_batches {
+                let rows = rng.random_range(1..12usize);
+                let pks: Vec<i32> = (0..rows)
+                    .map(|_| rng.random_range(0..n_partitions))
+                    .collect();
+                let vals: Vec<i32> =
+                    (0..rows).map(|_| rng.random_range(0..n_values)).collect();
+                all_rows.extend(pks.iter().copied().zip(vals.iter().copied()));
+                state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+            }
+
+            // Reference: keep every row whose RANK within its partition
+            // (1 + the number of strictly smaller values) is <= K.
+            let mut expected: Vec<(i32, i32)> = all_rows
+                .iter()
+                .filter(|(pk, val)| {
+                    let rank =
+                        1 + all_rows.iter().filter(|(p, v)| p == pk && v < val).count();
+                    rank <= k
+                })
+                .copied()
+                .collect();
+            expected.sort_unstable();
+
+            let batches: Vec<RecordBatch> = state.emit()?.try_collect::<Vec<_>>().await?;
+            let mut actual: Vec<(i32, i32)> = Vec::new();
+            for b in &batches {
+                let pk = b.column(0).as_primitive::<arrow::datatypes::Int32Type>();
+                let val = b.column(1).as_primitive::<arrow::datatypes::Int32Type>();
+                for i in 0..b.num_rows() {
+                    actual.push((pk.value(i), val.value(i)));
+                }
+            }
+            actual.sort_unstable();
+
+            assert_eq!(
+                actual, expected,
+                "seed={seed} k={k} partitions={n_partitions} values={n_values} \
+                 batches={n_batches}"
+            );
+        }
+        Ok(())
+    }
+
+    /// Randomized differential test for `PartitionedTopKDenseRank`.
+    ///
+    /// Mirrors [`test_partitioned_topk_rank_matches_bruteforce`] for
+    /// DENSE_RANK, whose admission path prunes rows against a boundary
+    /// that shifts as distinct ORDER BY values are evicted.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_matches_bruteforce() -> Result<()> {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        for seed in 0..64u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let k = rng.random_range(1..5usize);
+            let n_partitions = rng.random_range(1..4i32);
+            let n_values = rng.random_range(1..8i32);
+            let n_batches = rng.random_range(1..5usize);
+
+            let (schema, mut state) = build_partitioned_topk_dense_rank(k)?;
+            let mut all_rows: Vec<(i32, i32)> = Vec::new();
+
+            for _ in 0..n_batches {
+                let rows = rng.random_range(1..12usize);
+                let pks: Vec<i32> = (0..rows)
+                    .map(|_| rng.random_range(0..n_partitions))
+                    .collect();
+                let vals: Vec<i32> =
+                    (0..rows).map(|_| rng.random_range(0..n_values)).collect();
+                all_rows.extend(pks.iter().copied().zip(vals.iter().copied()));
+                state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+            }
+
+            // Reference: keep every row whose DENSE_RANK within its
+            // partition (1 + the number of distinct smaller values) is <= K.
+            let mut expected: Vec<(i32, i32)> = all_rows
+                .iter()
+                .filter(|(pk, val)| {
+                    let smaller: std::collections::BTreeSet<i32> = all_rows
+                        .iter()
+                        .filter(|(p, v)| p == pk && v < val)
+                        .map(|(_, v)| *v)
+                        .collect();
+                    // DENSE_RANK is 1 + the count of distinct smaller values.
+                    smaller.len() < k
+                })
+                .copied()
+                .collect();
+            expected.sort_unstable();
+
+            let batches: Vec<RecordBatch> = state.emit()?.try_collect::<Vec<_>>().await?;
+            let mut actual: Vec<(i32, i32)> = Vec::new();
+            for b in &batches {
+                let pk = b.column(0).as_primitive::<arrow::datatypes::Int32Type>();
+                let val = b.column(1).as_primitive::<arrow::datatypes::Int32Type>();
+                for i in 0..b.num_rows() {
+                    actual.push((pk.value(i), val.value(i)));
+                }
+            }
+            actual.sort_unstable();
+
+            assert_eq!(
+                actual, expected,
+                "seed={seed} k={k} partitions={n_partitions} values={n_values} \
+                 batches={n_batches}"
+            );
+        }
+        Ok(())
     }
 
     fn pk_val_batch(
