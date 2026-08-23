@@ -46,7 +46,7 @@ use parquet::file::writer::TrackedWrite;
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use crate::RowGroupAccessPlanFilter;
-use crate::metadata::DFParquetMetadata;
+use crate::metadata::{DFParquetMetadata, has_untrusted_min_max_order};
 use crate::push_decoder::RowGroupPruner;
 use crate::row_group_filter::RowGroupPruningStatistics;
 use crate::{PagePruningAccessPlanFilter, ParquetAccessPlan, ParquetFileMetrics};
@@ -656,6 +656,38 @@ fn signed_decimal_byte_array_statistics_remain_usable() {
             &metrics(),
         );
         assert!(!row_groups.build().should_scan(0));
+    }
+}
+
+#[test]
+fn undefined_int96_order_is_never_trusted() {
+    let parquet_type = ParquetType::primitive_type_builder("s", PhysicalType::INT96)
+        .build()
+        .unwrap();
+    let schema = SchemaDescriptor::new(Arc::new(
+        ParquetType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(parquet_type)])
+            .build()
+            .unwrap(),
+    ));
+    assert_eq!(schema.column(0).sort_order(), SortOrder::UNDEFINED);
+
+    for order in [
+        None,
+        Some(ColumnOrder::UNDEFINED),
+        Some(ColumnOrder::UNKNOWN),
+        Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED)),
+        Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)),
+        Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)),
+    ] {
+        assert!(
+            has_untrusted_min_max_order(
+                &schema,
+                order.as_ref().map(std::slice::from_ref),
+                0
+            ),
+            "order={order:?}",
+        );
     }
 }
 

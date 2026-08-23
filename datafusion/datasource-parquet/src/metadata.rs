@@ -65,18 +65,24 @@ fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
     ) && column.sort_order() != SortOrder::SIGNED
 }
 
-/// Whether byte-array bounds lack a recognized unsigned comparison order.
+/// Whether a column's min/max bounds lack a comparison order matching Arrow's.
 ///
 /// The deprecated Parquet `min`/`max` fields use signed comparison, unlike
 /// Arrow's string and binary comparisons. Even the modern bounds cannot be
 /// interpreted without the corresponding footer `column_orders` entry.
 /// Signed logical types, such as decimals, retain their existing behavior.
-pub(crate) fn has_untrusted_byte_array_order(
+/// Columns with undefined sort orders, such as `INT96`, never have usable
+/// min/max bounds regardless of their physical type. The `INT96` check is
+/// defensive because parquet-rs does not currently expose those bounds.
+pub(crate) fn has_untrusted_min_max_order(
     parquet_schema: &SchemaDescriptor,
     column_orders: Option<&[ColumnOrder]>,
     parquet_column_index: usize,
 ) -> bool {
     let column = parquet_schema.column(parquet_column_index);
+    if column.sort_order() == SortOrder::UNDEFINED {
+        return true;
+    }
     requires_unsigned_byte_array_order(&column)
         && (column.sort_order() != SortOrder::UNSIGNED
             || column_orders
@@ -547,7 +553,7 @@ impl<'a> DFParquetMetadata<'a> {
                         Ok(stats_converter) => {
                             let parquet_index = stats_converter.parquet_column_index();
                             if parquet_index.is_some_and(|index| {
-                                has_untrusted_byte_array_order(
+                                has_untrusted_min_max_order(
                                     file_metadata.schema_descr(),
                                     file_metadata.column_orders().map(Vec::as_slice),
                                     index,

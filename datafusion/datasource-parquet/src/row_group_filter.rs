@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
-use crate::metadata::{has_untrusted_byte_array_order, has_untrusted_byte_array_stats};
+use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
 use arrow::datatypes::Schema;
@@ -551,7 +551,7 @@ impl<'a> RowGroupPruningStatistics<'a> {
         let converter = self.statistics_converter(column).ok()?;
         let parquet_index = converter.parquet_column_index();
         if parquet_index.is_some_and(|index| {
-            has_untrusted_byte_array_order(self.parquet_schema, self.column_orders, index)
+            has_untrusted_min_max_order(self.parquet_schema, self.column_orders, index)
         }) {
             return None;
         }
