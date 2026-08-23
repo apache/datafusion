@@ -162,11 +162,11 @@ fn decimal_places_from_scalar(scalar: &ScalarValue) -> Result<i32> {
     ),
     sql_example = r#"```sql
 > SELECT round(3.14159);
-+--------------+
-| round(3.14159)|
-+--------------+
-| 3.0          |
-+--------------+
++----------------+
+| round(3.14159) |
++----------------+
+| 3.0            |
++----------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
