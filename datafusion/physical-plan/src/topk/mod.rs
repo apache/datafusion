@@ -2179,14 +2179,16 @@ impl PartitionedTopKDenseRank {
             // value don't re-allocate.
             let mut runs = std::mem::take(&mut self.ob_runs);
             runs.clear();
-            // Once the partition tracks its full K distinct ob values, the
-            // largest of them is an admission boundary that only ever
-            // improves: case B (which can raise the max) is closed, and
-            // case C replaces the max with something strictly smaller. So a
-            // row above today's boundary is above every later one too, and
-            // is neither tracked now nor admissible later — skip it before
-            // it costs a bucket. Rows *equal* to the boundary must still go
-            // through: the boundary key is itself a tracked group.
+            // Once the partition holds its full K distinct ob values, the
+            // largest of them is the bar a new value must beat, and that bar
+            // only ever gets stricter: with K values held there is no free
+            // slot left for a new (possibly larger) one, and the only way in
+            // from here is to evict that largest and put something strictly
+            // smaller in its place. So a row worse than today's bar is worse
+            // than every later bar too — it is not held now and can never be
+            // admitted — and can be dropped before it costs a bucket. Rows
+            // *equal* to the bar must still go through: that value is one of
+            // the K being held, so its rows belong to a live group.
             let boundary: Option<&[u8]> = if state.groups.len() == k {
                 state.keys.peek().map(Vec::as_slice)
             } else {
