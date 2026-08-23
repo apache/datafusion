@@ -281,7 +281,8 @@ mod tests {
 
     use super::*;
 
-    use arrow::array::{ArrayRef, RecordBatch};
+    use arrow::array::{ArrayRef, AsArray, RecordBatch};
+    use arrow::datatypes::{Field, Int32Type, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::Result;
     use datafusion_execution::TaskContext;
@@ -378,5 +379,79 @@ mod tests {
         assert_eq!(total, 0, "fetch=Some(0) must emit zero rows, got {total}");
 
         Ok(())
+    }
+
+    /// Merge streams of `(key, tag)` rows sorted on `key` with the round-robin
+    /// tie breaker enabled, returning the `tag` column of the output in order.
+    async fn merge_tags(streams: Vec<Vec<(i32, i32)>>) -> Vec<i32> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("tag", DataType::Int32, false),
+        ]));
+        let streams = streams
+            .into_iter()
+            .map(|rows| {
+                let (keys, tags): (Vec<i32>, Vec<i32>) = rows.into_iter().unzip();
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(keys)),
+                        Arc::new(Int32Array::from(tags)),
+                    ],
+                )
+                .unwrap();
+                Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&schema),
+                    futures::stream::iter(vec![Ok(batch)]),
+                )) as SendableRecordBatchStream
+            })
+            .collect();
+        let sort: LexOrdering =
+            [PhysicalSortExpr::new_default(col("key", &schema).unwrap())].into();
+
+        let merged = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(schema)
+            .with_expressions(&sort)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_batch_size(1024)
+            .with_bypass_mempool()
+            .with_round_robin_tie_breaker(true)
+            .build()
+            .unwrap();
+
+        collect(merged)
+            .await
+            .unwrap()
+            .iter()
+            .flat_map(|b| b.column(1).as_primitive::<Int32Type>().values().to_vec())
+            .collect()
+    }
+
+    /// The round-robin tie breaker must start every run of equal keys with a
+    /// clean slate: poll counts left over from an earlier run of ties must not
+    /// influence which stream wins the next one.
+    #[tokio::test]
+    async fn test_round_robin_tie_breaker_resets_poll_counts_between_tie_runs() {
+        // Stream 0 runs out of `1`s first, so the first tie run ends with
+        // stream 1 holding several unanswered rows. The second run (key `2`)
+        // must then alternate from its first row rather than let stream 1
+        // "catch up" on the stale count stream 0 accumulated during run one.
+        let stream0: Vec<_> = std::iter::repeat_n((1, 0), 6)
+            .chain(std::iter::repeat_n((2, 0), 8))
+            .collect();
+        let stream1: Vec<_> = std::iter::repeat_n((1, 1), 12)
+            .chain(std::iter::repeat_n((2, 1), 8))
+            .collect();
+
+        let tags = merge_tags(vec![stream0, stream1]).await;
+
+        let expected: Vec<i32> = [0, 1]
+            .repeat(6)
+            .into_iter()
+            .chain(std::iter::repeat_n(1, 6))
+            .chain([0, 1].repeat(8))
+            .collect();
+        assert_eq!(tags, expected);
     }
 }
