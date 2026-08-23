@@ -31,7 +31,7 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::PhysicalExpr;
 use crate::expressions::Literal;
@@ -51,7 +51,8 @@ use datafusion_expr::{
 
 mod dictionary;
 use dictionary::{
-    PeeledFields, compact_dictionary, unwrap_scalar_dictionaries, with_key_nulls,
+    Lookup, Memo, PeeledFields, Recollection, ValuesIdentity, compact_dictionary,
+    scalar_arguments, unwrap_scalar_dictionaries, with_key_nulls,
 };
 
 /// Physical expression of a scalar function
@@ -63,6 +64,9 @@ pub struct ScalarFunctionExpr {
     config_options: Arc<ConfigOptions>,
     /// Fields for the peeled call, built once and reused across batches.
     peeled: OnceLock<PeeledFields>,
+    /// Results computed for a dictionary's values: a batch carries its own
+    /// keys but its column chunk's whole dictionary, so the same values recur.
+    memoized: RwLock<Memo>,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -92,6 +96,7 @@ impl ScalarFunctionExpr {
             return_field,
             config_options,
             peeled: OnceLock::new(),
+            memoized: RwLock::new(Memo::default()),
         }
     }
 
@@ -127,6 +132,7 @@ impl ScalarFunctionExpr {
             return_field,
             config_options,
             peeled: OnceLock::new(),
+            memoized: RwLock::new(Memo::default()),
         })
     }
 
@@ -262,14 +268,30 @@ impl ScalarFunctionExpr {
         }
         let fields = self.peeled_fields(dictionary_index, arg_fields, raw.values());
 
-        // Fast tier: invoke over the values as-is, no scan and no compaction —
-        // the cost profile of the hand-rolled dictionary arms. Null keys are
-        // left in place, which only a strict `f` (NULL in -> NULL out) can
-        // answer for. The error is dropped rather than returned because it may
-        // come from a value no key references; the tiers below settle that.
-        if raw.keys().null_count() == 0 || self.fun.is_strict() {
+        // Both tiers below re-use the keys as they are, which only a strict
+        // `f` (NULL in -> NULL out) can answer for when some are null.
+        let keys_are_answerable = raw.keys().null_count() == 0 || self.fun.is_strict();
+
+        // Memoized tier: already evaluated for this expression — checked
+        // before profitability, since work already done is worth re-using
+        // however large the dictionary is.
+        if keys_are_answerable {
+            let scalars = scalar_arguments(args, fields.index);
+            let recollection = self.memoized(raw.values(), &scalars);
+            if let Recollection::Evaluated(output) = recollection {
+                return self.remap(raw, output, &fields).map(Some);
+            }
+
+            // Fast tier: invoke over the values as-is — the cost profile of
+            // the hand-rolled dictionary arms. Values no key references are
+            // worth evaluating once a second sighting has made a repeat
+            // likely; an error is not returned, because it may come from such
+            // a value, and the tiers below settle that.
             let values_len = raw.values().len();
-            let profitable = if returns_dictionary {
+            let repeats = matches!(recollection, Recollection::SeenBefore);
+            let profitable = if repeats {
+                true
+            } else if returns_dictionary {
                 values_len <= num_rows
             } else {
                 values_len * 2 <= num_rows
@@ -283,15 +305,20 @@ impl ScalarFunctionExpr {
                     &fields.output,
                 )
             {
+                // Kept only for a dictionary that has proved it comes back;
+                // otherwise the entry would never be read.
+                if repeats {
+                    self.memoize(raw.values(), &scalars, &output);
+                }
                 return self.remap(raw, output, &fields).map(Some);
             }
         }
 
-        // Guarded tier: `f` sees exactly the values this batch references, with
-        // null keys redirected to one appended NULL slot it evaluates like any
-        // other value — correct even where `f(NULL)` is not NULL. A dictionary
-        // return re-wraps in O(1), so compaction pays off for it at any
-        // cardinality; only flat returns carry a row budget.
+        // Guarded tier: `f` sees exactly the values this batch references,
+        // null keys redirected to one appended NULL slot it evaluates like
+        // any other value — correct even where `f(NULL)` is not NULL. A
+        // dictionary return re-wraps in O(1); only flat returns carry a
+        // row budget.
         let row_budget = (!returns_dictionary).then_some(num_rows);
         if let Some(dictionary) = compact_dictionary(array, row_budget)? {
             let peeled =
@@ -419,6 +446,39 @@ impl ScalarFunctionExpr {
         Ok(ColumnarValue::Array(remapped))
     }
 
+    /// What this expression already knows about `values`: its result if it
+    /// has one, or whether it has seen these values before. Hits take only
+    /// the read lock, so partitions sharing this expression do not serialize
+    /// on each other's warm batches; between the two locks another partition
+    /// may record the same dictionary, which costs at most one extra full
+    /// evaluation — what an unlucky first sighting costs anyway.
+    fn memoized(&self, values: &ArrayRef, scalars: &[ScalarValue]) -> Recollection {
+        let identity = {
+            let Ok(memo) = self.memoized.read() else {
+                return Recollection::Unknown;
+            };
+            match memo.find(values, scalars) {
+                Lookup::Evaluated(output) => return Recollection::Evaluated(output),
+                Lookup::Absent(identity) => identity,
+            }
+        };
+        let hash = match identity {
+            Some(identity) => identity.hash(),
+            None => ValuesIdentity::hash_of(values),
+        };
+        let Ok(mut memo) = self.memoized.write() else {
+            return Recollection::Unknown;
+        };
+        memo.note(hash)
+    }
+
+    /// Keeps `output` for the next batch that arrives with the same values.
+    fn memoize(&self, values: &ArrayRef, scalars: &[ScalarValue], output: &ArrayRef) {
+        if let Ok(mut memo) = self.memoized.write() {
+            memo.keep(values, scalars, output);
+        }
+    }
+
     /// Invokes the function with `array` in place of the dictionary argument,
     /// whose field is rewritten to match. Returns `array.len()` rows.
     fn invoke_on_array(
@@ -474,6 +534,7 @@ impl PartialEq for ScalarFunctionExpr {
             return_field,
             config_options,
             peeled: _, // derived from the fields above
+            memoized: _,
         } = self;
         fun.eq(&o.fun)
             && name.eq(&o.name)
@@ -494,6 +555,7 @@ impl Hash for ScalarFunctionExpr {
             return_field,
             config_options: _, // expensive to hash, and often equal
             peeled: _,
+            memoized: _,
         } = self;
         fun.hash(state);
         name.hash(state);
@@ -642,6 +704,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
 #[cfg(test)]
 mod tests {
+    use super::dictionary::MEMOIZED_BYTES;
     use super::*;
     use crate::expressions::Column;
     use arrow::array::DictionaryArray;
@@ -765,52 +828,101 @@ mod tests {
     struct PeelFixture {
         expr: ScalarFunctionExpr,
         batch: RecordBatch,
+        values: ArrayRef,
         seen: Arc<Mutex<Vec<usize>>>,
         saw_dictionary: Arc<std::sync::atomic::AtomicBool>,
     }
 
-    /// `keys` over three string values, wrapped in a `ScalarFunctionExpr`.
+    impl PeelFixture {}
+
+    /// What a peeling test varies. Everything not named takes the default:
+    /// an immutable elementwise function returning `Int32` over the three
+    /// string values `ab`, `cd`, `ef`.
+    struct PeelSetup {
+        keys: Int32Array,
+        values: ArrayRef,
+        volatility: Volatility,
+        elementwise: bool,
+        return_type: DataType,
+        strict: bool,
+        fail_if_contains: Option<&'static str>,
+    }
+
+    impl Default for PeelSetup {
+        fn default() -> Self {
+            Self {
+                keys: Int32Array::from(vec![0, 1, 0, 2, 1, 0, 2, 0]),
+                values: Arc::new(StringArray::from(vec!["ab", "cd", "ef"])),
+                volatility: Volatility::Immutable,
+                elementwise: true,
+                return_type: DataType::Int32,
+                strict: false,
+                fail_if_contains: None,
+            }
+        }
+    }
+
+    impl PeelSetup {
+        /// The keys wrapped in a `ScalarFunctionExpr` over the values.
+        fn build(self) -> PeelFixture {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let saw_dictionary = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let udf = Arc::new(ScalarUDF::from(ObservingUdf {
+                signature: Signature::any(1, self.volatility),
+                seen: Arc::clone(&seen),
+                saw_dictionary: Arc::clone(&saw_dictionary),
+                elementwise: self.elementwise,
+                return_type: self.return_type.clone(),
+                strict: self.strict,
+                fail_if_contains: self.fail_if_contains,
+            }));
+
+            let values = self.values;
+            let batch = dictionary_batch(self.keys, &values);
+            let expr = ScalarFunctionExpr::new(
+                "observing_udf",
+                udf,
+                vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
+                Arc::new(Field::new("f", self.return_type, true)),
+                Arc::new(ConfigOptions::new()),
+            );
+            PeelFixture {
+                expr,
+                batch,
+                values,
+                seen,
+                saw_dictionary,
+            }
+        }
+    }
+
+    /// A one-column batch holding `keys` over `values`.
+    fn dictionary_batch(keys: Int32Array, values: &ArrayRef) -> RecordBatch {
+        let dict =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::clone(values)).unwrap();
+        let schema = Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap()
+    }
+
+    fn keys_8_over_3() -> Int32Array {
+        Int32Array::from(vec![0, 1, 0, 2, 1, 0, 2, 0])
+    }
+
+    /// `keys` over the default values, wrapped in a `ScalarFunctionExpr`.
     fn peel_fixture(
         keys: Int32Array,
         volatility: Volatility,
         elementwise: bool,
         return_type: DataType,
     ) -> PeelFixture {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let saw_dictionary = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
-            signature: Signature::any(1, volatility),
-            seen: Arc::clone(&seen),
-            saw_dictionary: Arc::clone(&saw_dictionary),
+        PeelSetup {
+            keys,
+            volatility,
             elementwise,
-            return_type: return_type.clone(),
-            strict: false,
-            fail_if_contains: None,
-        }));
-
-        let values = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
-        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
-        let schema = Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
-        let batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(dict)]).unwrap();
-        let args = vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>];
-        let expr = ScalarFunctionExpr::new(
-            "observing_udf",
-            udf,
-            args,
-            Arc::new(Field::new("f", return_type, true)),
-            Arc::new(ConfigOptions::new()),
-        );
-        PeelFixture {
-            expr,
-            batch,
-            seen,
-            saw_dictionary,
+            return_type,
+            ..Default::default()
         }
-    }
-
-    fn keys_8_over_3() -> Int32Array {
-        Int32Array::from(vec![0, 1, 0, 2, 1, 0, 2, 0])
+        .build()
     }
 
     #[test]
@@ -1206,6 +1318,360 @@ mod tests {
             panic!("expected an array");
         };
         assert_eq!(array.as_primitive::<Int32Type>().values(), &[0, 1]);
+    }
+
+    #[test]
+    fn values_are_evaluated_once_across_batches() {
+        // A batch carries its own keys but the dictionary of a whole column
+        // chunk: the second batch over the same values evaluates nothing.
+        let values = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
+            signature: Signature::any(1, Volatility::Immutable),
+            seen: Arc::clone(&seen),
+            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            elementwise: true,
+            return_type: DataType::Int32,
+            strict: false,
+            fail_if_contains: None,
+        }));
+        let expr = ScalarFunctionExpr::new(
+            "observing_udf",
+            udf,
+            vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
+            Arc::new(Field::new("f", DataType::Int32, true)),
+            Arc::new(ConfigOptions::new()),
+        );
+
+        let batch_over = |keys: Vec<i32>, values: &Arc<StringArray>| {
+            let dict = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(values) as ArrayRef,
+            )
+            .unwrap();
+            let schema =
+                Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap()
+        };
+
+        let keys = [
+            vec![0, 1, 0, 2, 1, 0, 2, 0],
+            vec![2, 2, 1, 0, 1, 1, 0, 2],
+            vec![1, 0, 2, 2, 0, 1, 1, 0],
+        ];
+        let outputs: Vec<_> = keys
+            .iter()
+            .map(|keys| {
+                let batch = batch_over(keys.clone(), &values);
+                match expr.evaluate(&batch).unwrap() {
+                    ColumnarValue::Array(array) => array,
+                    _ => panic!("expected an array"),
+                }
+            })
+            .collect();
+
+        // The first batch cannot know the dictionary will come back; the second
+        // proves it and is what the result is kept from. The third is free.
+        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+        for (output, keys) in outputs.iter().zip(&keys) {
+            assert_eq!(output.as_primitive::<Int32Type>().values(), keys.as_slice());
+        }
+    }
+
+    #[test]
+    fn concurrent_hits_share_the_memo() {
+        // One expression is shared by every partition of a plan. Once a result
+        // is remembered, readers take it concurrently without evaluating —
+        // whatever the interleaving, the counter must not move.
+        let values = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
+            signature: Signature::any(1, Volatility::Immutable),
+            seen: Arc::clone(&seen),
+            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            elementwise: true,
+            return_type: DataType::Int32,
+            strict: false,
+            fail_if_contains: None,
+        }));
+        let expr = Arc::new(ScalarFunctionExpr::new(
+            "observing_udf",
+            udf,
+            vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
+            Arc::new(Field::new("f", DataType::Int32, true)),
+            Arc::new(ConfigOptions::new()),
+        ));
+
+        let batch_over = |keys: Vec<i32>, values: &Arc<StringArray>| {
+            let dict = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(values) as ArrayRef,
+            )
+            .unwrap();
+            let schema =
+                Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap()
+        };
+
+        // Prove the dictionary repeats so its result is remembered.
+        expr.evaluate(&batch_over(vec![0, 1, 2], &values)).unwrap();
+        expr.evaluate(&batch_over(vec![2, 1, 0], &values)).unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+
+        let handles: Vec<_> = (0..8)
+            .map(|t| {
+                let expr = Arc::clone(&expr);
+                let batch = batch_over(vec![t % 3, (t + 1) % 3, 0], &values);
+                std::thread::spawn(move || {
+                    for _ in 0..200 {
+                        let out = expr.evaluate(&batch).unwrap();
+                        let ColumnarValue::Array(array) = out else {
+                            panic!("expected an array");
+                        };
+                        assert_eq!(
+                            array.as_primitive::<Int32Type>().values(),
+                            &[t % 3, (t + 1) % 3, 0]
+                        );
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        // Every concurrent pass was a hit.
+        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+    }
+
+    #[test]
+    fn a_dictionary_too_large_to_keep_is_evaluated_each_time() {
+        // The memo holds its entries alive, so it is bounded by bytes as well
+        // as by count: values larger than the whole budget are never admitted,
+        // and every batch over them is evaluated — correctly, just not freely.
+        let big = "x".repeat(5 * 1024 * 1024);
+        let values = Arc::new(StringArray::from(vec![big.as_str(), "cd", "ef"]));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
+            signature: Signature::any(1, Volatility::Immutable),
+            seen: Arc::clone(&seen),
+            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            elementwise: true,
+            return_type: DataType::Int32,
+            strict: false,
+            fail_if_contains: None,
+        }));
+        let expr = ScalarFunctionExpr::new(
+            "observing_udf",
+            udf,
+            vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
+            Arc::new(Field::new("f", DataType::Int32, true)),
+            Arc::new(ConfigOptions::new()),
+        );
+
+        let batch_over = |keys: Vec<i32>, values: &Arc<StringArray>| {
+            let dict = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(values) as ArrayRef,
+            )
+            .unwrap();
+            let schema =
+                Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap()
+        };
+
+        // The values hold five megabytes against a four megabyte budget: the
+        // repeat is recognised, but its result is never kept.
+        assert!(values.get_array_memory_size() > MEMOIZED_BYTES);
+        for keys in [
+            vec![0, 1, 0, 2, 1, 0, 2, 0],
+            vec![2, 2, 1, 0, 1, 1, 0, 2],
+            vec![1, 0, 2, 2, 0, 1, 1, 0],
+        ] {
+            expr.evaluate(&batch_over(keys, &values)).unwrap();
+        }
+        assert_eq!(*seen.lock().unwrap(), vec![3, 3, 3]);
+    }
+
+    #[test]
+    fn different_values_are_evaluated_again() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
+            signature: Signature::any(1, Volatility::Immutable),
+            seen: Arc::clone(&seen),
+            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            elementwise: true,
+            return_type: DataType::Int32,
+            strict: false,
+            fail_if_contains: None,
+        }));
+        let expr = ScalarFunctionExpr::new(
+            "observing_udf",
+            udf,
+            vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
+            Arc::new(Field::new("f", DataType::Int32, true)),
+            Arc::new(ConfigOptions::new()),
+        );
+
+        for values in [vec!["ab", "cd", "ef"], vec!["gh", "ij", "kl"]] {
+            let dict = DictionaryArray::<Int32Type>::try_new(
+                keys_8_over_3(),
+                Arc::new(StringArray::from(values)),
+            )
+            .unwrap();
+            let schema =
+                Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
+            let batch =
+                RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap();
+            expr.evaluate(&batch).unwrap();
+        }
+
+        // Same shape, different contents: the second dictionary is its own work.
+        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+    }
+
+    #[test]
+    fn a_dictionary_reaching_the_memo_through_another_arc_is_recognized() {
+        // Batches of one column chunk can carry the same values through
+        // different `Arc`s; the memo answers on what the buffers are, so the
+        // third batch below evaluates nothing.
+        let f = PeelSetup::default().build();
+        let keys = || Int32Array::from(vec![0, 1, 2, 0, 1, 2, 0, 1]);
+
+        f.expr
+            .evaluate(&dictionary_batch(keys(), &f.values))
+            .unwrap();
+        f.expr
+            .evaluate(&dictionary_batch(keys(), &f.values))
+            .unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
+
+        // The same buffers behind an `Arc` of its own.
+        let same_values = f.values.slice(0, f.values.len());
+        assert!(!Arc::ptr_eq(&same_values, &f.values));
+        f.expr
+            .evaluate(&dictionary_batch(keys(), &same_values))
+            .unwrap();
+
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
+    }
+
+    #[test]
+    fn the_oldest_dictionary_leaves_the_memo_once_it_is_full() {
+        // The memo is bounded: a dictionary that has fallen out of it is
+        // evaluated again.
+        let f = PeelSetup::default().build();
+        let keys = || Int32Array::from(vec![0, 1, 2, 0, 1, 2, 0, 1]);
+        let values_of = |n: usize| -> ArrayRef {
+            Arc::new(StringArray::from(vec![
+                format!("a{n}"),
+                format!("b{n}"),
+                format!("c{n}"),
+            ]))
+        };
+        // Twice each: a dictionary is kept only once it has proved it repeats.
+        let fill = |values: &ArrayRef| {
+            for _ in 0..2 {
+                f.expr.evaluate(&dictionary_batch(keys(), values)).unwrap();
+            }
+        };
+
+        let stored: Vec<ArrayRef> = (0..dictionary::MEMOIZED_DICTIONARIES)
+            .map(values_of)
+            .collect();
+        for values in &stored {
+            fill(values);
+        }
+        let evaluations = f.seen.lock().unwrap().len();
+
+        // Still remembered while the memo has room for it.
+        f.expr
+            .evaluate(&dictionary_batch(keys(), &stored[0]))
+            .unwrap();
+        assert_eq!(f.seen.lock().unwrap().len(), evaluations);
+
+        // One dictionary too many. Entries leave in the order they arrived,
+        // and the lookup above did not refresh the first one.
+        fill(&values_of(dictionary::MEMOIZED_DICTIONARIES));
+        let before_return = f.seen.lock().unwrap().len();
+        f.expr
+            .evaluate(&dictionary_batch(keys(), &stored[0]))
+            .unwrap();
+        // Exactly one evaluation more: the entry is gone, so it is recomputed.
+        assert_eq!(f.seen.lock().unwrap().len(), before_return + 1);
+    }
+
+    #[test]
+    fn a_dictionary_forgotten_before_it_repeated_is_not_kept() {
+        // Sightings are remembered in a ring of their own. A dictionary whose
+        // first sighting has aged out of it has to be seen twice again before
+        // its result is worth keeping.
+        let f = PeelSetup::default().build();
+        let keys = || Int32Array::from(vec![0, 1, 2, 0, 1, 2, 0, 1]);
+        let values_of = |n: usize| -> ArrayRef {
+            Arc::new(StringArray::from(vec![
+                format!("a{n}"),
+                format!("b{n}"),
+                format!("c{n}"),
+            ]))
+        };
+        let evaluate = |values: &ArrayRef| {
+            f.expr.evaluate(&dictionary_batch(keys(), values)).unwrap();
+        };
+
+        let first = values_of(0);
+        evaluate(&first);
+        // Enough other dictionaries to push that sighting out of the ring.
+        // They are kept alive: sightings are recorded by buffer address, and
+        // a freed dictionary's address can be handed to the next one.
+        let others: Vec<ArrayRef> = (1..=dictionary::MEMOIZED_DICTIONARIES)
+            .map(values_of)
+            .collect();
+        for values in &others {
+            evaluate(values);
+        }
+
+        // Its second sighting therefore reads as a first one: nothing kept.
+        evaluate(&first);
+        let evaluations = f.seen.lock().unwrap().len();
+        // The third proves the repeat and keeps the result...
+        evaluate(&first);
+        assert_eq!(f.seen.lock().unwrap().len(), evaluations + 1);
+        // ...which the fourth is served from.
+        evaluate(&first);
+        assert_eq!(f.seen.lock().unwrap().len(), evaluations + 1);
+    }
+
+    #[test]
+    fn values_that_differ_only_in_their_nulls_are_told_apart() {
+        // Two values arrays can share their data buffers and differ only in
+        // which slots are null. The memo must not answer for one with the
+        // other's result.
+        let f = PeelSetup::default().build();
+        let keys = || Int32Array::from(vec![0, 1, 2, 0, 1, 2, 0, 1]);
+
+        f.expr
+            .evaluate(&dictionary_batch(keys(), &f.values))
+            .unwrap();
+        f.expr
+            .evaluate(&dictionary_batch(keys(), &f.values))
+            .unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
+
+        // The same buffers, with the middle value marked null.
+        let data = f.values.to_data();
+        let nulled = arrow::array::make_array(
+            data.into_builder()
+                .nulls(Some(arrow::buffer::NullBuffer::from(vec![
+                    true, false, true,
+                ])))
+                .build()
+                .unwrap(),
+        );
+
+        f.expr.evaluate(&dictionary_batch(keys(), &nulled)).unwrap();
+
+        // Not the stored dictionary: evaluated rather than answered.
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3, 3]);
     }
 
     #[test]

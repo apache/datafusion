@@ -16,14 +16,17 @@
 // under the License.
 
 //! The dictionary side of a peeled scalar-function call: the fields the call
-//! is made with, and the compaction that narrows a dictionary to what a batch
-//! references. [`super::ScalarFunctionExpr`] owns the tier decisions; this
-//! module owns the machinery under them.
+//! is made with, the compaction that narrows a dictionary to what a batch
+//! references, and the memo that carries results across the batches of a
+//! column chunk. [`super::ScalarFunctionExpr`] owns the locks and the tier
+//! decisions; this module owns the policy under them.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, DictionaryArray, PrimitiveArray, UInt64Array, new_null_array,
+    Array, ArrayData, ArrayRef, DictionaryArray, PrimitiveArray, UInt64Array,
+    new_null_array,
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::{concat, take};
@@ -43,6 +46,168 @@ pub(super) struct PeeledFields {
     pub(super) source: FieldRef,
     pub(super) argument: FieldRef,
     pub(super) output: FieldRef,
+}
+
+/// What a lookup found: the stored result, or the identity built on the way,
+/// so the caller can hash it without reading the array again.
+pub(super) enum Lookup {
+    Evaluated(ArrayRef),
+    Absent(Option<ValuesIdentity>),
+}
+
+/// What an expression remembers about a dictionary it is handed.
+pub(super) enum Recollection {
+    /// Never seen; now recorded, so a repeat is recognisable.
+    Unknown,
+    /// Seen before, so evaluating all of its values will pay for itself.
+    SeenBefore,
+    /// Already evaluated.
+    Evaluated(ArrayRef),
+}
+
+/// How many dictionaries results are kept for. One expression is shared by
+/// every partition of a plan, so a single slot would be evicted by whichever
+/// partition ran last.
+pub(super) const MEMOIZED_DICTIONARIES: usize = 8;
+
+/// How much one memo may hold alive, values and results together — sized to
+/// admit a worst-case Parquet page dictionary (at most 1 MiB by default) with
+/// its result.
+pub(super) const MEMOIZED_BYTES: usize = 4 * 1024 * 1024;
+
+/// What an expression keeps between batches: results for the dictionaries it
+/// has evaluated, and a cheap note of the ones it has only glimpsed. Both are
+/// evicted in insertion order and only ever hold dictionaries that proved
+/// they repeat, so an eviction costs one re-evaluation, not a wrong result.
+#[derive(Debug, Default)]
+pub(super) struct Memo {
+    evaluated: Vec<Memoized>,
+    /// What the entries hold alive, maintained so admission is O(1).
+    bytes: usize,
+    /// Hashes of dictionaries seen once. A false match only costs evaluating
+    /// a dictionary in full one batch early; results are matched exactly.
+    glimpsed: Vec<u64>,
+}
+
+impl Memo {
+    /// The stored result for `values`, if any.
+    pub(super) fn find(&self, values: &ArrayRef, scalars: &[ScalarValue]) -> Lookup {
+        if self.evaluated.is_empty() {
+            return Lookup::Absent(None);
+        }
+        let known = ValuesIdentity::of(values);
+        let found = self.evaluated.iter().find(|entry| {
+            entry.scalars == scalars
+                && (Arc::ptr_eq(&entry.values, values) || entry.identity == known)
+        });
+        match found {
+            Some(entry) => Lookup::Evaluated(Arc::clone(&entry.output)),
+            None => Lookup::Absent(Some(known)),
+        }
+    }
+
+    /// Records a sighting; answers whether this dictionary was seen before.
+    pub(super) fn note(&mut self, hash: u64) -> Recollection {
+        if self.glimpsed.contains(&hash) {
+            return Recollection::SeenBefore;
+        }
+        if self.glimpsed.len() == MEMOIZED_DICTIONARIES {
+            self.glimpsed.remove(0);
+        }
+        self.glimpsed.push(hash);
+        Recollection::Unknown
+    }
+
+    /// Keeps `output` for the next batch that arrives with the same values.
+    /// The memo holds its entries alive, so admission is bounded by bytes as
+    /// well as by count; what cannot fit is recomputed per batch instead.
+    pub(super) fn keep(
+        &mut self,
+        values: &ArrayRef,
+        scalars: &[ScalarValue],
+        output: &ArrayRef,
+    ) {
+        let bytes = values.get_array_memory_size() + output.get_array_memory_size();
+        if bytes > MEMOIZED_BYTES {
+            return;
+        }
+        while self.evaluated.len() >= MEMOIZED_DICTIONARIES
+            || self.bytes + bytes > MEMOIZED_BYTES
+        {
+            let evicted = self.evaluated.remove(0);
+            self.bytes -= evicted.bytes;
+        }
+        self.bytes += bytes;
+        self.evaluated.push(Memoized {
+            values: Arc::clone(values),
+            identity: ValuesIdentity::of(values),
+            scalars: scalars.to_vec(),
+            output: Arc::clone(output),
+            bytes,
+        });
+    }
+}
+
+/// The result of evaluating a function over one dictionary's values.
+#[derive(Debug)]
+struct Memoized {
+    /// The values these results came from, kept alive so the addresses
+    /// [`ValuesIdentity`] compares cannot be reused by an unrelated array.
+    values: ArrayRef,
+    identity: ValuesIdentity,
+    /// The other arguments at the time; a different format string is a
+    /// different result.
+    scalars: Vec<ScalarValue>,
+    output: ArrayRef,
+    /// What this entry holds alive, counted once at admission.
+    bytes: usize,
+}
+
+/// The memory an array views, compared by address: two arrays whose data
+/// agree on all of it — children included, so nested values are told apart
+/// by more than the buffers of their top level — hold the same elements.
+#[derive(Debug)]
+pub(super) struct ValuesIdentity(ArrayData);
+
+impl PartialEq for ValuesIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
+impl ValuesIdentity {
+    fn of(array: &ArrayRef) -> Self {
+        Self(array.to_data())
+    }
+
+    /// This identity as a hash: equal identities hash alike.
+    pub(super) fn hash(&self) -> u64 {
+        fn hash_data(data: &ArrayData, hasher: &mut DefaultHasher) {
+            // What `ArrayData::ptr_eq` compares.
+            data.data_type().hash(hasher);
+            hasher.write_usize(data.len());
+            hasher.write_usize(data.offset());
+            for buffer in data.buffers() {
+                hasher.write_usize(buffer.as_ptr() as usize);
+                hasher.write_usize(buffer.len());
+            }
+            if let Some(nulls) = data.nulls() {
+                hasher.write_usize(nulls.buffer().as_ptr() as usize);
+                hasher.write_usize(nulls.offset());
+            }
+            for child in data.child_data() {
+                hash_data(child, hasher);
+            }
+        }
+        let mut hasher = DefaultHasher::new();
+        hash_data(&self.0, &mut hasher);
+        hasher.finish()
+    }
+
+    /// The hash of `array`'s identity.
+    pub(super) fn hash_of(array: &ArrayRef) -> u64 {
+        Self::of(array).hash()
+    }
 }
 
 /// Rewrites a dictionary so its values are exactly the ones referenced by this
