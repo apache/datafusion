@@ -340,10 +340,6 @@ impl PrebuiltRowFilterCandidateList {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
     fn as_slice(&self) -> &[PrebuiltRowFilterCandidate] {
         &self.inner
     }
@@ -397,15 +393,15 @@ impl RowFilterContext {
     /// Build a fresh [`RowFilter`] for the next non-fully-matched run using
     /// the cached candidates. Cheap: no tree walks, only counter allocation
     /// and (optionally) a sort by `required_bytes`.
-    pub(crate) fn build_row_filter(&self) -> Option<RowFilter> {
-        if self.prebuilt.is_empty() {
-            return None;
-        }
-        Some(row_filter_from_prebuilt(
+    ///
+    /// Infallible by construction: [`Self::try_new`] only produces a context
+    /// when the prebuilt candidate list is non-empty.
+    pub(crate) fn build_row_filter(&self) -> RowFilter {
+        row_filter_from_prebuilt(
             self.prebuilt.as_slice(),
             self.reorder_predicates,
             &self.file_metrics,
-        ))
+        )
     }
 }
 
@@ -667,22 +663,11 @@ impl PushDecoderStreamState {
                     .row_filter_context
                     .as_ref()
                     .expect("filter_needs_toggle ⇒ context set");
-                match ctx.build_row_filter() {
-                    Some(filter) => {
-                        builder = builder.with_row_filter(filter);
-                        if let Some(cap) = ctx.max_predicate_cache_size {
-                            builder = builder.with_max_predicate_cache_size(cap);
-                        }
-                        self.filter_installed = true;
-                    }
-                    None => {
-                        // Filter could not be rebuilt; install an empty filter
-                        // so the decoder runs unfiltered for this run rather
-                        // than failing.
-                        builder = builder.with_row_filter(RowFilter::new(vec![]));
-                        self.filter_installed = false;
-                    }
+                builder = builder.with_row_filter(ctx.build_row_filter());
+                if let Some(cap) = ctx.max_predicate_cache_size {
+                    builder = builder.with_max_predicate_cache_size(cap);
                 }
+                self.filter_installed = true;
             } else {
                 // Skip per-row filtering for the upcoming fully-matched RG.
                 builder = builder.with_row_filter(RowFilter::new(vec![]));

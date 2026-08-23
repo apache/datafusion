@@ -428,7 +428,7 @@ pub fn build_row_filter(
 /// Extracting this from [`build_row_filter`] lets callers pay the tree-walk +
 /// column-resolution + `reassign_expr_columns` cost **once per file** instead
 /// of once per row group, which is the hot path for
-/// [`RowFilterContext::build`](crate::push_decoder::RowFilterContext) rebuilds
+/// [`RowFilterContext::build_row_filter`](crate::push_decoder::RowFilterContext) rebuilds
 /// on `fully_matched → not-fully-matched` boundaries.
 #[derive(Clone, Debug)]
 pub(crate) struct PrebuiltRowFilterCandidate {

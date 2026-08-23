@@ -1552,26 +1552,25 @@ impl RowGroupsPrunedParquetOpen {
             // installed filter is owned by the decoder and is not
             // recoverable once replaced.
             let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
-            let initial_filter = precomputed_context
-                .as_ref()
-                .and_then(|ctx| ctx.build_row_filter());
             let row_filter_context = precomputed_context;
 
             let mut builder =
                 decoder_config.build(prepared_access_plan, reader_metadata.clone());
             let mut filter_installed = false;
-            if let Some(row_filter) = initial_filter {
+            if let Some(ctx) = row_filter_context.as_ref() {
                 if first_rg_fully_matched {
                     // The first RG is fully matched: install an empty filter
                     // and count the suppression, exactly as the per-RG toggle
                     // does mid-scan, so the metric is consistent whether the
-                    // skip happens at open time or at a later boundary.
+                    // skip happens at open time or at a later boundary. The
+                    // real filter is only built (lazily, from the prebuilt
+                    // candidates) at the first non-fully-matched boundary.
                     builder = builder.with_row_filter(
                         parquet::arrow::arrow_reader::RowFilter::new(vec![]),
                     );
                     row_filter_skipped_fully_matched.add_one();
                 } else {
-                    builder = builder.with_row_filter(row_filter);
+                    builder = builder.with_row_filter(ctx.build_row_filter());
                     filter_installed = true;
                     if let Some(max_predicate_cache_size) =
                         prepared.max_predicate_cache_size
