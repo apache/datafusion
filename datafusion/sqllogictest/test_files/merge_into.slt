@@ -169,6 +169,11 @@ statement error DataFusion error: type_coercion\ncaused by\nError during plannin
 merge into target using source on target.id = source.id
 when matched and 'yes' then delete;
 
+# NULL conditions coerce to boolean and reach the provider
+statement error DataFusion error: MERGE INTO operation on table 'target'\ncaused by\nThis feature is not implemented: MERGE INTO not supported for Base table
+merge into target using source on null
+when matched and null then delete;
+
 ##########
 # Planning errors: invalid structure
 ##########
