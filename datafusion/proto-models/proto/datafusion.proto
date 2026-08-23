@@ -1691,6 +1691,7 @@ message SortMergeJoinExecNode {
   JoinFilter filter = 5;
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
+  repeated uint32 projection = 8;
 }
 
 message AsyncFuncExecNode {

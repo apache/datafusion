@@ -6098,3 +6098,86 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
 
     Ok(())
 }
+
+/// A projection names the columns to emit, so swapping the inputs must renumber it
+/// rather than leave it pointing at the columns the other side now occupies.
+#[tokio::test]
+async fn swap_inputs_swaps_the_projection() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![10, 20, 30]),
+        ("c1", &vec![100, 200, 300]),
+    );
+    let right = build_table(
+        ("a2", &vec![1, 2, 3]),
+        ("b2", &vec![11, 22, 33]),
+        ("c2", &vec![111, 222, 333]),
+    );
+    let on: JoinOn = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a2", 0)) as _,
+    )];
+    // One column from each side, in an order that tells the two sides apart.
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        None,
+        Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?
+    .with_projection(Some(vec![4, 2]))?;
+
+    let swapped = join.swap_inputs()?;
+    assert_eq!(
+        swapped.schema().fields(),
+        join.schema().fields(),
+        "swapping must not change what the join emits"
+    );
+
+    let task_ctx = Arc::new(TaskContext::default());
+    let expected = common::collect(join.execute(0, Arc::clone(&task_ctx))?).await?;
+    let actual = common::collect(swapped.execute(0, task_ctx)?).await?;
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+/// An empty projection still changes the output schema, and the row count has to
+/// survive it: `SELECT count(1)` over a join needs the rows but none of the columns.
+#[tokio::test]
+async fn an_empty_projection_keeps_the_rows() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![10, 20, 30]),
+        ("c1", &vec![100, 200, 300]),
+    );
+    let right = build_table(
+        ("a2", &vec![1, 2, 3]),
+        ("b2", &vec![11, 22, 33]),
+        ("c2", &vec![111, 222, 333]),
+    );
+    let on: JoinOn = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a2", 0)) as _,
+    )];
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        None,
+        Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?
+    .with_projection(Some(vec![]))?;
+
+    assert_eq!(join.schema().fields().len(), 0);
+    let batches =
+        common::collect(join.execute(0, Arc::new(TaskContext::default()))?).await?;
+    let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(rows, 3);
+
+    Ok(())
+}

@@ -2838,16 +2838,15 @@ logical_plan
 04)--SubqueryAlias: t2
 05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
 physical_plan
-01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]
-02)--SortMergeJoinExec: join_type=Right, on=[(CAST(t1.c3 AS Decimal128(10, 2))@4, c3@2)]
-03)----SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC], preserve_partitioning=[true]
-04)------RepartitionExec: partitioning=Hash([CAST(t1.c3 AS Decimal128(10, 2))@4], 2), input_partitions=2
-05)--------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)----SortExec: expr=[c3@2 ASC], preserve_partitioning=[true]
-09)------RepartitionExec: partitioning=Hash([c3@2], 2), input_partitions=1
-10)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortMergeJoinExec: join_type=Right, on=[(CAST(t1.c3 AS Decimal128(10, 2))@4, c3@2)], projection=[c1@0, c2@1, c3@2, c4@3, c1@5, c2@6, c3@7, c4@8]
+02)--SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC], preserve_partitioning=[true]
+03)----RepartitionExec: partitioning=Hash([CAST(t1.c3 AS Decimal128(10, 2))@4], 2), input_partitions=2
+04)------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--SortExec: expr=[c3@2 ASC], preserve_partitioning=[true]
+08)----RepartitionExec: partitioning=Hash([c3@2], 2), input_partitions=1
+09)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # sort_merge_join_on_decimal right join on data type (Decimal)
 query DDRTDDRT rowsort
@@ -2858,8 +2857,8 @@ NULL 1970-01-04T00:00:00 789 ghi 1970-01-04 NULL 789 qwe
 NULL NULL NULL NULL NULL 1970-01-04T00:00:00 0 qwerty
 NULL NULL NULL NULL NULL NULL 100000 abcdefg
 
-# Regression test: projection pushdown through SortMergeJoinExec must not reuse a
-# JoinFilter after its input columns have been projected away.
+# Regression test: projection optimization through SortMergeJoinExec must keep
+# JoinFilter columns available when the output projection does not select them.
 statement ok
 set datafusion.optimizer.repartition_joins = true;
 
@@ -2880,8 +2879,8 @@ logical_plan
 06)----SubqueryAlias: t2
 07)------Values: (Int64(10), Int64(1))
 physical_plan
-01)ProjectionExec: expr=[column2@1 as left_b1, column2@3 as right_b1]
-02)--SortMergeJoinExec: join_type=Inner, on=[(column2@1, column2@1)], filter=column1@0 > column1@1
+01)ProjectionExec: expr=[column2@0 as left_b1, column2@1 as right_b1]
+02)--SortMergeJoinExec: join_type=Inner, on=[(column2@1, column2@1)], filter=column1@0 > column1@1, projection=[column2@1, column2@3]
 03)----SortExec: expr=[column2@1 ASC], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)----SortExec: expr=[column2@1 ASC], preserve_partitioning=[false]
