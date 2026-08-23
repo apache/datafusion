@@ -3083,11 +3083,19 @@ mod tests {
     /// ~15x for the equivalent `ROW_NUMBER` state on identical input.
     #[tokio::test]
     async fn test_partitioned_topk_rank_size_is_not_per_partition_batch() -> Result<()> {
-        const P: i32 = 500; // distinct partitions, all inside one batch
+        // The over-count factor was exactly the number of partitions sharing
+        // a batch, so P is what makes the bug visible at all. 500 turns the
+        // rank/row_number size ratio from ~1x into ~35x — far outside the
+        // range any accounting change could drift into.
+        const P: i32 = 500;
+        // 8 rows per partition: enough for every partition's k=2 heap to fill
+        // and then evict, so the heaps hold real state rather than sitting
+        // half-empty in the fill phase.
         const ROWS: i32 = 4000;
 
         // Distinct values throughout: no ties, so RANK retains exactly what
-        // ROW_NUMBER does and the two sizes are directly comparable.
+        // ROW_NUMBER does and the two sizes are directly comparable. k=2 is
+        // the smallest k with a distinct fill phase before eviction begins.
         let pks: Vec<i32> = (0..ROWS).map(|i| i % P).collect();
         let vals: Vec<i32> = (0..ROWS).map(|i| i / P).collect();
 
@@ -3099,6 +3107,10 @@ mod tests {
         rk.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
         let rk_size = rk.size();
 
+        // Measured ratio here is ~1.04 (18.1x vs 17.4x of the input batch);
+        // the bug produced ~35x. A 2x bar sits more than an order of magnitude
+        // clear of both, so this neither flakes when the size calculation is
+        // legitimately adjusted nor misses a reintroduced per-partition factor.
         assert!(
             rk_size <= rn_size * 2,
             "RANK reported {rk_size} bytes for the same retained rows that \
@@ -3118,10 +3130,15 @@ mod tests {
     /// than with `K + ties`.
     #[tokio::test]
     async fn test_partitioned_topk_rank_ties_do_not_pin_input_batches() -> Result<()> {
+        // k=1 makes every retained row after the very first one a boundary
+        // tie, which is the state under test.
         let (schema, mut rk) = build_partitioned_topk_rank(1)?;
 
         // Each batch carries exactly one row tied at the boundary and 999
-        // rows that are strictly worse and must be dropped.
+        // rows that are strictly worse and must be dropped. The 1000:1 ratio
+        // is the point: holding the tied row costs a few bytes, holding the
+        // batch it arrived in costs ~8 KB, so the two outcomes cannot be
+        // confused.
         let mut vals = vec![100; 1000];
         vals[0] = 7;
         let batch = pk_val_batch(&schema, vec![1; 1000], vals)?;
@@ -3133,9 +3150,11 @@ mod tests {
         }
         let after_eight = rk.size();
 
-        // Seven more batches retain seven more single rows. Growth must be
-        // on the order of those rows, not of the seven 1000-row batches
-        // (~8 KB each) they arrived in.
+        // Seven more batches retain seven more single rows. Correct growth is
+        // ~8 bytes per batch (~56 total, just the tie-list slots); the bug grew
+        // by a whole ~8 KB batch each time (~56 KB total). A 2000-byte bar sits
+        // between the two with more than an order of magnitude of clearance on
+        // each side.
         let growth = after_eight - after_first;
         assert!(
             growth < 2000,
@@ -3145,139 +3164,165 @@ mod tests {
         Ok(())
     }
 
-    /// Randomized differential test for `PartitionedTopKRank`.
+    /// One deterministic pseudo-random input shape for the differential
+    /// tests below: a `k`, and the `(pks, vals)` batches to feed in.
     ///
-    /// The operator's retention rule is subtle — a K-bounded heap plus a
-    /// boundary-tie list that must be discarded the moment the K-th-best
-    /// ORDER BY value improves — and it is driven by the interleaving of
-    /// partitions, ties, and batch boundaries. This compares it against a
-    /// brute-force `RANK() <= K` over the same rows for many random
-    /// shapes.
-    #[tokio::test]
-    async fn test_partitioned_topk_rank_matches_bruteforce() -> Result<()> {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
+    /// Shapes are deliberately tiny. These bugs live in how ties, partitions
+    /// and batch boundaries interleave, not in volume, so many small shapes
+    /// cover far more of that space than a few large ones — and they keep the
+    /// O(n^2) brute-force reference cheap.
+    struct DiffShape {
+        seed: u64,
+        k: usize,
+        n_partitions: i32,
+        n_values: i32,
+        batches: Vec<(Vec<i32>, Vec<i32>)>,
+    }
 
-        for seed in 0..64u64 {
+    impl std::fmt::Display for DiffShape {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "seed={} k={} partitions={} values={} batches={}",
+                self.seed,
+                self.k,
+                self.n_partitions,
+                self.n_values,
+                self.batches.len()
+            )
+        }
+    }
+
+    impl DiffShape {
+        /// `max_values` caps the ORDER BY value domain. Keep it near `k` so
+        /// rows tie above, at, and below the boundary frequently rather than
+        /// by chance; raise it for an operator that bounds *distinct* values
+        /// and so needs more than `k` of them before it will evict anything.
+        fn new(seed: u64, max_values: i32) -> Self {
+            use rand::rngs::StdRng;
+            use rand::{Rng, SeedableRng};
+
             let mut rng = StdRng::seed_from_u64(seed);
             let k = rng.random_range(1..5usize);
             let n_partitions = rng.random_range(1..4i32);
-            // A small value domain relative to K so ties at, above, and
-            // below the boundary all occur frequently.
-            let n_values = rng.random_range(1..6i32);
+            let n_values = rng.random_range(1..max_values);
             let n_batches = rng.random_range(1..5usize);
 
-            let (schema, mut state) = build_partitioned_topk_rank(k)?;
-            let mut all_rows: Vec<(i32, i32)> = Vec::new();
-
-            for _ in 0..n_batches {
-                let rows = rng.random_range(1..12usize);
-                let pks: Vec<i32> = (0..rows)
-                    .map(|_| rng.random_range(0..n_partitions))
-                    .collect();
-                let vals: Vec<i32> =
-                    (0..rows).map(|_| rng.random_range(0..n_values)).collect();
-                all_rows.extend(pks.iter().copied().zip(vals.iter().copied()));
-                state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
-            }
-
-            // Reference: keep every row whose RANK within its partition
-            // (1 + the number of strictly smaller values) is <= K.
-            let mut expected: Vec<(i32, i32)> = all_rows
-                .iter()
-                .filter(|(pk, val)| {
-                    let rank =
-                        1 + all_rows.iter().filter(|(p, v)| p == pk && v < val).count();
-                    rank <= k
+            let batches = (0..n_batches)
+                .map(|_| {
+                    let rows = rng.random_range(1..12usize);
+                    let pks = (0..rows)
+                        .map(|_| rng.random_range(0..n_partitions))
+                        .collect();
+                    let vals = (0..rows).map(|_| rng.random_range(0..n_values)).collect();
+                    (pks, vals)
                 })
-                .copied()
                 .collect();
-            expected.sort_unstable();
 
-            let batches: Vec<RecordBatch> = state.emit()?.try_collect::<Vec<_>>().await?;
-            let mut actual: Vec<(i32, i32)> = Vec::new();
-            for b in &batches {
-                let pk = b.column(0).as_primitive::<arrow::datatypes::Int32Type>();
-                let val = b.column(1).as_primitive::<arrow::datatypes::Int32Type>();
-                for i in 0..b.num_rows() {
-                    actual.push((pk.value(i), val.value(i)));
-                }
+            Self {
+                seed,
+                k,
+                n_partitions,
+                n_values,
+                batches,
             }
-            actual.sort_unstable();
+        }
 
-            assert_eq!(
-                actual, expected,
-                "seed={seed} k={k} partitions={n_partitions} values={n_values} \
-                 batches={n_batches}"
-            );
+        /// Every `(pk, val)` fed in, across all batches.
+        fn all_rows(&self) -> Vec<(i32, i32)> {
+            self.batches
+                .iter()
+                .flat_map(|(pks, vals)| pks.iter().copied().zip(vals.iter().copied()))
+                .collect()
+        }
+
+        /// Brute-force reference: the sorted rows a `<= k` filter keeps, given
+        /// `rank_of(all_rows, pk, val)` for the ranking function under test.
+        fn expected(
+            &self,
+            rank_of: impl Fn(&[(i32, i32)], i32, i32) -> usize,
+        ) -> Vec<(i32, i32)> {
+            let all = self.all_rows();
+            let mut kept: Vec<(i32, i32)> = all
+                .iter()
+                .copied()
+                .filter(|&(pk, val)| rank_of(&all, pk, val) <= self.k)
+                .collect();
+            kept.sort_unstable();
+            kept
+        }
+    }
+
+    /// Drain an operator's output into sorted `(pk, val)` pairs, ready to
+    /// compare against [`DiffShape::expected`].
+    async fn sorted_pk_val(stream: SendableRecordBatchStream) -> Result<Vec<(i32, i32)>> {
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        let mut rows: Vec<(i32, i32)> = Vec::new();
+        for b in &batches {
+            let pk = b.column(0).as_primitive::<arrow::datatypes::Int32Type>();
+            let val = b.column(1).as_primitive::<arrow::datatypes::Int32Type>();
+            for i in 0..b.num_rows() {
+                rows.push((pk.value(i), val.value(i)));
+            }
+        }
+        rows.sort_unstable();
+        Ok(rows)
+    }
+
+    /// Randomized differential test for `PartitionedTopKRank`.
+    ///
+    /// The retention rule is subtle — a K-bounded heap plus a boundary-tie
+    /// list that must be discarded the moment the K-th-best ORDER BY value
+    /// improves — and it turns on how partitions, ties and batch boundaries
+    /// interleave. 64 seeds runs in ~10 ms; deleting the tie-clear on a
+    /// boundary shift is caught by seed 0.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_matches_bruteforce() -> Result<()> {
+        for seed in 0..64u64 {
+            let shape = DiffShape::new(seed, 6);
+            let (schema, mut state) = build_partitioned_topk_rank(shape.k)?;
+            for (pks, vals) in &shape.batches {
+                state.insert_batch(&pk_val_batch(&schema, pks.clone(), vals.clone())?)?;
+            }
+
+            // RANK: 1 + the number of strictly smaller rows.
+            let expected = shape.expected(|rows, pk, val| {
+                1 + rows.iter().filter(|&&(p, v)| p == pk && v < val).count()
+            });
+
+            assert_eq!(sorted_pk_val(state.emit()?).await?, expected, "{shape}");
         }
         Ok(())
     }
 
     /// Randomized differential test for `PartitionedTopKDenseRank`.
     ///
-    /// Mirrors [`test_partitioned_topk_rank_matches_bruteforce`] for
-    /// DENSE_RANK, whose admission path prunes rows against a boundary
-    /// that shifts as distinct ORDER BY values are evicted.
+    /// Same harness as [`test_partitioned_topk_rank_matches_bruteforce`],
+    /// differing only in the ranking formula and a wider value domain:
+    /// DENSE_RANK bounds *distinct* values, so a partition needs more than
+    /// `k` of them before it evicts anything, and eviction is what the
+    /// admission pre-filter guards. A pre-filter that wrongly rejects
+    /// boundary-equal rows is caught by seed 6.
     #[tokio::test]
     async fn test_partitioned_topk_dense_rank_matches_bruteforce() -> Result<()> {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
-
         for seed in 0..64u64 {
-            let mut rng = StdRng::seed_from_u64(seed);
-            let k = rng.random_range(1..5usize);
-            let n_partitions = rng.random_range(1..4i32);
-            let n_values = rng.random_range(1..8i32);
-            let n_batches = rng.random_range(1..5usize);
-
-            let (schema, mut state) = build_partitioned_topk_dense_rank(k)?;
-            let mut all_rows: Vec<(i32, i32)> = Vec::new();
-
-            for _ in 0..n_batches {
-                let rows = rng.random_range(1..12usize);
-                let pks: Vec<i32> = (0..rows)
-                    .map(|_| rng.random_range(0..n_partitions))
-                    .collect();
-                let vals: Vec<i32> =
-                    (0..rows).map(|_| rng.random_range(0..n_values)).collect();
-                all_rows.extend(pks.iter().copied().zip(vals.iter().copied()));
-                state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+            let shape = DiffShape::new(seed, 8);
+            let (schema, mut state) = build_partitioned_topk_dense_rank(shape.k)?;
+            for (pks, vals) in &shape.batches {
+                state.insert_batch(&pk_val_batch(&schema, pks.clone(), vals.clone())?)?;
             }
 
-            // Reference: keep every row whose DENSE_RANK within its
-            // partition (1 + the number of distinct smaller values) is <= K.
-            let mut expected: Vec<(i32, i32)> = all_rows
-                .iter()
-                .filter(|(pk, val)| {
-                    let smaller: std::collections::BTreeSet<i32> = all_rows
-                        .iter()
-                        .filter(|(p, v)| p == pk && v < val)
-                        .map(|(_, v)| *v)
-                        .collect();
-                    // DENSE_RANK is 1 + the count of distinct smaller values.
-                    smaller.len() < k
-                })
-                .copied()
-                .collect();
-            expected.sort_unstable();
+            // DENSE_RANK: 1 + the number of *distinct* strictly smaller values.
+            let expected = shape.expected(|rows, pk, val| {
+                1 + rows
+                    .iter()
+                    .filter(|&&(p, v)| p == pk && v < val)
+                    .map(|&(_, v)| v)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+            });
 
-            let batches: Vec<RecordBatch> = state.emit()?.try_collect::<Vec<_>>().await?;
-            let mut actual: Vec<(i32, i32)> = Vec::new();
-            for b in &batches {
-                let pk = b.column(0).as_primitive::<arrow::datatypes::Int32Type>();
-                let val = b.column(1).as_primitive::<arrow::datatypes::Int32Type>();
-                for i in 0..b.num_rows() {
-                    actual.push((pk.value(i), val.value(i)));
-                }
-            }
-            actual.sort_unstable();
-
-            assert_eq!(
-                actual, expected,
-                "seed={seed} k={k} partitions={n_partitions} values={n_values} \
-                 batches={n_batches}"
-            );
+            assert_eq!(sorted_pk_val(state.emit()?).await?, expected, "{shape}");
         }
         Ok(())
     }
