@@ -19,7 +19,6 @@
 //! partitions to M output partitions based on a partitioning scheme, optionally
 //! maintaining the order of the input rows in the output.
 
-use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -47,18 +46,21 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, Statistics, validate_child_count,
 };
 
-use arrow::array::{Array, PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+#[cfg(test)]
+use arrow::array::Array;
+use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
+#[cfg(any(test, feature = "proto"))]
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
+use datafusion_common::utils::transpose;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
-    assert_or_internal_err, internal_datafusion_err, internal_err,
-    validate_range_split_points,
+    ColumnStatistics, DataFusionError, HashMap, SplitPoint, assert_or_internal_err,
+    internal_datafusion_err, internal_err, validate_range_split_points,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -89,6 +91,11 @@ use log::trace;
 use parking_lot::Mutex;
 
 mod distributor_channels;
+mod range;
+
+use range::RangeRouter;
+use std::hash::{Hash, Hasher};
+
 use crate::repartition::distributor_channels::SendError;
 use distributor_channels::{
     DistributionReceiver, DistributionSender, channels, partition_aware_channels,
@@ -634,14 +641,10 @@ enum BatchPartitionerState {
     Range {
         /// Ordered partitioning key.
         ordering: LexOrdering,
-        /// Sort options from the `LexOrdering`
-        sort_options: Vec<SortOptions>,
-        /// Boundaries between adjacent partitions.
-        split_points: Vec<SplitPoint>,
+        /// Router for partition assignment.
+        router: RangeRouter,
         /// Row indices grouped by output partition
         indices: Vec<Vec<u32>>,
-        /// Buffer of `ScalarValue` used to represent the values for a row - based on the `LexOrdering` ordering - to compare against split points
-        partition_buffer: Vec<ScalarValue>,
     },
 }
 
@@ -653,11 +656,30 @@ pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_
 ///
 /// This uses the same routing function as [`BatchPartitioner`], so dynamic
 /// filtering and repartitioning agree for every [`ScalarValue`] comparison.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RangeExpr {
     on_columns: Vec<PhysicalExprRef>,
     split_points: Vec<SplitPoint>,
     sort_options: Vec<SortOptions>,
+    router: RangeRouter,
+}
+
+impl PartialEq for RangeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.on_columns == other.on_columns
+            && self.split_points == other.split_points
+            && self.sort_options == other.sort_options
+    }
+}
+
+impl Eq for RangeExpr {}
+
+impl Hash for RangeExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.on_columns.hash(state);
+        self.split_points.hash(state);
+        self.sort_options.hash(state);
+    }
 }
 
 impl RangeExpr {
@@ -690,10 +712,19 @@ impl RangeExpr {
             "RangeExpr key count must match sort options"
         );
         validate_range_split_points(&split_points, &sort_options)?;
+        let data_types: Vec<DataType> = if !split_points.is_empty() {
+            (0..on_columns.len())
+                .map(|col_idx| split_points[0].values()[col_idx].data_type())
+                .collect()
+        } else {
+            vec![]
+        };
+        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
         Ok(Self {
             on_columns,
             split_points,
             sort_options,
+            router,
         })
     }
 
@@ -751,16 +782,9 @@ impl PhysicalExpr for RangeExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arrays = evaluate_expressions_to_arrays(self.on_columns.iter(), batch)?;
-        let mut row_key_buffer = Vec::with_capacity(arrays.len());
         let mut partition_ids = Vec::with_capacity(batch.num_rows());
-        for row_idx in 0..batch.num_rows() {
-            extract_row_at_idx_to_buf(&arrays, row_idx, &mut row_key_buffer)?;
-            partition_ids.push(range_partition_id(
-                &row_key_buffer,
-                &self.split_points,
-                &self.sort_options,
-            )? as u64);
-        }
+        self.router
+            .route_partition_ids(&arrays, &mut partition_ids)?;
         Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
             partition_ids,
         ))))
@@ -844,23 +868,6 @@ impl RangeExpr {
             sort_options,
         )?))
     }
-}
-
-fn range_partition_id(
-    row_key: &[ScalarValue],
-    split_points: &[SplitPoint],
-    sort_options: &[SortOptions],
-) -> Result<usize> {
-    let mut low = 0;
-    let mut high = split_points.len();
-    while low < high {
-        let mid = low + (high - low) / 2;
-        match compare_rows(row_key, split_points[mid].values(), sort_options)? {
-            Ordering::Less => high = mid,
-            Ordering::Equal | Ordering::Greater => low = mid + 1,
-        }
-    }
-    Ok(low)
 }
 
 /// Computes `value % divisor` without division in the hot loop when `divisor`
@@ -1004,16 +1011,25 @@ impl BatchPartitioner {
         timer: metrics::Time,
     ) -> Self {
         let ordering = range_partitioning.ordering().clone();
-        let split_points = range_partitioning.split_points().to_vec();
+        let split_points = range_partitioning.split_points();
         let num_partitions = range_partitioning.partition_count();
         let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
+        let data_types: Vec<DataType> = if !split_points.is_empty() {
+            (0..ordering.len())
+                .map(|col_idx| split_points[0].values()[col_idx].data_type())
+                .collect()
+        } else {
+            vec![]
+        };
+        let router = RangeRouter::try_new(&data_types, &sort_options, split_points)
+            .unwrap_or_else(|_| {
+                RangeRouter::new_fallback(split_points.to_vec(), sort_options)
+            });
 
         Self {
             state: BatchPartitionerState::Range {
-                partition_buffer: Vec::with_capacity(ordering.len()),
                 ordering,
-                sort_options,
-                split_points,
+                router,
                 indices: vec![vec![]; num_partitions],
             },
             timer,
@@ -1145,14 +1161,12 @@ impl BatchPartitioner {
                 }
                 BatchPartitionerState::Range {
                     ordering,
-                    sort_options,
-                    split_points,
+                    router,
                     indices,
-                    partition_buffer,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
-                    if split_points.is_empty() {
+                    if router.num_split_points() == 0 {
                         timer.done();
                         Box::new(std::iter::once(Ok((0, batch))))
                     } else {
@@ -1165,13 +1179,7 @@ impl BatchPartitioner {
                             v.clear();
                         }
 
-                        Self::partition_range_indices(
-                            &arrays,
-                            split_points,
-                            sort_options,
-                            partition_buffer,
-                            indices,
-                        )?;
+                        router.route_indices(&arrays, indices)?;
 
                         // Finished building index-arrays for output partitions
                         timer.done();
@@ -1185,28 +1193,6 @@ impl BatchPartitioner {
             };
 
         Ok(it)
-    }
-
-    /// Groups input row indices by range partition. This populates `indices[p]` with the
-    /// row indices from `arrays` that belong in output partition `p` according to `split_points` and `sort_options`.
-    fn partition_range_indices(
-        arrays: &[Arc<dyn Array>],
-        split_points: &[SplitPoint],
-        sort_options: &[SortOptions],
-        row_key_buffer: &mut Vec<ScalarValue>,
-        indices: &mut [Vec<u32>],
-    ) -> Result<()> {
-        let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
-        for row_idx in 0..num_rows {
-            // Note that `extract_row_at_idx_to_buf` clears the `row_key_buffer` on each invocation, creating a new row key for comparison for each row
-            extract_row_at_idx_to_buf(arrays, row_idx, row_key_buffer)?;
-
-            let partition =
-                range_partition_id(row_key_buffer, split_points, sort_options)?;
-            indices[partition].push(row_idx as u32)
-        }
-
-        Ok(())
     }
 
     // return the number of output partitions
