@@ -446,8 +446,9 @@ physical_plan
 
 ##########
 # TEST 11: Left-Side Range Hash Joins With Incompatible Range Layouts
-# Different split points or partition counts do not satisfy the
-# co-partitioned layout requirement.
+# Differing split points on equal-size inputs fall back to hash repartitioning,
+# while mismatched partition counts adapt the smaller input to match the larger
+# input's range partitioning.
 ##########
 
 # Different split points do not satisfy the co-partitioned layout requirement.
@@ -478,8 +479,8 @@ ORDER BY l.range_key;
 30 300 300
 35 350 350
 
-# Different partition counts do not satisfy the co-partitioned layout
-# requirement.
+# Different partition counts adapt the smaller input to match the larger
+# input's range partitioning.
 query TT
 EXPLAIN SELECT l.range_key, l.value, r.value
 FROM range_partitioned l
@@ -487,10 +488,9 @@ LEFT JOIN range_partitioned_narrow r ON l.range_key = r.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Left, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
-02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=3
-05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+03)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), input_partitions=3
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
 
 ##########
 # TEST 12: LeftMark Subqueries Over Range Hash Joins
@@ -907,9 +907,8 @@ reset datafusion.optimizer.subset_repartition_threshold;
 ##########
 # TEST 23: Right Join with Mismatched Range Partition Counts Repartitions
 # Both inputs are range partitioned on range_key, but declare a different number
-# of partitions (four vs three). The per-child key requirements can be satisfied
-# by Range, but the co-partitioned layout requirement cannot, so Hash
-# repartitioning repairs both sides of the right join.
+# of partitions (four vs three). The larger input's range partitioning is
+# preserved, and the smaller input is repartitioned to match.
 ##########
 
 query TT
@@ -919,10 +918,9 @@ RIGHT JOIN range_partitioned_narrow r ON l.range_key = r.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
-02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=3
-05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+03)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), input_partitions=3
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
 
 query III
 SELECT l.value, r.range_key, r.value
