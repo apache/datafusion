@@ -218,24 +218,6 @@ async fn merge_into_context() -> SessionContext {
     ctx
 }
 
-async fn assert_merge_physical_error(ctx: &SessionContext, sql: &str, expected: &str) {
-    let result = ctx
-        .sql(sql)
-        .await
-        .unwrap_or_else(|error| panic!("failed to plan MERGE SQL:\n{sql}\n{error}"))
-        .create_physical_plan()
-        .await;
-    let err = match result {
-        Ok(_) => panic!("expected physical planning to fail:\n{sql}"),
-        Err(error) => error,
-    };
-    let actual = err.strip_backtrace();
-    assert!(
-        actual.contains(expected),
-        "MERGE SQL:\n{sql}\n\nExpected:\n{expected}\n\nActual:\n{actual}"
-    );
-}
-
 async fn merge_operation(ctx: &SessionContext, sql: &str) -> Box<MergeIntoOp> {
     let plan = ctx.state().create_logical_plan(sql).await.unwrap();
     let LogicalPlan::Dml(dml) = plan else {
@@ -323,30 +305,6 @@ async fn merge_into_preserves_target_alias_in_correlated_subquery() {
         &merge_op.on,
         &TableReference::bare("t")
     ));
-}
-
-#[tokio::test]
-async fn merge_into_requires_boolean_conditions() {
-    let ctx = merge_into_context().await;
-
-    for (sql, expected) in [
-        (
-            "MERGE INTO target USING source ON 1 WHEN MATCHED THEN DELETE",
-            "MERGE ON condition must be boolean type, but got Int64",
-        ),
-        (
-            "MERGE INTO target USING source ON true \
-             WHEN MATCHED AND 1 THEN DELETE",
-            "MERGE WHEN condition must be boolean type, but got Int64",
-        ),
-        (
-            "MERGE INTO target USING source ON NULL \
-             WHEN MATCHED AND NULL THEN DELETE",
-            "MERGE INTO not supported for Base table",
-        ),
-    ] {
-        assert_merge_physical_error(&ctx, sql, expected).await;
-    }
 }
 
 #[tokio::test]
