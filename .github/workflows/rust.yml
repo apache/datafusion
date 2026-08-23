@@ -15,8 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# For some actions, we use Runs-On to run them on ASF infrastructure: https://datafusion.apache.org/contributor-guide/#ci-runners
-
+# # CI runners
+#
+# Some actions use Runs-On to run on ASF infrastructure:
+# https://datafusion.apache.org/contributor-guide/#ci-runners
+#
+# # `cargo xtask`
+#
+# Individual CI commands are implemented with `cargo xtask` to make them easier
+# to reproduce locally.
+#
+# See `xtask/README.md` for details about DataFusion's `xtask` tooling.
+#
+# It is being rolled out incrementally across all workflows.
+# Track progress at https://github.com/apache/datafusion/issues/24487.
+#
 name: Rust
 
 concurrency:
