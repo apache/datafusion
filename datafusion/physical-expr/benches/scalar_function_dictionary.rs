@@ -16,13 +16,13 @@
 // under the License.
 
 //! Scalar functions over a dictionary-encoded column, against the flat column
-//! carrying the same rows. `reverse` has had a hand-written dictionary arm
-//! since #23930; `encode` has no dictionary handling, so only its flat and
-//! cast-away shapes are measured.
+//! carrying the same rows. `encode` had no dictionary handling of its own;
+//! `reverse` has had a hand-written arm since #23930.
 //!
 //! `cold` gives every batch its own dictionary, as a projection building one
 //! per batch does. `warm` shares one across batches, as a Parquet scan does
-//! within a column chunk.
+//! within a column chunk — the results of the first are then reused by the
+//! rest, so the two bound what a batch costs.
 
 use std::cell::Cell;
 use std::hint::black_box;
@@ -146,24 +146,12 @@ fn expr_over(udf: Arc<ScalarUDF>, schema: &Schema, base64: bool) -> ScalarFuncti
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // (name, function, takes a base64 argument, dictionary-typed calls reach
-    // the function today)
-    let functions: Vec<(&str, Arc<ScalarUDF>, bool, bool)> = vec![
-        (
-            "encode",
-            datafusion_functions::encoding::encode(),
-            true,
-            false,
-        ),
-        (
-            "reverse",
-            datafusion_functions::unicode::reverse(),
-            false,
-            true,
-        ),
+    let functions: Vec<(&str, Arc<ScalarUDF>, bool)> = vec![
+        ("encode", datafusion_functions::encoding::encode(), true),
+        ("reverse", datafusion_functions::unicode::reverse(), false),
     ];
 
-    for (name, udf, binary, dictionary_calls) in &functions {
+    for (name, udf, binary) in &functions {
         let mut group = c.benchmark_group(format!("scalar_function_dictionary/{name}"));
 
         // A dictionary of its own per batch: nothing carries over.
@@ -172,10 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         // for every sample: restarted per sample it would revisit the first
         // batches often enough for a result to still be remembered, and the
         // group would quietly measure a warm dictionary under a cold name.
-        for distinct in [8usize, 256, 512, ROWS]
-            .into_iter()
-            .filter(|_| *dictionary_calls)
-        {
+        for distinct in [8usize, 256, 512, ROWS] {
             let (schema, batches) = separate(distinct, 16, *binary);
             let expr = expr_over(Arc::clone(udf), &schema, *binary);
             let cursor = Cell::new(0usize);
@@ -194,10 +179,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         }
 
         // One dictionary across the batches of a column chunk.
-        for distinct in [8usize, 256, 512, ROWS]
-            .into_iter()
-            .filter(|_| *dictionary_calls)
-        {
+        for distinct in [8usize, 256, 512, ROWS] {
             let (schema, batches) = chunk(distinct, 8, *binary);
             let expr = expr_over(Arc::clone(udf), &schema, *binary);
             for batch in &batches {
