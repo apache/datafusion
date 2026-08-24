@@ -23,6 +23,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
+use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::Operator;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
@@ -627,6 +629,117 @@ fn dense_rank_no_order_by_no_change() -> Result<()> {
         before, after,
         "DENSE_RANK with empty ORDER BY must not be rewritten"
     );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Streaming path: input already sorted by (partition, order), no SortExec.
+// ---------------------------------------------------------------------------
+
+/// A leaf already sorted by `(pk ASC, val ASC)` — no `SortExec` needed.
+fn sorted_source() -> Result<Arc<dyn ExecutionPlan>> {
+    let s = schema();
+    let ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
+        PhysicalSortExpr::new_default(col("val", &s)?).asc(),
+    ])
+    .unwrap();
+    let source = MemorySourceConfig::try_new(&[vec![]], Arc::clone(&s), None)?
+        .try_with_sort_information(vec![ordering])?;
+    Ok(DataSourceExec::from_data_source(source))
+}
+
+/// Build `FilterExec(rank op limit) → BoundedWindowAggExec(<fn> PBY pk OBY val)
+/// → <already-sorted source>` — no `SortExec`.
+fn build_streaming_plan(
+    udwf_factory: fn() -> Arc<datafusion_expr::WindowUDF>,
+    udwf_name: &str,
+    limit_value: i64,
+    op: Operator,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let s = schema();
+    let child = sorted_source()?;
+
+    let partition_by = vec![col("pk", &s)?];
+    let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
+
+    let window_expr = Arc::new(StandardWindowExpr::new(
+        create_udwf_window_expr(&udwf_factory(), &[], &s, udwf_name.to_string(), false)?,
+        &partition_by,
+        &order_by,
+        Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        )),
+    ));
+
+    let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+        vec![window_expr],
+        child,
+        InputOrderMode::Sorted,
+        true,
+    )?);
+
+    let rk_col = Arc::new(Column::new(udwf_name, 2));
+    let limit_lit = lit(ScalarValue::UInt64(Some(limit_value as u64)));
+    let predicate = Arc::new(BinaryExpr::new(rk_col, op, limit_lit));
+    Ok(Arc::new(FilterExec::try_new(predicate, window)?))
+}
+
+#[test]
+fn streaming_row_number_sorted_input() -> Result<()> {
+    // Already-sorted input → streaming operator inserted, no SortExec, no Filter.
+    let plan = build_streaming_plan(row_number_udwf, "row_number", 3, Operator::LtEq)?;
+    let s = plan_str(optimize(plan)?.as_ref());
+    assert!(s.contains("StreamingPartitionedTopKExec"), "plan was:\n{s}");
+    assert!(s.contains("fetch=3"), "plan was:\n{s}");
+    assert!(!s.contains("SortExec"), "sort must be gone:\n{s}");
+    assert!(!s.contains("FilterExec"), "filter must be gone:\n{s}");
+    Ok(())
+}
+
+#[test]
+fn streaming_rank_sorted_input() -> Result<()> {
+    let plan = build_streaming_plan(rank_udwf, "rank", 3, Operator::LtEq)?;
+    let s = plan_str(optimize(plan)?.as_ref());
+    assert!(s.contains("StreamingPartitionedTopKExec"), "plan was:\n{s}");
+    assert!(s.contains("fn=rank"), "plan was:\n{s}");
+    Ok(())
+}
+
+#[test]
+fn streaming_dense_rank_sorted_input() -> Result<()> {
+    // DENSE_RANK is streamable in the same single-pass shape as RANK (a distinct
+    // ORDER BY value counter), so the streaming path takes it too rather than
+    // falling through to the flag-gated heap.
+    let plan = build_streaming_plan(dense_rank_udwf, "dense_rank", 3, Operator::LtEq)?;
+    let s = plan_str(optimize(plan)?.as_ref());
+    assert!(s.contains("StreamingPartitionedTopKExec"), "plan was:\n{s}");
+    assert!(s.contains("fn=dense_rank"), "plan was:\n{s}");
+    assert!(!s.contains("SortExec"), "sort must be gone:\n{s}");
+    assert!(!s.contains("FilterExec"), "filter must be gone:\n{s}");
+    Ok(())
+}
+
+#[test]
+fn streaming_fires_regardless_of_flag() -> Result<()> {
+    // The streaming rewrite is a pure win and applies even with the flag off.
+    let plan = build_streaming_plan(row_number_udwf, "row_number", 3, Operator::LtEq)?;
+    let s = plan_str(optimize_disabled(plan)?.as_ref());
+    assert!(
+        s.contains("StreamingPartitionedTopKExec"),
+        "streaming must fire with enable_window_topn=false:\n{s}"
+    );
+    Ok(())
+}
+
+#[test]
+fn streaming_rn_lt_becomes_fetch_2() -> Result<()> {
+    let plan = build_streaming_plan(row_number_udwf, "row_number", 3, Operator::Lt)?;
+    let s = plan_str(optimize(plan)?.as_ref());
+    assert!(s.contains("StreamingPartitionedTopKExec"), "plan was:\n{s}");
+    assert!(s.contains("fetch=2"), "rn < 3 → fetch 2:\n{s}");
     Ok(())
 }
 
