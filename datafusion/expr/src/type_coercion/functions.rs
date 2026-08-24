@@ -1158,9 +1158,6 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        // coerced run-end encoded the same way as dictionary: callers of a
-        // signature built from `Exact`/`OneOf` only know the logical value
-        // type, not that the argument happens to be physically run-encoded.
         (_, RunEndEncoded(_, value_type))
             if coerced_from(type_into, value_type.data_type()).is_some() =>
         {
@@ -1657,6 +1654,17 @@ mod tests {
         let type_from =
             run_end_encoded_of(DataType::Timestamp(TimeUnit::Nanosecond, None));
         let type_into = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // The reverse direction: a plain type coercing into an REE target
+        // (e.g. a signature that happens to require RunEndEncoded) should
+        // succeed whenever the plain type coerces into the wrapped value
+        // type.
+        let type_into = run_end_encoded_of(DataType::Int64);
+        let type_from = DataType::Int32;
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())
