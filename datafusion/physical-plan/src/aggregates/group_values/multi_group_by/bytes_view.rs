@@ -19,9 +19,7 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray,
-};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray, NullBufferBuilder};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
@@ -69,7 +67,7 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     max_block_size: usize,
 
     /// Nulls
-    nulls: MaybeNullBufferBuilder,
+    nulls: NullBufferBuilder,
 
     /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
@@ -88,7 +86,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             in_progress: Vec::new(),
             completed: Vec::new(),
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
-            nulls: MaybeNullBufferBuilder::new(),
+            nulls: NullBufferBuilder::empty(),
             _phantom: PhantomData {},
         }
     }

@@ -19,10 +19,7 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray,
-    GenericByteArray, GenericStringArray, OffsetSizeTrait, types::GenericStringType,
-};
+use arrow::array::{types::GenericStringType, Array, ArrayRef, AsArray, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray, GenericByteArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;
@@ -52,7 +49,7 @@ where
     /// are stored as a zero length string.
     offsets: Vec<O>,
     /// Nulls
-    nulls: MaybeNullBufferBuilder,
+    nulls: NullBufferBuilder,
     /// The maximum size of the buffer for `0`
     max_buffer_size: usize,
 }
@@ -66,7 +63,7 @@ where
             output_type,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()],
-            nulls: MaybeNullBufferBuilder::new(),
+            nulls: NullBufferBuilder::empty(),
             max_buffer_size: if O::IS_LARGE {
                 i64::MAX as usize
             } else {
@@ -89,12 +86,12 @@ where
     {
         let arr = array.as_bytes::<B>();
         if arr.is_null(row) {
-            self.nulls.append(true);
+            self.nulls.append_null();
             // nulls need a zero length in the offset buffer
             let offset = self.buffer.len();
             self.offsets.push(O::usize_as(offset));
         } else {
-            self.nulls.append(false);
+            self.nulls.append_non_null();
             self.do_append_val_inner(arr, row)?;
         }
 
@@ -152,14 +149,14 @@ where
             }
 
             Nulls::None => {
-                self.nulls.append_n(rows.len(), false);
+                self.nulls.append_n_non_nulls(rows.len());
                 for &row in rows {
                     self.do_append_val_inner(arr, row)?;
                 }
             }
 
             Nulls::All => {
-                self.nulls.append_n(rows.len(), true);
+                self.nulls.append_n_nulls(rows.len());
 
                 let new_len = self.offsets.len() + rows.len();
                 let offset = self.buffer.len();
