@@ -34,6 +34,7 @@ use datafusion_common::{
     Result, ScalarValue, assert_eq_or_internal_err, exec_err, not_impl_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -93,12 +94,30 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             self.nullable(input_schema)?,
         )))
     }
-    /// Evaluate an expression against a RecordBatch after first applying a validity array
+    /// Evaluates this expression only for rows where `selection` is `true`.
+    ///
+    /// Rows where `selection` is `false` or null are skipped during evaluation and
+    /// produce `NULL` in the result. Thus, values in those rows cannot trigger
+    /// evaluation errors such as division by zero.
+    ///
+    /// # Example
+    ///
+    /// Given `expr = 4 / val`:
+    ///
+    /// ```text
+    /// val  selection | result
+    ///   0      false |   NULL
+    ///   1       true |      4
+    ///   2       true |      2
+    /// ```
+    ///
+    /// The first row is not evaluated, avoiding division by zero. Its result is
+    /// `NULL`.
     ///
     /// # Errors
     ///
-    /// Returns an `Err` if the expression could not be evaluated or if the length of the
-    /// `selection` validity array and the number of row in `batch` is not equal.
+    /// Returns an `Err` if the expression could not be evaluated or if the length of
+    /// `selection` does not equal the number of rows in `batch`.
     fn evaluate_selection(
         &self,
         batch: &RecordBatch,
@@ -777,12 +796,6 @@ pub mod proto_decode {
     }
 }
 
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `datafusion_expr_common::dyn_eq` instead"
-)]
-pub use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
-
 impl dyn PhysicalExpr {
     /// Returns `true` if the expression is of type `T`.
     ///
@@ -889,7 +902,7 @@ where
 /// # use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 /// # use datafusion_common::Result;
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
-/// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
+/// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
 /// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {

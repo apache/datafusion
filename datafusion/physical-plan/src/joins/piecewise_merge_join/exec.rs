@@ -363,7 +363,6 @@ impl PiecewiseMergeJoinExec {
             &streamed,
             Arc::clone(&schema),
             join_type,
-            &on,
         )?;
 
         Ok(Self {
@@ -425,7 +424,6 @@ impl PiecewiseMergeJoinExec {
         streamed: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
-        join_on: &(PhysicalExprRef, PhysicalExprRef),
     ) -> Result<PlanProperties> {
         let eq_properties = join_equivalence_properties(
             buffered.equivalence_properties().clone(),
@@ -434,7 +432,12 @@ impl PiecewiseMergeJoinExec {
             schema,
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
-            std::slice::from_ref(join_on),
+            // `PiecewiseMergeJoin`'s `on` is a range predicate (e.g. `l < r`),
+            // not an equijoin key. Passing it here would register a false
+            // `left == right` output equivalence, letting the optimizer drop a
+            // required sort and return wrongly ordered results. Range joins add
+            // no column equivalences, so pass none.
+            &[],
         )?;
 
         let output_partitioning =
