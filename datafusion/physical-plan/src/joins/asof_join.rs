@@ -72,16 +72,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, new_null_array};
+use arrow::array::{
+    Array, ArrayRef, DynComparator, RecordBatch, RecordBatchOptions, make_comparator,
+    new_null_array,
+};
 use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
-use datafusion_common::utils::normalize_float_zero_scalar;
 use datafusion_common::{
-    ColumnStatistics, JoinSide, JoinType, NullEquality, Result, ScalarValue, Statistics,
+    ColumnStatistics, JoinSide, JoinType, NullEquality, Result, Statistics,
     assert_eq_or_internal_err, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
@@ -628,7 +630,10 @@ struct InputCursor {
     key_validity: Option<NullBuffer>,
     /// Evaluated match values for `batch`.
     match_array: Option<ArrayRef>,
-    /// Monotonic identity of the current key arrays.
+    /// Logical NULLs cached separately so row checks avoid constructing
+    /// `ScalarValue`s and still handle nested representations such as dictionaries.
+    match_validity: Option<NullBuffer>,
+    /// Monotonic identity of the current arrays.
     key_batch_id: usize,
     /// Current row within `batch`.
     row: usize,
@@ -650,6 +655,7 @@ impl InputCursor {
             key_arrays: Arc::from([]),
             key_validity: None,
             match_array: None,
+            match_validity: None,
             key_batch_id: 0,
             row: 0,
             eof: false,
@@ -671,6 +677,7 @@ impl InputCursor {
             self.key_arrays = Arc::from([]);
             self.key_validity = None;
             self.match_array = None;
+            self.match_validity = None;
             self.row = 0;
             if self.eof {
                 return Poll::Ready(Ok(false));
@@ -692,11 +699,12 @@ impl InputCursor {
             self.key_validity =
                 matchable_join_keys(&key_arrays, NullEquality::NullEqualsNothing);
             self.key_arrays = key_arrays.into();
-            self.match_array = Some(
-                self.match_expr
-                    .evaluate(&batch)?
-                    .into_array(batch.num_rows())?,
-            );
+            let match_array = self
+                .match_expr
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())?;
+            self.match_validity = match_array.logical_nulls();
+            self.match_array = Some(match_array);
             self.key_batch_id += 1;
             self.batch = Some(batch);
         }
@@ -708,11 +716,10 @@ impl InputCursor {
             .is_some_and(|validity| validity.is_null(self.row))
     }
 
-    fn match_value(&self) -> Result<ScalarValue> {
-        let array = self.match_array.as_ref().ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!("ASOF match array is missing")
-        })?;
-        ScalarValue::try_from_array(array, self.row).map(normalize_float_zero_scalar)
+    fn match_is_null(&self) -> bool {
+        self.match_validity
+            .as_ref()
+            .is_some_and(|validity| validity.is_null(self.row))
     }
 
     fn batch_row(&self) -> Result<(Arc<RecordBatch>, usize)> {
@@ -847,6 +854,11 @@ impl PendingRows {
 /// candidate advances from `(A, 2)` to `(A, 6)` without rewinding the right
 /// cursor. Cursors and the candidate survive input batch changes and output
 /// flushes; a change of equality group clears the candidate before reuse.
+///
+/// The hot path avoids materializing scalar values: expressions are evaluated
+/// once per batch, comparators are cached by batch identity, and both cursors
+/// only move forward. Input batches and evaluated arrays remain shared through
+/// `Arc`; output can therefore use a zero-copy slice when its rows are contiguous.
 struct AsOfJoinStream {
     /// Output schema used when pending row references are materialized.
     schema: SchemaRef,
@@ -870,6 +882,10 @@ struct AsOfJoinStream {
     input_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
     /// Cached comparator for the candidate and current left batches.
     candidate_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
+    /// Cached match-key comparator for the current right and left batches.
+    /// Building it performs type dispatch, so doing so once per batch pair avoids
+    /// repeating that work for every candidate comparison.
+    input_match_comparator: Option<(usize, usize, DynComparator)>,
     /// Left row references accumulated for the next output batch.
     pending_left: PendingRows,
     /// Matched right row references, aligned with `pending_left`.
@@ -914,6 +930,7 @@ impl AsOfJoinStream {
             group_sort_options,
             input_group_comparator: None,
             candidate_group_comparator: None,
+            input_match_comparator: None,
             batch_size: batch_size.max(1),
             metrics,
         }
@@ -982,6 +999,50 @@ impl AsOfJoinStream {
         Ok(comparator.compare(candidate.row, self.left.row) != Ordering::Equal)
     }
 
+    /// Compares the current right match value with the current left match value.
+    ///
+    /// This always returns natural ascending order (`right.cmp(left)`), regardless
+    /// of scan direction. [`is_eligible`] interprets that order for the four ASOF
+    /// operators, keeping direction-specific logic out of the comparator cache.
+    fn compare_input_matches(&mut self) -> Result<Ordering> {
+        let _timer = self.metrics.baseline.elapsed_compute().timer();
+        let right_batch_id = self.right.key_batch_id;
+        let left_batch_id = self.left.key_batch_id;
+        if self
+            .input_match_comparator
+            .as_ref()
+            .is_none_or(|(right, left, _)| {
+                *right != right_batch_id || *left != left_batch_id
+            })
+        {
+            let right = self.right.match_array.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ASOF right match array is missing"
+                )
+            })?;
+            let left = self.left.match_array.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ASOF left match array is missing"
+                )
+            })?;
+            let comparator = make_comparator(
+                right.as_ref(),
+                left.as_ref(),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            )?;
+            self.input_match_comparator =
+                Some((right_batch_id, left_batch_id, comparator));
+        }
+        let (_, _, comparator) = self
+            .input_match_comparator
+            .as_ref()
+            .expect("ASOF input match comparator must be initialized");
+        Ok(comparator(self.right.row, self.left.row))
+    }
+
     /// Produces the next output batch without resetting the merge state.
     ///
     /// Each left row first validates its equality group, then advances the right
@@ -1021,11 +1082,7 @@ impl AsOfJoinStream {
                 return Poll::Ready(None);
             }
 
-            let left_match = {
-                let _timer = self.metrics.baseline.elapsed_compute().timer();
-                self.left.match_value()?
-            };
-            if left_match.is_null() || self.left.group_has_null() {
+            if self.left.match_is_null() || self.left.group_has_null() {
                 self.candidate = None;
                 self.candidate_group_comparator = None;
                 self.push_current_left(None)?;
@@ -1056,13 +1113,11 @@ impl AsOfJoinStream {
                     Ordering::Greater => break,
                     Ordering::Equal => {}
                 }
-                let _timer = self.metrics.baseline.elapsed_compute().timer();
-                let right_match = self.right.match_value()?;
-                if right_match.is_null() {
+                if self.right.match_is_null() {
                     self.right.advance();
                     continue;
                 }
-                if !is_eligible(self.op, &left_match, &right_match)? {
+                if !is_eligible(self.op, self.compare_input_matches()?) {
                     break;
                 }
                 let (batch, row) = self.right.batch_row()?;
@@ -1230,15 +1285,14 @@ fn validate_expr_side(expr: &PhysicalExprRef, schema: &Schema, name: &str) -> Re
     Ok(())
 }
 
-fn is_eligible(op: Operator, left: &ScalarValue, right: &ScalarValue) -> Result<bool> {
-    let ordering = right.try_cmp(left)?;
-    Ok(match op {
-        Operator::Gt => ordering == Ordering::Less,
-        Operator::GtEq => ordering != Ordering::Greater,
-        Operator::Lt => ordering == Ordering::Greater,
-        Operator::LtEq => ordering != Ordering::Less,
+fn is_eligible(op: Operator, right_vs_left: Ordering) -> bool {
+    match op {
+        Operator::Gt => right_vs_left == Ordering::Less,
+        Operator::GtEq => right_vs_left != Ordering::Greater,
+        Operator::Lt => right_vs_left == Ordering::Greater,
+        Operator::LtEq => right_vs_left != Ordering::Less,
         _ => unreachable!("ASOF match operator is validated by try_new"),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1251,6 +1305,7 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
