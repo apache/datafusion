@@ -3165,6 +3165,81 @@ async fn test_hashjoin_dynamic_filter_survives_probe_subtree_replacement() {
     );
 }
 
+// Not portable to sqllogictest: custom `PhysicalOptimizerRule`s are appended
+// after the built in ones, so a user rule runs after the Post phase
+// `FilterPushdown` that decides whether to keep the join's dynamic filter. Such a
+// rule can bring a consumer back by re-running the pushdown; there is nothing to
+// undo first, because a join with no consumer holds no dynamic filter.
+#[test]
+fn test_hashjoin_dynamic_filter_recreated_when_pushdown_reruns() {
+    let (build_side_schema, build_scan, probe_side_schema, _) = hashjoin_pushdown_scans();
+
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let unsupported_probe = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(false)
+        .with_batches(probe_batches.clone())
+        .build();
+
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            Arc::clone(&build_scan),
+            unsupported_probe,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    // Nothing in the probe side accepts the filter, so the join drops it.
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    assert_eq!(plan.dynamic_expressions_produced().len(), 0);
+
+    // A later rule swaps in a probe side that does accept filters and re-runs the
+    // pushdown. The join creates a fresh filter and finds its consumer.
+    let supported_probe = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+    let plan = plan
+        .replace_children(
+            vec![build_scan, supported_probe],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+        .unwrap();
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    assert_eq!(plan.dynamic_expressions_produced().len(), 1);
+}
+
 /// Regression test for https://github.com/apache/datafusion/issues/20109.
 ///
 /// Not portable to sqllogictest: the regression specifically targets the
