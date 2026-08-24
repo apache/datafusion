@@ -266,12 +266,12 @@ impl FileSink for ParquetSink {
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let rows_written_counter = self.metrics.rows_written().clone();
+        let rows_written_counter = self.metrics.rows_written();
         // Note: bytes_written is the sum of compressed row group sizes, which
         // may differ slightly from the actual on-disk file size (excludes footer,
         // page indexes, and other Parquet metadata overhead).
-        let bytes_written_counter = self.metrics.bytes_written().clone();
-        let elapsed_compute = self.metrics.elapsed_compute().clone();
+        let bytes_written_counter = self.metrics.bytes_written();
+        let elapsed_compute = self.metrics.elapsed_compute();
 
         let parquet_opts = &self.parquet_options;
 

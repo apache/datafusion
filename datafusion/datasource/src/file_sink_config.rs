@@ -42,47 +42,33 @@ mod proto;
 #[derive(Debug)]
 pub struct FileSinkMetrics {
     metrics: ExecutionPlanMetricsSet,
-    rows_written: Count,
-    bytes_written: Count,
-    elapsed_compute: Time,
 }
 
 impl FileSinkMetrics {
     /// Create a new set of file sink metrics.
     pub fn new() -> Self {
-        let metrics = ExecutionPlanMetricsSet::new();
-        let rows_written = MetricBuilder::new(&metrics)
-            .with_category(MetricCategory::Rows)
-            .global_counter("rows_written");
-        let bytes_written = MetricBuilder::new(&metrics)
-            .with_category(MetricCategory::Bytes)
-            .global_counter("bytes_written");
-        let elapsed_compute = MetricBuilder::new(&metrics).elapsed_compute(0);
-
         Self {
-            metrics,
-            rows_written,
-            bytes_written,
-            elapsed_compute,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
-    /// Return the number of rows written.
-    pub fn rows_written(&self) -> &Count {
-        &self.rows_written
+    /// Create a counter for rows written by one sink execution.
+    pub fn rows_written(&self) -> Count {
+        MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Rows)
+            .global_counter("rows_written")
     }
 
-    /// Return the number of bytes written.
-    ///
-    /// The exact meaning is format-specific. For stateless sinks, this is the
-    /// number of bytes written after any stream-level compression is applied.
-    pub fn bytes_written(&self) -> &Count {
-        &self.bytes_written
+    /// Create a counter for bytes written by one sink execution.
+    pub fn bytes_written(&self) -> Count {
+        MetricBuilder::new(&self.metrics)
+            .with_category(MetricCategory::Bytes)
+            .global_counter("bytes_written")
     }
 
-    /// Return the elapsed compute time.
-    pub fn elapsed_compute(&self) -> &Time {
-        &self.elapsed_compute
+    /// Create an elapsed-compute metric for one sink execution.
+    pub fn elapsed_compute(&self) -> Time {
+        MetricBuilder::new(&self.metrics).elapsed_compute(0)
     }
 
     /// Return a snapshot of the metrics.
@@ -231,5 +217,23 @@ impl FileSinkConfig {
     /// Get output schema
     pub fn output_schema(&self) -> &SchemaRef {
         &self.output_schema
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metrics_are_created_per_sink_execution() {
+        let metrics = FileSinkMetrics::new();
+
+        let first_rows = metrics.rows_written();
+        first_rows.add(3);
+
+        let second_rows = metrics.rows_written();
+
+        assert_eq!(first_rows.value(), 3);
+        assert_eq!(second_rows.value(), 0);
     }
 }
