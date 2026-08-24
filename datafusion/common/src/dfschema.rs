@@ -1340,9 +1340,8 @@ impl SchemaExt for Schema {
 /// `format!("{q}.{name}")` when `qualifier` is `Some`, or just `name` when
 /// `None`. We avoid going through the `fmt` machinery for performance reasons.
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
-    let qualifier = match qualifier {
-        None => return name.to_string(),
-        Some(q) => q,
+    let Some(qualifier) = qualifier else {
+        return name.to_string();
     };
     let (first, second, third) = match qualifier {
         TableReference::Bare { table } => (table.as_ref(), None, None),

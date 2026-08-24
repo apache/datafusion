@@ -1629,4 +1629,31 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn infer_schema_rejects_duplicate_header_names() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("duplicate_header.csv");
+        std::fs::write(&path, "id,value,value\n1,10,100\n")?;
+
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let meta = crate::test::object_store::local_unpartitioned_file(&path);
+
+        let ctx = SessionContext::new().state();
+        let error = CsvFormat::default()
+            .with_has_header(true)
+            .infer_schema(&ctx, &store, std::slice::from_ref(&meta))
+            .await
+            .expect_err("duplicate header names must not infer a schema")
+            .to_string();
+
+        assert!(
+            error.contains("duplicate unqualified field name")
+                && error.contains("value")
+                && error.contains("duplicate_header.csv"),
+            "unexpected error: {error}"
+        );
+
+        Ok(())
+    }
 }

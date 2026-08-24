@@ -530,7 +530,13 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        Ok(self.left.nullable(input_schema)? || self.right.nullable(input_schema)?)
+        match self.op {
+            Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => Ok(false),
+            _ => {
+                Ok(self.left.nullable(input_schema)?
+                    || self.right.nullable(input_schema)?)
+            }
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -878,13 +884,13 @@ impl PhysicalExpr for BinaryExpr {
                 strictly_order_preserving: false,
             }),
             Operator::And => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.and(&r_order),
                 range: l_range.and(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,
             }),
             Operator::Or => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.or(&r_order),
                 range: l_range.or(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,
@@ -4191,6 +4197,27 @@ mod tests {
         .iter()
         .collect();
         apply_logic_op(&schema, &a, &b, Operator::IsDistinctFrom, expected).unwrap();
+    }
+
+    #[test]
+    fn distinct_from_op_nullability() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("nullable", DataType::Boolean, true),
+            Field::new("non_nullable", DataType::Boolean, false),
+        ]);
+        let cases = [
+            (Operator::IsDistinctFrom, "nullable", false),
+            (Operator::IsNotDistinctFrom, "nullable", false),
+            (Operator::Eq, "nullable", true),
+            (Operator::Eq, "non_nullable", false),
+        ];
+
+        for (op, column, expected) in cases {
+            let expr = BinaryExpr::new(col(column, &schema)?, op, lit(true));
+            assert_eq!(expr.nullable(&schema)?, expected, "{op} with {column}");
+        }
+
+        Ok(())
     }
 
     #[test]

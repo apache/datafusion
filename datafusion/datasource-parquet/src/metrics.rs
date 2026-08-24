@@ -27,6 +27,31 @@ use datafusion_physical_plan::metrics::{
 /// This component is a subject to **change** in near future and is exposed for low level integrations
 /// through [`ParquetFileReaderFactory`].
 ///
+/// # The `bytes_processed` metric
+///
+/// Not every metric the parquet scan reports is a field on this struct. `bytes_processed` — the
+/// number of bytes the scan is finished with, whether it read them or proved by pruning that it
+/// did not need them — is registered straight onto the plan's metrics set, because only the
+/// internal progress guard ever touches it and a public field here would make every future
+/// metric a breaking change for anyone building this struct with a literal.
+///
+/// Read it the way `EXPLAIN ANALYZE` does, by name off the plan's metrics:
+///
+/// ```no_run
+/// # use datafusion_physical_plan::ExecutionPlan;
+/// # fn completion_fraction(plan: &dyn ExecutionPlan, total_file_bytes: u64) -> Option<f64> {
+/// let processed = plan.metrics()?.sum_by_name("bytes_processed")?.as_usize();
+/// Some(processed as f64 / total_file_bytes as f64)
+/// # }
+/// ```
+///
+/// Over the life of a file — or of one byte range of a file split for parallelism — it advances
+/// by exactly that file's size, which is what makes the ratio above a completion fraction rather
+/// than just another counter. Note that it measures work *resolved*, not time spent: bytes that
+/// pruning removes are credited the moment they are proved unnecessary, and proving that is
+/// nearly free. It is the right numerator for a progress bar, and only a rough one for
+/// predicting how much longer a query will take.
+///
 /// [`ParquetFileReaderFactory`]: super::ParquetFileReaderFactory
 #[derive(Debug, Clone)]
 pub struct ParquetFileMetrics {
@@ -101,6 +126,67 @@ pub struct ParquetFileMetrics {
     /// number of rows that were stored in the cache after evaluating predicates
     /// reused for the output.
     pub predicate_cache_records: Gauge,
+}
+
+/// Tracks how much of one file — or one byte range of a file — a scan has
+/// finished with, crediting [`ParquetFileMetrics`]'s `bytes_processed` as it goes.
+///
+/// Every credit is clamped to the bytes left in the budget, and whatever is
+/// left over is credited on drop. The counter therefore advances by exactly the
+/// size of the range being scanned however the scan ends: normally, at a
+/// `LIMIT`, when a dynamic filter proves the rest of the file irrelevant, or on
+/// an error — including one that stops the file being opened at all, which is
+/// why the guard is created before the fallible stages of opening rather than
+/// alongside the decoder. That total is what makes the metric usable as a
+/// completion fraction rather than just another counter.
+///
+/// The clamp and the final top-up also absorb two small inexactnesses in
+/// crediting by row group: a file is slightly larger than the sum of its row
+/// groups (the footer, the page index and any padding belong to no row group),
+/// and a row group is assigned to a byte range by the offset of its first page,
+/// so a range's row groups do not add up to precisely its length.
+///
+/// The budget is held as a `usize` because [`Count`] is, so the two cannot
+/// disagree: on a 32-bit target a range longer than `usize::MAX` saturates once,
+/// here, rather than letting the remaining-byte arithmetic run ahead of what the
+/// counter can record. [`ParquetFileMetrics::bytes_scanned`] has the same
+/// ceiling.
+#[derive(Debug)]
+pub(crate) struct ByteProgress {
+    /// Bytes of the scanned range not yet credited.
+    remaining: usize,
+    bytes_processed: Count,
+}
+
+impl ByteProgress {
+    /// Start tracking a range of `total` bytes.
+    pub(crate) fn new(total: u64, bytes_processed: Count) -> Self {
+        Self {
+            remaining: saturating_usize(total),
+            bytes_processed,
+        }
+    }
+
+    /// Record that the scan is finished with `bytes` more of the range.
+    pub(crate) fn credit(&mut self, bytes: u64) {
+        let bytes = saturating_usize(bytes).min(self.remaining);
+        self.remaining -= bytes;
+        self.bytes_processed.add(bytes);
+    }
+}
+
+/// Narrow a byte count to the width [`Count`] stores, saturating rather than
+/// wrapping. Lossless on 64-bit targets.
+fn saturating_usize(bytes: u64) -> usize {
+    usize::try_from(bytes).unwrap_or(usize::MAX)
+}
+
+impl Drop for ByteProgress {
+    fn drop(&mut self) {
+        let remaining = self.remaining;
+        self.remaining = 0;
+        self.bytes_processed.add(remaining);
+    }
 }
 
 impl ParquetFileMetrics {
@@ -232,6 +318,39 @@ impl ParquetFileMetrics {
             predicate_cache_inner_records,
             predicate_cache_records,
         }
+    }
+
+    /// The `bytes_processed` counter for one file: the total number of bytes the
+    /// scan is finished with, whether they were read or skipped.
+    ///
+    /// Where [`Self::bytes_scanned`] counts only the bytes fetched from the
+    /// object store, this counts every byte the scan has resolved: the bytes it
+    /// read, plus the bytes of the row groups (and whole files) that pruning
+    /// proved cannot contribute. Over the lifetime of a file it therefore sums
+    /// to that file's size — or, for a file split into byte ranges for
+    /// parallelism, to the size of the range — so
+    /// `bytes_processed / total file bytes` is a scan completion fraction,
+    /// which `bytes_scanned` on its own is not: it understates progress by
+    /// however much pruning and projection pushdown saved.
+    ///
+    /// Credited at row-group granularity: a row group's bytes land when the
+    /// scan is done with it. Crediting a row group's bytes progressively as its
+    /// rows are decoded is left to a follow-up.
+    ///
+    /// Built on demand rather than held on [`ParquetFileMetrics`] because only
+    /// [`ByteProgress`] ever touches it, and a public field would make every
+    /// future metric added here a breaking change for anyone constructing the
+    /// struct with a literal.
+    pub(crate) fn bytes_processed_counter(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        filename: &str,
+    ) -> Count {
+        MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::Summary)
+            .with_category(MetricCategory::Bytes)
+            .counter("bytes_processed", partition)
     }
 
     /// Record pages whose page-index pruning was skipped because the containing
