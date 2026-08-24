@@ -3154,6 +3154,11 @@ async fn test_hashjoin_dynamic_filter_survives_probe_subtree_replacement() {
 // `FilterPushdown` that decides whether to keep the join's dynamic filter. Such a
 // rule can bring a consumer back by re-running the pushdown; there is nothing to
 // undo first, because a join with no consumer holds no dynamic filter.
+//
+// Re-running the Post phase is an already supported mode rather than something
+// this test invents: see `post_phase_is_idempotent_on_hash_join` below, added by
+// apache/datafusion#22523 because AQE (datafusion-ballista#1359) re-runs the
+// optimizer chain after every completed stage.
 #[test]
 fn test_hashjoin_dynamic_filter_recreated_when_pushdown_reruns() {
     let (build_side_schema, build_scan, probe_side_schema, _) = hashjoin_pushdown_scans();
