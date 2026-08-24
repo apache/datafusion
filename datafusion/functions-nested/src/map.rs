@@ -328,7 +328,7 @@ fn make_map_batch_internal(
     doc_section(label = "Map Functions"),
     description = "Returns an Arrow map with the specified key-value pairs.\n\n\
     The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
-    syntax_example = "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
+    syntax_example = "map(key, value)\nmap {key: value}\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
     sql_example = r#"
 ```sql
 -- Using map function
@@ -745,9 +745,8 @@ mod tests {
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");
@@ -851,9 +850,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 2, "Should have 2 maps");
@@ -924,9 +922,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");

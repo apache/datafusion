@@ -86,7 +86,7 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
 DataFusion logical plans can be created using the [LogicalPlanBuilder] struct. There is also a [DataFrame] API which is
 a higher-level API that delegates to [LogicalPlanBuilder].
 
-There are several functions that can can be used to create a new builder, such as
+There are several functions that can be used to create a new builder, such as
 
 - `empty` - create an empty plan with no fields
 - `values` - create a plan from a set of literal values

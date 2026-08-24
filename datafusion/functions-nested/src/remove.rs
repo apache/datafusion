@@ -454,14 +454,13 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     element_array: &ArrayRef,
     arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
-    let list_field = match list_array.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => {
-            return exec_err!(
-                "Expected List or LargeList data type, got {:?}",
-                list_array.data_type()
-            );
-        }
+    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
+        list_array.data_type()
+    else {
+        return exec_err!(
+            "Expected List or LargeList data type, got {:?}",
+            list_array.data_type()
+        );
     };
     let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
@@ -567,14 +566,13 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         return Ok(Arc::new(list_array.clone()));
     }
 
-    let list_field = match list_array.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => {
-            return exec_err!(
-                "Expected List or LargeList data type, got {:?}",
-                list_array.data_type()
-            );
-        }
+    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
+        list_array.data_type()
+    else {
+        return exec_err!(
+            "Expected List or LargeList data type, got {:?}",
+            list_array.data_type()
+        );
     };
 
     let list_offsets = list_array.offsets();

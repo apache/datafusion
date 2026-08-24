@@ -182,23 +182,6 @@ impl ExprSimplifier {
     /// representing the number of simplification cycles performed, which can be useful for testing
     /// optimizations.
     ///
-    /// See [Self::simplify] for details and usage examples.
-    #[deprecated(
-        since = "48.0.0",
-        note = "Use `simplify_with_cycle_count_transformed` instead"
-    )]
-    #[expect(unused_mut)]
-    pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
-        let (transformed, cycle_count) =
-            self.simplify_with_cycle_count_transformed(expr)?;
-        Ok((transformed.data, cycle_count))
-    }
-
-    /// Like [Self::simplify], simplifies this [`Expr`] as much as possible, evaluating
-    /// constants and applying algebraic simplifications. Additionally returns a `u32`
-    /// representing the number of simplification cycles performed, which can be useful for testing
-    /// optimizations.
-    ///
     /// # Returns
     ///
     /// A tuple containing:
@@ -1372,7 +1355,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&left, &right, BitwiseXor) => {
+            }) if !info.nullable(&right)? && expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 Transformed::yes(if expr == *right {
                     Expr::Literal(
@@ -1389,7 +1372,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&right, &left, BitwiseXor) => {
+            }) if !info.nullable(&left)? && expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 Transformed::yes(if expr == *left {
                     Expr::Literal(
@@ -2546,6 +2529,36 @@ mod tests {
         assert_eq!(simplify(expr_b), expected_b);
     }
 
+    /// `c3_non_null IN (SELECT a FROM t)`, where `a` has the given nullability.
+    fn in_subquery_expr(a_nullable: bool) -> Expr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, a_nullable)]);
+        let source = Arc::new(LogicalTableSource::new(Arc::new(schema)));
+        let subquery = LogicalPlanBuilder::scan("t", source, None)
+            .unwrap()
+            .project(vec![col("a")])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        in_subquery(col("c3_non_null"), Arc::new(subquery))
+    }
+
+    #[test]
+    fn test_simplify_eq_not_self_in_subquery() {
+        // `expr_a`: even though `c3_non_null` is non-nullable, the `IN` evaluates to NULL
+        // when `c3_non_null` matches no row and the subquery's `a` contains a NULL. So the
+        // expression is nullable and `A = A` must not fold to `true`.
+        let expr_a = in_subquery_expr(true);
+        let expected_a = expr_a.clone().is_not_null().or(lit_bool_null());
+
+        // `expr_b`: neither side can be NULL, so the `IN` is non-nullable and `A = A` is true.
+        let expr_b = in_subquery_expr(false);
+        let expected_b = lit(true);
+
+        assert_eq!(simplify(expr_a.clone().eq(expr_a)), expected_a);
+        assert_eq!(simplify(expr_b.clone().eq(expr_b)), expected_b);
+    }
+
     #[test]
     fn test_simplify_or_true() {
         let expr_a = col("c2").or(lit(true));
@@ -2990,16 +3003,19 @@ mod tests {
         // c2 ^ ((c2 ^ (c2 | c1)) ^ (c1 & c2)) --> (c2 | c1) ^ (c1 & c2)
 
         let expr = bitwise_xor(
-            col("c2"),
+            col("c2_non_null"),
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
         );
 
         let expected = bitwise_xor(
-            bitwise_or(col("c2"), col("c1")),
-            bitwise_and(col("c1"), col("c2")),
+            bitwise_or(col("c2_non_null"), col("c1")),
+            bitwise_and(col("c1"), col("c2_non_null")),
         );
 
         assert_eq!(simplify(expr), expected);
@@ -3008,18 +3024,24 @@ mod tests {
         // c2 ^ (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) --> c2 ^ ((c2 | c1) ^ (c1 & c2))
 
         let expr = bitwise_xor(
-            col("c2"),
+            col("c2_non_null"),
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_xor(
+                    bitwise_and(col("c1"), col("c2_non_null")),
+                    col("c2_non_null"),
+                ),
             ),
         );
 
         let expected = bitwise_xor(
-            col("c2"),
+            col("c2_non_null"),
             bitwise_xor(
-                bitwise_or(col("c2"), col("c1")),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_or(col("c2_non_null"), col("c1")),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
         );
 
@@ -3030,15 +3052,18 @@ mod tests {
 
         let expr = bitwise_xor(
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
-            col("c2"),
+            col("c2_non_null"),
         );
 
         let expected = bitwise_xor(
-            bitwise_or(col("c2"), col("c1")),
-            bitwise_and(col("c1"), col("c2")),
+            bitwise_or(col("c2_non_null"), col("c1")),
+            bitwise_and(col("c1"), col("c2_non_null")),
         );
 
         assert_eq!(simplify(expr), expected);
@@ -3048,21 +3073,45 @@ mod tests {
 
         let expr = bitwise_xor(
             bitwise_xor(
-                bitwise_xor(col("c2"), bitwise_or(col("c2"), col("c1"))),
-                bitwise_xor(bitwise_and(col("c1"), col("c2")), col("c2")),
+                bitwise_xor(
+                    col("c2_non_null"),
+                    bitwise_or(col("c2_non_null"), col("c1")),
+                ),
+                bitwise_xor(
+                    bitwise_and(col("c1"), col("c2_non_null")),
+                    col("c2_non_null"),
+                ),
             ),
-            col("c2"),
+            col("c2_non_null"),
         );
 
         let expected = bitwise_xor(
             bitwise_xor(
-                bitwise_or(col("c2"), col("c1")),
-                bitwise_and(col("c1"), col("c2")),
+                bitwise_or(col("c2_non_null"), col("c1")),
+                bitwise_and(col("c1"), col("c2_non_null")),
             ),
-            col("c2"),
+            col("c2_non_null"),
         );
 
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_does_not_cancel_nullable_bitwise_xor() {
+        let nullable = col("c3");
+        let other = col("c3_non_null");
+
+        let expr = bitwise_xor(nullable.clone(), nullable.clone());
+        assert_eq!(simplify(expr.clone()), expr);
+
+        let expr = bitwise_xor(
+            bitwise_xor(nullable.clone(), other.clone()),
+            nullable.clone(),
+        );
+        assert_eq!(simplify(expr.clone()), expr);
+
+        let expr = bitwise_xor(nullable.clone(), bitwise_xor(other, nullable));
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     #[test]
@@ -3154,13 +3203,13 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_xor() {
         // c4 ^ c4 -> 0
-        let expr = (col("c4")).bitxor(col("c4"));
+        let expr = (col("c4_non_null")).bitxor(col("c4_non_null"));
         let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
 
         // c3 ^ c3 -> 0
-        let expr = col("c3").bitxor(col("c3"));
+        let expr = col("c3_non_null").bitxor(col("c3_non_null"));
         let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
@@ -3720,6 +3769,29 @@ mod tests {
             simplify(Expr::IsNull(Box::new(col("c1_non_null")))),
             lit(false)
         );
+    }
+
+    #[test]
+    fn simplify_scalar_subquery_is_null() {
+        let possibly_empty = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let possibly_empty = scalar_subquery(Arc::new(possibly_empty));
+
+        assert_eq!(
+            simplify(possibly_empty.clone().is_null()),
+            possibly_empty.is_null()
+        );
+
+        let always_one = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let always_one = scalar_subquery(Arc::new(always_one));
+        assert_eq!(simplify(always_one.is_null()), lit(false));
     }
 
     #[test]

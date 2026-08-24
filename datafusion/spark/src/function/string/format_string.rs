@@ -1789,42 +1789,16 @@ impl ConversionSpecifier {
                 }
             }
         }
-        // Take care of padding
-        let NumericParam::Literal(width) = self.width else {
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-            return Ok(());
-        };
-        if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num.push(' ');
-            }
-            writer.push_str(&full_num);
-        } else if self.zero_pad && value.is_finite() {
-            while prefix.len() + number.len() + suffix.len() < width as usize {
-                prefix.push('0');
-            }
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-        } else {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num = " ".to_owned() + &full_num;
-            }
-            writer.push_str(&full_num);
-        };
 
+        self.write_numeric_parts(writer, prefix, &number, &suffix, value.is_finite());
         Ok(())
     }
 
     fn format_signed(&self, writer: &mut String, value: i64) -> Result<()> {
         let negative = value < 0;
-        let abs_val = value.abs();
+        let abs_val = value.unsigned_abs();
 
-        let (sign_prefix, sign_suffix) = if negative && self.negative_in_parentheses {
+        let (prefix, suffix) = if negative && self.negative_in_parentheses {
             ("(".to_owned(), ")".to_owned())
         } else if negative {
             ("-".to_owned(), "".to_owned())
@@ -1836,60 +1810,31 @@ impl ConversionSpecifier {
             ("".to_owned(), "".to_owned())
         };
 
-        let mut mod_spec = *self;
-        mod_spec.width = match self.width {
-            NumericParam::Literal(w) => NumericParam::Literal(
-                w - sign_prefix.len() as i32 - sign_suffix.len() as i32,
-            ),
-            _ => NumericParam::FromArgument,
-        };
-        let mut formatted = String::new();
-        mod_spec.format_unsigned(&mut formatted, abs_val as u64)?;
-        // put the sign a after any leading spaces
-        let mut actual_number = &formatted[0..];
-        let mut leading_spaces = &formatted[0..0];
-        if let Some(first_non_space) = formatted.find(|c| c != ' ') {
-            actual_number = &formatted[first_non_space..];
-            leading_spaces = &formatted[0..first_non_space];
-        }
-        write!(
-            writer,
-            "{}{}{}{}",
-            leading_spaces.to_owned(),
-            sign_prefix,
-            actual_number,
-            sign_suffix
-        )
-        .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+        self.format_decimal_integer(writer, abs_val, prefix, &suffix);
         Ok(())
     }
 
     fn format_unsigned(&self, writer: &mut String, value: u64) -> Result<()> {
         let mut s = String::new();
-        let mut alt_prefix = "";
-        match self.conversion_type {
+        let alt_prefix = match self.conversion_type {
             ConversionType::DecInt => {
-                let num_str = format!("{value}");
-                s = if self.grouping_separator {
-                    insert_thousands_separator(&num_str)
-                } else {
-                    num_str
-                };
+                self.format_decimal_integer(writer, value, String::new(), "");
+                return Ok(());
             }
             ConversionType::HexIntLower => {
-                alt_prefix = "0x";
                 write!(&mut s, "{value:x}")
                     .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+                "0x"
             }
             ConversionType::HexIntUpper => {
-                alt_prefix = "0X";
                 write!(&mut s, "{value:X}")
                     .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+                "0X"
             }
             ConversionType::OctInt => {
-                alt_prefix = "0";
                 write!(&mut s, "{value:o}")
                     .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
+                "0"
             }
             _ => {
                 return exec_err!(
@@ -1897,7 +1842,7 @@ impl ConversionSpecifier {
                     self.conversion_type
                 );
             }
-        }
+        };
         let mut prefix = if self.alt_form {
             alt_prefix.to_owned()
         } else {
@@ -1929,6 +1874,22 @@ impl ConversionSpecifier {
         write!(writer, "{formatted}")
             .map_err(|e| exec_datafusion_err!("Write error: {}", e))?;
         Ok(())
+    }
+
+    fn format_decimal_integer(
+        &self,
+        writer: &mut String,
+        value: u64,
+        prefix: String,
+        suffix: &str,
+    ) {
+        let number = value.to_string();
+        let number = if self.grouping_separator {
+            insert_thousands_separator(&number)
+        } else {
+            number
+        };
+        self.write_numeric_parts(writer, prefix, &number, suffix, true);
     }
 
     fn format_str(&self, writer: &mut String, value: &str) -> Result<()> {
@@ -2076,35 +2037,7 @@ impl ConversionSpecifier {
             }
         };
 
-        // Handle padding
-        let NumericParam::Literal(width) = self.width else {
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-            return Ok(());
-        };
-
-        if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num.push(' ');
-            }
-            writer.push_str(&full_num);
-        } else if self.zero_pad {
-            while prefix.len() + number.len() + suffix.len() < width as usize {
-                prefix.push('0');
-            }
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-        } else {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num = " ".to_owned() + &full_num;
-            }
-            writer.push_str(&full_num);
-        }
-
+        self.write_numeric_parts(writer, prefix, &number, &suffix, true);
         Ok(())
     }
 
@@ -2266,6 +2199,44 @@ impl ConversionSpecifier {
             TimeFormat::DUpper => Ok(dt.format("%m/%d/%y").to_string()),
             TimeFormat::FUpper => Ok(dt.format("%Y-%m-%d").to_string()),
             TimeFormat::CLower => Ok(dt.format("%a %b %d %H:%M:%S UTC %Y").to_string()),
+        }
+    }
+
+    fn write_numeric_parts(
+        &self,
+        writer: &mut String,
+        mut prefix: String,
+        number: &str,
+        suffix: &str,
+        zero_pad_allowed: bool,
+    ) {
+        // Handle padding
+        let NumericParam::Literal(width) = self.width else {
+            writer.push_str(&prefix);
+            writer.push_str(number);
+            writer.push_str(suffix);
+            return;
+        };
+
+        if self.left_adj {
+            let mut full_num = prefix + number + suffix;
+            while full_num.len() < width as usize {
+                full_num.push(' ');
+            }
+            writer.push_str(&full_num);
+        } else if self.zero_pad && zero_pad_allowed {
+            while prefix.len() + number.len() + suffix.len() < width as usize {
+                prefix.push('0');
+            }
+            writer.push_str(&prefix);
+            writer.push_str(number);
+            writer.push_str(suffix);
+        } else {
+            let mut full_num = prefix + number + suffix;
+            while full_num.len() < width as usize {
+                full_num = " ".to_owned() + &full_num;
+            }
+            writer.push_str(&full_num);
         }
     }
 }
@@ -2585,6 +2556,80 @@ mod tests {
             let formatter = Formatter::parse(fmt, &data_types)?;
             let args = vec![value; arg_count];
             assert_eq!(formatter.format(&args)?, expected, "{fmt}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_numeric_final_assembly() -> Result<()> {
+        let cases = [
+            ("%(08d", ScalarValue::Int64(Some(-12)), "(000012)"),
+            ("%+08d", ScalarValue::Int64(Some(12)), "+0000012"),
+            ("%+08d", ScalarValue::Int64(Some(-12)), "-0000012"),
+            ("% 08d", ScalarValue::Int64(Some(12)), " 0000012"),
+            (
+                "%+,12d",
+                ScalarValue::Int64(Some(1_234_567)),
+                "  +1,234,567",
+            ),
+            (
+                "%+,12d",
+                ScalarValue::Int64(Some(-1_234_567)),
+                "  -1,234,567",
+            ),
+            (
+                "%(012.2f",
+                ScalarValue::Decimal128(Some(-123450), 10, 2),
+                "(0001234.50)",
+            ),
+            (
+                "%(012.2f",
+                ScalarValue::Decimal256(Some(i256::from(-123450)), 10, 2),
+                "(0001234.50)",
+            ),
+            (
+                "%010.2f",
+                ScalarValue::Float64(Some(f64::NAN)),
+                "       NaN",
+            ),
+            (
+                "%010.2f",
+                ScalarValue::Float64(Some(f64::INFINITY)),
+                "  Infinity",
+            ),
+            (
+                "%010.2f",
+                ScalarValue::Float64(Some(f64::NEG_INFINITY)),
+                " -Infinity",
+            ),
+            ("%-(8d", ScalarValue::Int64(Some(-12)), "(12)    "),
+        ];
+
+        for (format, value, expected) in cases {
+            let formatter = Formatter::parse(format, &[value.data_type()])?;
+            assert_eq!(formatter.format(&[value])?, expected, "{format}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_unsigned_decimal_final_assembly_policy() -> Result<()> {
+        let cases = [
+            ("%0,12d", 1_234_567, "0001,234,567"),
+            ("%-,12d", 1_234_567, "1,234,567   "),
+            ("%12d", 1_234_567, "     1234567"),
+            ("%+08d", 42, "00000042"),
+            ("% 08d", 42, "00000042"),
+            ("%(08d", 42, "00000042"),
+        ];
+
+        for (format, value, expected) in cases {
+            let formatter = Formatter::parse(format, &[DataType::UInt64])?;
+            assert_eq!(
+                formatter.format(&[ScalarValue::UInt64(Some(value))])?,
+                expected,
+                "{format}"
+            );
         }
         Ok(())
     }
@@ -2936,6 +2981,54 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
             ],
             Ok(Some("     (1,234.50)")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_ignore_zero_padding_for_float_nan() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%010.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NAN))),
+            ],
+            Ok(Some("       NaN")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_ignore_zero_padding_for_float_inf() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%010.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::INFINITY))),
+            ],
+            Ok(Some("  Infinity")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_parentheses_zero_padding_decimal() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(0,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 2, 2)),
+            ],
+            Ok(Some("(000001,234.50)")),
             &str,
             Utf8,
             StringArray

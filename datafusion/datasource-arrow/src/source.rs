@@ -40,6 +40,7 @@ use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -314,7 +315,7 @@ impl FileSource for ArrowSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+        Arc::new(self.clone())
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
@@ -392,6 +393,88 @@ impl FileSource for ArrowSource {
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
+    }
+
+    /// Emit an `ArrowScan` node wrapping the shared base config and recording
+    /// which Arrow IPC format (file or stream) this source reads.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let format = match self.format {
+            ArrowFormat::File => protobuf::ArrowIpcFormat::File,
+            ArrowFormat::Stream => protobuf::ArrowIpcFormat::Stream,
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ArrowScan(
+                protobuf::ArrowScanExecNode {
+                    base_conf: Some(base.try_to_proto(ctx)?),
+                    format: format as i32,
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ArrowSource {
+    /// Reconstructs a `DataSourceExec` from a protobuf `ArrowScan`.
+    ///
+    /// Payloads encoded before the `format` field existed leave it unset;
+    /// those decode as the IPC file format, matching the historical behavior.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_proto_models::protobuf;
+
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::ArrowScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not an ArrowScan"
+            );
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ArrowScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        let format = protobuf::ArrowIpcFormat::try_from(scan.format).map_err(|_| {
+            datafusion_common::internal_datafusion_err!(
+                "Unknown ArrowIpcFormat: {}",
+                scan.format
+            )
+        })?;
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let source = match format {
+            protobuf::ArrowIpcFormat::Stream => {
+                ArrowSource::new_stream_file_source(table_schema)
+            }
+            protobuf::ArrowIpcFormat::File => ArrowSource::new_file_source(table_schema),
+        };
+        let scan_conf = FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
+        Ok(DataSourceExec::from_data_source(scan_conf))
+    }
 }
 
 /// `FileOpener` wrapper for both Arrow IPC file and stream formats
@@ -444,7 +527,7 @@ impl From<ArrowSource> for Arc<dyn FileSource> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Read};
+    use std::fs::File;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_ipc::reader::{FileReader, StreamReader};
@@ -460,11 +543,8 @@ mod tests {
         for filename in ["example.arrow", "example_stream.arrow"] {
             let path = format!("tests/data/{filename}");
             let path_str = path.as_str();
-            let mut file = File::open(path_str)?;
-            let file_size = file.metadata()?.len();
-
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)?;
+            let buffer = std::fs::read(path_str)?;
+            let file_size = buffer.len() as u64;
             let bytes = Bytes::from(buffer);
 
             let object_store = Arc::new(InMemory::new());
@@ -504,11 +584,8 @@ mod tests {
         let filename = "example.arrow";
         let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
-        let mut file = File::open(path_str)?;
-        let file_size = file.metadata()?.len();
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let buffer = std::fs::read(path_str)?;
+        let file_size = buffer.len() as u64;
         let bytes = Bytes::from(buffer);
 
         let object_store = Arc::new(InMemory::new());
@@ -545,11 +622,8 @@ mod tests {
         let filename = "example_stream.arrow";
         let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
-        let mut file = File::open(path_str)?;
-        let file_size = file.metadata()?.len();
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let buffer = std::fs::read(path_str)?;
+        let file_size = buffer.len() as u64;
         let bytes = Bytes::from(buffer);
 
         let object_store = Arc::new(InMemory::new());
@@ -610,11 +684,8 @@ mod tests {
         let filename = "example_stream.arrow";
         let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
-        let mut file = File::open(path_str)?;
-        let file_size = file.metadata()?.len();
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let buffer = std::fs::read(path_str)?;
+        let file_size = buffer.len() as u64;
         let bytes = Bytes::from(buffer);
 
         let object_store = Arc::new(InMemory::new());

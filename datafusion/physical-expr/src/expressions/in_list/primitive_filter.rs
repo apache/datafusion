@@ -19,23 +19,134 @@
 //!
 //! This module provides membership tests for Arrow primitive types.
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
-use arrow::buffer::{BooleanBuffer, NullBuffer, ScalarBuffer};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
 use std::hash::{Hash, Hasher};
-use std::mem::size_of;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
-use super::result::{build_in_list_result, build_result_from_contains};
-use super::static_filter::{StaticFilter, handle_dictionary};
+use super::branchless_filter::{BranchlessFilter, BranchlessFilterType};
+use super::result::build_in_list_result;
+use super::static_filter::{StaticFilter, StaticFilterRef, handle_dictionary};
+
+/// Selects an optimized filter for a primitive representation.
+///
+/// Supported short lists use a branchless filter. Larger supported lists use a
+/// bitmap or hash-set filter. Returns `None` for primitive types without a
+/// specialized filter. Representation adapters call this after conversion and
+/// use the same cutoffs and fallback policy as native primitive arrays.
+pub(super) fn instantiate_primitive_filter(
+    in_array: &ArrayRef,
+) -> Result<Option<StaticFilterRef>> {
+    if let Some(filter) = instantiate_branchless_filter(in_array)? {
+        return Ok(Some(filter));
+    }
+
+    let filter: StaticFilterRef = match in_array.data_type() {
+        DataType::Int8 => Arc::new(BitmapFilter::<Int8Type>::try_new(in_array)?),
+        DataType::UInt8 => Arc::new(BitmapFilter::<UInt8Type>::try_new(in_array)?),
+        DataType::Int16 => Arc::new(BitmapFilter::<Int16Type>::try_new(in_array)?),
+        DataType::UInt16 => Arc::new(BitmapFilter::<UInt16Type>::try_new(in_array)?),
+        DataType::Float16 => Arc::new(BitmapFilter::<Float16Type>::try_new(in_array)?),
+        DataType::Int32 => {
+            Arc::new(PrimitiveHashSetFilter::<Int32Type>::try_new(in_array)?)
+        }
+        DataType::Int64 => {
+            Arc::new(PrimitiveHashSetFilter::<Int64Type>::try_new(in_array)?)
+        }
+        DataType::UInt32 => {
+            Arc::new(PrimitiveHashSetFilter::<UInt32Type>::try_new(in_array)?)
+        }
+        DataType::UInt64 => {
+            Arc::new(PrimitiveHashSetFilter::<UInt64Type>::try_new(in_array)?)
+        }
+        DataType::Decimal128(_, _) => {
+            Arc::new(PrimitiveHashSetFilter::<Decimal128Type>::try_new(in_array)?)
+        }
+        // Float primitive types use ordered wrapper keys for Hash/Eq.
+        DataType::Float32 => Arc::new(PrimitiveHashSetFilter::<
+            Float32Type,
+            OrderedFloat32,
+        >::try_new(in_array)?),
+        DataType::Float64 => Arc::new(PrimitiveHashSetFilter::<
+            Float64Type,
+            OrderedFloat64,
+        >::try_new(in_array)?),
+        _ => return Ok(None),
+    };
+
+    Ok(Some(filter))
+}
+
+fn instantiate_branchless_filter(in_array: &ArrayRef) -> Result<Option<StaticFilterRef>> {
+    let non_null_count = in_array.len() - in_array.null_count();
+
+    macro_rules! branchless {
+        ($arrow_type:ty) => {{
+            // Larger lists use the standard primitive filter. `try_new`
+            // checks the limit again when called directly.
+            if non_null_count > <$arrow_type as BranchlessFilterType>::MAX_LIST_LEN {
+                Ok(None)
+            } else {
+                let filter: StaticFilterRef =
+                    Arc::new(BranchlessFilter::<$arrow_type>::try_new(in_array)?);
+                Ok(Some(filter))
+            }
+        }};
+    }
+
+    match in_array.data_type() {
+        DataType::Int8 => branchless!(Int8Type),
+        DataType::UInt8 => branchless!(UInt8Type),
+        DataType::Int16 => branchless!(Int16Type),
+        DataType::UInt16 => branchless!(UInt16Type),
+        DataType::Float16 => branchless!(Float16Type),
+        DataType::Int32 => branchless!(Int32Type),
+        DataType::UInt32 => branchless!(UInt32Type),
+        DataType::Float32 => branchless!(Float32Type),
+        DataType::Date32 => branchless!(Date32Type),
+        DataType::Time32(unit) => match unit {
+            TimeUnit::Second => branchless!(Time32SecondType),
+            TimeUnit::Millisecond => branchless!(Time32MillisecondType),
+            _ => Ok(None),
+        },
+        DataType::Int64 => branchless!(Int64Type),
+        DataType::UInt64 => branchless!(UInt64Type),
+        DataType::Float64 => branchless!(Float64Type),
+        DataType::Date64 => branchless!(Date64Type),
+        DataType::Time64(unit) => match unit {
+            TimeUnit::Microsecond => branchless!(Time64MicrosecondType),
+            TimeUnit::Nanosecond => branchless!(Time64NanosecondType),
+            _ => Ok(None),
+        },
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => branchless!(TimestampSecondType),
+            TimeUnit::Millisecond => branchless!(TimestampMillisecondType),
+            TimeUnit::Microsecond => branchless!(TimestampMicrosecondType),
+            TimeUnit::Nanosecond => branchless!(TimestampNanosecondType),
+        },
+        DataType::Duration(unit) => match unit {
+            TimeUnit::Second => branchless!(DurationSecondType),
+            TimeUnit::Millisecond => branchless!(DurationMillisecondType),
+            TimeUnit::Microsecond => branchless!(DurationMicrosecondType),
+            TimeUnit::Nanosecond => branchless!(DurationNanosecondType),
+        },
+        DataType::Decimal128(_, _) => branchless!(Decimal128Type),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            branchless!(IntervalMonthDayNanoType)
+        }
+        _ => Ok(None),
+    }
+}
 
 /// Storage for the bits used by [`BitmapFilter`].
 ///
 /// `BitmapFilter` represents an `IN` list with one bit for each possible
 /// value, so membership checks become direct bit tests. This trait lets the
 /// same filter code use different storage sizes for different integer widths.
-pub(super) trait BitmapStorage: Send + Sync {
+trait BitmapStorage: Send + Sync {
     fn new_zeroed() -> Self;
     fn set_bit(&mut self, index: usize);
     fn get_bit(&self, index: usize) -> bool;
@@ -82,9 +193,7 @@ impl BitmapStorage for Box<[u64; 1024]> {
 /// supplies the bitmap storage size and maps values to their bit-pattern index
 /// for the primitive domains that are small enough to represent with one bit
 /// per possible value.
-pub(super) trait BitmapFilterType:
-    ArrowPrimitiveType + Send + Sync + 'static
-{
+trait BitmapFilterType: ArrowPrimitiveType + Send + Sync + 'static {
     type Storage: BitmapStorage;
 
     /// Returns the index in the bitmap to check for this value.
@@ -152,7 +261,7 @@ impl BitmapFilterType for Float16Type {
 /// the bit selected by each value. Evaluating input values checks the same bit
 /// position. Null handling and `NOT IN` inversion are handled by
 /// `build_in_list_result`.
-pub(super) struct BitmapFilter<T: BitmapFilterType> {
+struct BitmapFilter<T: BitmapFilterType> {
     null_count: usize,
     bits: T::Storage,
 }
@@ -161,7 +270,7 @@ impl<T> BitmapFilter<T>
 where
     T: BitmapFilterType,
 {
-    pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
+    fn try_new(in_array: &ArrayRef) -> Result<Self> {
         let prim_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
             exec_datafusion_err!("BitmapFilter: expected {} array", T::DATA_TYPE)
         })?;
@@ -223,276 +332,6 @@ where
     }
 }
 
-pub(super) type BranchlessNative<T> =
-    <<T as BranchlessFilterType>::CompareType as ArrowPrimitiveType>::Native;
-
-/// Maximum list size for branchless lookup on 1-byte primitives.
-///
-/// Sixteen 1-byte values fit in one 128-bit SIMD vector, so this keeps the
-/// branchless list small enough for a single vectorized membership check.
-const BRANCHLESS_MAX_1B: usize = 16;
-
-/// Maximum list size for branchless lookup on 2-byte primitives.
-///
-/// Eight 2-byte values fit in one 128-bit SIMD vector, so this keeps the
-/// branchless list small enough for a single vectorized membership check.
-const BRANCHLESS_MAX_2B: usize = 8;
-
-/// Maximum list size for branchless lookup on 4-byte primitives.
-///
-/// Thirty-two 4-byte values keep the inline list at 128 bytes. Beyond that,
-/// the comparison chain and filter footprint grow enough that the hash/generic
-/// fallback is a better fit.
-const BRANCHLESS_MAX_4B: usize = 32;
-
-/// Maximum list size for branchless lookup on 8-byte primitives.
-///
-/// Sixteen 8-byte values use the same 128-byte inline-list budget as 4-byte
-/// primitives. Larger lists are left to the hash/generic fallback.
-const BRANCHLESS_MAX_8B: usize = 16;
-
-/// Maximum list size for branchless lookup on 16-byte primitives.
-///
-/// These comparisons are wider, so this path is limited to four values.
-/// Larger lists are left to the generic fallback.
-const BRANCHLESS_MAX_16B: usize = 4;
-
-/// Arrow primitive types supported by [`BranchlessFilter`].
-///
-/// `T` is the logical Arrow type accepted by the filter. `CompareType` is the
-/// same-width type used for the fixed comparison chain. Signed integers,
-/// floats, and temporal values use an unsigned comparison type so they compare
-/// by their raw bit pattern.
-pub(super) trait BranchlessFilterType:
-    ArrowPrimitiveType + Send + Sync + 'static
-{
-    type CompareType: ArrowPrimitiveType + Send + Sync + 'static;
-
-    /// Maximum number of non-null IN-list values to handle with
-    /// [`BranchlessFilter`] for this primitive type.
-    const MAX_LIST_LEN: usize;
-}
-
-macro_rules! branchless_filter_type {
-    ($logical:ty, $compare:ty, $max_len:expr) => {
-        // The branchless filter reads the same Arrow value buffer as the
-        // comparison type. That is only valid when both native types have the
-        // same width, so catch any bad mapping here at compile time.
-        const _: () = assert!(
-            size_of::<<$logical as ArrowPrimitiveType>::Native>()
-                == size_of::<<$compare as ArrowPrimitiveType>::Native>(),
-            "BranchlessFilterType::CompareType must use the same native width"
-        );
-
-        impl BranchlessFilterType for $logical {
-            type CompareType = $compare;
-            const MAX_LIST_LEN: usize = $max_len;
-        }
-    };
-}
-
-branchless_filter_type!(Int8Type, UInt8Type, BRANCHLESS_MAX_1B);
-branchless_filter_type!(UInt8Type, UInt8Type, BRANCHLESS_MAX_1B);
-branchless_filter_type!(Int16Type, UInt16Type, BRANCHLESS_MAX_2B);
-branchless_filter_type!(UInt16Type, UInt16Type, BRANCHLESS_MAX_2B);
-branchless_filter_type!(Float16Type, UInt16Type, BRANCHLESS_MAX_2B);
-
-branchless_filter_type!(Int32Type, UInt32Type, BRANCHLESS_MAX_4B);
-branchless_filter_type!(UInt32Type, UInt32Type, BRANCHLESS_MAX_4B);
-branchless_filter_type!(Float32Type, UInt32Type, BRANCHLESS_MAX_4B);
-branchless_filter_type!(Date32Type, UInt32Type, BRANCHLESS_MAX_4B);
-branchless_filter_type!(Time32SecondType, UInt32Type, BRANCHLESS_MAX_4B);
-branchless_filter_type!(Time32MillisecondType, UInt32Type, BRANCHLESS_MAX_4B);
-
-branchless_filter_type!(Int64Type, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(UInt64Type, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(Float64Type, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(Date64Type, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(Time64MicrosecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(Time64NanosecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(TimestampSecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(TimestampMillisecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(TimestampMicrosecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(TimestampNanosecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(DurationSecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(DurationMillisecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(DurationMicrosecondType, UInt64Type, BRANCHLESS_MAX_8B);
-branchless_filter_type!(DurationNanosecondType, UInt64Type, BRANCHLESS_MAX_8B);
-
-branchless_filter_type!(Decimal128Type, Decimal128Type, BRANCHLESS_MAX_16B);
-branchless_filter_type!(
-    IntervalMonthDayNanoType,
-    IntervalMonthDayNanoType,
-    BRANCHLESS_MAX_16B
-);
-
-/// Checks each input value against the `IN`-list values.
-type MembershipCheck<C> = fn(in_list_values: &[C], input_values: &[C]) -> BooleanBuffer;
-
-/// A branchless filter for fixed-width primitive `IN` lists up to
-/// `T::MAX_LIST_LEN` values.
-///
-/// The filter stores the non-null `IN`-list values in a slice and chooses a
-/// comparison function for that length. Keeping the length out of
-/// `BranchlessFilter` avoids generating a full copy of the filter for every
-/// supported length.
-pub(super) struct BranchlessFilter<T: BranchlessFilterType> {
-    expected_data_type: DataType,
-    null_count: usize,
-    in_list_values: Box<[BranchlessNative<T>]>,
-    check_values: MembershipCheck<BranchlessNative<T>>,
-}
-
-impl<T> BranchlessFilter<T>
-where
-    T: BranchlessFilterType,
-    BranchlessNative<T>: Copy + PartialEq,
-{
-    pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
-        let in_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
-            exec_datafusion_err!("BranchlessFilter: expected {} array", T::DATA_TYPE)
-        })?;
-        let non_null_count = in_array.len() - in_array.null_count();
-        // `try_new` can be called on its own, so check the limit here too.
-        if non_null_count > T::MAX_LIST_LEN {
-            return Err(exec_datafusion_err!(
-                "BranchlessFilter: supports at most {} non-null values, got {non_null_count}",
-                T::MAX_LIST_LEN
-            ));
-        }
-
-        let all_values = branchless_values::<T>(in_array);
-        let mut in_list_values = Vec::with_capacity(non_null_count);
-
-        match in_array.nulls() {
-            None => {
-                in_list_values.extend(all_values.iter().copied());
-            }
-            Some(nulls) => {
-                for row in
-                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
-                {
-                    in_list_values.push(all_values[row]);
-                }
-            }
-        }
-
-        debug_assert_eq!(in_list_values.len(), non_null_count);
-        let in_list_values = in_list_values.into_boxed_slice();
-        let check_values = membership_check_for_len::<T>(in_list_values.len());
-
-        Ok(Self {
-            expected_data_type: in_array.data_type().clone(),
-            null_count: in_array.null_count(),
-            in_list_values,
-            check_values,
-        })
-    }
-}
-
-impl<T> StaticFilter for BranchlessFilter<T>
-where
-    T: BranchlessFilterType,
-    BranchlessNative<T>: Copy + PartialEq + Send + Sync,
-{
-    fn null_count(&self) -> usize {
-        self.null_count
-    }
-
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
-
-        // Arrow compatibility ignores timestamp timezone and decimal precision/scale
-        // while still requiring the same primitive representation.
-        if !PrimitiveArray::<T>::is_compatible(v.data_type()) {
-            return Err(exec_datafusion_err!(
-                "BranchlessFilter: expected {} array, got {}",
-                self.expected_data_type,
-                v.data_type()
-            ));
-        }
-
-        let v = v.as_primitive_opt::<T>().ok_or_else(|| {
-            exec_datafusion_err!("BranchlessFilter: expected {} array", T::DATA_TYPE)
-        })?;
-        let input_values = branchless_values::<T>(v);
-        let matches =
-            (self.check_values)(self.in_list_values.as_ref(), input_values.as_ref());
-        Ok(build_result_from_contains(
-            v.nulls(),
-            self.null_count > 0,
-            negated,
-            matches,
-        ))
-    }
-}
-
-/// Picks the comparison function for `len` non-null `IN`-list values.
-///
-/// A length of zero is used when the list contains only nulls. The comparisons
-/// return false, and the caller then applies the usual SQL null behavior.
-fn membership_check_for_len<T>(len: usize) -> MembershipCheck<BranchlessNative<T>>
-where
-    T: BranchlessFilterType,
-    BranchlessNative<T>: Copy + PartialEq,
-{
-    macro_rules! choose {
-        ($($n:literal),* $(,)?) => {
-            match len {
-                $($n => check_values::<BranchlessNative<T>, $n>,)*
-                _ => unreachable!("list length exceeds the configured limit"),
-            }
-        };
-    }
-
-    // Avoid creating checks for lengths a type does not support.
-    match T::MAX_LIST_LEN {
-        4 => choose!(0, 1, 2, 3, 4),
-        8 => choose!(0, 1, 2, 3, 4, 5, 6, 7, 8),
-        16 => choose!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
-        32 => choose!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
-        ),
-        _ => unreachable!("list-size limits must be 4, 8, 16, or 32"),
-    }
-}
-
-#[inline]
-fn check_values<C, const N: usize>(
-    in_list_values: &[C],
-    input_values: &[C],
-) -> BooleanBuffer
-where
-    C: Copy + PartialEq,
-{
-    let in_list_values: &[C; N] = in_list_values
-        .try_into()
-        .expect("comparison length matches IN-list values");
-
-    BooleanBuffer::collect_bool(input_values.len(), |i| {
-        // SAFETY: `collect_bool` invokes this closure for indices in
-        // `0..input_values.len()`.
-        let input_value = unsafe { *input_values.get_unchecked(i) };
-        // `|` checks every list value; `||` would stop after the first match.
-        in_list_values
-            .iter()
-            .fold(false, |acc, &value| acc | (value == input_value))
-    })
-}
-
-fn branchless_values<T>(array: &PrimitiveArray<T>) -> ScalarBuffer<BranchlessNative<T>>
-where
-    T: BranchlessFilterType,
-{
-    let data = array.to_data();
-    ScalarBuffer::<BranchlessNative<T>>::new(
-        data.buffers()[0].clone(),
-        data.offset(),
-        data.len(),
-    )
-}
-
 /// Wrapper for f32 that implements Hash and Eq using bit comparison.
 /// This treats NaN values as equal to each other when they have the same bit pattern.
 #[derive(Clone, Copy)]
@@ -543,157 +382,77 @@ impl From<f64> for OrderedFloat64 {
     }
 }
 
-// Macro to generate specialized StaticFilter implementations for primitive types
-macro_rules! primitive_static_filter {
-    ($Name:ident, $ArrowType:ty) => {
-        primitive_static_filter!(
-            $Name,
-            $ArrowType,
-            <$ArrowType as ArrowPrimitiveType>::Native,
-            |v| v
-        );
-    };
-    ($Name:ident, $ArrowType:ty, $SetValueType:ty, $to_set_value:expr) => {
-        pub(super) struct $Name {
-            null_count: usize,
-            values: HashSet<$SetValueType>,
-        }
-
-        impl $Name {
-            pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
-                let in_array =
-                    in_array.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "Failed to downcast an array to a '{}' array",
-                            stringify!($ArrowType)
-                        )
-                    })?;
-
-                let mut values = HashSet::with_capacity(in_array.len());
-                let null_count = in_array.null_count();
-
-                for v in in_array.iter().flatten() {
-                    values.insert(($to_set_value)(v));
-                }
-
-                Ok(Self { null_count, values })
-            }
-        }
-
-        impl StaticFilter for $Name {
-            fn null_count(&self) -> usize {
-                self.null_count
-            }
-
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-                handle_dictionary!(self, v, negated);
-
-                let v = v.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
-
-                let haystack_has_nulls = self.null_count > 0;
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
-                // ("-" means the value doesn't affect the result)
-                //
-                // | needle_null | haystack_null | negated | in set? | result |
-                // |-------------|---------------|---------|---------|--------|
-                // | true        | -             | false   | -       | null   |
-                // | true        | -             | true    | -       | null   |
-                // | false       | true          | false   | yes     | true   |
-                // | false       | true          | false   | no      | null   |
-                // | false       | true          | true    | yes     | false  |
-                // | false       | true          | true    | no      | null   |
-                // | false       | false         | false   | yes     | true   |
-                // | false       | false         | false   | no      | false  |
-                // | false       | false         | true    | yes     | false  |
-                // | false       | false         | true    | no      | true   |
-
-                // Compute the "contains" result using collect_bool (fast batched approach)
-                // This ignores nulls - we handle them separately
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                };
-
-                // Compute the null mask
-                // Output is null when:
-                // 1. needle value is null, OR
-                // 2. needle value is not in set AND haystack has nulls
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => {
-                        // No nulls anywhere
-                        None
-                    }
-                    (true, false) => {
-                        // Only needle has nulls - just use needle's null mask
-                        needle_nulls.cloned()
-                    }
-                    (false, true) => {
-                        // Only haystack has nulls - result is null when value not in set
-                        // Valid (not null) when original "in set" is true
-                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        // Both have nulls - combine needle nulls with haystack-induced nulls
-                        let needle_validity =
-                            needle_nulls.map(|n| n.inner().clone()).unwrap_or_else(
-                                || BooleanBuffer::new_set(needle_values.len()),
-                            );
-
-                        // Valid when original "in set" is true (see above)
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-
-                        // Combined validity: valid only where both are valid
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
-            }
-        }
-    };
+/// Hash-set membership for primitive types.
+///
+/// `K` defaults to the Arrow type's native value. Floats use an ordered wrapper
+/// key because their native values do not implement [`Eq`] and [`Hash`].
+struct PrimitiveHashSetFilter<
+    T: ArrowPrimitiveType,
+    K = <T as ArrowPrimitiveType>::Native,
+> {
+    null_count: usize,
+    values: HashSet<K>,
+    _marker: PhantomData<T>,
 }
 
-primitive_static_filter!(Int32StaticFilter, Int32Type);
-primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt32StaticFilter, UInt32Type);
-primitive_static_filter!(UInt64StaticFilter, UInt64Type);
+impl<T, K> PrimitiveHashSetFilter<T, K>
+where
+    T: ArrowPrimitiveType,
+    T::Native: Copy,
+    K: From<T::Native> + Eq + Hash,
+{
+    fn try_new(in_array: &ArrayRef) -> Result<Self> {
+        let in_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveHashSetFilter: expected {} array",
+                T::DATA_TYPE
+            )
+        })?;
+        let mut values = HashSet::with_capacity(in_array.len() - in_array.null_count());
+        for value in in_array.iter().flatten() {
+            values.insert(K::from(value));
+        }
 
-// Macro to generate specialized StaticFilter implementations for float types
-// Floats require a wrapper type (OrderedFloat*) to implement Hash/Eq due to NaN semantics
-macro_rules! float_static_filter {
-    ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
-        primitive_static_filter!($Name, $ArrowType, $OrderedType, <$OrderedType>::from);
-    };
+        Ok(Self {
+            null_count: in_array.null_count(),
+            values,
+            _marker: PhantomData,
+        })
+    }
 }
 
-// Generate specialized filters for float types using ordered wrappers
-float_static_filter!(Float32StaticFilter, Float32Type, OrderedFloat32);
-float_static_filter!(Float64StaticFilter, Float64Type, OrderedFloat64);
+impl<T, K> StaticFilter for PrimitiveHashSetFilter<T, K>
+where
+    T: ArrowPrimitiveType + Send + Sync + 'static,
+    T::Native: Copy + Send + Sync,
+    K: From<T::Native> + Eq + Hash + Send + Sync + 'static,
+{
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let v = v.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveHashSetFilter: expected {} array",
+                T::DATA_TYPE
+            )
+        })?;
+        let input_values = v.values();
+        Ok(build_in_list_result(
+            v.len(),
+            v.nulls(),
+            self.null_count > 0,
+            negated,
+            |index| {
+                let key = K::from(input_values[index]);
+                self.values.contains(&key)
+            },
+        ))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -701,11 +460,14 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        Decimal128Array, DictionaryArray, Float16Array, Float32Array, Float64Array,
-        Int8Array, Int16Array, IntervalMonthDayNanoArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, UInt8Array, UInt16Array,
+        DictionaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
+        UInt8Array, UInt16Array, UInt32Array,
     };
     use half::f16;
+
+    fn uint32_array(values: Vec<Option<u32>>) -> ArrayRef {
+        Arc::new(UInt32Array::from(values))
+    }
 
     fn assert_contains(
         filter: &dyn StaticFilter,
@@ -717,6 +479,60 @@ mod tests {
             BooleanArray::from(expected)
         );
         Ok(())
+    }
+
+    #[test]
+    fn branchless_routing_respects_max_list_len() -> Result<()> {
+        let max_len = <UInt32Type as BranchlessFilterType>::MAX_LIST_LEN;
+
+        let values = (0..max_len)
+            .map(|value| Some(value as u32))
+            .collect::<Vec<_>>();
+        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_some());
+
+        let values = (0..=max_len)
+            .map(|value| Some(value as u32))
+            .collect::<Vec<_>>();
+        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn branchless_routing_handles_zero_non_null_values() -> Result<()> {
+        let array = uint32_array(vec![None; 3]);
+
+        assert!(instantiate_branchless_filter(&array)?.is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_hash_filter_handles_float_keys() -> Result<()> {
+        let nan32 = f32::NAN;
+        let other_nan32 = f32::from_bits(nan32.to_bits() + 1);
+        let haystack: ArrayRef = Arc::new(Float32Array::from(vec![0.0, nan32]));
+        let filter =
+            PrimitiveHashSetFilter::<Float32Type, OrderedFloat32>::try_new(&haystack)?;
+        let needles = Float32Array::from(vec![
+            Some(0.0),
+            Some(-0.0),
+            Some(nan32),
+            Some(other_nan32),
+            None,
+        ]);
+        assert_contains(
+            &filter,
+            &needles,
+            vec![Some(true), Some(false), Some(true), Some(false), None],
+        )?;
+
+        let nan64 = f64::NAN;
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, nan64]));
+        let filter =
+            PrimitiveHashSetFilter::<Float64Type, OrderedFloat64>::try_new(&haystack)?;
+        let needles = Float64Array::from(vec![Some(1.0), Some(nan64), Some(2.0)]);
+        assert_contains(&filter, &needles, vec![Some(true), Some(true), Some(false)])
     }
 
     #[test]
@@ -853,208 +669,6 @@ mod tests {
         assert_eq!(
             filter.contains(&needles, true)?,
             BooleanArray::from(vec![Some(false), Some(false), None, None])
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_u8_handles_nulls() -> Result<()> {
-        let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)]));
-        let filter = BranchlessFilter::<UInt8Type>::try_new(&haystack)?;
-        let needles = UInt8Array::from(vec![Some(1), Some(2), None, Some(3)]);
-
-        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])?;
-        assert_eq!(
-            filter.contains(&needles, true)?,
-            BooleanArray::from(vec![Some(false), None, None, Some(false)])
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_all_null_list_preserves_sql_null_semantics() -> Result<()> {
-        let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![None, None]));
-        let filter = BranchlessFilter::<UInt8Type>::try_new(&haystack)?;
-        let needles = UInt8Array::from(vec![Some(1), None]);
-        let expected = BooleanArray::from(vec![None, None]);
-
-        assert_eq!(filter.contains(&needles, false)?, expected);
-        assert_eq!(filter.contains(&needles, true)?, expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_i8_handles_signed_boundaries_and_slices() -> Result<()> {
-        let haystack: ArrayRef = Arc::new(
-            Int8Array::from(vec![Some(99), Some(i8::MIN), None, Some(-1), Some(42)])
-                .slice(1, 3),
-        );
-        let filter = BranchlessFilter::<Int8Type>::try_new(&haystack)?;
-        let needles =
-            Int8Array::from(vec![Some(7), Some(i8::MIN), Some(-1), None]).slice(1, 3);
-
-        assert_eq!(
-            filter.contains(&needles, false)?,
-            BooleanArray::from(vec![Some(true), Some(true), None])
-        );
-        assert_eq!(
-            filter.contains(&needles, true)?,
-            BooleanArray::from(vec![Some(false), Some(false), None])
-        );
-
-        let wrong_type = UInt8Array::from(vec![Some(128), Some(u8::MAX)]);
-        let err = filter.contains(&wrong_type, false).unwrap_err().to_string();
-        assert!(err.contains("expected Int8 array, got UInt8"), "{err}");
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_f16_handles_bit_patterns_and_slices() -> Result<()> {
-        let nan_a = f16::from_bits(0x7e01);
-        let nan_b = f16::from_bits(0x7e02);
-        let haystack: ArrayRef = Arc::new(
-            Float16Array::from(vec![
-                Some(f16::from_f32(9.0)),
-                Some(f16::from_f32(-0.0)),
-                Some(nan_a),
-                None,
-            ])
-            .slice(1, 3),
-        );
-        let filter = BranchlessFilter::<Float16Type>::try_new(&haystack)?;
-        let needles = Float16Array::from(vec![
-            Some(f16::from_f32(0.0)),
-            Some(f16::from_f32(-0.0)),
-            Some(nan_a),
-            Some(nan_b),
-            None,
-        ]);
-
-        assert_eq!(
-            filter.contains(&needles, false)?,
-            BooleanArray::from(vec![None, Some(true), Some(true), None, None])
-        );
-        assert_eq!(
-            filter.contains(&needles, true)?,
-            BooleanArray::from(vec![None, Some(false), Some(false), None, None])
-        );
-
-        let wrong_type = UInt16Array::from(vec![Some(0x8000), Some(0x7e01)]);
-        let err = filter.contains(&wrong_type, false).unwrap_err().to_string();
-        assert!(err.contains("expected Float16 array, got UInt16"), "{err}");
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_floats_use_bit_equality() -> Result<()> {
-        let nan_a = f32::from_bits(0x7fc0_0001);
-        let nan_b = f32::from_bits(0x7fc0_0002);
-        let haystack: ArrayRef =
-            Arc::new(Float32Array::from(vec![Some(-0.0), Some(nan_a)]));
-        let filter = BranchlessFilter::<Float32Type>::try_new(&haystack)?;
-        let needles =
-            Float32Array::from(vec![Some(0.0), Some(-0.0), Some(nan_a), Some(nan_b)]);
-
-        assert_eq!(
-            filter.contains(&needles, false)?,
-            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(false)])
-        );
-
-        let nan_a = f64::from_bits(0x7ff8_0000_0000_0001);
-        let nan_b = f64::from_bits(0x7ff8_0000_0000_0002);
-        let haystack: ArrayRef =
-            Arc::new(Float64Array::from(vec![Some(-0.0), Some(nan_a)]));
-        let filter = BranchlessFilter::<Float64Type>::try_new(&haystack)?;
-        let needles =
-            Float64Array::from(vec![Some(0.0), Some(-0.0), Some(nan_a), Some(nan_b)]);
-
-        assert_eq!(
-            filter.contains(&needles, false)?,
-            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(false)])
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_timestamp_uses_physical_compatibility() -> Result<()> {
-        let haystack: ArrayRef = Arc::new(
-            TimestampNanosecondArray::from(vec![Some(1), Some(3)]).with_timezone("UTC"),
-        );
-        let filter = BranchlessFilter::<TimestampNanosecondType>::try_new(&haystack)?;
-        let needles = TimestampNanosecondArray::from(vec![Some(1), Some(2), None])
-            .with_timezone("UTC");
-
-        assert_contains(&filter, &needles, vec![Some(true), Some(false), None])?;
-
-        let different_timezone = TimestampNanosecondArray::from(vec![Some(1), Some(2)])
-            .with_timezone("Europe/Paris");
-        assert_contains(&filter, &different_timezone, vec![Some(true), Some(false)])?;
-
-        let different_unit = TimestampMillisecondArray::from(vec![Some(1)]);
-        let err = filter
-            .contains(&different_unit, false)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Timestamp(ns"), "{err}");
-        assert!(err.contains("Timestamp(ms"), "{err}");
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_decimal128_handles_precision_scale_and_nulls() -> Result<()> {
-        let haystack: ArrayRef = Arc::new(
-            Decimal128Array::from(vec![Some(12345), None, Some(-700), Some(42)])
-                .with_precision_and_scale(10, 2)?,
-        );
-        let filter = BranchlessFilter::<Decimal128Type>::try_new(&haystack)?;
-        let needles =
-            Decimal128Array::from(vec![Some(12345), Some(999), None, Some(-700)])
-                .with_precision_and_scale(10, 2)?;
-
-        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])?;
-        assert_eq!(
-            filter.contains(&needles, true)?,
-            BooleanArray::from(vec![Some(false), None, None, Some(false)])
-        );
-
-        let compatible_metadata =
-            Decimal128Array::from(vec![Some(12345)]).with_precision_and_scale(11, 3)?;
-        assert_contains(&filter, &compatible_metadata, vec![Some(true)])?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn branchless_filter_interval_month_day_nano_handles_nulls() -> Result<()> {
-        let one_month = IntervalMonthDayNanoType::make_value(1, 0, 0);
-        let two_days = IntervalMonthDayNanoType::make_value(0, 2, 0);
-        let three_nanos = IntervalMonthDayNanoType::make_value(0, 0, 3);
-        let absent = IntervalMonthDayNanoType::make_value(4, 5, 6);
-        let haystack: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
-            Some(one_month),
-            None,
-            Some(two_days),
-            Some(three_nanos),
-        ]));
-        let filter = BranchlessFilter::<IntervalMonthDayNanoType>::try_new(&haystack)?;
-        let needles = IntervalMonthDayNanoArray::from(vec![
-            Some(one_month),
-            Some(absent),
-            None,
-            Some(three_nanos),
-        ]);
-
-        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])?;
-        assert_eq!(
-            filter.contains(&needles, true)?,
-            BooleanArray::from(vec![Some(false), None, None, Some(false)])
         );
 
         Ok(())

@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_common::display::GraphvizBuilder;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
@@ -516,21 +516,6 @@ impl<'a> DisplayableExecutionPlan<'a> {
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
             metric_names: self.metric_names.clone(),
-        }
-    }
-
-    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
-    pub fn to_stringified(
-        &self,
-        verbose: bool,
-        plan_type: PlanType,
-        explain_format: DisplayFormatType,
-    ) -> StringifiedPlan {
-        match (&explain_format, &plan_type) {
-            (DisplayFormatType::TreeRender, PlanType::FinalPhysicalPlan) => {
-                StringifiedPlan::new(plan_type, self.tree_render().to_string())
-            }
-            _ => StringifiedPlan::new(plan_type, self.indent(verbose).to_string()),
         }
     }
 }
@@ -1352,7 +1337,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
+            let extra_left_space = usize::from(!total_spaces.is_multiple_of(2));
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),
@@ -1504,11 +1489,17 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{Result, Statistics, internal_datafusion_err};
+    use datafusion_common::{
+        Result, Statistics, internal_datafusion_err, tree_node::TreeNodeRecursion,
+    };
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use crate::statistics::StatisticsArgs;
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, ExecutionPlan, PlanProperties,
+        ReplaceChildrenOptions,
+    };
 
     use super::DisplayableExecutionPlan;
 
@@ -1542,11 +1533,29 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -1626,10 +1635,11 @@ mod tests {
         use crate::empty::EmptyExec;
         use crate::filter::FilterExec;
         use crate::projection::ProjectionExec;
+        use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
         use datafusion_physical_expr::expressions::{binary, col, lit};
         use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
-        fn sample_plan() -> Arc<dyn crate::ExecutionPlan> {
+        fn sample_plan() -> Arc<dyn ExecutionPlan> {
             let schema = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1706,11 +1716,33 @@ mod tests {
                 fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
                     vec![&self.inner]
                 }
-                fn with_new_children(
+                fn apply_expressions(
+                    &self,
+                    _f: &mut dyn FnMut(
+                        &Arc<dyn PhysicalExpr>,
+                    ) -> Result<
+                        datafusion_common::tree_node::TreeNodeRecursion,
+                    >,
+                ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>
+                {
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                }
+
+                fn replace_children(
                     self: Arc<Self>,
                     _: Vec<Arc<dyn ExecutionPlan>>,
+                    _: ReplaceChildrenOptions,
                 ) -> Result<Arc<dyn ExecutionPlan>> {
                     unimplemented!()
+                }
+                fn with_new_children(
+                    self: Arc<Self>,
+                    children: Vec<Arc<dyn ExecutionPlan>>,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    self.replace_children(
+                        children,
+                        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                    )
                 }
                 fn execute(
                     &self,

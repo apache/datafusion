@@ -121,9 +121,11 @@ use datafusion_expr::{
 ///   to qualified or unqualified fields by name.
 /// * `execution_props` - Per-execution properties such as the query start time.
 /// * `planning_ctx` - The [`PhysicalPlanningContext`] used to resolve
-///   `Expr::ScalarSubquery` nodes. The physical planner threads the subquery
-///   index map and shared results container from its `ScalarSubqueryExec`
-///   construction into calls to `create_physical_expr`. Callers creating
+///   `Expr::ScalarSubquery` and `Expr::LambdaVariable` nodes. The physical
+///   planner threads the subquery index map and shared results container from
+///   its `ScalarSubqueryExec` construction into calls to
+///   `create_physical_expr`; the lambda variable qualifiers are added by this
+///   function itself as it descends into lambda bodies. Callers creating
 ///   physical expressions outside of physical planning should pass
 ///   `&PhysicalPlanningContext::default()`; converting a scalar subquery then returns a
 ///   planning error.
@@ -534,10 +536,9 @@ pub fn create_physical_expr(
                         );
                     }
                     let dt = schema.field(0).data_type().clone();
-                    let nullable = schema.field(0).is_nullable();
                     Ok(Arc::new(ScalarSubqueryExpr::new(
                         dt,
-                        nullable,
+                        e.nullable(input_dfschema)?,
                         index,
                         planning_ctx.results().clone(),
                     )))
@@ -612,15 +613,15 @@ pub fn create_physical_expr(
                             input_dfschema.metadata().clone(),
                         )?;
 
-                        let execution_props = execution_props
+                        let planning_ctx = planning_ctx
                             .clone()
                             .with_qualified_lambda_variables(&qualifier, &lambda.params);
 
                         create_physical_expr(
                             arg,
                             &lambda_schema,
-                            &execution_props,
-                            planning_ctx,
+                            execution_props,
+                            &planning_ctx,
                         )
                     }
                     _ => create_physical_expr(
@@ -657,12 +658,14 @@ pub fn create_physical_expr(
                 plan_datafusion_err!("unresolved LambdaVariable {name}")
             })?;
 
-            let qualifier = execution_props
-                .lambda_variable_qualifier
-                .get(name)
-                .ok_or_else(|| {
-                    plan_datafusion_err!("qualifier for lambda variable {name} not found")
-                })?;
+            let qualifier =
+                planning_ctx
+                    .lambda_variable_qualifier(name)
+                    .ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "qualifier for lambda variable {name} not found"
+                        )
+                    })?;
 
             let index = input_dfschema
                 .index_of_column_by_name(Some(qualifier), name)
@@ -740,7 +743,11 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_expr::col;
+    use datafusion_common::HashMap;
+    use datafusion_expr::physical_planning_context::{
+        ScalarSubqueryResults, SubqueryIndex,
+    };
+    use datafusion_expr::{LogicalPlanBuilder, col, scalar_subquery};
 
     use super::*;
 
@@ -790,6 +797,35 @@ mod tests {
             &result,
             &(Arc::new(BooleanArray::from(vec![true, false, false, false,])) as ArrayRef)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_subquery_nullability_accounts_for_min_rows() -> Result<()> {
+        for (produce_one_row, expected_nullable) in [(false, true), (true, false)] {
+            let plan = LogicalPlanBuilder::empty(produce_one_row)
+                .project(vec![lit(1)])?
+                .build()?;
+            let expr = scalar_subquery(Arc::new(plan));
+            let Expr::ScalarSubquery(subquery) = &expr else {
+                unreachable!()
+            };
+
+            let index = SubqueryIndex::new(0);
+            let planning_ctx = PhysicalPlanningContext::new(
+                HashMap::from([(subquery.clone(), index)]),
+                ScalarSubqueryResults::new(1),
+            );
+            let physical_expr = create_physical_expr(
+                &expr,
+                &DFSchema::empty(),
+                &ExecutionProps::new(),
+                &planning_ctx,
+            )?;
+
+            assert_eq!(physical_expr.nullable(&Schema::empty())?, expected_nullable);
+        }
 
         Ok(())
     }

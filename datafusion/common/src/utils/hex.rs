@@ -23,6 +23,8 @@
 //! integer, trimming leading zeros. All four take a [`HexCase`] to choose
 //! between lowercase and uppercase digits.
 
+use arrow::datatypes::ArrowNativeType;
+
 use crate::Result;
 use crate::error::_internal_err;
 
@@ -72,6 +74,44 @@ impl HexCase {
     }
 }
 
+/// Trait for converting integer types to hexadecimal in a buffer
+pub trait ToHex: ArrowNativeType {
+    /// Writes the hex representation into `buf` and returns the written
+    /// subslice. Digits are right-aligned with leading zeros trimmed.
+    fn write_hex(self, case: HexCase, buf: &mut [u8; 16]) -> &[u8];
+}
+
+macro_rules! impl_to_hex_signed {
+    ($ty:ty) => {
+        impl ToHex for $ty {
+            #[inline(always)]
+            fn write_hex(self, case: HexCase, buf: &mut [u8; 16]) -> &[u8] {
+                encode_u64(self as i64 as u64, case, buf)
+            }
+        }
+    };
+}
+
+macro_rules! impl_to_hex_unsigned {
+    ($ty:ty) => {
+        impl ToHex for $ty {
+            #[inline(always)]
+            fn write_hex(self, case: HexCase, buf: &mut [u8; 16]) -> &[u8] {
+                encode_u64(self as u64, case, buf)
+            }
+        }
+    };
+}
+
+impl_to_hex_signed!(i8);
+impl_to_hex_signed!(i16);
+impl_to_hex_signed!(i32);
+impl_to_hex_signed!(i64);
+impl_to_hex_unsigned!(u8);
+impl_to_hex_unsigned!(u16);
+impl_to_hex_unsigned!(u32);
+impl_to_hex_unsigned!(u64);
+
 /// Appends the hex encoding of `bytes` to `out`.
 ///
 /// Allocates only through `out`'s own growth. Callers that must bound or guard
@@ -120,6 +160,8 @@ pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Res
 }
 
 /// Returns the hex encoding of `bytes` as an owned `String`.
+///
+/// Prefer [`encode_bytes_into`] when you already have a reusable output buffer.
 ///
 /// # Example
 ///

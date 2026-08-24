@@ -57,9 +57,10 @@ use datafusion_expr::type_coercion::{
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
-    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, is_false,
-    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator,
+    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -128,6 +129,21 @@ fn analyze_internal(
         schema.merge(&source_schema);
     }
 
+    // MERGE expressions (ON / WHEN clauses) reference the target table, which
+    // is not one of `plan.inputs()`. Rebuild the target schema from the DML's
+    // `table_name` and `target` so those columns resolve during coercion.
+    if let LogicalPlan::Dml(DmlStatement {
+        op: WriteOp::MergeInto(_),
+        table_name,
+        target,
+        ..
+    }) = &plan
+    {
+        let target_schema =
+            DFSchema::try_from_qualified_schema(table_name.clone(), &target.schema())?;
+        schema.merge(&target_schema);
+    }
+
     // merge the outer schema for correlated subqueries
     // like case:
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
@@ -177,8 +193,58 @@ impl<'a> TypeCoercionRewriter<'a> {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
+            LogicalPlan::Dml(dml) => self.coerce_dml(dml),
             _ => Ok(plan),
         }
+    }
+
+    fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
+        let WriteOp::MergeInto(merge_op) = &dml.op else {
+            return Ok(LogicalPlan::Dml(dml));
+        };
+
+        let target_schema = DFSchema::try_from_qualified_schema(
+            dml.table_name.clone(),
+            &dml.target.schema(),
+        )?;
+        let mut merge_op = (**merge_op).clone();
+        merge_op.on = self.coerce_predicate(merge_op.on, "MERGE ON condition")?;
+        for clause in &mut merge_op.clauses {
+            clause.predicate = clause
+                .predicate
+                .take()
+                .map(|expr| self.coerce_predicate(expr, "MERGE WHEN condition"))
+                .transpose()?;
+
+            match &mut clause.action {
+                datafusion_expr::dml::MergeIntoAction::Update(assignments) => {
+                    for (column, value) in assignments {
+                        let field = target_schema.field_with_unqualified_name(column)?;
+                        *value = value.clone().cast_to(field.data_type(), self.schema)?;
+                    }
+                }
+                datafusion_expr::dml::MergeIntoAction::Insert { columns, values } => {
+                    if columns.is_empty() {
+                        for (value, field) in
+                            values.iter_mut().zip(target_schema.fields())
+                        {
+                            *value =
+                                value.clone().cast_to(field.data_type(), self.schema)?;
+                        }
+                    } else {
+                        for (column, value) in columns.iter().zip(values) {
+                            let field =
+                                target_schema.field_with_unqualified_name(column)?;
+                            *value =
+                                value.clone().cast_to(field.data_type(), self.schema)?;
+                        }
+                    }
+                }
+                datafusion_expr::dml::MergeIntoAction::Delete => {}
+            }
+        }
+        dml.op = WriteOp::MergeInto(Box::new(merge_op));
+        Ok(LogicalPlan::Dml(dml))
     }
 
     /// Coerce join equality expressions and join filter
@@ -212,7 +278,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         // Join filter must be boolean
         join.filter = join
             .filter
-            .map(|expr| self.coerce_join_filter(expr))
+            .map(|expr| self.coerce_predicate(expr, "Join condition"))
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
@@ -280,12 +346,14 @@ impl<'a> TypeCoercionRewriter<'a> {
         }))
     }
 
-    fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
+    fn coerce_predicate(&self, expr: Expr, description: &str) -> Result<Expr> {
         let expr_type = expr.get_type(self.schema)?;
         match expr_type {
             DataType::Boolean => Ok(expr),
             DataType::Null => expr.cast_to(&DataType::Boolean, self.schema),
-            other => plan_err!("Join condition must be boolean type, but got {other:?}"),
+            other => {
+                plan_err!("{description} must be boolean type, but got {other:?}")
+            }
         }
     }
 
@@ -1003,6 +1071,7 @@ fn coerce_frame_bound(
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
+        || col_type.is_binary()
         || col_type.is_null()
         || matches!(
             col_type,
@@ -1037,7 +1106,20 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                extract_window_frame_target_type(&col_type)?
+                let target_type = extract_window_frame_target_type(&col_type)?;
+                // A finite offset bound (e.g. `5 PRECEDING`) is computed as
+                // `current_value ± offset`, so it is only meaningful for target
+                // types that support arithmetic. Strings, binaries, booleans
+                // and lists are orderable -- which is all a free range frame
+                // needs -- but have no such arithmetic.
+                let supports_offset_arithmetic =
+                    target_type.is_numeric() || is_interval(&target_type);
+                if !supports_offset_arithmetic && !window_frame.free_range() {
+                    return plan_err!(
+                        "RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type {target_type}"
+                    );
+                }
+                target_type
             } else {
                 return internal_err!("ORDER BY column cannot be empty");
             }
@@ -1593,6 +1675,88 @@ mod test {
             EmptyRelation: rows=0
         "
         )
+    }
+
+    #[test]
+    fn merge_into_resolves_and_coerces_target_and_source_columns() -> Result<()> {
+        use datafusion_expr::dml::{
+            MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+        };
+        use datafusion_expr::logical_plan::table_scan;
+        use datafusion_expr::{DmlStatement, WriteOp};
+
+        // Target table `target(id: UInt32)`.
+        let target_table_name = TableReference::bare("target");
+        let target_arrow_schema =
+            Schema::new(vec![Field::new("id", DataType::UInt32, false)]);
+        let target_plan =
+            table_scan(Some(target_table_name.clone()), &target_arrow_schema, None)?
+                .build()?;
+        let target_source = match &target_plan {
+            LogicalPlan::TableScan(ts) => Arc::clone(&ts.source),
+            _ => unreachable!("table_scan() always builds a TableScan"),
+        };
+
+        // Source plan `source(id: Int64)` — deliberately a different numeric
+        // type than `target.id` so the `ON` comparison needs a CAST.
+        let source_arrow_schema =
+            Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let source_plan =
+            table_scan(Some("source"), &source_arrow_schema, None)?.build()?;
+
+        // `ON target.id = source.id`. Resolving `target.id` requires the
+        // target schema to be visible to the analyzer, which only sees
+        // `plan.inputs()` (the source plan) by default.
+        let on = col("target.id").eq(col("source.id"));
+        let merge_op = MergeIntoOp {
+            on,
+            clauses: vec![
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::Matched,
+                    predicate: None,
+                    action: MergeIntoAction::Update(vec![(
+                        "id".to_string(),
+                        col("source.id"),
+                    )]),
+                },
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::NotMatched,
+                    predicate: None,
+                    action: MergeIntoAction::Insert {
+                        columns: vec!["id".to_string()],
+                        values: vec![col("source.id")],
+                    },
+                },
+            ],
+        };
+        let plan = LogicalPlan::Dml(DmlStatement::new(
+            target_table_name,
+            target_source,
+            WriteOp::MergeInto(Box::new(merge_op)),
+            Arc::new(source_plan),
+        ));
+
+        let analyzed = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(plan, &ConfigOptions::default(), |_, _| {})?;
+        let LogicalPlan::Dml(dml) = analyzed else {
+            panic!("expected Dml");
+        };
+        let WriteOp::MergeInto(merge_op) = dml.op else {
+            panic!("expected MergeInto");
+        };
+        assert_eq!(
+            merge_op.on.to_string(),
+            "CAST(target.id AS Int64) = source.id"
+        );
+        let MergeIntoAction::Update(assignments) = &merge_op.clauses[0].action else {
+            panic!("expected UPDATE");
+        };
+        assert_eq!(assignments[0].1.to_string(), "CAST(source.id AS UInt32)");
+        let MergeIntoAction::Insert { values, .. } = &merge_op.clauses[1].action else {
+            panic!("expected INSERT");
+        };
+        assert_eq!(values[0].to_string(), "CAST(source.id AS UInt32)");
+        Ok(())
     }
 
     #[test]
@@ -2570,6 +2734,10 @@ mod test {
         )
     }
 
+    #[expect(
+        clippy::unnecessary_box_returns,
+        reason = "`Case` stores boxed expressions, so returning the box reuses the allocation"
+    )]
     fn cast_if_not_same_type(
         expr: Box<Expr>,
         data_type: &DataType,

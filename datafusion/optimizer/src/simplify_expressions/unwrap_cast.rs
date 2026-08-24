@@ -118,12 +118,10 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
             Expr::TryCast(TryCast {
                 expr: left_expr,
                 field,
-                ..
             })
             | Expr::Cast(Cast {
                 expr: left_expr,
                 field,
-                ..
             }),
             Expr::Literal(lit_val, _),
         ) => {
@@ -161,12 +159,10 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
     let (Expr::TryCast(TryCast {
         expr: left_expr,
         field,
-        ..
     })
     | Expr::Cast(Cast {
         expr: left_expr,
         field,
-        ..
     })) = expr
     else {
         return false;
