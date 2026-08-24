@@ -330,7 +330,7 @@ pub trait StatisticsProvider: Debug + Send + Sync {
 /// "default" provider is unnecessary. Kept for backward compatibility; do not
 /// add it to a provider chain.
 #[deprecated(
-    since = "55.0.0",
+    since = "56.0.0",
     note = "redundant: the statistics walk falls back to `statistics_from_inputs` when the provider chain delegates or is empty; register no terminal provider"
 )]
 #[derive(Debug, Default)]
@@ -436,7 +436,7 @@ impl StatisticsRegistry {
     /// statistics for an existing operator without that operator declaring
     /// anything.
     #[deprecated(
-        since = "55.0.0",
+        since = "56.0.0",
         note = "use `StatisticsContext::new_with_registry(registry).compute_extended(plan, &StatisticsArgs::new())`"
     )]
     pub fn compute(&self, plan: &dyn ExecutionPlan) -> Result<ExtendedStatistics> {
@@ -450,7 +450,7 @@ impl StatisticsRegistry {
     ///
     /// Convenience method for callers that don't need extensions.
     #[deprecated(
-        since = "55.0.0",
+        since = "56.0.0",
         note = "use `StatisticsContext::new_with_registry(registry).compute(plan, &StatisticsArgs::new())`"
     )]
     pub fn compute_base(&self, plan: &dyn ExecutionPlan) -> Result<Statistics> {
