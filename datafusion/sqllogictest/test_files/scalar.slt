@@ -1864,6 +1864,26 @@ true
 false
 true
 
+# Aggregate CSE preserves the non-nullability of truth predicates
+# issue: https://github.com/apache/datafusion/issues/24096
+query IIIIIII
+SELECT
+  SUM(CASE WHEN b IS TRUE THEN 1 ELSE 0 END),
+  COUNT(CASE WHEN b IS TRUE THEN 1 END),
+  SUM(CASE WHEN b IS FALSE THEN 1 ELSE 0 END),
+  SUM(CASE WHEN b IS NOT TRUE THEN 1 ELSE 0 END),
+  SUM(CASE WHEN b IS NOT FALSE THEN 1 ELSE 0 END),
+  SUM(CASE WHEN b IS UNKNOWN THEN 1 ELSE 0 END),
+  SUM(CASE WHEN b IS NOT UNKNOWN THEN 1 ELSE 0 END)
+FROM (
+  VALUES
+    (TRUE),
+    (FALSE),
+    (CAST(NULL AS BOOLEAN))
+) AS t(b);
+----
+1 1 1 2 2 1 2
+
 
 # query_without_from()
 
