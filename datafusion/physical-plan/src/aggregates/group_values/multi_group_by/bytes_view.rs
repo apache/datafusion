@@ -355,7 +355,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         unsafe {
             Arc::new(GenericByteViewArray::<B>::new_unchecked(
                 views,
-                completed,
+                completed.into(),
                 null_buffer,
             ))
         }
@@ -410,7 +410,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             unsafe {
                 return Arc::new(GenericByteViewArray::<B>::new_unchecked(
                     views,
-                    Vec::new(),
+                    Vec::new().into(),
                     null_buffer,
                 ));
             }
@@ -461,7 +461,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         unsafe {
             Arc::new(GenericByteViewArray::<B>::new_unchecked(
                 views,
-                buffers,
+                buffers.into(),
                 null_buffer,
             ))
         }

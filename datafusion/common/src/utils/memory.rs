@@ -314,7 +314,7 @@ impl RecordBatchMemoryCounter {
         array: &GenericByteViewArray<T>,
     ) {
         self.count_buffer_memory_size(array.views().inner());
-        for buffer in array.data_buffers() {
+        for buffer in array.data_buffers().iter() {
             self.count_buffer_memory_size(buffer);
         }
     }
