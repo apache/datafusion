@@ -108,13 +108,13 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Null row case, set and return
         if arr.is_null(row) {
-            self.nulls.append(true);
+            self.nulls.append_null();
             self.views.push(0);
             return;
         }
 
         // Not null row case
-        self.nulls.append(false);
+        self.nulls.append_non_null();
         self.do_append_val_inner(arr, row);
     }
 
@@ -166,7 +166,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             }
 
             Nulls::None => {
-                self.nulls.append_n(rows.len(), false);
+                self.nulls.append_n_non_nulls(rows.len());
                 if arr.data_buffers().is_empty() {
                     // Fast path: all strings are inline (≤12 bytes).
                     // The input array's u128 views are already in the correct format;
@@ -189,7 +189,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             }
 
             Nulls::All => {
-                self.nulls.append_n(rows.len(), true);
+                self.nulls.append_n_nulls(rows.len());
                 let new_len = self.views.len() + rows.len();
                 self.views.resize(new_len, 0);
             }
