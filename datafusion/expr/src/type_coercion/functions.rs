@@ -1654,7 +1654,8 @@ mod tests {
         // Timestamp, but a REE-encoded column (e.g. a segment written with
         // REE-dict encoding for that field) should still coerce against
         // them via the wrapped value type.
-        let type_from = run_end_encoded_of(DataType::Timestamp(TimeUnit::Nanosecond, None));
+        let type_from =
+            run_end_encoded_of(DataType::Timestamp(TimeUnit::Nanosecond, None));
         let type_into = DataType::Timestamp(TimeUnit::Nanosecond, None);
         assert_eq!(
             coerced_from(&type_into, &type_from),
