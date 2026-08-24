@@ -999,13 +999,10 @@ impl HashJoinExec {
 
     /// Set the dynamic filter on this hash join.
     ///
-    /// Holding a dynamic filter is what makes the join compute and publish
-    /// build-side bounds during execution, so callers are asserting that
-    /// something will consume the filter. The filter pushdown rule only sets one
-    /// after finding a consumer for it in the probe subtree; callers wiring a
-    /// filter up by hand (for example to carry it across a network boundary)
-    /// take on that check themselves.
-    ///
+    /// Setting a dynamic filter is what makes the join compute and publish
+    /// build-side bounds during execution. [`Self::handle_child_pushdown_result`]
+    /// sets one after finding a consumer for it in the probe side. Callers wiring a
+    /// filter up by hand take on that check themselves.
     /// Resets any internal state that depends on any existing dynamic filter.
     ///
     /// Validates that the filter's children reference valid columns in
