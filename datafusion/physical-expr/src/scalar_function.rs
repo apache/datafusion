@@ -708,8 +708,8 @@ mod tests {
     use super::*;
     use crate::expressions::Column;
     use arrow::array::DictionaryArray;
-    use arrow::array::{Int32Array, StringArray};
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::array::{Int32Array, StringArray, StructArray, UInt32Array};
+    use arrow::datatypes::{Field, Int32Type, UInt32Type};
     use datafusion_expr::{ScalarUDFImpl, Signature};
     use datafusion_physical_expr_common::physical_expr::is_volatile;
     use std::hash::{Hash, Hasher};
@@ -750,6 +750,8 @@ mod tests {
         return_type: DataType,
         strict: bool,
         fail_if_contains: Option<&'static str>,
+        /// Answer NULL for a NULL input without declaring `is_strict`.
+        null_in_null_out: bool,
     }
 
     impl PartialEq for ObservingUdf {
@@ -820,7 +822,13 @@ mod tests {
                     dictionary.with_values(Arc::new(converted)),
                 ));
             }
-            let values: Int32Array = (0..len).map(|i| Some(i as i32)).collect();
+            let nulls = match &args.args[0] {
+                ColumnarValue::Array(array) if self.null_in_null_out => {
+                    array.logical_nulls()
+                }
+                _ => None,
+            };
+            let values = Int32Array::new((0..len as i32).collect(), nulls);
             Ok(ColumnarValue::Array(Arc::new(values)))
         }
     }
@@ -833,7 +841,13 @@ mod tests {
         saw_dictionary: Arc<std::sync::atomic::AtomicBool>,
     }
 
-    impl PeelFixture {}
+    impl PeelFixture {
+        /// Another batch of the same column chunk: new keys, the very same
+        /// values array, which is what the memo keys on.
+        fn batch_over(&self, keys: Vec<Option<i32>>) -> RecordBatch {
+            dictionary_batch(Int32Array::from(keys), &self.values)
+        }
+    }
 
     /// What a peeling test varies. Everything not named takes the default:
     /// an immutable elementwise function returning `Int32` over the three
@@ -846,6 +860,8 @@ mod tests {
         return_type: DataType,
         strict: bool,
         fail_if_contains: Option<&'static str>,
+        /// Answer NULL for a NULL input without declaring `is_strict`.
+        null_in_null_out: bool,
     }
 
     impl Default for PeelSetup {
@@ -858,6 +874,7 @@ mod tests {
                 return_type: DataType::Int32,
                 strict: false,
                 fail_if_contains: None,
+                null_in_null_out: false,
             }
         }
     }
@@ -875,6 +892,7 @@ mod tests {
                 return_type: self.return_type.clone(),
                 strict: self.strict,
                 fail_if_contains: self.fail_if_contains,
+                null_in_null_out: self.null_in_null_out,
             }));
 
             let values = self.values;
@@ -908,31 +926,36 @@ mod tests {
         Int32Array::from(vec![0, 1, 0, 2, 1, 0, 2, 0])
     }
 
-    /// `keys` over the default values, wrapped in a `ScalarFunctionExpr`.
-    fn peel_fixture(
-        keys: Int32Array,
-        volatility: Volatility,
-        elementwise: bool,
-        return_type: DataType,
-    ) -> PeelFixture {
-        PeelSetup {
-            keys,
-            volatility,
-            elementwise,
-            return_type,
-            ..Default::default()
-        }
-        .build()
+    /// `keys_8_over_3` with its second key null.
+    fn keys_8_over_3_with_a_null() -> Int32Array {
+        Int32Array::from(vec![
+            Some(0),
+            None,
+            Some(1),
+            Some(2),
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(0),
+        ])
+    }
+
+    fn dictionary_of_int32() -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32))
+    }
+
+    /// The rows of an `Int32` result, dictionary or flat.
+    fn flattened(array: &ArrayRef) -> Vec<Option<i32>> {
+        arrow::compute::cast(array, &DataType::Int32)
+            .unwrap()
+            .as_primitive::<Int32Type>()
+            .iter()
+            .collect()
     }
 
     #[test]
     fn peel_evaluates_once_per_distinct_value() {
-        let f = peel_fixture(
-            keys_8_over_3(),
-            Volatility::Immutable,
-            true,
-            DataType::Int32,
-        );
+        let f = PeelSetup::default().build();
         let out = f.expr.evaluate(&f.batch).unwrap();
 
         // Three distinct values seen instead of eight rows...
@@ -949,20 +972,22 @@ mod tests {
 
     #[test]
     fn peel_skipped_when_flag_is_off() {
-        let f = peel_fixture(
-            keys_8_over_3(),
-            Volatility::Immutable,
-            false,
-            DataType::Int32,
-        );
+        let f = PeelSetup {
+            elementwise: false,
+            ..Default::default()
+        }
+        .build();
         f.expr.evaluate(&f.batch).unwrap();
         assert_eq!(*f.seen.lock().unwrap(), vec![8]);
     }
 
     #[test]
     fn peel_skipped_for_volatile_functions() {
-        let f =
-            peel_fixture(keys_8_over_3(), Volatility::Volatile, true, DataType::Int32);
+        let f = PeelSetup {
+            volatility: Volatility::Volatile,
+            ..Default::default()
+        }
+        .build();
         f.expr.evaluate(&f.batch).unwrap();
         assert_eq!(*f.seen.lock().unwrap(), vec![8]);
     }
@@ -982,7 +1007,11 @@ mod tests {
             Some(2),
             Some(0),
         ]);
-        let f = peel_fixture(keys, Volatility::Immutable, true, DataType::Int32);
+        let f = PeelSetup {
+            keys,
+            ..Default::default()
+        }
+        .build();
         let out = f.expr.evaluate(&f.batch).unwrap();
         assert_eq!(*f.seen.lock().unwrap(), vec![4]);
         let ColumnarValue::Array(array) = out else {
@@ -991,6 +1020,70 @@ mod tests {
         assert_eq!(
             array.as_primitive::<Int32Type>().values(),
             &[0, 3, 1, 2, 0, 1, 2, 0]
+        );
+    }
+
+    #[test]
+    fn null_keys_stay_null_where_f_null_is_null() {
+        // A function that answers NULL for NULL without declaring it strict
+        // takes the guarded tier; its dictionary result must carry the nulls
+        // on the keys, where consumers of a dictionary read them.
+        let f = PeelSetup {
+            keys: keys_8_over_3_with_a_null(),
+            return_type: dictionary_of_int32(),
+            null_in_null_out: true,
+            ..Default::default()
+        }
+        .build();
+        let out = f.expr.evaluate(&f.batch).unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![4]);
+        let ColumnarValue::Array(array) = out else {
+            panic!("expected an array");
+        };
+        assert_eq!(array.as_dictionary::<Int32Type>().keys().null_count(), 1);
+        assert!(array.is_null(1));
+        assert_eq!(
+            flattened(&array),
+            vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(0)
+            ]
+        );
+    }
+
+    #[test]
+    fn null_keys_answer_f_null_where_it_is_not_null() {
+        // Where `f(NULL)` is a value, the rows with null keys get it, and
+        // nothing is null.
+        let f = PeelSetup {
+            keys: keys_8_over_3_with_a_null(),
+            return_type: dictionary_of_int32(),
+            ..Default::default()
+        }
+        .build();
+        let out = f.expr.evaluate(&f.batch).unwrap();
+        let ColumnarValue::Array(array) = out else {
+            panic!("expected an array");
+        };
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(
+            flattened(&array),
+            vec![
+                Some(0),
+                Some(3),
+                Some(1),
+                Some(2),
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(0)
+            ]
         );
     }
 
@@ -1006,7 +1099,11 @@ mod tests {
                 true, false, true, true, true, true, true, true,
             ])),
         );
-        let f = peel_fixture(keys, Volatility::Immutable, true, DataType::Int32);
+        let f = PeelSetup {
+            keys,
+            ..Default::default()
+        }
+        .build();
         f.expr.evaluate(&f.batch).unwrap();
         // Only value slot 0 is live; +1 appended NULL slot. Slot 1 ("cd") is
         // never evaluated despite the garbage key pointing at it.
@@ -1027,6 +1124,7 @@ mod tests {
             return_type: DataType::Int32,
             strict: true,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let keys = Int32Array::new(
             vec![0, 9999, 1, 2, 0, 1, 2, 0].into(),
@@ -1056,7 +1154,8 @@ mod tests {
     #[test]
     fn peel_declines_when_the_null_slot_overflows_the_key_type() {
         // Int8 keys address 128 values; a batch referencing all of them plus a
-        // null key has nowhere to put the appended NULL slot.
+        // null key has nowhere to put the appended NULL slot. Enough rows that
+        // the row budget (two per value) is met, so the overflow alone declines.
         use arrow::datatypes::Int8Type;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let udf = Arc::new(ScalarUDF::from(ObservingUdf {
@@ -1067,13 +1166,15 @@ mod tests {
             return_type: DataType::Int32,
             strict: false,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let values = Arc::new(StringArray::from(
             (0..128).map(|i| format!("v{i}")).collect::<Vec<_>>(),
         ));
-        let mut keys: Vec<Option<i8>> = (0..128).map(|i| Some(i as i8)).collect();
-        keys.push(None);
-        keys.extend((0..128).map(|i| Some(i as i8)));
+        let mut keys: Vec<Option<i8>> = vec![None];
+        for _ in 0..3 {
+            keys.extend((0..128).map(|i| Some(i as i8)));
+        }
         let rows = keys.len();
         let dict =
             DictionaryArray::<Int8Type>::try_new(keys.into_iter().collect(), values)
@@ -1111,6 +1212,7 @@ mod tests {
             return_type: return_type.clone(),
             strict: false,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let values = Arc::new(StringArray::from(
             (0..128).map(|i| format!("v{i}")).collect::<Vec<_>>(),
@@ -1144,12 +1246,11 @@ mod tests {
 
     #[test]
     fn peel_skipped_for_empty_batches() {
-        let f = peel_fixture(
-            Int32Array::from(Vec::<i32>::new()),
-            Volatility::Immutable,
-            true,
-            DataType::Int32,
-        );
+        let f = PeelSetup {
+            keys: Int32Array::from(Vec::<i32>::new()),
+            ..Default::default()
+        }
+        .build();
         f.expr.evaluate(&f.batch).unwrap();
         assert_eq!(*f.seen.lock().unwrap(), vec![0]);
     }
@@ -1158,12 +1259,7 @@ mod tests {
     fn peel_skipped_for_fields_with_metadata() {
         // Metadata (e.g. extension types) binds to the field's storage type,
         // which peeling would rewrite: such fields take the unpeeled path.
-        let mut f = peel_fixture(
-            keys_8_over_3(),
-            Volatility::Immutable,
-            true,
-            DataType::Int32,
-        );
+        let mut f = PeelSetup::default().build();
         let metadata = std::collections::HashMap::from([(
             "ARROW:extension:name".to_string(),
             "myorg.uuid".to_string(),
@@ -1185,7 +1281,11 @@ mod tests {
         // including one unreferenced) with no discovery scan — the hand-rolled
         // cost profile. Harmless for an infallible `f`.
         let keys = Int32Array::from(vec![0, 1, 0, 1, 0, 1, 0, 0]);
-        let f = peel_fixture(keys, Volatility::Immutable, true, DataType::Int32);
+        let f = PeelSetup {
+            keys,
+            ..Default::default()
+        }
+        .build();
         f.expr.evaluate(&f.batch).unwrap();
         assert_eq!(*f.seen.lock().unwrap(), vec![3]);
     }
@@ -1203,6 +1303,7 @@ mod tests {
             return_type: DataType::Int32,
             strict: false,
             fail_if_contains: Some("ef"),
+            null_in_null_out: false,
         }));
         let keys = Int32Array::from(vec![0, 1, 0, 1, 0, 1, 0, 0]);
         let values = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
@@ -1229,30 +1330,15 @@ mod tests {
     fn peel_surfaces_an_error_from_a_referenced_value() {
         // The counterpart of the test above: an error the query can actually
         // observe is not swallowed by the retry.
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
-            signature: Signature::any(1, Volatility::Immutable),
-            seen: Arc::clone(&seen),
-            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elementwise: true,
-            return_type: DataType::Int32,
-            strict: false,
+        let f = PeelSetup {
+            keys: Int32Array::from(vec![0, 1, 0, 1, 0, 1, 0, 0]),
             fail_if_contains: Some("cd"),
-        }));
-        let keys = Int32Array::from(vec![0, 1, 0, 1, 0, 1, 0, 0]);
-        let values = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
-        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
-        let schema = Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap();
-        let expr = ScalarFunctionExpr::new(
-            "observing_udf",
-            udf,
-            vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
-            Arc::new(Field::new("f", DataType::Int32, true)),
-            Arc::new(ConfigOptions::new()),
-        );
+            null_in_null_out: false,
+            ..Default::default()
+        }
+        .build();
 
-        let error = expr.evaluate(&batch).unwrap_err().to_string();
+        let error = f.expr.evaluate(&f.batch).unwrap_err().to_string();
         assert!(error.contains("poisoned value"), "{error}");
     }
 
@@ -1270,6 +1356,7 @@ mod tests {
             return_type: DataType::Int32,
             strict: true,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         use arrow::buffer::NullBuffer;
         let keys = Int32Array::new(
@@ -1304,12 +1391,11 @@ mod tests {
         // two saved invocations, so the guard declines — and `f`, which opted
         // in to elementwise evaluation, gets the expanded array rather than the
         // dictionary it cannot be assumed to handle.
-        let f = peel_fixture(
-            Int32Array::from(vec![0, 1]),
-            Volatility::Immutable,
-            true,
-            DataType::Int32,
-        );
+        let f = PeelSetup {
+            keys: Int32Array::from(vec![0, 1]),
+            ..Default::default()
+        }
+        .build();
         let out = f.expr.evaluate(&f.batch).unwrap();
 
         assert_eq!(*f.seen.lock().unwrap(), vec![2]);
@@ -1324,35 +1410,7 @@ mod tests {
     fn values_are_evaluated_once_across_batches() {
         // A batch carries its own keys but the dictionary of a whole column
         // chunk: the second batch over the same values evaluates nothing.
-        let values = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
-            signature: Signature::any(1, Volatility::Immutable),
-            seen: Arc::clone(&seen),
-            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elementwise: true,
-            return_type: DataType::Int32,
-            strict: false,
-            fail_if_contains: None,
-        }));
-        let expr = ScalarFunctionExpr::new(
-            "observing_udf",
-            udf,
-            vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
-            Arc::new(Field::new("f", DataType::Int32, true)),
-            Arc::new(ConfigOptions::new()),
-        );
-
-        let batch_over = |keys: Vec<i32>, values: &Arc<StringArray>| {
-            let dict = DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from(keys),
-                Arc::clone(values) as ArrayRef,
-            )
-            .unwrap();
-            let schema =
-                Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap()
-        };
+        let f = PeelSetup::default().build();
 
         let keys = [
             vec![0, 1, 0, 2, 1, 0, 2, 0],
@@ -1362,8 +1420,8 @@ mod tests {
         let outputs: Vec<_> = keys
             .iter()
             .map(|keys| {
-                let batch = batch_over(keys.clone(), &values);
-                match expr.evaluate(&batch).unwrap() {
+                let batch = f.batch_over(keys.iter().map(|k| Some(*k)).collect());
+                match f.expr.evaluate(&batch).unwrap() {
                     ColumnarValue::Array(array) => array,
                     _ => panic!("expected an array"),
                 }
@@ -1372,7 +1430,7 @@ mod tests {
 
         // The first batch cannot know the dictionary will come back; the second
         // proves it and is what the result is kept from. The third is free.
-        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
         for (output, keys) in outputs.iter().zip(&keys) {
             assert_eq!(output.as_primitive::<Int32Type>().values(), keys.as_slice());
         }
@@ -1383,45 +1441,20 @@ mod tests {
         // One expression is shared by every partition of a plan. Once a result
         // is remembered, readers take it concurrently without evaluating —
         // whatever the interleaving, the counter must not move.
-        let values = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
-            signature: Signature::any(1, Volatility::Immutable),
-            seen: Arc::clone(&seen),
-            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            elementwise: true,
-            return_type: DataType::Int32,
-            strict: false,
-            fail_if_contains: None,
-        }));
-        let expr = Arc::new(ScalarFunctionExpr::new(
-            "observing_udf",
-            udf,
-            vec![Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>],
-            Arc::new(Field::new("f", DataType::Int32, true)),
-            Arc::new(ConfigOptions::new()),
-        ));
-
-        let batch_over = |keys: Vec<i32>, values: &Arc<StringArray>| {
-            let dict = DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from(keys),
-                Arc::clone(values) as ArrayRef,
-            )
-            .unwrap();
-            let schema =
-                Schema::new(vec![Field::new("d", dict.data_type().clone(), true)]);
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)]).unwrap()
-        };
+        let f = PeelSetup::default().build();
+        let expr = Arc::new(f.expr);
+        let batch_over =
+            |keys: Vec<i32>| dictionary_batch(Int32Array::from(keys), &f.values);
 
         // Prove the dictionary repeats so its result is remembered.
-        expr.evaluate(&batch_over(vec![0, 1, 2], &values)).unwrap();
-        expr.evaluate(&batch_over(vec![2, 1, 0], &values)).unwrap();
-        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+        expr.evaluate(&batch_over(vec![0, 1, 2])).unwrap();
+        expr.evaluate(&batch_over(vec![2, 1, 0])).unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
 
         let handles: Vec<_> = (0..8)
             .map(|t| {
                 let expr = Arc::clone(&expr);
-                let batch = batch_over(vec![t % 3, (t + 1) % 3, 0], &values);
+                let batch = batch_over(vec![t % 3, (t + 1) % 3, 0]);
                 std::thread::spawn(move || {
                     for _ in 0..200 {
                         let out = expr.evaluate(&batch).unwrap();
@@ -1440,7 +1473,7 @@ mod tests {
             handle.join().unwrap();
         }
         // Every concurrent pass was a hit.
-        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
     }
 
     #[test]
@@ -1459,6 +1492,7 @@ mod tests {
             return_type: DataType::Int32,
             strict: false,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let expr = ScalarFunctionExpr::new(
             "observing_udf",
@@ -1503,6 +1537,7 @@ mod tests {
             return_type: DataType::Int32,
             strict: false,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let expr = ScalarFunctionExpr::new(
             "observing_udf",
@@ -1642,6 +1677,102 @@ mod tests {
     }
 
     #[test]
+    fn nested_values_are_told_apart_by_their_children() {
+        // A struct array has no buffers of its own, only its children do, so
+        // an identity that stopped at the top level would take any two
+        // same-length struct values for one and serve the wrong result.
+        let struct_of = |names: &[&str]| -> ArrayRef {
+            Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new("s", DataType::Utf8, true)),
+                Arc::new(StringArray::from(names.to_vec())) as ArrayRef,
+            )]))
+        };
+        let first = struct_of(&["ab", "cd", "ef"]);
+        let second = struct_of(&["gh", "ij", "kl"]);
+        let f = PeelSetup {
+            values: Arc::clone(&first),
+            ..Default::default()
+        }
+        .build();
+
+        f.expr.evaluate(&f.batch).unwrap();
+        f.expr
+            .evaluate(&dictionary_batch(keys_8_over_3(), &first))
+            .unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
+
+        f.expr
+            .evaluate(&dictionary_batch(keys_8_over_3(), &second))
+            .unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3, 3]);
+    }
+
+    #[test]
+    fn nested_values_reaching_the_memo_through_another_arc_are_recognized() {
+        // The counterpart: nested values whose data agrees, children included,
+        // are the same dictionary even behind a different `Arc`.
+        let inner = DictionaryArray::<UInt32Type>::try_new(
+            UInt32Array::from(vec![0, 1, 2]),
+            Arc::new(StringArray::from(vec!["ab", "cd", "ef"])),
+        )
+        .unwrap();
+        let values: ArrayRef = Arc::new(inner);
+        let f = PeelSetup {
+            values: Arc::clone(&values),
+            ..Default::default()
+        }
+        .build();
+
+        f.expr.evaluate(&f.batch).unwrap();
+        f.expr
+            .evaluate(&dictionary_batch(keys_8_over_3(), &values))
+            .unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
+
+        let same_values = values.slice(0, values.len());
+        assert!(!Arc::ptr_eq(&same_values, &values));
+        f.expr
+            .evaluate(&dictionary_batch(keys_8_over_3(), &same_values))
+            .unwrap();
+        assert_eq!(*f.seen.lock().unwrap(), vec![3, 3]);
+    }
+
+    #[test]
+    fn a_scalar_argument_rides_along_with_the_memo() {
+        // A literal beside the dictionary is part of the memo's key; it does
+        // not stop a repeated dictionary from being recognised.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let udf = Arc::new(ScalarUDF::from(ObservingUdf {
+            signature: Signature::any(2, Volatility::Immutable),
+            seen: Arc::clone(&seen),
+            saw_dictionary: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            elementwise: true,
+            return_type: DataType::Int32,
+            strict: false,
+            fail_if_contains: None,
+            null_in_null_out: false,
+        }));
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
+        let expr = ScalarFunctionExpr::new(
+            "observing_udf",
+            udf,
+            vec![
+                Arc::new(Column::new("d", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Literal::new(ScalarValue::from("hex"))) as Arc<dyn PhysicalExpr>,
+            ],
+            Arc::new(Field::new("f", DataType::Int32, true)),
+            Arc::new(ConfigOptions::new()),
+        );
+
+        for _ in 0..3 {
+            expr.evaluate(&dictionary_batch(keys_8_over_3(), &values))
+                .unwrap();
+        }
+        // Evaluated on the first sighting, kept on the second, served on the third.
+        assert_eq!(*seen.lock().unwrap(), vec![3, 3]);
+    }
+
+    #[test]
     fn values_that_differ_only_in_their_nulls_are_told_apart() {
         // Two values arrays can share their data buffers and differ only in
         // which slots are null. The memo must not answer for one with the
@@ -1678,33 +1809,30 @@ mod tests {
     fn peel_boundary_is_two_rows_per_referenced_value() {
         // The flat-return bound is `values * 2 <= rows`: three values are
         // peeled over six rows, and expanded over five.
-        let peeled = peel_fixture(
-            Int32Array::from(vec![0, 1, 2, 0, 1, 2]),
-            Volatility::Immutable,
-            true,
-            DataType::Int32,
-        );
+        let peeled = PeelSetup {
+            keys: Int32Array::from(vec![0, 1, 2, 0, 1, 2]),
+            ..Default::default()
+        }
+        .build();
         peeled.expr.evaluate(&peeled.batch).unwrap();
         assert_eq!(*peeled.seen.lock().unwrap(), vec![3]);
 
-        let expanded = peel_fixture(
-            Int32Array::from(vec![0, 1, 2, 0, 1]),
-            Volatility::Immutable,
-            true,
-            DataType::Int32,
-        );
+        let expanded = PeelSetup {
+            keys: Int32Array::from(vec![0, 1, 2, 0, 1]),
+            ..Default::default()
+        }
+        .build();
         expanded.expr.evaluate(&expanded.batch).unwrap();
         assert_eq!(*expanded.seen.lock().unwrap(), vec![5]);
     }
 
     #[test]
     fn functions_that_did_not_opt_in_still_receive_the_dictionary() {
-        let f = peel_fixture(
-            keys_8_over_3(),
-            Volatility::Immutable,
-            false,
-            DataType::Int32,
-        );
+        let f = PeelSetup {
+            elementwise: false,
+            ..Default::default()
+        }
+        .build();
         f.expr.evaluate(&f.batch).unwrap();
         assert!(f.saw_dictionary.load(std::sync::atomic::Ordering::Relaxed));
     }
@@ -1713,7 +1841,11 @@ mod tests {
     fn peel_rewraps_when_the_planned_type_is_a_dictionary() {
         let return_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
-        let f = peel_fixture(keys_8_over_3(), Volatility::Immutable, true, return_type);
+        let f = PeelSetup {
+            return_type,
+            ..Default::default()
+        }
+        .build();
         let out = f.expr.evaluate(&f.batch).unwrap();
 
         assert_eq!(*f.seen.lock().unwrap(), vec![3]);
@@ -1739,6 +1871,7 @@ mod tests {
             return_type: DataType::Int32,
             strict: false,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let values: ArrayRef = Arc::new(StringArray::from(vec!["ab", "cd", "ef"]));
         let left =
@@ -1785,6 +1918,7 @@ mod tests {
             return_type: return_type.clone(),
             strict: false,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let values = Arc::new(StringArray::from(
             (0..100).map(|i| format!("v{i}")).collect::<Vec<_>>(),
@@ -1825,6 +1959,7 @@ mod tests {
             return_type: DataType::Int32,
             strict: false,
             fail_if_contains: None,
+            null_in_null_out: false,
         }));
         let scalar = ScalarValue::Dictionary(
             Box::new(DataType::Int32),
