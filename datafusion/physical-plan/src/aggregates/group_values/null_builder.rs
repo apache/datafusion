@@ -63,8 +63,7 @@ impl MaybeNullBufferBuilder {
 
     /// return the number of heap allocated bytes used by this structure to store boolean values
     pub fn allocated_size(&self) -> usize {
-        // NullBufferBuilder builder::allocated_size returns capacity in bits
-        self.nulls.allocated_size() / 8
+        self.nulls.allocated_size()
     }
 
     /// Return a NullBuffer representing the accumulated nulls so far
@@ -96,5 +95,21 @@ impl MaybeNullBufferBuilder {
     /// but may be true even if there are no nulls
     pub(crate) fn might_have_nulls(&self) -> bool {
         self.nulls.as_slice().is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::BooleanBufferBuilder;
+
+    #[test]
+    fn allocated_size_should_return_bytes() {
+        let mut expected = BooleanBufferBuilder::new(0);
+        expected.append(true);
+        let expected_capacity_in_bytes = expected.capacity() / 8;
+        let mut builder = MaybeNullBufferBuilder::new();
+        builder.append(true);
+        assert_eq!(builder.allocated_size(), expected_capacity_in_bytes);
     }
 }
