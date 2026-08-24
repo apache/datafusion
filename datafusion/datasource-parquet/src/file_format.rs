@@ -743,7 +743,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             dictionary_page_size_limit: global_options.global.dictionary_page_size_limit as u64,
             statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
-                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled.to_string())
             }),
             max_row_group_size: global_options.global.max_row_group_size as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,

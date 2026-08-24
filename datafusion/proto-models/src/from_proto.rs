@@ -366,13 +366,15 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 }
             }),
             dictionary_page_size_limit: proto.dictionary_page_size_limit as usize,
-            statistics_enabled: proto.statistics_enabled_opt.as_ref().map(
-                |opt| match opt {
+            statistics_enabled: proto
+                .statistics_enabled_opt
+                .as_ref()
+                .map(|opt| match opt {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
                         statistics,
-                    ) => statistics.clone(),
-                },
-            ),
+                    ) => statistics.parse(),
+                })
+                .transpose()?,
             max_row_group_size: proto.max_row_group_size as usize,
             max_in_list_size: proto.max_in_list_size as usize,
             created_by: proto.created_by.clone(),
@@ -515,5 +517,28 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
                 .collect(),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_parquet_statistics() {
+        let proto = ParquetOptionsProto {
+            statistics_enabled_opt: Some(
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
+                    "invalid".to_string(),
+                ),
+            ),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid parquet statistics setting: invalid")
+        );
     }
 }

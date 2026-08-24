@@ -910,7 +910,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
-            statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
             max_row_group_size: value.max_row_group_size as u64,
             max_in_list_size: value.max_in_list_size as u64,
             created_by: value.created_by.clone(),
