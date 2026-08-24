@@ -1003,6 +1003,7 @@ impl HashJoinExec {
     /// build-side bounds during execution. [`Self::handle_child_pushdown_result`]
     /// sets one after finding a consumer for it in the probe side. Callers wiring a
     /// filter up by hand take on that check themselves.
+    ///
     /// Resets any internal state that depends on any existing dynamic filter.
     ///
     /// Validates that the filter's children reference valid columns in
@@ -1453,10 +1454,6 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        // Whether the probe subtree contains a consumer for the dynamic filter is
-        // decided at planning time in `handle_child_pushdown_result`: a join that
-        // nothing listens to is rebuilt without a dynamic filter at all. So by the
-        // time we get here the filter's presence is the answer.
         let enable_dynamic_filter_pushdown = self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
             && self.dynamic_filter.is_some();
