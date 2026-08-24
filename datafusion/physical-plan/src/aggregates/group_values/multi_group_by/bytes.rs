@@ -19,7 +19,11 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{types::GenericStringType, Array, ArrayRef, AsArray, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray, GenericByteArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray,
+    GenericByteArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    types::GenericStringType,
+};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
 use datafusion_common::utils::proxy::VecAllocExt;

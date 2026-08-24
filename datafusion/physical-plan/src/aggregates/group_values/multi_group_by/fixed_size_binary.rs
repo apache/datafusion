@@ -19,7 +19,10 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeBinaryArray, NullBufferBuilder};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeBinaryArray,
+    NullBufferBuilder,
+};
 use arrow::buffer::{Buffer, NullBuffer};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::utils::split_vec_min_alloc;

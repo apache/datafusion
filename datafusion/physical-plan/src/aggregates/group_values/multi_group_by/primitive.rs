@@ -20,11 +20,11 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{ArrowNativeTypeOp, NullBufferBuilder};
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, BooleanBufferBuilder, PrimitiveArray,
     cast::AsArray,
 };
+use arrow::array::{ArrowNativeTypeOp, NullBufferBuilder};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use arrow::util::bit_util::apply_bitwise_binary_op;

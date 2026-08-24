@@ -20,7 +20,9 @@ use std::sync::Arc;
 use crate::aggregates::group_values::multi_group_by::Nulls;
 use crate::aggregates::group_values::multi_group_by::{GroupColumn, nulls_equal_to};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, NullBufferBuilder};
+use arrow::array::{
+    Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
+};
 use datafusion_common::Result;
 
 /// An implementation of [`GroupColumn`] for booleans

@@ -19,7 +19,10 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray, NullBufferBuilder};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray,
+    NullBufferBuilder,
+};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;

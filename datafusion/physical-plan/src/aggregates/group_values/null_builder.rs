@@ -18,19 +18,12 @@
 use arrow::array::NullBufferBuilder;
 use arrow::buffer::NullBuffer;
 
-
-/// Builder for an (optional) null mask
-///
-/// Optimized for avoid creating the bitmask when all values are non-null
+/// Helper methods for NullBufferBuilder that are used in Group By columns
 pub(crate) trait MaybeNullBufferBuilder {
-
     fn empty() -> Self;
 
     /// Return true if the row at index `row` is null
     fn is_null(&self, row: usize) -> bool;
-
-    fn append_n(&mut self, n: usize, is_valid: bool);
-
 
     /// Returns a NullBuffer representing the first `n` rows accumulated so far
     /// shifting any remaining down by `n`
@@ -52,14 +45,6 @@ impl MaybeNullBufferBuilder for NullBufferBuilder {
         !self.is_valid(row)
     }
 
-    fn append_n(&mut self, n: usize, is_valid: bool) {
-        if is_valid {
-            self.append_n_non_nulls(n);
-        } else {
-            self.append_n_nulls(n);
-        }
-    }
-
     fn take_n(&mut self, n: usize) -> Option<NullBuffer> {
         // Copy over the values at  n..len-1 values to the start of a
         // new builder and leave it in self
@@ -69,7 +54,7 @@ impl MaybeNullBufferBuilder for NullBufferBuilder {
         for i in n..self.len() {
             new_builder.append(self.is_valid(i));
         }
-        std::mem::swap(&mut new_builder, &mut self);
+        std::mem::swap(&mut new_builder, self);
 
         // take only first n values from the original builder
         new_builder.truncate(n);
