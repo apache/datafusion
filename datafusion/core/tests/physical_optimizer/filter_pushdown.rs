@@ -66,7 +66,9 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
     collect,
-    execution_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions},
+    execution_plan::{
+        ChildrenPropertiesMode, ReplaceChildrenOptions, plan_contains_expression_id,
+    },
     filter::{FilterExec, FilterExecBuilder},
     joins::{HashJoinExec, PartitionMode},
     projection::ProjectionExec,
@@ -2971,24 +2973,6 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
 // SQL analog because parquet supports filter pushdown.
 #[test]
 fn test_hashjoin_dynamic_filter_requires_probe_consumer() {
-    fn contains_expression_id(plan: &Arc<dyn ExecutionPlan>, expression_id: u64) -> bool {
-        let mut found = false;
-        plan.apply(|node| {
-            node.apply_expressions(&mut |root| {
-                root.apply(|expr| {
-                    if expr.expression_id() == Some(expression_id) {
-                        found = true;
-                        Ok(TreeNodeRecursion::Stop)
-                    } else {
-                        Ok(TreeNodeRecursion::Continue)
-                    }
-                })
-            })
-        })
-        .unwrap();
-        found
-    }
-
     for (probe_supports_pushdown, expected_consumer) in [(false, false), (true, true)] {
         let build_side_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
@@ -3068,7 +3052,7 @@ fn test_hashjoin_dynamic_filter_requires_probe_consumer() {
                 .expression_id()
                 .expect("Dynamic filters always have an expression ID");
             assert!(
-                contains_expression_id(hash_join.right(), expression_id),
+                plan_contains_expression_id(hash_join.right(), expression_id).unwrap(),
                 "probe subtree should contain the dynamic filter it accepted"
             );
         }
