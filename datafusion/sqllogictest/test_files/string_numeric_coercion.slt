@@ -573,6 +573,10 @@ SELECT arrow_cast('hello', 'RunEndEncoded("run_ends": non-null Int32, "values": 
 ----
 true
 
+# The type argument to arrow_cast must remain a literal after planning.
+statement error arrow_cast requires its second argument
+SELECT arrow_cast(1, cast('Utf8' as varchar));
+
 # -------------------------------------------------
 # Cleanup
 # -------------------------------------------------
