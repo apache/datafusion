@@ -20,21 +20,19 @@
 
 use crate::ParquetFileMetrics;
 use crate::metadata::DFParquetMetadata;
+use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
-use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
-use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::FutureExt;
 use futures::TryFutureExt;
 use futures::future::BoxFuture;
 use object_store::{ObjectStore, ObjectStoreExt};
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
-use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -300,6 +298,105 @@ impl AsyncFileReader for ParquetFileReader {
         }
         .boxed()
     }
+
+    fn get_arrow_reader_metadata<'a>(
+        &'a mut self,
+        options: ArrowReaderOptions,
+    ) -> BoxFuture<'a, parquet::errors::Result<ArrowReaderMetadata>> {
+        let object_meta = self.partitioned_file.object_meta.clone();
+        let metadata_cache = self.metadata_cache.clone();
+
+        async move {
+            // We can serve from cache when no embedded-schema-skip and no
+            // virtual columns are requested. A `supplied_schema` is OK —
+            // the wrapper has a separate cache slot for post-coercion
+            // builds keyed by the supplied schema's Arc identity.
+            let can_use_cache = metadata_cache.is_some()
+                && !options.skip_arrow_metadata()
+                && options.virtual_columns().is_empty();
+            let supplied = options.supplied_schema().cloned();
+
+            #[cfg(feature = "parquet_encryption")]
+            let file_decryption_properties =
+                options.file_decryption_properties().map(Arc::clone);
+            #[cfg(not(feature = "parquet_encryption"))]
+            let file_decryption_properties = None;
+
+            let try_serve_from_cache = |options: ArrowReaderOptions,
+                                        supplied: Option<SchemaRef>|
+             -> parquet::errors::Result<Option<ArrowReaderMetadata>> {
+                if !can_use_cache {
+                    return Ok(None);
+                }
+                let Some(cache) = metadata_cache.as_ref() else {
+                    return Ok(None);
+                };
+                let Some(cached) = cache.get(&object_meta.location) else {
+                    return Ok(None);
+                };
+                if !cached.is_valid_for(&object_meta) {
+                    return Ok(None);
+                }
+                let Some(cached_parquet) = cached
+                    .file_metadata
+                    .as_any()
+                    .downcast_ref::<CachedParquetMetaData>()
+                else {
+                    return Ok(None);
+                };
+                let arm = if let Some(schema) = supplied {
+                    cached_parquet
+                        .coerced_arrow_reader_metadata(&schema, options)
+                        .map_err(|e| {
+                            ParquetError::General(format!(
+                                "Failed to build coerced arrow reader metadata for {}: {e}",
+                                object_meta.location,
+                            ))
+                        })?
+                } else {
+                    cached_parquet
+                        .arrow_reader_metadata()
+                        .map_err(|e| {
+                            ParquetError::General(format!(
+                                "Failed to build arrow reader metadata for {}: {e}",
+                                object_meta.location,
+                            ))
+                        })?
+                        .clone()
+                };
+                Ok(Some(arm))
+            };
+
+            // Fast path: cache hit (already-fetched metadata).
+            if let Some(arm) = try_serve_from_cache(options.clone(), supplied.clone())? {
+                return Ok(arm);
+            }
+
+            // Slow path: fetch + cache the metadata, then retry. The page
+            // index policy must be honoured here exactly as in `get_metadata`
+            // — otherwise a caller that asked to skip the page index still
+            // gets it fetched, and the cached entry is polluted with it.
+            let metadata = DFParquetMetadata::new(&self.store, &object_meta)
+                .with_decryption_properties(file_decryption_properties)
+                .with_file_metadata_cache(metadata_cache.clone())
+                .with_metadata_size_hint(self.metadata_size_hint)
+                .with_page_index_policy(Some(options.column_index_policy()))
+                .fetch_metadata()
+                .await
+                .map_err(|e| {
+                    ParquetError::General(format!(
+                        "Failed to fetch metadata for file {}: {e}",
+                        object_meta.location,
+                    ))
+                })?;
+            if let Some(arm) = try_serve_from_cache(options.clone(), supplied)? {
+                return Ok(arm);
+            }
+
+            ArrowReaderMetadata::try_new(metadata, options)
+        }
+        .boxed()
+    }
 }
 
 impl Drop for ParquetFileReader {
@@ -314,31 +411,7 @@ impl Drop for ParquetFileReader {
     }
 }
 
-/// Wrapper to implement [`FileMetadata`] for [`ParquetMetaData`].
-pub struct CachedParquetMetaData(Arc<ParquetMetaData>);
-
-impl CachedParquetMetaData {
-    pub fn new(metadata: Arc<ParquetMetaData>) -> Self {
-        Self(metadata)
-    }
-
-    pub fn parquet_metadata(&self) -> &Arc<ParquetMetaData> {
-        &self.0
-    }
-}
-
-impl FileMetadata for CachedParquetMetaData {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn memory_size(&self) -> usize {
-        self.0.memory_size()
-    }
-
-    fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
-        HashMap::from([("page_index".to_owned(), page_index.to_string())])
-    }
-}
+// `CachedParquetMetaData` lives in `crate::metadata` (where it carries the
+// lazily-built, cached `ArrowReaderMetadata`). Re-export it here so the
+// `pub use reader::*` in `mod.rs` keeps exposing it at the crate root.
+pub use crate::metadata::CachedParquetMetaData;
