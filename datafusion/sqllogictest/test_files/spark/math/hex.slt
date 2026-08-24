@@ -126,8 +126,9 @@ SELECT hex(arrow_cast('hi', 'BinaryView'));
 ----
 6869
 
+# Utf8 → FixedSizeBinary is not a supported constant cast; go through Binary.
 query T
-SELECT hex(arrow_cast('hi', 'FixedSizeBinary(2)'));
+SELECT hex(arrow_cast(arrow_cast('hi', 'Binary'), 'FixedSizeBinary(2)'));
 ----
 6869
 
