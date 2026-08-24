@@ -274,7 +274,7 @@ WHERE EXISTS (
 )
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=LeftSemi, on=[(k@0, k@0)], filter=v@1 <= x@0 - 300, metrics=[output_rows=1,<slt:ignore>spill_count=1, spilled_bytes=<slt:ignore> KB, spilled_rows=<slt:ignore> K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=LeftSemi, on=[(k@0, k@0)], filter=v@1 <= x@0 - 300, projection=[k@0], metrics=[output_rows=1,<slt:ignore>spill_count=1, spilled_bytes=<slt:ignore> KB, spilled_rows=<slt:ignore> K, peak_mem_used=<slt:ignore>
 
 # The same query must retain the matching first slice after later overflows.
 query I

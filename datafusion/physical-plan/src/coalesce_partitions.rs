@@ -385,9 +385,19 @@ impl ExecutionPlan for CoalescePartitionsExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let fetch = self
-            .fetch()
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CoalescePartitionsExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            fetch,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let fetch = fetch
             .map(|fetch| usize_to_wire(fetch, "CoalescePartitionsExec", "fetch"))
             .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
@@ -423,13 +433,16 @@ impl CoalescePartitionsExec {
             protobuf::physical_plan_node::PhysicalPlanType::Merge,
             "CoalescePartitionsExec",
         );
+        // Destructure exhaustively so that a new field on
+        // `CoalescePartitionsExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::CoalescePartitionsExecNode { input, fetch } = &**merge;
         let input = ctx.decode_required_child(
-            merge.input.as_deref(),
+            input.as_deref(),
             "CoalescePartitionsExec",
             "input",
         )?;
-        let fetch = merge
-            .fetch
+        let fetch = fetch
             .map(|f| usize_from_wire(f, "CoalescePartitionsExec", "fetch"))
             .transpose()?;
         Ok(Arc::new(

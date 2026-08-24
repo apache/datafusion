@@ -593,20 +593,22 @@ fn get_record_count(path: &PathBuf, label: String) -> u64 {
         parse_file(path).unwrap();
     let mut count: u64 = 0;
 
-    records.iter().for_each(|rec| match rec {
-        Record::Query { conditions, .. } | Record::Statement { conditions, .. }
-            if conditions.is_empty()
-                || !conditions.contains(&Condition::SkipIf {
-                    label: label.clone(),
-                })
-                || conditions.contains(&Condition::OnlyIf {
-                    label: label.clone(),
-                }) =>
-        {
-            count += 1;
+    for rec in &records {
+        match rec {
+            Record::Query { conditions, .. } | Record::Statement { conditions, .. }
+                if conditions.is_empty()
+                    || !conditions.contains(&Condition::SkipIf {
+                        label: label.clone(),
+                    })
+                    || conditions.contains(&Condition::OnlyIf {
+                        label: label.clone(),
+                    }) =>
+            {
+                count += 1;
+            }
+            _ => {}
         }
-        _ => {}
-    });
+    }
 
     count
 }

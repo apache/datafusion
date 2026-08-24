@@ -1041,12 +1041,11 @@ FROM range_partitioned l
 JOIN range_partitioned r ON l.range_key = r.range_key;
 ----
 physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
-02)--SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)]
-03)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
-05)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-06)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
+01)SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
+04)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+05)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
 
 query III
 SELECT l.range_key, l.value, r.value
@@ -1075,14 +1074,13 @@ FROM range_partitioned l
 JOIN range_partitioned_shifted r ON l.range_key = r.range_key;
 ----
 physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
-02)--SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)]
-03)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-04)------RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-06)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-07)------RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-08)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=parquet
+01)SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+03)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+05)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+06)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+07)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=parquet
 
 query III
 SELECT l.range_key, l.value, r.value

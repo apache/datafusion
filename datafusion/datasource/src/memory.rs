@@ -129,7 +129,12 @@ impl DataSource for MemorySourceConfig {
                 }
             }
             DisplayFormatType::TreeRender => {
-                let total_rows = self.partitions.iter().map(|b| b.len()).sum::<usize>();
+                let total_rows = self
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>();
                 let total_bytes: usize = self
                     .partitions
                     .iter()

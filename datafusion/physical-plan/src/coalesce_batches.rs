@@ -324,19 +324,28 @@ impl ExecutionPlan for CoalesceBatchesExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CoalesceBatchesExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            target_batch_size,
+            fetch,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         let to_wire =
             |value, field| usize_to_wire::<u32>(value, "CoalesceBatchesExec", field);
-        if self.target_batch_size() == 0 {
+        if *target_batch_size == 0 {
             return datafusion_common::plan_err!(
                 "CoalesceBatchesExec: target_batch_size must be greater than 0"
             );
         }
-        let target_batch_size = to_wire(self.target_batch_size(), "target_batch_size")?;
-        let fetch = self
-            .fetch()
-            .map(|fetch| to_wire(fetch, "fetch"))
-            .transpose()?;
+        let target_batch_size = to_wire(*target_batch_size, "target_batch_size")?;
+        let fetch = fetch.map(|fetch| to_wire(fetch, "fetch")).transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches(
@@ -375,24 +384,25 @@ impl CoalesceBatchesExec {
             protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches,
             "CoalesceBatchesExec",
         );
-        let input = ctx.decode_required_child(
-            coalesce_batches.input.as_deref(),
-            "CoalesceBatchesExec",
-            "input",
-        )?;
+        // Destructure exhaustively so that a new field on
+        // `CoalesceBatchesExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::CoalesceBatchesExecNode {
+            input,
+            target_batch_size,
+            fetch,
+        } = &**coalesce_batches;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "CoalesceBatchesExec", "input")?;
         let from_wire =
             |value, field| usize_from_wire(value, "CoalesceBatchesExec", field);
-        let target_batch_size =
-            from_wire(coalesce_batches.target_batch_size, "target_batch_size")?;
+        let target_batch_size = from_wire(*target_batch_size, "target_batch_size")?;
         if target_batch_size == 0 {
             return datafusion_common::plan_err!(
                 "CoalesceBatchesExec: target_batch_size must be greater than 0"
             );
         }
-        let fetch = coalesce_batches
-            .fetch
-            .map(|fetch| from_wire(fetch, "fetch"))
-            .transpose()?;
+        let fetch = fetch.map(|fetch| from_wire(fetch, "fetch")).transpose()?;
         Ok(Arc::new(
             CoalesceBatchesExec::new(input, target_batch_size).with_fetch(fetch),
         ))

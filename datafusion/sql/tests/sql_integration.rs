@@ -5759,9 +5759,8 @@ impl HigherOrderUDFImpl for MockArrayReduce {
             unreachable!()
         };
 
-        let list_field = match list.data_type() {
-            DataType::List(field) => field,
-            _ => unreachable!(),
+        let DataType::List(list_field) = list.data_type() else {
+            unreachable!()
         };
 
         Ok(match (step, merge) {
