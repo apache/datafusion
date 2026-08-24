@@ -64,7 +64,7 @@ use crate::spill::spill_manager::SpillManager;
 /// Left (build-side) data
 pub(crate) struct JoinLeftData {
     /// Build-side data collected to single batch
-    batch: RecordBatch,
+    pub batch: RecordBatch,
     /// Shared bitmap builder for visited left indices
     bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially able to update `bitmap`
