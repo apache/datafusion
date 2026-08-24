@@ -7010,7 +7010,7 @@ async fn test_dataframe_from_columns() -> Result<()> {
         let schema = df.schema();
 
         for (name, data_type) in &expected_types {
-            assert_eq!(schema.field_with_name(None, *name)?.data_type(), data_type);
+            assert_eq!(schema.field_with_name(None, name)?.data_type(), data_type);
         }
 
         let rows = df.sort(vec![col("i32").sort(true, true)])?;
