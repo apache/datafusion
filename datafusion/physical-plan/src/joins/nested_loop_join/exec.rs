@@ -26,6 +26,7 @@ use super::materializing_stream::{
 };
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::joins::nested_loop_join::semi_anti_mark_stream::SemiAntiMarkNestedLoopJoinStream;
 use crate::joins::utils::{
     ColumnIndex, JoinFilter, OnceAsync, build_join_schema, check_join_is_valid,
     estimate_join_statistics,
@@ -684,17 +685,39 @@ impl ExecutionPlan for NestedLoopJoinExec {
             SpillState::Disabled
         };
 
-        Ok(Box::pin(NestedLoopJoinStream::new(
-            self.schema(),
-            self.filter.clone(),
+        if matches!(
             self.join_type,
-            probe_side_data,
-            build_side_data,
-            column_indices_after_projection,
-            metrics,
-            batch_size,
-            spill_state,
-        )))
+            JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::RightSemi
+                | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
+        ) {
+            Ok(Box::pin(SemiAntiMarkNestedLoopJoinStream::new(
+                self.schema(),
+                self.filter.clone(),
+                self.join_type,
+                probe_side_data,
+                build_side_data,
+                column_indices_after_projection,
+                metrics,
+                batch_size,
+                spill_state,
+            )))
+        } else {
+            Ok(Box::pin(NestedLoopJoinStream::new(
+                self.schema(),
+                self.filter.clone(),
+                self.join_type,
+                probe_side_data,
+                build_side_data,
+                column_indices_after_projection,
+                metrics,
+                batch_size,
+                spill_state,
+            )))
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
