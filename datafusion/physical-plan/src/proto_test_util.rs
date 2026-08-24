@@ -320,6 +320,145 @@ impl ExecutionPlanDecode for StubPlanDecoder {
     }
 }
 
+/// Minimal extension plans for the [`crate::proto::registry`] tests.
+///
+/// Deliberately tiny: they exist to exercise name registration, collision
+/// detection and the `encode_extension` / `decode_extension` pair, not to
+/// execute.
+pub(crate) mod registry_test_plan {
+    use super::stub_schema;
+    use crate::execution_plan::{Boundedness, EmissionType};
+    use crate::proto::{
+        ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExtensionExecutionPlan,
+    };
+    use crate::{
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+        SendableRecordBatchStream,
+    };
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_common::{Result, internal_err};
+    use datafusion_execution::TaskContext;
+    use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+    use datafusion_proto_models::protobuf::PhysicalPlanNode;
+    use std::fmt::Formatter;
+    use std::sync::Arc;
+
+    fn stub_properties() -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(stub_schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ))
+    }
+
+    /// Defines an extension plan carrying a `String` payload and its children,
+    /// serialized through the extension helpers on the plan contexts.
+    macro_rules! extension_plan {
+        ($name:ident, $plan_name:literal) => {
+            #[derive(Debug)]
+            pub(crate) struct $name {
+                pub(crate) payload: String,
+                pub(crate) children: Vec<Arc<dyn ExecutionPlan>>,
+                properties: Arc<PlanProperties>,
+            }
+
+            impl $name {
+                pub(crate) fn new(
+                    payload: impl Into<String>,
+                    children: Vec<Arc<dyn ExecutionPlan>>,
+                ) -> Self {
+                    Self {
+                        payload: payload.into(),
+                        children,
+                        properties: stub_properties(),
+                    }
+                }
+            }
+
+            impl DisplayAs for $name {
+                fn fmt_as(
+                    &self,
+                    _t: DisplayFormatType,
+                    f: &mut Formatter,
+                ) -> std::fmt::Result {
+                    write!(f, "{}({})", $plan_name, self.payload)
+                }
+            }
+
+            impl ExecutionPlan for $name {
+                fn name(&self) -> &str {
+                    $plan_name
+                }
+
+                fn properties(&self) -> &Arc<PlanProperties> {
+                    &self.properties
+                }
+
+                fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+                    self.children.iter().collect()
+                }
+
+                fn apply_expressions(
+                    &self,
+                    _f: &mut dyn FnMut(
+                        &Arc<dyn crate::PhysicalExpr>,
+                    ) -> Result<TreeNodeRecursion>,
+                ) -> Result<TreeNodeRecursion> {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+
+                fn with_new_children(
+                    self: Arc<Self>,
+                    children: Vec<Arc<dyn ExecutionPlan>>,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    Ok(Arc::new(Self::new(self.payload.clone(), children)))
+                }
+
+                fn execute(
+                    &self,
+                    _partition: usize,
+                    _context: Arc<TaskContext>,
+                ) -> Result<SendableRecordBatchStream> {
+                    internal_err!("{} is a serde-only test stub", $plan_name)
+                }
+
+                fn try_to_proto(
+                    &self,
+                    ctx: &ExecutionPlanEncodeCtx<'_>,
+                ) -> Result<Option<PhysicalPlanNode>> {
+                    Ok(Some(ctx.encode_extension::<Self, _>(
+                        self.payload.as_bytes().to_vec(),
+                        self.children(),
+                    )?))
+                }
+            }
+
+            impl ExtensionExecutionPlan for $name {
+                const PLAN_NAME: &'static str = $plan_name;
+
+                fn try_from_proto(
+                    node: &PhysicalPlanNode,
+                    ctx: &ExecutionPlanDecodeCtx<'_>,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    let (payload, children) =
+                        ctx.decode_extension(node, Self::PLAN_NAME)?;
+                    let Ok(payload) = std::str::from_utf8(payload) else {
+                        return internal_err!("{} payload is not UTF-8", $plan_name);
+                    };
+                    Ok(Arc::new(Self::new(payload, children)))
+                }
+            }
+        };
+    }
+
+    extension_plan!(RegisteredExec, "datafusion-test.RegisteredExec");
+    // A *different* Rust type claiming the same name: the collision two
+    // independent crates could hit.
+    extension_plan!(RegisteredExecClone, "datafusion-test.RegisteredExec");
+    extension_plan!(OtherRegisteredExec, "datafusion-test.OtherRegisteredExec");
+}
+
 /// Decoder that must never run: asserts that the reject paths of a
 /// `try_from_proto` (wrong node variant, missing required child) bail out
 /// before any decoding happens.
