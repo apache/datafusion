@@ -1119,7 +1119,23 @@ impl AggregateExec {
     /// Replace the dynamic filter expression. This method errors if the aggregate does not
     /// support dynamic filtering or if the filter expression is incompatible with this
     /// [`AggregateExec`].
+    #[deprecated(
+        since = "56.0.0",
+        note = "unused by DataFusion; `AggregateExec` restores its dynamic filter in `AggregateExec::try_from_proto`, which sets the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn with_dynamic_filter_expr(
+        self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        self.set_dynamic_filter(filter)
+    }
+
+    /// Replace the dynamic filter expression, validating that it is compatible
+    /// with this [`AggregateExec`].
+    ///
+    /// Only used to restore the filter when decoding a serialized plan: every
+    /// other code path creates the filter in [`AggregateExec::try_new`].
+    fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -2695,7 +2711,7 @@ impl AggregateExec {
                         "AggregateExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
                     )
                 })?;
-            aggregate.with_dynamic_filter_expr(dynamic_filter)?
+            aggregate.set_dynamic_filter(dynamic_filter)?
         } else {
             let mut aggregate = aggregate;
             aggregate.dynamic_filter = None;
@@ -7998,7 +8014,7 @@ mod tests {
         }
     }
 
-    /// Test that [`AggregateExec::with_dynamic_filter_expr`] overrides the existing dynamic filter
+    /// Test that [`AggregateExec::set_dynamic_filter`] overrides the existing dynamic filter
     #[test]
     fn test_with_dynamic_filter() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
@@ -8025,7 +8041,7 @@ mod tests {
             vec![col("a", &schema)?],
             lit(false),
         ));
-        let agg = agg.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let agg = agg.set_dynamic_filter(Arc::clone(&new_df))?;
         let produced = agg.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
         assert_eq!(produced[0].expression_id(), new_df.expression_id());
@@ -8050,7 +8066,7 @@ mod tests {
         };
         // Hard to assert this because the filter is identical. No error means
         // the filter was accepted. That's a good enough assertion for now.
-        let _agg = agg.with_dynamic_filter_expr(remapped_df)?;
+        let _agg = agg.set_dynamic_filter(remapped_df)?;
         Ok(())
     }
 
@@ -8086,7 +8102,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test that [`AggregateExec::with_dynamic_filter_expr`] errors when the aggregate does not support dynamic filtering
+    /// Test that [`AggregateExec::set_dynamic_filter`] errors when the aggregate does not support dynamic filtering
     #[test]
     fn test_with_dynamic_filter_error_unsupported() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -8115,11 +8131,11 @@ mod tests {
             vec![col("a", &schema)?],
             lit(true),
         ));
-        assert!(agg.with_dynamic_filter_expr(df).is_err());
+        assert!(agg.set_dynamic_filter(df).is_err());
         Ok(())
     }
 
-    /// Test that [`AggregateExec::with_dynamic_filter_expr`] errors when the column is not in the schema
+    /// Test that [`AggregateExec::set_dynamic_filter`] errors when the column is not in the schema
     #[test]
     fn test_with_dynamic_filter_error_column_mismatch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
@@ -8143,7 +8159,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(agg.with_dynamic_filter_expr(df).is_err());
+        assert!(agg.set_dynamic_filter(df).is_err());
         Ok(())
     }
 }

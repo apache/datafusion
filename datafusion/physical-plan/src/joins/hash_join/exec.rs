@@ -1003,7 +1003,25 @@ impl HashJoinExec {
     ///
     /// Validates that the filter's children reference valid columns in
     /// the probe (right) side's schema.
+    #[deprecated(
+        since = "56.0.0",
+        note = "unused by DataFusion; `HashJoinExec` restores its dynamic filter in `HashJoinExec::try_from_proto`, which sets the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn with_dynamic_filter_expr(
+        self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        self.set_dynamic_filter(filter)
+    }
+
+    /// Set the dynamic filter on this hash join, resetting any internal state
+    /// that depends on an existing one and validating that the filter's
+    /// children reference valid columns in the probe (right) side's schema.
+    ///
+    /// Only used to restore the filter when decoding a serialized plan: every
+    /// other code path installs the filter in
+    /// [`ExecutionPlan::handle_child_pushdown_result`].
+    fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -2088,7 +2106,7 @@ impl HashJoinExec {
                         "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
                     )
                 })?;
-            hash_join = hash_join.with_dynamic_filter_expr(df)?;
+            hash_join = hash_join.set_dynamic_filter(df)?;
         }
 
         Ok(Arc::new(hash_join))
@@ -7838,7 +7856,7 @@ mod tests {
             vec![Arc::new(Column::new("b1", 1)) as _],
             lit(true),
         ));
-        let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
+        let join = join.set_dynamic_filter(Arc::clone(&df))?;
 
         let produced = join.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
@@ -7881,7 +7899,7 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?
-        .with_dynamic_filter_expr(dynamic_filter)?;
+        .set_dynamic_filter(dynamic_filter)?;
 
         let err = join.swap_inputs(PartitionMode::CollectLeft).unwrap_err();
         assert_contains!(
@@ -8130,7 +8148,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(join.with_dynamic_filter_expr(df).is_err());
+        assert!(join.set_dynamic_filter(df).is_err());
         Ok(())
     }
 }
