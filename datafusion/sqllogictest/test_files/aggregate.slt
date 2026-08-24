@@ -827,6 +827,15 @@ SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
+query R
+SELECT percentile_cont(col_f64_nan, 0.5) FROM median_table
+----
+NaN
+
+query R
+SELECT approx_percentile_cont(col_f64_nan, 0.5) FROM median_table
+----
+NaN
 
 # median_i8_overflow_negative
 query R

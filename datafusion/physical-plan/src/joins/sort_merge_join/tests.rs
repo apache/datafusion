@@ -33,6 +33,7 @@ use super::bitwise_stream::BitwiseSortMergeJoinStream;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
+use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
 use crate::test::exec::BarrierExec;
@@ -359,6 +360,118 @@ async fn join_collect_batch_size_equals_two(
     let stream = join.execute(0, task_ctx)?;
     let batches = common::collect(stream).await?;
     Ok((columns, batches))
+}
+
+fn join_and_projection_for_pushdown(
+    filter: Option<JoinFilter>,
+) -> Result<(Arc<SortMergeJoinExec>, ProjectionExec)> {
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![2]), ("c1", &vec![3]));
+    let right = build_table(("a2", &vec![4]), ("b2", &vec![2]), ("c2", &vec![5]));
+    let on = vec![(
+        Arc::new(Column::new("b1", 1)) as _,
+        Arc::new(Column::new("b2", 1)) as _,
+    )];
+    let join = Arc::new(SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        filter,
+        Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?);
+    let input: Arc<dyn ExecutionPlan> = Arc::clone(&join) as _;
+    let projection = ProjectionExec::try_new(
+        [
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c1", 2)),
+                alias: "c1".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("b1", 1)),
+                alias: "b1".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c2", 5)),
+                alias: "c2".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("b2", 4)),
+                alias: "b2".to_string(),
+            },
+        ],
+        input,
+    )?;
+
+    Ok((join, projection))
+}
+
+#[test]
+fn projection_pushdown_remaps_filter() -> Result<()> {
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+    let (join, projection) = join_and_projection_for_pushdown(Some(filter))?;
+
+    let swapped = join
+        .try_swapping_with_projection(&projection)?
+        .expect("projection should be pushed below the join");
+    let swapped = swapped
+        .downcast_ref::<SortMergeJoinExec>()
+        .expect("swapped plan should be a SortMergeJoinExec");
+
+    let (left_on, right_on) = &swapped.on()[0];
+    assert_eq!(left_on.downcast_ref::<Column>().unwrap().index(), 1);
+    assert_eq!(right_on.downcast_ref::<Column>().unwrap().index(), 1);
+    assert_eq!(
+        swapped.filter().as_ref().unwrap().column_indices(),
+        &[
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn projection_pushdown_without_filter() -> Result<()> {
+    let (join, projection) = join_and_projection_for_pushdown(None)?;
+
+    let swapped = join
+        .try_swapping_with_projection(&projection)?
+        .expect("projection should be pushed below the join");
+    let swapped = swapped
+        .downcast_ref::<SortMergeJoinExec>()
+        .expect("swapped plan should be a SortMergeJoinExec");
+
+    assert!(swapped.filter().is_none());
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -5982,6 +6095,89 @@ async fn bitwise_spill_pending_stream() -> Result<()> {
             "Pending-forced spill read produced different results for {join_type:?}"
         );
     }
+
+    Ok(())
+}
+
+/// A projection names the columns to emit, so swapping the inputs must renumber it
+/// rather than leave it pointing at the columns the other side now occupies.
+#[tokio::test]
+async fn swap_inputs_swaps_the_projection() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![10, 20, 30]),
+        ("c1", &vec![100, 200, 300]),
+    );
+    let right = build_table(
+        ("a2", &vec![1, 2, 3]),
+        ("b2", &vec![11, 22, 33]),
+        ("c2", &vec![111, 222, 333]),
+    );
+    let on: JoinOn = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a2", 0)) as _,
+    )];
+    // One column from each side, in an order that tells the two sides apart.
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        None,
+        Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?
+    .with_projection(Some(vec![4, 2]))?;
+
+    let swapped = join.swap_inputs()?;
+    assert_eq!(
+        swapped.schema().fields(),
+        join.schema().fields(),
+        "swapping must not change what the join emits"
+    );
+
+    let task_ctx = Arc::new(TaskContext::default());
+    let expected = common::collect(join.execute(0, Arc::clone(&task_ctx))?).await?;
+    let actual = common::collect(swapped.execute(0, task_ctx)?).await?;
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+/// An empty projection still changes the output schema, and the row count has to
+/// survive it: `SELECT count(1)` over a join needs the rows but none of the columns.
+#[tokio::test]
+async fn an_empty_projection_keeps_the_rows() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![10, 20, 30]),
+        ("c1", &vec![100, 200, 300]),
+    );
+    let right = build_table(
+        ("a2", &vec![1, 2, 3]),
+        ("b2", &vec![11, 22, 33]),
+        ("c2", &vec![111, 222, 333]),
+    );
+    let on: JoinOn = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a2", 0)) as _,
+    )];
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        None,
+        Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?
+    .with_projection(Some(vec![]))?;
+
+    assert_eq!(join.schema().fields().len(), 0);
+    let batches =
+        common::collect(join.execute(0, Arc::new(TaskContext::default()))?).await?;
+    let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(rows, 3);
 
     Ok(())
 }

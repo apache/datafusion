@@ -1218,7 +1218,8 @@ impl DefaultPhysicalPlanner {
                     .config()
                     .options()
                     .optimizer
-                    .default_filter_selectivity;
+                    .default_filter_selectivity
+                    .get();
                 let filter_exec: Arc<dyn ExecutionPlan> =
                     Arc::new(filter.with_default_selectivity(selectivity)?);
                 filter_exec
@@ -2559,7 +2560,7 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
@@ -2586,7 +2587,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 }
 
 /// Create an aggregate expression from a logical expression or an alias
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
