@@ -225,12 +225,9 @@ macro_rules! width_bucket_kernel_impl {
                     }
                 }
 
-                let ord = match l.partial_cmp(&h) {
-                    Some(o) => o,
-                    None => {
-                        b.append_null();
-                        continue;
-                    }
+                let Some(ord) = l.partial_cmp(&h) else {
+                    b.append_null();
+                    continue;
                 };
                 if ord == std::cmp::Ordering::Equal {
                     b.append_null();

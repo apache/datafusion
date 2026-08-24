@@ -392,8 +392,8 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             )
         })?;
 
+        let raw_keys = dict_keys.values();
         if dict_keys.null_count() == 0 {
-            let raw_keys = dict_keys.values();
             for &row in rows {
                 let val_idx = raw_keys[row].as_usize();
                 if self.val_to_inner[val_idx] == usize::MAX {
@@ -411,7 +411,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 self.group_to_inner.push(self.val_to_inner[val_idx]);
             }
         } else {
-            let raw_keys = dict_keys.values();
             let null_buf = dict_keys.nulls().unwrap();
             for &row in rows {
                 let slot = if null_buf.is_null(row) {

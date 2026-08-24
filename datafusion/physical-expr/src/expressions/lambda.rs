@@ -93,7 +93,7 @@ impl LambdaExpr {
 
         let mut projection = used_indices.into_iter().collect::<Vec<_>>();
 
-        projection.sort();
+        projection.sort_unstable();
 
         let column_index_map = projection
             .iter()

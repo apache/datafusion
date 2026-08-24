@@ -271,7 +271,7 @@ The time zone can be a value like +00:00, 'Europe/London' etc.
 | to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +--------------------------------------------------------------------------------------------------------------+
 | 2023-05-17T03:59:00.123456789                                                                                |
-+---------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------+
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
@@ -1703,9 +1703,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
@@ -1753,9 +1752,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));

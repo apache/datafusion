@@ -330,8 +330,8 @@ impl<'a> ArrayWrapper<'a> {
 /// Primitive and string element types take a per-type fast path; nested (and any
 /// other) element types fall back to the per-row `eq` kernel, which allocates a
 /// `BooleanArray` per row.
-fn array_has_dispatch_for_array<'a>(
-    haystack: ArrayWrapper<'a>,
+fn array_has_dispatch_for_array(
+    haystack: ArrayWrapper<'_>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let combined_nulls = NullBuffer::union(haystack.nulls(), needle.nulls());
@@ -1066,11 +1066,11 @@ impl ScalarUDFImpl for ArrayHasAll {
     syntax_example = "array_has_any(array1, array2)",
     sql_example = r#"```sql
 > select array_has_any([1, 2, 3], [3, 4]);
-+------------------------------------------+
++-------------------------------------------+
 | array_has_any(List([1,2,3]), List([3,4])) |
-+------------------------------------------+
-| true                                     |
-+------------------------------------------+
++-------------------------------------------+
+| true                                      |
++-------------------------------------------+
 ```"#,
     argument(
         name = "array1",
