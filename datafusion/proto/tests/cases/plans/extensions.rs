@@ -31,8 +31,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::proto::{
-    ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExecutionPlanRegistry,
-    ExecutionPlanRegistryExt, ExtensionExecutionPlan,
+    ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExecutionPlanRegistryExt,
+    ExtensionExecutionPlan, ExtensionPlanParts,
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
@@ -191,7 +191,8 @@ impl ExtensionExecutionPlan for ShuffleExec {
         node: &PhysicalPlanNode,
         ctx: &ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (payload, children) = ctx.decode_extension(node, Self::PLAN_NAME)?;
+        let ExtensionPlanParts { payload, children } =
+            ctx.decode_extension(node, Self::PLAN_NAME)?;
         let proto = ShuffleExecProto::decode(payload)
             .map_err(|e| internal_datafusion_err!("failed to decode ShuffleExec: {e}"))?;
         // Session-dependent decode: the pool never crossed the wire.
@@ -257,7 +258,8 @@ impl ExtensionExecutionPlan for SamplerExec {
         node: &PhysicalPlanNode,
         ctx: &ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (payload, children) = ctx.decode_extension(node, Self::PLAN_NAME)?;
+        let ExtensionPlanParts { payload, children } =
+            ctx.decode_extension(node, Self::PLAN_NAME)?;
         let proto = SamplerExecProto::decode(payload)
             .map_err(|e| internal_datafusion_err!("failed to decode SamplerExec: {e}"))?;
         Ok(Arc::new(SamplerExec {
@@ -603,47 +605,6 @@ fn a_registered_decoder_failing_does_not_fall_back_to_the_codec() -> Result<()> 
     assert!(
         err.to_string().contains("failed to decode ShuffleExec"),
         "the registered decoder's own error must survive, got: {err}"
-    );
-    Ok(())
-}
-
-#[test]
-fn a_decoder_registered_by_name_is_reachable_through_dispatch() -> Result<()> {
-    // The `register_decoder` escape hatch: one Rust type served under a second,
-    // legacy name.
-    let mut registry = ExecutionPlanRegistry::new();
-    registry.register::<ShuffleExec>()?;
-    registry.register_decoder("legacy-alias.ShuffleExec", ShuffleExec::try_from_proto)?;
-    let mut config = session_with(&["worker-1"]);
-    config.set_execution_plan_registry(Arc::new(registry));
-    let ctx = SessionContext::new_with_config(config);
-    let codec = DefaultPhysicalExtensionCodec {};
-
-    // A node stamped with the alias rather than with `PLAN_NAME`.
-    let mut node = encode(
-        Arc::new(ShuffleExec {
-            stage: 5,
-            pool: Arc::new(WorkerPool {
-                endpoints: vec!["worker-1".to_string()],
-            }),
-            child: child(),
-        }),
-        &codec,
-    )?;
-    match &mut node.physical_plan_type {
-        Some(PhysicalPlanType::Extension(extension)) => {
-            extension.plan_name = Some("legacy-alias.ShuffleExec".to_string());
-        }
-        other => panic!("expected an extension node, got {other:?}"),
-    }
-
-    let decoded = decode(&node, &ctx, &codec)?;
-    assert_eq!(
-        decoded
-            .downcast_ref::<ShuffleExec>()
-            .expect("the alias must resolve to the same decoder")
-            .stage,
-        5
     );
     Ok(())
 }

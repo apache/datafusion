@@ -1296,9 +1296,7 @@ pub trait PhysicalPlanNodeExt: Sized {
         // takes the codec chain exactly as before.
         let registry = ctx.task_ctx().session_config().execution_plan_registry();
         if let Some(plan_name) = extension.plan_name.as_deref()
-            && let Some(decoder) = registry
-                .as_ref()
-                .and_then(|registry| registry.decoder(plan_name))
+            && let Some(registry) = registry.as_ref()
         {
             let plan_decoder = ConverterPlanDecoder {
                 ctx,
@@ -1306,7 +1304,15 @@ pub trait PhysicalPlanNodeExt: Sized {
             };
             // The decoder receives the whole node, like every built-in
             // `try_from_proto`, and decodes its own children through the ctx.
-            return decoder(self.node(), &ExecutionPlanDecodeCtx::new(&plan_decoder));
+            // `None` here means no decoder claims the name; a decode *failure*
+            // is returned as-is rather than falling through to the codec.
+            if let Some(decoded) = registry.decode(
+                plan_name,
+                self.node(),
+                &ExecutionPlanDecodeCtx::new(&plan_decoder),
+            ) {
+                return decoded;
+            }
         }
 
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension

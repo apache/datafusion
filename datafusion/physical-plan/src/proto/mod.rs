@@ -93,8 +93,7 @@ use datafusion_proto_models::protobuf::{
 use crate::ExecutionPlan;
 
 pub use registry::{
-    ExecutionPlanDecoder, ExecutionPlanRegistry, ExecutionPlanRegistryExt,
-    ExtensionExecutionPlan,
+    ExecutionPlanRegistry, ExecutionPlanRegistryExt, ExtensionExecutionPlan,
 };
 
 /// Internal dispatch trait backing [`ExecutionPlanEncodeCtx`].
@@ -176,11 +175,15 @@ pub trait ExecutionPlanDecode {
     fn decode_udwf(&self, name: &str, payload: Option<&[u8]>) -> Result<Arc<WindowUDF>>;
 }
 
-/// The wire parts of an extension plan: its opaque payload, borrowed from the
-/// node it was read from, and its already-decoded children.
-///
-/// Returned by [`ExecutionPlanDecodeCtx::decode_extension`].
-pub type ExtensionPlanParts<'n> = (&'n [u8], Vec<Arc<dyn ExecutionPlan>>);
+/// The wire parts of an extension plan, as returned by
+/// [`ExecutionPlanDecodeCtx::decode_extension`].
+#[derive(Debug)]
+pub struct ExtensionPlanParts<'n> {
+    /// The plan's opaque payload, borrowed from the node it was read from.
+    pub payload: &'n [u8],
+    /// The plan's children, already decoded.
+    pub children: Vec<Arc<dyn ExecutionPlan>>,
+}
 
 /// Context handed to [`ExecutionPlan::try_to_proto`].
 ///
@@ -253,9 +256,9 @@ impl<'a> ExecutionPlanEncodeCtx<'a> {
     /// single `PhysicalExtensionNode` variant and carry their own bytes.
     ///
     /// Taking the name from `T` rather than as a string is what keeps the
-    /// written name and the registered name from drifting: a mismatch would
-    /// compile, then silently fall back to the `PhysicalExtensionCodec` on
-    /// whichever machine does the decoding.
+    /// written name and the registered name from drifting: a string mismatch
+    /// would compile, then silently fall back to the `PhysicalExtensionCodec`
+    /// on whichever machine does the decoding.
     ///
     /// The name is the wire discriminator. Register `T` on the decoding session
     /// (see [`registry`]) and decode selects the plan's own `try_from_proto` by
@@ -273,30 +276,12 @@ impl<'a> ExecutionPlanEncodeCtx<'a> {
         T: ExtensionExecutionPlan,
         I: IntoIterator<Item = &'b Arc<dyn ExecutionPlan>>,
     {
-        self.encode_extension_named(T::PLAN_NAME, payload, children)
-    }
-
-    /// [`Self::encode_extension`] with the name supplied explicitly.
-    ///
-    /// For plans registered through
-    /// [`ExecutionPlanRegistry::register_decoder`](registry::ExecutionPlanRegistry::register_decoder),
-    /// whose name is not a compile-time constant of a single type. Prefer
-    /// [`Self::encode_extension`], which cannot disagree with the registration.
-    pub fn encode_extension_named<'b, I>(
-        &self,
-        plan_name: &str,
-        payload: Vec<u8>,
-        children: I,
-    ) -> Result<PhysicalPlanNode>
-    where
-        I: IntoIterator<Item = &'b Arc<dyn ExecutionPlan>>,
-    {
         Ok(PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Extension(
                 PhysicalExtensionNode {
                     node: payload,
                     inputs: self.encode_children(children)?,
-                    plan_name: Some(plan_name.to_string()),
+                    plan_name: Some(T::PLAN_NAME.to_string()),
                 },
             )),
         })
@@ -454,10 +439,10 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
                 "PhysicalPlanNode is not an extension node ({plan_name})"
             );
         };
-        Ok((
-            extension.node.as_slice(),
-            self.decode_children(&extension.inputs)?,
-        ))
+        Ok(ExtensionPlanParts {
+            payload: extension.node.as_slice(),
+            children: self.decode_children(&extension.inputs)?,
+        })
     }
 
     /// An expression-level decode context backed by this plan context, bound to
@@ -566,7 +551,7 @@ mod tests {
         let decoder = StubPlanDecoder::ok();
         let ctx = ExecutionPlanDecodeCtx::new(&decoder);
 
-        let (payload, children) = ctx
+        let ExtensionPlanParts { payload, children } = ctx
             .decode_extension(&node, RegisteredExec::PLAN_NAME)
             .expect("decode must succeed");
 

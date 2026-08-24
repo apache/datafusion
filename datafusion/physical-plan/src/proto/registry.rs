@@ -55,14 +55,21 @@ use datafusion_proto_models::protobuf::PhysicalPlanNode;
 use crate::ExecutionPlan;
 use crate::proto::ExecutionPlanDecodeCtx;
 
-/// The decode half of an extension plan's serialization, as a plain function
-/// pointer.
+/// How the registry stores a decoder internally: a function pointer to the
+/// monomorphized [`ExtensionExecutionPlan::try_from_proto`].
 ///
-/// This is exactly the signature every migrated plan's `try_from_proto`
-/// associated function already has. `try_from_proto` is an inherent function
-/// rather than a trait method precisely so it can return
-/// `Arc<dyn ExecutionPlan>` and be stored like this.
-pub type ExecutionPlanDecoder =
+/// Deliberately private. [`ExtensionExecutionPlan`] is the public contract, and
+/// [`ExecutionPlanRegistry::decode`] is the public way to invoke one, so the
+/// storage can become something else (a `dyn` decoder object, to admit
+/// stateful or closure decoders) without a breaking change.
+///
+/// Note that returning `Arc<dyn ExecutionPlan>` is *not* what keeps
+/// `try_from_proto` off `dyn` dispatch — `ExecutionPlan::with_new_children`
+/// returns exactly that from an object-safe trait. It is that `try_from_proto`
+/// is a constructor: a receiver-less associated function has no `self` to
+/// dispatch on, so it cannot be called through a trait object and a fn pointer
+/// is what a registry can hold.
+type ExecutionPlanDecoder =
     fn(&PhysicalPlanNode, &ExecutionPlanDecodeCtx<'_>) -> Result<Arc<dyn ExecutionPlan>>;
 
 /// An extension [`ExecutionPlan`] that serializes itself, without a
@@ -107,7 +114,7 @@ pub type ExecutionPlanDecoder =
 ///         node: &PhysicalPlanNode,
 ///         ctx: &ExecutionPlanDecodeCtx<'_>,
 ///     ) -> Result<Arc<dyn ExecutionPlan>> {
-///         let (_payload, _children) = ctx.decode_extension(node, Self::PLAN_NAME)?;
+///         let parts = ctx.decode_extension(node, Self::PLAN_NAME)?;
 ///         // ... rebuild `MyExec` from the payload and children ...
 /// #       unimplemented!()
 ///     }
@@ -143,9 +150,7 @@ pub trait ExtensionExecutionPlan: ExecutionPlan + Sized {
 #[derive(Debug, Clone, Copy)]
 struct RegisteredPlan {
     decoder: ExecutionPlanDecoder,
-    /// `None` for decoders registered by name via
-    /// [`ExecutionPlanRegistry::register_decoder`], which carry no Rust type.
-    type_id: Option<TypeId>,
+    type_id: TypeId,
     type_name: &'static str,
 }
 
@@ -175,31 +180,8 @@ impl ExecutionPlanRegistry {
             T::PLAN_NAME,
             RegisteredPlan {
                 decoder: T::try_from_proto,
-                type_id: Some(TypeId::of::<T>()),
+                type_id: TypeId::of::<T>(),
                 type_name: type_name::<T>(),
-            },
-        )
-    }
-
-    /// Register a decoder under an explicit `name`.
-    ///
-    /// Escape hatch for plans whose name is not a compile-time constant (for
-    /// example a generic plan registered once per instantiation, or a legacy
-    /// alias kept alongside the current name). Prefer [`Self::register`].
-    ///
-    /// Unlike [`Self::register`] this cannot tell a repeat registration from a
-    /// collision, so *any* duplicate name is an error.
-    pub fn register_decoder(
-        &mut self,
-        name: impl Into<String>,
-        decoder: ExecutionPlanDecoder,
-    ) -> Result<()> {
-        self.insert(
-            name,
-            RegisteredPlan {
-                decoder,
-                type_id: None,
-                type_name: "<decoder registered by name>",
             },
         )
     }
@@ -219,12 +201,7 @@ impl ExecutionPlanRegistry {
             }
             // Re-registering the same type is a no-op: sessions are often
             // configured by more than one layer of an application.
-            Entry::Occupied(entry)
-                if entry.get().type_id.is_some()
-                    && entry.get().type_id == plan.type_id =>
-            {
-                Ok(())
-            }
+            Entry::Occupied(entry) if entry.get().type_id == plan.type_id => Ok(()),
             Entry::Occupied(entry) => config_err!(
                 "Extension ExecutionPlan name '{}' is already registered by {}, cannot register {}. \
                  Namespace the name with the owning crate to avoid the collision.",
@@ -235,9 +212,26 @@ impl ExecutionPlanRegistry {
         }
     }
 
-    /// The decoder registered under `name`, if any.
-    pub fn decoder(&self, name: &str) -> Option<ExecutionPlanDecoder> {
-        self.decoders.get(name).map(|plan| plan.decoder)
+    /// Decode `node` with the decoder registered under `name`.
+    ///
+    /// `None` means "no decoder claims this name" — the caller falls back to
+    /// the `PhysicalExtensionCodec` chain. `Some(Err(..))` means the decoder
+    /// that *does* own the name failed, which is fatal: falling back there
+    /// would let another codec mis-decode the payload, the very thing the name
+    /// exists to prevent.
+    pub fn decode(
+        &self,
+        name: &str,
+        node: &PhysicalPlanNode,
+        ctx: &ExecutionPlanDecodeCtx<'_>,
+    ) -> Option<Result<Arc<dyn ExecutionPlan>>> {
+        let plan = self.decoders.get(name)?;
+        Some((plan.decoder)(node, ctx))
+    }
+
+    /// Whether a decoder is registered under `name`.
+    pub fn contains(&self, name: &str) -> bool {
+        self.decoders.contains_key(name)
     }
 
     /// Every registered name, in arbitrary order.
@@ -324,7 +318,7 @@ impl ExecutionPlanRegistryExt for SessionConfig {
 mod tests {
     use super::*;
     use crate::proto_test_util::registry_test_plan::{
-        OtherRegisteredExec, RegisteredExec, RegisteredExecClone,
+        OtherRegisteredExec, RegisteredExec, RegisteredExecClone, UnnamedExec,
     };
 
     #[test]
@@ -334,7 +328,7 @@ mod tests {
         registry.register::<RegisteredExec>()?;
 
         assert_eq!(registry.len(), 1);
-        assert!(registry.decoder(RegisteredExec::PLAN_NAME).is_some());
+        assert!(registry.contains(RegisteredExec::PLAN_NAME));
         Ok(())
     }
 
@@ -369,36 +363,21 @@ mod tests {
             names,
             vec![OtherRegisteredExec::PLAN_NAME, RegisteredExec::PLAN_NAME]
         );
-        assert!(registry.decoder("not.registered").is_none());
+        assert!(!registry.contains("not.registered"));
         Ok(())
     }
 
     #[test]
-    fn register_decoder_rejects_any_duplicate_name() -> Result<()> {
-        let mut registry = ExecutionPlanRegistry::new();
-        registry.register_decoder("alias.MyExec", RegisteredExec::try_from_proto)?;
-        assert_eq!(registry.len(), 1);
-
-        let err = registry
-            .register_decoder("alias.MyExec", RegisteredExec::try_from_proto)
-            .expect_err("duplicate name must fail even for the same decoder");
-        assert!(
-            err.to_string().contains("already registered"),
-            "unexpected error: {err}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn register_decoder_rejects_an_empty_name() {
+    fn register_rejects_an_empty_plan_name() {
         let mut registry = ExecutionPlanRegistry::new();
         let err = registry
-            .register_decoder("", RegisteredExec::try_from_proto)
-            .expect_err("empty name must fail");
+            .register::<UnnamedExec>()
+            .expect_err("an empty PLAN_NAME must fail");
         assert!(
             err.to_string().contains("empty name"),
             "unexpected error: {err}"
         );
+        assert!(registry.is_empty());
     }
 
     #[test]
@@ -413,8 +392,8 @@ mod tests {
             .execution_plan_registry()
             .expect("registry must be attached to the session");
         assert_eq!(registry.len(), 2);
-        assert!(registry.decoder(RegisteredExec::PLAN_NAME).is_some());
-        assert!(registry.decoder(OtherRegisteredExec::PLAN_NAME).is_some());
+        assert!(registry.contains(RegisteredExec::PLAN_NAME));
+        assert!(registry.contains(OtherRegisteredExec::PLAN_NAME));
         Ok(())
     }
 
@@ -427,8 +406,7 @@ mod tests {
             cloned
                 .execution_plan_registry()
                 .expect("registry must survive a clone")
-                .decoder(RegisteredExec::PLAN_NAME)
-                .is_some()
+                .contains(RegisteredExec::PLAN_NAME)
         );
         Ok(())
     }

@@ -330,6 +330,7 @@ pub(crate) mod registry_test_plan {
     use crate::execution_plan::{Boundedness, EmissionType};
     use crate::proto::{
         ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExtensionExecutionPlan,
+        ExtensionPlanParts,
     };
     use crate::{
         DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -441,7 +442,7 @@ pub(crate) mod registry_test_plan {
                     node: &PhysicalPlanNode,
                     ctx: &ExecutionPlanDecodeCtx<'_>,
                 ) -> Result<Arc<dyn ExecutionPlan>> {
-                    let (payload, children) =
+                    let ExtensionPlanParts { payload, children } =
                         ctx.decode_extension(node, Self::PLAN_NAME)?;
                     let Ok(payload) = std::str::from_utf8(payload) else {
                         return internal_err!("{} payload is not UTF-8", $plan_name);
@@ -457,6 +458,9 @@ pub(crate) mod registry_test_plan {
     // independent crates could hit.
     extension_plan!(RegisteredExecClone, "datafusion-test.RegisteredExec");
     extension_plan!(OtherRegisteredExec, "datafusion-test.OtherRegisteredExec");
+    // A plan whose author forgot to fill in `PLAN_NAME`: registration must
+    // reject it rather than let an unnamed node reach the wire.
+    extension_plan!(UnnamedExec, "");
 }
 
 /// Decoder that must never run: asserts that the reject paths of a
