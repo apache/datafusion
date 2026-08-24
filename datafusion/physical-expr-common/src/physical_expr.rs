@@ -599,6 +599,12 @@ pub mod proto_encode {
     /// wrap the existing `PhysicalExtensionCodec` +
     /// `PhysicalProtoConverterExtension` plumbing. Expression authors should
     /// use [`PhysicalExprEncodeCtx`] instead of calling this directly.
+    ///
+    /// **Not public API.** `pub` only because the implementors live in another
+    /// crate; `#[doc(hidden)]` records that, so encoding primitives can be
+    /// added here as the serialization hooks grow without breaking downstream
+    /// code.
+    #[doc(hidden)]
     pub trait PhysicalExprEncode {
         /// Encode an expression to a protobuf node.
         fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
@@ -630,10 +636,11 @@ pub mod proto_encode {
 /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
 #[cfg(feature = "proto")]
 pub mod proto_decode {
+    use std::any::{Any, type_name};
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
-    use datafusion_common::Result;
+    use datafusion_common::{Result, internal_datafusion_err};
     use datafusion_proto_models::protobuf::PhysicalExprNode;
 
     use super::PhysicalExpr;
@@ -702,6 +709,38 @@ pub mod proto_decode {
         /// data-type resolution, etc.
         pub fn schema(&self) -> &Schema {
             self.schema
+        }
+
+        /// The session state this decode is running under, so expressions that
+        /// need the function registry or session configuration can reach it —
+        /// the expression-side counterpart of
+        /// `ExecutionPlanDecodeCtx::task_ctx`.
+        ///
+        /// The session type is `datafusion_execution::TaskContext`, which this
+        /// crate cannot name (`datafusion-execution` depends on
+        /// `datafusion-physical-expr-common`, so the reverse edge would be a
+        /// cycle). It is therefore handed over type-erased and recovered with
+        /// a turbofish:
+        ///
+        /// ```ignore
+        /// let task_ctx = ctx.task_ctx::<TaskContext>()?;
+        /// let udf = task_ctx.udf("my_udf")?;
+        /// ```
+        ///
+        /// Errors if the driver exposes no session (some unit-test decoders)
+        /// or if `T` is not the session type it holds.
+        pub fn task_ctx<T: Any + Send + Sync>(&self) -> Result<&T> {
+            let task_ctx = self.decoder.task_ctx().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "no session is available to this PhysicalExprDecodeCtx"
+                )
+            })?;
+            task_ctx.downcast_ref::<T>().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "PhysicalExprDecodeCtx session is not a {}",
+                    type_name::<T>()
+                )
+            })
         }
 
         /// Decode an expression node, recursing into child sub-expressions.
@@ -784,6 +823,13 @@ pub mod proto_decode {
     /// Internal dispatch trait. Implementors live in `datafusion-proto`.
     /// Expression authors should use [`PhysicalExprDecodeCtx`] instead of
     /// calling this directly.
+    ///
+    /// **Not public API.** `pub` only because the implementors live in another
+    /// crate; `#[doc(hidden)]` records that, so decoding primitives can be
+    /// added here as the serialization hooks grow without breaking downstream
+    /// code. New methods carry a default so downstream implementors keep
+    /// compiling.
+    #[doc(hidden)]
     pub trait PhysicalExprDecode {
         /// Decode a proto node into a concrete `PhysicalExpr`. The schema is
         /// passed alongside so implementations can support recursive children
@@ -793,6 +839,19 @@ pub mod proto_decode {
             node: &PhysicalExprNode,
             schema: &Schema,
         ) -> Result<Arc<dyn PhysicalExpr>>;
+
+        /// The session state this decode is running under, type-erased.
+        ///
+        /// This is a `datafusion_execution::TaskContext`, but that type lives
+        /// in a crate that depends on this one, so it cannot be named here —
+        /// see [`PhysicalExprDecodeCtx::task_ctx`], which does the downcast.
+        ///
+        /// Returning `None` (the default) means the driver has no session to
+        /// offer, which is the case for the lightweight decoders used in unit
+        /// tests.
+        fn task_ctx(&self) -> Option<&(dyn Any + Send + Sync)> {
+            None
+        }
     }
 }
 

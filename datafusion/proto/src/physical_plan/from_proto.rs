@@ -499,4 +499,8 @@ impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprD
         self.proto_converter
             .proto_to_physical_expr(node, schema, self.ctx)
     }
+
+    fn task_ctx(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(self.ctx.task_ctx())
+    }
 }
