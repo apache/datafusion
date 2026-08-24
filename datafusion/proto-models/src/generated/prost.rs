@@ -2559,6 +2559,8 @@ pub struct SortMergeJoinExecNode {
     pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
     pub null_equality: i32,
+    #[prost(uint32, repeated, tag = "8")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncFuncExecNode {

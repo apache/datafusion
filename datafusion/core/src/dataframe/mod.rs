@@ -2600,22 +2600,33 @@ impl DataFrame {
             .collect()
     }
 
-    /// Helper for creating DataFrame.
+    /// Create a DataFrame from named Arrow arrays.
+    ///
     /// # Example
+    ///
     /// ```
+    /// use std::sync::Arc;
     /// use arrow::array::{ArrayRef, Int32Array, StringArray};
     /// use datafusion::prelude::DataFrame;
-    /// use std::sync::Arc;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)]).unwrap();
-    /// // +----+------+,
-    /// // | id | name |,
-    /// // +----+------+,
-    /// // | 1  | foo  |,
-    /// // | 2  | bar  |,
-    /// // | 3  | baz  |,
-    /// // +----+------+,
+    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)])?;
+    /// let expected = vec![
+    ///     "+----+------+",
+    ///     "| id | name |",
+    ///     "+----+------+",
+    ///     "| 1  | foo  |",
+    ///     "| 2  | bar  |",
+    ///     "| 3  | baz  |",
+    ///     "+----+------+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn from_columns(columns: Vec<(&str, ArrayRef)>) -> Result<Self> {
         let fields = columns
@@ -2636,28 +2647,33 @@ impl DataFrame {
     }
 }
 
-/// Macro for creating DataFrame.
+/// Create a DataFrame from column names and values.
+///
 /// # Example
+///
 /// ```
 /// use datafusion::prelude::dataframe;
 /// # use datafusion::error::Result;
+/// # use datafusion_common::assert_batches_sorted_eq;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let df = dataframe!(
-///    "id" => [1, 2, 3],
-///    "name" => ["foo", "bar", "baz"]
-///  )?;
-/// df.show().await?;
-/// // +----+------+,
-/// // | id | name |,
-/// // +----+------+,
-/// // | 1  | foo  |,
-/// // | 2  | bar  |,
-/// // | 3  | baz  |,
-/// // +----+------+,
-/// let df_empty = dataframe!()?; // empty DataFrame
-/// assert_eq!(df_empty.schema().fields().len(), 0);
-/// assert_eq!(df_empty.count().await?, 0);
+///     "id" => [1, 2, 3],
+///     "name" => ["foo", "bar", "baz"]
+/// )?;
+/// let expected = vec![
+///     "+----+------+",
+///     "| id | name |",
+///     "+----+------+",
+///     "| 1  | foo  |",
+///     "| 2  | bar  |",
+///     "| 3  | baz  |",
+///     "+----+------+",
+/// ];
+/// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+/// # let df_empty = dataframe!()?;
+/// # assert_eq!(df_empty.schema().fields().len(), 0);
+/// # assert_eq!(df_empty.count().await?, 0);
 /// # Ok(())
 /// # }
 /// ```
