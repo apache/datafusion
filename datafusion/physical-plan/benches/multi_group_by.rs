@@ -66,7 +66,7 @@ fn generate_batches(
 
     let num_full_batches = num_rows / batch_size;
     let remainder = num_rows % batch_size;
-    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+    let num_batches = num_full_batches + usize::from(remainder > 0);
 
     (0..num_batches)
         .map(|batch_idx| {
@@ -386,7 +386,7 @@ fn generate_fsb_batches(
 
     let num_full_batches = num_rows / batch_size;
     let remainder = num_rows % batch_size;
-    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+    let num_batches = num_full_batches + usize::from(remainder > 0);
 
     (0..num_batches)
         .map(|batch_idx| {
@@ -477,7 +477,7 @@ fn generate_f16_batches(
 
     let num_full_batches = num_rows / batch_size;
     let remainder = num_rows % batch_size;
-    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+    let num_batches = num_full_batches + usize::from(remainder > 0);
 
     (0..num_batches)
         .map(|batch_idx| {
@@ -559,7 +559,7 @@ fn generate_duration_batches(
 ) -> Vec<Vec<ArrayRef>> {
     let num_full_batches = num_rows / batch_size;
     let remainder = num_rows % batch_size;
-    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+    let num_batches = num_full_batches + usize::from(remainder > 0);
 
     (0..num_batches)
         .map(|batch_idx| {
@@ -643,7 +643,7 @@ fn generate_interval_batches(
 ) -> Vec<Vec<ArrayRef>> {
     let num_full_batches = num_rows / batch_size;
     let remainder = num_rows % batch_size;
-    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+    let num_batches = num_full_batches + usize::from(remainder > 0);
 
     (0..num_batches)
         .map(|batch_idx| {
@@ -730,7 +730,7 @@ fn generate_decimal256_batches(
 ) -> Vec<Vec<ArrayRef>> {
     let num_full_batches = num_rows / batch_size;
     let remainder = num_rows % batch_size;
-    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+    let num_batches = num_full_batches + usize::from(remainder > 0);
 
     (0..num_batches)
         .map(|batch_idx| {

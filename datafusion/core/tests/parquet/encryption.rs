@@ -41,10 +41,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
-async fn read_parquet_test_data<'a, T: Into<String>>(
+async fn read_parquet_test_data<T: Into<String>>(
     path: T,
     ctx: &SessionContext,
-    options: ParquetReadOptions<'a>,
+    options: ParquetReadOptions<'_>,
 ) -> Vec<RecordBatch> {
     ctx.read_parquet(path.into(), options)
         .await

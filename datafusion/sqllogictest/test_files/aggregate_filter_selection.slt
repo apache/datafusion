@@ -1,0 +1,100 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Aggregate FILTER must select rows before evaluating fallible arguments.
+
+statement ok
+CREATE TABLE aggregate_filter_selection (g INT, v BIGINT);
+
+statement ok
+INSERT INTO aggregate_filter_selection VALUES
+  (1, 0),
+  (2, 2),
+  (3, 0),
+  (4, 5);
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 100000;
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = true;
+
+query II
+SELECT g, SUM(10 / v) FILTER (WHERE v <> 0)
+FROM aggregate_filter_selection
+GROUP BY g
+ORDER BY g;
+----
+1 NULL
+2 5
+3 NULL
+4 2
+
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+statement ok
+CREATE TABLE aggregate_filter_selection_skip (g INT, v BIGINT);
+
+statement ok
+INSERT INTO aggregate_filter_selection_skip VALUES
+  (1, 2),
+  (3, 5),
+  (2, 0);
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = true;
+
+query II
+SELECT g, SUM(10 / v) FILTER (WHERE v <> 0)
+FROM aggregate_filter_selection_skip
+GROUP BY g
+ORDER BY g;
+----
+1 5
+2 NULL
+3 2
+
+statement ok
+RESET datafusion.execution.enable_migration_aggregate;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE aggregate_filter_selection_skip;
+
+statement ok
+DROP TABLE aggregate_filter_selection;

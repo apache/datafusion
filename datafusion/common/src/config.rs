@@ -748,6 +748,92 @@ impl Display for ConfigMinTwoUsize {
     }
 }
 
+/// Used for [`OptimizerOptions::default_filter_selectivity`] to represent
+/// an integer percentage value, when valid values are 0 to 100 inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigFilterSelectivity(u8);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use
+/// [`ConfigFilterSelectivity::try_new`].
+const fn filter_selectivity_default(value: u8) -> ConfigFilterSelectivity {
+    if value <= 100 {
+        ConfigFilterSelectivity(value)
+    } else {
+        panic!("value must be between 0 and 100")
+    }
+}
+
+impl ConfigFilterSelectivity {
+    fn try_from_i64(value: i64) -> Result<Self> {
+        if (0..=100).contains(&value) {
+            Ok(Self(value as u8))
+        } else {
+            _config_err!("value must be between 0 and 100, got {value}")
+        }
+    }
+
+    /// Creates a [`ConfigFilterSelectivity`], returning a configuration error
+    /// if `value` is greater than 100.
+    pub fn try_new(value: u8) -> Result<Self> {
+        Self::try_from_i64(i64::from(value))
+    }
+
+    /// Returns the wrapped `u8`.
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<ConfigFilterSelectivity> for u8 {
+    fn from(value: ConfigFilterSelectivity) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigFilterSelectivity {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from_i64(default_config_transform::<i64>(s)?)
+    }
+}
+
+impl ConfigField for ConfigFilterSelectivity {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigFilterSelectivity::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigFilterSelectivity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -1688,7 +1774,7 @@ config_namespace! {
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
-        pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
+        pub hash_join_single_partition_threshold: usize, default = 4 * 1024 * 1024
 
         /// The maximum estimated size in rows for one input side of a HashJoin
         /// will be collected into a single partition
@@ -1727,7 +1813,7 @@ config_namespace! {
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
-        pub default_filter_selectivity: u8, default = 20
+        pub default_filter_selectivity: ConfigFilterSelectivity, default = filter_selectivity_default(20)
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
@@ -1824,6 +1910,65 @@ impl ExecutionOptions {
     }
 }
 
+/// Format used to display `Duration` values in query output. Mirrors
+/// [`arrow::util::display::DurationFormat`].
+///
+/// See [`FormatOptions::duration_format`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigDurationFormat {
+    /// Format durations in a human readable form, e.g. `1h2m3s450ms`.
+    #[default]
+    Pretty,
+    /// Format durations as an ISO 8601 duration string, e.g. `PT1H2M3.45S`.
+    Iso8601,
+}
+
+impl FromStr for ConfigDurationFormat {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "pretty" => Ok(Self::Pretty),
+            "iso8601" => Ok(Self::Iso8601),
+            _ => _config_err!(
+                "Invalid duration format: {s}. Valid values are pretty or iso8601"
+            ),
+        }
+    }
+}
+
+impl ConfigField for ConfigDurationFormat {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ConfigDurationFormat::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for ConfigDurationFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Pretty => "pretty",
+            Self::Iso8601 => "iso8601",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl From<ConfigDurationFormat> for arrow::util::display::DurationFormat {
+    fn from(value: ConfigDurationFormat) -> Self {
+        match value {
+            ConfigDurationFormat::Pretty => arrow::util::display::DurationFormat::Pretty,
+            ConfigDurationFormat::Iso8601 => {
+                arrow::util::display::DurationFormat::ISO8601
+            }
+        }
+    }
+}
+
 config_namespace! {
     /// Options controlling the format of output when printing record batches
     /// Copies [`arrow::util::display::FormatOptions`]
@@ -1844,7 +1989,7 @@ config_namespace! {
         /// Time format for time arrays
         pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
         /// Duration format. Can be either `"pretty"` or `"ISO8601"`
-        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        pub duration_format: ConfigDurationFormat, default = ConfigDurationFormat::Pretty
         /// Show types in visual representation batches
         pub types_info: bool, default = false
     }
@@ -1853,17 +1998,6 @@ config_namespace! {
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
-        let duration_format = match options.duration_format.as_str() {
-            "pretty" => arrow::util::display::DurationFormat::Pretty,
-            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
-            _ => {
-                return _config_err!(
-                    "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    options.duration_format
-                );
-            }
-        };
-
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -1872,7 +2006,7 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
             .with_timestamp_format(options.timestamp_format.as_deref())
             .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
             .with_time_format(options.time_format.as_deref())
-            .with_duration_format(duration_format)
+            .with_duration_format(options.duration_format.into())
             .with_types_info(options.types_info))
     }
 }

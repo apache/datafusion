@@ -32,6 +32,7 @@ use datafusion_common::{
 use log::debug;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ptr::from_ref;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ type CacheKey = (usize, Option<usize>);
 
 fn cache_key(plan: &dyn ExecutionPlan, partition: Option<usize>) -> CacheKey {
     (
-        plan as *const dyn ExecutionPlan as *const () as usize,
+        from_ref::<dyn ExecutionPlan>(plan) as *const () as usize,
         partition,
     )
 }

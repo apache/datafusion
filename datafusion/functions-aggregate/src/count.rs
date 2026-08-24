@@ -139,7 +139,7 @@ pub fn count_all_window() -> Expr {
     sql_example = r#"```sql
 > SELECT count(column_name) FROM table_name;
 +-----------------------+
-| count(column_name)     |
+| count(column_name)    |
 +-----------------------+
 | 100                   |
 +-----------------------+

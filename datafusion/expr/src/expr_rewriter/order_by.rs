@@ -89,9 +89,7 @@ fn rewrite_in_terms_of_projection(
         // (e.g. "c1" --> "t.c1") because that normalization is done
         // at the input of the aggregate.
 
-        let normalized_expr = if let Ok(e) = normalize_col(expr.clone(), input) {
-            e
-        } else {
+        let Ok(normalized_expr) = normalize_col(expr.clone(), input) else {
             // The expr is not based on Aggregate plan output. Skip it.
             return Ok(Transformed::no(expr));
         };

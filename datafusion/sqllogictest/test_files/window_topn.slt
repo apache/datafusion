@@ -283,7 +283,7 @@ physical_plan
 54)│    --------------------   │
 55)│         bytes: 480        │
 56)│       format: memory      │
-57)│          rows: 1          │
+57)│          rows: 10         │
 58)└───────────────────────────┘
 
 statement ok
@@ -365,8 +365,114 @@ physical_plan
 04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Sibling safety: an aggregate sibling (SUM) is computed over the pruned
+# input, so the rule must NOT fire even though the filter is on ROW_NUMBER.
+# SUM over the default RANGE frame includes tie-peers that pruning would
+# drop, giving a wrong sum. The plan keeps SortExec + FilterExec — no
+# PartitionedTopKExec.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    SUM(val) OVER (PARTITION BY pk ORDER BY val) as running_sum
+  FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, sum(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as running_sum]
+02)--FilterExec: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Sibling safety: a LEAD sibling reads following (pruned) rows, so the
+# rule must NOT fire — the boundary row's LEAD would resolve to a pruned
+# row. The plan keeps SortExec + FilterExec.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    LEAD(val) OVER (PARTITION BY pk ORDER BY val) as next_val
+  FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, lead(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as next_val]
+02)--FilterExec: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 SET datafusion.explain.physical_plan_only = false;
+
+# Sibling safety (correctness): LEAD reads following rows, so if the rule
+# fired, the pruned input would give a wrong LEAD at the retained boundary
+# — each rn=2 row's next_val would become NULL instead of the (pruned)
+# rn=3 row's value. The guard keeps the normal plan, so LEAD sees the full
+# partition and next_val is correct (30 / 25 / 100 for the rn=2 rows).
+query IIIII rowsort
+SELECT id, pk, val, rn, next_val FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    LEAD(val)    OVER (PARTITION BY pk ORDER BY val) as next_val
+  FROM window_topn_t
+) WHERE rn <= 2;
+----
+1 1 10 1 20
+10 3 75 2 100
+2 1 20 2 30
+5 2 5 1 15
+6 2 15 2 25
+9 3 50 1 75
+
+# A tie table for sibling-safety correctness: pk=1 has three peers at
+# val=5, one 10, one 20 (row_number 1..5; rank 1,1,1,4,5; dense_rank
+# 1,1,1,2,3).
+statement ok
+CREATE TABLE window_topn_sib_t (id INT, pk INT, val INT) AS VALUES
+  (1, 1, 5),
+  (2, 1, 5),
+  (3, 1, 5),
+  (4, 1, 10),
+  (5, 1, 20);
+
+# SUM sibling (correctness): fetch=2 but there are three peers at val=5,
+# so one peer would be pruned. The guard keeps the normal plan, so the
+# RANGE frame sees all three 5s and running_sum = 15. If the rule fired,
+# the pruned 2-row input would sum to 10. (id excluded — which two of the
+# three tied rows get row_number 1/2 is not deterministic.)
+query III rowsort
+SELECT pk, val, running_sum FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    SUM(val)     OVER (PARTITION BY pk ORDER BY val) as running_sum
+  FROM window_topn_sib_t
+) WHERE rn <= 2;
+----
+1 5 15
+1 5 15
+
+# All three ranking siblings (ROW_NUMBER + RANK + DENSE_RANK) over the same
+# window are prune-safe, so the rule DOES fire (filter on rn). Verify the
+# rank/dense_rank values stay correct under the optimized plan — including
+# the val=10 row where row_number=4, rank=4, dense_rank=2 all differ.
+query IIII rowsort
+SELECT pk, val, rnk, dr FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    RANK()       OVER (PARTITION BY pk ORDER BY val) as rnk,
+    DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr
+  FROM window_topn_sib_t
+) WHERE rn <= 4;
+----
+1 10 4 2
+1 5 1 1
+1 5 1 1
+1 5 1 1
+
+statement ok
+DROP TABLE window_topn_sib_t;
 
 # Test 15: ROW_NUMBER with DESC ordering — correctness
 query III rowsort
@@ -1088,6 +1194,353 @@ SELECT id, pk, val FROM (
 
 statement ok
 DROP TABLE window_topn_rank_null_t;
+
+###############################################################################
+# DENSE_RANK() tests
+###############################################################################
+#
+# DENSE_RANK semantics: `WHERE dr <= K` keeps every row whose ORDER BY
+# value is among the K distinct-smallest ORDER BY values in the
+# partition. The total kept per partition is unbounded in
+# rows-per-distinct-value (unlike RANK, which is bounded above by
+# `K + ties at the boundary`).
+#
+# The tests below exercise:
+#   - heavy ties within a distinct ob key (all rows retained per key)
+#   - cross-batch appends under the same key
+#   - eviction of the entire max-key group when a strictly-smaller
+#     distinct ob arrives
+#   - the empty-ORDER-BY degenerate case (rule must NOT fire)
+
+statement ok
+SET datafusion.optimizer.enable_window_topn = true;
+
+statement ok
+CREATE TABLE window_topn_dense_rank_t (id INT, pk INT, val INT) AS VALUES
+  -- pk=1: distinct top-2 = {10, 20}. Every row at those keeps dr <= 2.
+  --   10 appears once, 20 appears three times (heavy tie), 30/40 dropped.
+  (1, 1, 10),
+  (2, 1, 20),
+  (3, 1, 20),
+  (4, 1, 20),
+  (5, 1, 30),
+  (6, 1, 40),
+  -- pk=2: distinct top-2 = {5, 15}. Two rows at 5, one at 15.
+  (7, 2, 5),
+  (8, 2, 5),
+  (9, 2, 15),
+  (10, 2, 25),
+  -- pk=3: 100 then four 200s — 200 group is the "boundary-max" but with
+  -- dense_rank <= 2 both distinct values (100, 200) are retained.
+  (11, 3, 100),
+  (12, 3, 200),
+  (13, 3, 200),
+  (14, 3, 200),
+  (15, 3, 200),
+  (16, 3, 300);
+
+# Test DR1: Basic DENSE_RANK correctness — every row at the K distinct
+# smallest values is retained.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 2;
+----
+1 1 10
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+2 1 20
+3 1 20
+4 1 20
+7 2 5
+8 2 5
+9 2 15
+
+# Test DR2: EXPLAIN shows PartitionedTopKExec with fn=dense_rank
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 2;
+----
+logical_plan
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS dr
+02)--Filter: dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as dr]
+02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test DR3: dr < 3 should give the same results (fetch = K-1 = 2)
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE dr < 3;
+----
+1 1 10
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+2 1 20
+3 1 20
+4 1 20
+7 2 5
+8 2 5
+9 2 15
+
+# Test DR4: flipped predicate (2 >= dr) also fires the rule
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE 2 >= dr;
+----
+1 1 10
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+2 1 20
+3 1 20
+4 1 20
+7 2 5
+8 2 5
+9 2 15
+
+# Test DR5: K exceeds every partition's distinct count — nothing dropped.
+# pk=1: 4 distinct, pk=2: 3 distinct, pk=3: 3 distinct. dr <= 100 retains all.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 100;
+----
+1 1 10
+10 2 25
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+16 3 300
+2 1 20
+3 1 20
+4 1 20
+5 1 30
+6 1 40
+7 2 5
+8 2 5
+9 2 15
+
+# Test DR6: DENSE_RANK without PARTITION BY — should NOT trigger the optimization
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, DENSE_RANK() OVER (ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 2;
+----
+logical_plan
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS dr
+02)--Filter: dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as dr]
+02)--FilterExec: dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 2
+03)----BoundedWindowAggExec: wdw=[dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test DR7: DENSE_RANK with empty ORDER BY — degenerate (every row at
+# dense_rank 1), rule must NOT fire.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 3;
+----
+logical_plan
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS dr
+02)--Filter: dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING <= UInt64(3)
+03)----WindowAggr: windowExpr=[[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as dr]
+02)--FilterExec: dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 <= 3
+03)----BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test DR8: DESC ordering — distinct-top-2 DESC per partition.
+#   pk=1 DESC {40, 30, 20, 10}: top-2 = {40, 30} → 2 rows
+#   pk=2 DESC {25, 15, 5}:      top-2 = {25, 15} → 2 rows
+#   pk=3 DESC {300, 200, 100}:  top-2 = {300, 200} → 5 rows (200 appears 4x)
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val DESC) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 2;
+----
+10 2 25
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+16 3 300
+5 1 30
+6 1 40
+9 2 15
+
+# Test DR9: multi-column PARTITION BY
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk, id ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 1;
+----
+1 1 10
+10 2 25
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+16 3 300
+2 1 20
+3 1 20
+4 1 20
+5 1 30
+6 1 40
+7 2 5
+8 2 5
+9 2 15
+
+# Test DR10: mixed ROW_NUMBER + DENSE_RANK — filter on DR should optimize
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr
+  FROM window_topn_dense_rank_t
+) WHERE dr <= 2;
+----
+logical_plan
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS dr
+02)--Filter: dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as dr]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test DR11: `dr < 1` keeps nothing (limit_n = 0). The rule must NOT
+# fire (a fetch=0 PartitionedTopKExec would panic); the ordinary
+# FilterExec returns the empty result.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM window_topn_dense_rank_t
+) WHERE dr < 1;
+----
+
+# Test DR11b: ORDER BY keys fully covered by the PARTITION BY prefix
+# (`PARTITION BY pk ORDER BY pk`). The deduplicated sort ordering is just
+# `[pk]`, so no order key survives past the partition prefix. The rule
+# must NOT fire — a PartitionedTopKExec built with zero order expressions
+# panics on execution. Every row ties at dense_rank 1, so `dr <= 2` keeps
+# the whole table (returned via the ordinary window + filter plan).
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY pk) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 2;
+----
+1 1 10
+10 2 25
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+16 3 300
+2 1 20
+3 1 20
+4 1 20
+5 1 30
+6 1 40
+7 2 5
+8 2 5
+9 2 15
+
+statement ok
+DROP TABLE window_topn_dense_rank_t;
+
+# ---------------------------------------------------------------------------
+# DENSE_RANK NULL-in-ORDER-BY ordering
+#
+# Under DENSE_RANK a NULL is a distinct ob value occupying its own rank
+# slot; whether it lands among the K distinct-smallest depends on
+# NULLS FIRST / NULLS LAST. Correctness rests entirely on the
+# byte-comparable row encoding driving the distinct-ob key ordering, so
+# exercise both null placements explicitly.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE window_topn_dr_null_t (id INT, pk INT, val INT) AS VALUES
+  (1, 1, NULL),
+  (2, 1, NULL),
+  (3, 1, 10),
+  (4, 1, 20),
+  (5, 1, 30);
+
+# Test DR12: NULLS FIRST — NULL is the smallest distinct ob (dr 1), then
+# 10 (dr 2). `dr <= 2` keeps both NULL rows and val=10.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as dr
+  FROM window_topn_dr_null_t
+) WHERE dr <= 2;
+----
+1 1 NULL
+2 1 NULL
+3 1 10
+
+# Test DR13: EXPLAIN confirms the NULLS FIRST case uses PartitionedTopKExec.
+query TT
+EXPLAIN SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as dr
+  FROM window_topn_dr_null_t
+) WHERE dr <= 2;
+----
+logical_plan
+01)Projection: window_topn_dr_null_t.id, window_topn_dr_null_t.pk, window_topn_dr_null_t.val
+02)--Filter: dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_dr_null_t projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val]
+02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+04)------PartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test DR14: NULLS LAST — NULL is the largest distinct ob (dr 4). 10 (dr
+# 1) and 20 (dr 2) are the two smallest, so `dr <= 2` excludes the NULLs.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val ASC NULLS LAST) as dr
+  FROM window_topn_dr_null_t
+) WHERE dr <= 2;
+----
+3 1 10
+4 1 20
+
+statement ok
+DROP TABLE window_topn_dr_null_t;
 
 # Reset config to default (false)
 statement ok
