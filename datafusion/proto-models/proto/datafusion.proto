@@ -992,6 +992,12 @@ message ListUnnest {
 message PhysicalExtensionNode {
   bytes node = 1;
   repeated PhysicalPlanNode inputs = 2;
+  // Globally unique, namespaced name of the extension plan type (e.g.
+  // `my-crate.MyExec`), written by plans that serialize themselves through
+  // `ExecutionPlan::try_to_proto`. When present and registered on the decoding
+  // session, it selects the decoder directly; otherwise decoding falls back to
+  // the `PhysicalExtensionCodec` chain. Absent for codec-encoded plans.
+  optional string plan_name = 3;
 }
 
 // physical expressions

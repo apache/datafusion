@@ -1545,6 +1545,13 @@ pub struct PhysicalExtensionNode {
     pub node: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+    /// Globally unique, namespaced name of the extension plan type (e.g.
+    /// `my-crate.MyExec`), written by plans that serialize themselves through
+    /// `ExecutionPlan::try_to_proto`. When present and registered on the decoding
+    /// session, it selects the decoder directly; otherwise decoding falls back to
+    /// the `PhysicalExtensionCodec` chain. Absent for codec-encoded plans.
+    #[prost(string, optional, tag = "3")]
+    pub plan_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]

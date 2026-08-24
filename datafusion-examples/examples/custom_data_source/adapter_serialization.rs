@@ -360,6 +360,11 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
                     PhysicalExtensionNode {
                         node: payload_bytes,
                         inputs: vec![inner_proto],
+                        // This converter recognizes its own nodes by the marker
+                        // inside the payload, so it needs no `plan_name`
+                        // discriminator. Plans that decode through the session
+                        // registry set it to their `PLAN_NAME` instead.
+                        plan_name: None,
                     },
                 )),
             });

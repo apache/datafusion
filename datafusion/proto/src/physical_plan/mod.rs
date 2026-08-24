@@ -1265,7 +1265,13 @@ pub trait PhysicalPlanNodeExt: Sized {
 
                 Ok(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::Extension(
-                        protobuf::PhysicalExtensionNode { node: buf, inputs },
+                        protobuf::PhysicalExtensionNode {
+                            node: buf,
+                            inputs,
+                            // Codec-encoded plans stay anonymous on the wire:
+                            // the codec that wrote them decodes them back.
+                            plan_name: None,
+                        },
                     )),
                 })
             }
