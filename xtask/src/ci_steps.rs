@@ -353,6 +353,7 @@ impl StepContext {
                     "--",
                     "--substrait-round-trip",
                     "limit.slt",
+                    "configmatrix_show_smoke.slt",
                 ]);
             }
             _ => return Err(StepError::Usage),
@@ -771,7 +772,7 @@ cargo test \
 -p datafusion-sqllogictest \
 --test sqllogictests \
 --features substrait \
--- --substrait-round-trip limit.slt
+-- --substrait-round-trip limit.slt configmatrix_show_smoke.slt
 ")
                 },
             },

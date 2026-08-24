@@ -195,7 +195,8 @@ Runs the same `.slt` once per combination of config values. Each directive is a 
 - Repeat the directive to nest keys. Values are the cartesian product.
 - Whitespace-trimmed and deduped; repeated keys merge value lists.
 - Unknown key or invalid value fails fast, naming the file, key, and value.
-- Test failures include `[configMatrix: k=v, ...]` in the `N errors in file …` banner.
+- Supported by the default runner and by `--substrait-round-trip`; `--complete` and the Postgres runner ignore matrix directives.
+- Test failures include `[configMatrix: k=v, ...]` at the end of the `N errors in file …` banner line.
 
 Nested example (2 × 2 = 4 runs):
 

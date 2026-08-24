@@ -23,10 +23,9 @@ use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err}
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    ConfigMatrixCombination, CurrentlyExecutingSqlTracker, DataFusion, Filter,
-    TestContext, df_value_validator, matrix_tag, parse_config_matrix_from_file,
-    read_dir_recursive, setup_scratch_dir, should_skip_file, should_skip_record,
-    value_normalizer,
+    CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
+    df_value_validator, expand_matrix_runs, matrix_tag_suffix, read_dir_recursive,
+    setup_scratch_dir, should_skip_file, should_skip_record, value_normalizer,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -64,7 +63,6 @@ const TPCH_PREFIX: &str = "tpch";
 const SQLITE_PREFIX: &str = "sqlite";
 const ENCRYPTED_PARQUET_FILE: &str = "encrypted_parquet.slt";
 const ERRS_PER_FILE_LIMIT: usize = 10;
-const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
 
 #[derive(Debug)]
 struct FileTiming {
@@ -126,7 +124,6 @@ async fn run_tests() -> Result<()> {
     env_logger::init();
 
     let options: Options = Parser::parse();
-    let timing_debug_slow_files = is_env_truthy(TIMING_DEBUG_SLOW_FILES_ENV);
     if options.list {
         // nextest parses stdout, so print messages to stderr
         eprintln!("NOTICE: --list option unsupported, quitting");
@@ -275,7 +272,7 @@ async fn run_tests() -> Result<()> {
                 };
 
                 let elapsed = file_start.elapsed();
-                if timing_debug_slow_files && elapsed.as_secs() > 30 {
+                if options.timing_debug_slow_files && elapsed.as_secs() > 30 {
                     eprintln!(
                         "Slow file: {} took {:.1}s",
                         relative_path_for_timing.display(),
@@ -324,59 +321,55 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
-    let mut file_timings: Vec<FileTiming> = file_results
-        .iter()
-        .map(|(_, path, _, elapsed)| FileTiming {
-            relative_path: path.clone(),
-            elapsed: *elapsed,
-        })
-        .collect();
+    let mut file_timings = Vec::with_capacity(file_results.len());
+    let mut errors = Vec::new();
+    for (result, test_file_path, current_sql, elapsed) in file_results {
+        file_timings.push(FileTiming {
+            relative_path: test_file_path.clone(),
+            elapsed,
+        });
+        let err = match result {
+            Err(e) => {
+                let error = DataFusionError::External(Box::new(e));
+                let current_sql = current_sql.get_currently_running_sqls();
+                Some(if current_sql.is_empty() {
+                    error.context(format!(
+                        "failure in {} with no currently running sql tracked",
+                        test_file_path.display()
+                    ))
+                } else if current_sql.len() == 1 {
+                    let sql = &current_sql[0];
+                    error.context(format!(
+                        "failure in {} for sql {sql}",
+                        test_file_path.display()
+                    ))
+                } else {
+                    let sqls = current_sql
+                        .iter()
+                        .enumerate()
+                        .map(|(i, sql)| format!("\n[{}]: {}", i + 1, sql))
+                        .collect::<String>();
+                    error.context(format!(
+                        "failure in {} for multiple currently running sqls: {}",
+                        test_file_path.display(),
+                        sqls
+                    ))
+                })
+            }
+            Ok(thread_result) => thread_result.err(),
+        };
+        if let Some(err) = err {
+            errors.push(err);
+        }
+    }
 
-    file_timings.sort_by(|a, b| {
+    file_timings.sort_unstable_by(|a, b| {
         b.elapsed
             .cmp(&a.elapsed)
             .then_with(|| a.relative_path.cmp(&b.relative_path))
     });
 
     print_timing_summary(&options, &file_timings)?;
-
-    let errors: Vec<_> = file_results
-        .into_iter()
-        .filter_map(|(result, test_file_path, current_sql, _)| {
-            // Filter out any Ok() leaving only the DataFusionErrors
-            match result {
-                Err(e) => {
-                    let error = DataFusionError::External(Box::new(e));
-                    let current_sql = current_sql.get_currently_running_sqls();
-
-                    if current_sql.is_empty() {
-                        Some(error.context(format!(
-                            "failure in {} with no currently running sql tracked",
-                            test_file_path.display()
-                        )))
-                    } else if current_sql.len() == 1 {
-                        let sql = &current_sql[0];
-                        Some(error.context(format!(
-                            "failure in {} for sql {sql}",
-                            test_file_path.display()
-                        )))
-                    } else {
-                        let sqls = current_sql
-                            .iter()
-                            .enumerate()
-                            .map(|(i, sql)| format!("\n[{}]: {}", i + 1, sql))
-                            .collect::<String>();
-                        Some(error.context(format!(
-                            "failure in {} for multiple currently running sqls: {}",
-                            test_file_path.display(),
-                            sqls
-                        )))
-                    }
-                }
-                Ok(thread_result) => thread_result.err(),
-            }
-        })
-        .collect();
 
     m.println(format!(
         "Completed {} test files in {}",
@@ -419,17 +412,6 @@ fn print_timing_summary(options: &Options, file_timings: &[FileTiming]) -> Resul
     Ok(())
 }
 
-fn is_env_truthy(name: &str) -> bool {
-    std::env::var_os(name)
-        .and_then(|value| value.into_string().ok())
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
-
 #[cfg(feature = "substrait")]
 async fn run_test_file_substrait_round_trip(
     test_file: TestFile,
@@ -444,17 +426,69 @@ async fn run_test_file_substrait_round_trip(
         path,
         relative_path,
     } = test_file;
+
+    let mut records = parse_records(&path)?;
+    let count = count_records(&records, "DatafusionSubstraitRoundTrip");
+
+    let combos = expand_matrix_runs(&path)?;
+    let last = combos.len() - 1;
+    for (i, combo) in combos.iter().enumerate() {
+        let records = if i == last {
+            std::mem::take(&mut records)
+        } else {
+            records.clone()
+        };
+        run_test_file_substrait_round_trip_once(
+            path.clone(),
+            relative_path.clone(),
+            records,
+            count,
+            validator,
+            mp.clone(),
+            mp_style.clone(),
+            filters,
+            currently_executing_sql_tracker.clone(),
+            colored_output,
+            combo,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Run a single pass of the test file under Substrait round-trip. If `combo`
+/// is non-empty, the config values are applied to a fresh `SessionContext`
+/// before the runner starts, and any failure banner is annotated with the
+/// matrix key/value.
+#[cfg(feature = "substrait")]
+#[expect(clippy::too_many_arguments)]
+async fn run_test_file_substrait_round_trip_once(
+    path: PathBuf,
+    relative_path: PathBuf,
+    records: Vec<Record<DFColumnType>>,
+    count: u64,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+    filters: &[Filter],
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
+    combo: &[(String, String)],
+) -> Result<()> {
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
     setup_scratch_dir(&relative_path)?;
 
-    let count: u64 = get_record_count(&path, "DatafusionSubstraitRoundTrip".to_string());
+    test_ctx.apply_config_overrides(combo, &relative_path)?;
+
+    let matrix_suffix = matrix_tag_suffix(combo);
+
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(relative_path.display().to_string());
+    pb.set_message(format!("{}{matrix_suffix}", relative_path.display()));
 
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusionSubstraitRoundTrip::new(
@@ -468,7 +502,9 @@ async fn run_test_file_substrait_round_trip(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let res = run_file_in_runner(path, &mut runner, filters, colored_output).await;
+    let res =
+        run_file_in_runner(path, records, &mut runner, filters, colored_output, combo)
+            .await;
     pb.finish_and_clear();
     res
 }
@@ -504,55 +540,51 @@ async fn run_test_file(
         relative_path,
     } = test_file;
 
-    let combinations = parse_config_matrix_from_file(&path)?;
+    let mut records = parse_records(&path)?;
+    let count = count_records(&records, "Datafusion");
 
-    // No matrix -> preserve the original single-pass behavior byte-for-byte.
-    if combinations.is_empty() {
-        return run_test_file_once(
-            path,
-            relative_path,
-            validator,
-            mp,
-            mp_style,
-            filters,
-            currently_executing_sql_tracker,
-            colored_output,
-            None,
-        )
-        .await;
-    }
-
-    for combo in combinations {
+    let combos = expand_matrix_runs(&path)?;
+    let last = combos.len() - 1;
+    for (i, combo) in combos.iter().enumerate() {
+        let records = if i == last {
+            std::mem::take(&mut records)
+        } else {
+            records.clone()
+        };
         run_test_file_once(
             path.clone(),
             relative_path.clone(),
+            records,
+            count,
             validator,
             mp.clone(),
             mp_style.clone(),
             filters,
             currently_executing_sql_tracker.clone(),
             colored_output,
-            Some(&combo),
+            combo,
         )
         .await?;
     }
     Ok(())
 }
 
-/// Run a single pass of the test file. If `combo` is `Some`, the config
+/// Run a single pass of the test file. If `combo` is non-empty, the config
 /// values are applied to a fresh `SessionContext` before the runner starts,
-/// and any failure is annotated with the matrix key/value.
+/// and any failure banner is annotated with the matrix key/value.
 #[expect(clippy::too_many_arguments)]
 async fn run_test_file_once(
     path: PathBuf,
     relative_path: PathBuf,
+    records: Vec<Record<DFColumnType>>,
+    count: u64,
     validator: Validator,
     mp: MultiProgress,
     mp_style: ProgressStyle,
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     colored_output: bool,
-    combo: Option<&ConfigMatrixCombination>,
+    combo: &[(String, String)],
 ) -> Result<()> {
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
@@ -561,17 +593,13 @@ async fn run_test_file_once(
 
     setup_scratch_dir(&relative_path)?;
 
-    if let Some(combo) = combo {
-        apply_config_matrix_combination(&test_ctx, combo, &relative_path)?;
-    }
+    test_ctx.apply_config_overrides(combo, &relative_path)?;
 
-    // Suffix appended to the progress bar and any error to identify the
-    // active matrix combination. Empty when no matrix is in play.
-    let matrix_suffix = combo
-        .map(|c| format!(" {}", matrix_tag(c)))
-        .unwrap_or_default();
+    // Progress bar suffix identifying the active matrix combination (empty
+    // when no matrix is in play). Failure banners are tagged separately
+    // inside `run_file_in_runner` so the tag lands next to the record count.
+    let matrix_suffix = matrix_tag_suffix(combo);
 
-    let count: u64 = get_record_count(&path, "Datafusion".to_string());
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
@@ -595,57 +623,38 @@ async fn run_test_file_once(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let mut result = run_file_in_runner(path, &mut runner, filters, colored_output).await;
+    let res =
+        run_file_in_runner(path, records, &mut runner, filters, colored_output, combo)
+            .await;
     pb.finish_and_clear();
+    res?;
 
-    // If there was no correctness error, check that the config is unchanged.
-    if result.is_ok() {
-        runner.shutdown_async().await;
-        result = config_change_result(&config_change_errors);
-    }
-
-    // Annotate any error with the active matrix combination so CI logs point
-    // at the offending config on the first line.
-    if matrix_suffix.is_empty() {
-        result
-    } else {
-        result
-            .map_err(|e| DataFusionError::External(format!("{e}{matrix_suffix}").into()))
-    }
+    // Config-drift check runs only when the per-record loop succeeded.
+    // Tag any drift error with the active combination to match the placement
+    // `run_file_in_runner` uses for per-record errors.
+    runner.shutdown_async().await;
+    config_change_result(&config_change_errors).map_err(|e| {
+        if matrix_suffix.is_empty() {
+            e
+        } else {
+            DataFusionError::External(format!("{e}{matrix_suffix}").into())
+        }
+    })
 }
 
-/// Apply the matrix values to the given `TestContext`'s config in-place.
-/// Any unknown key or invalid value is reported with a user-friendly error
-/// naming the file, key, and value.
-fn apply_config_matrix_combination(
-    test_ctx: &TestContext,
-    combo: &ConfigMatrixCombination,
-    relative_path: &Path,
-) -> Result<()> {
-    let session_ctx = test_ctx.session_ctx();
-    let state_ref = session_ctx.state_ref();
-    let mut state = state_ref.write();
-    let opts = state.config_mut().options_mut();
-    for (key, value) in combo {
-        opts.set(key, value).map_err(|e| {
-            exec_datafusion_err!(
-                "configMatrix in {}: failed to set `{key}` = `{value}`: {e}",
-                relative_path.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
-async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
+async fn run_file_in_runner<D, M>(
     path: PathBuf,
+    records: Vec<Record<DFColumnType>>,
     runner: &mut sqllogictest::Runner<D, M>,
     filters: &[Filter],
     colored_output: bool,
-) -> Result<()> {
+    combo: &[(String, String)],
+) -> Result<()>
+where
+    D: AsyncDB<ColumnType = DFColumnType>,
+    M: MakeConnection<Conn = D>,
+{
     let path = path.canonicalize()?;
-    let records =
-        parse_file(&path).map_err(|e| DataFusionError::External(Box::new(e)))?;
     let mut errs = vec![];
     for record in records.into_iter() {
         if let Record::Halt { .. } = record {
@@ -664,7 +673,12 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     }
 
     if !errs.is_empty() {
-        let mut msg = format!("{} errors in file {}\n\n", errs.len(), path.display());
+        let matrix_suffix = matrix_tag_suffix(combo);
+        let mut msg = format!(
+            "{} errors in file {}{matrix_suffix}\n\n",
+            errs.len(),
+            path.display(),
+        );
         for (i, err) in errs.iter().enumerate() {
             if i >= ERRS_PER_FILE_LIMIT {
                 msg.push_str(&format!(
@@ -682,30 +696,28 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     Ok(())
 }
 
-#[expect(clippy::needless_pass_by_value)]
-fn get_record_count(path: &PathBuf, label: String) -> u64 {
-    let records: Vec<Record<<DataFusion as AsyncDB>::ColumnType>> =
-        parse_file(path).unwrap();
-    let mut count: u64 = 0;
+fn parse_records(path: &Path) -> Result<Vec<Record<DFColumnType>>> {
+    parse_file(path).map_err(|e| DataFusionError::External(Box::new(e)))
+}
 
-    for rec in &records {
-        match rec {
-            Record::Query { conditions, .. } | Record::Statement { conditions, .. }
-                if conditions.is_empty()
-                    || !conditions.contains(&Condition::SkipIf {
-                        label: label.clone(),
-                    })
-                    || conditions.contains(&Condition::OnlyIf {
-                        label: label.clone(),
-                    }) =>
-            {
-                count += 1;
+fn count_records(records: &[Record<DFColumnType>], label: &str) -> u64 {
+    let skip_if = Condition::SkipIf {
+        label: label.to_string(),
+    };
+    let only_if = Condition::OnlyIf {
+        label: label.to_string(),
+    };
+    records
+        .iter()
+        .filter(|rec| match rec {
+            Record::Query { conditions, .. } | Record::Statement { conditions, .. } => {
+                conditions.is_empty()
+                    || !conditions.contains(&skip_if)
+                    || conditions.contains(&only_if)
             }
-            _ => {}
-        }
-    }
-
-    count
+            _ => false,
+        })
+        .count() as u64
 }
 
 #[cfg(feature = "postgres")]
@@ -724,7 +736,8 @@ async fn run_test_file_with_postgres(
     } = test_file;
     setup_scratch_dir(&relative_path)?;
 
-    let count: u64 = get_record_count(&path, "postgresql".to_string());
+    let records = parse_records(&path)?;
+    let count = count_records(&records, "postgresql");
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
@@ -741,7 +754,8 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result = run_file_in_runner(path, &mut runner, filters, false).await;
+    let result =
+        run_file_in_runner(path, records, &mut runner, filters, false, &[]).await;
     pb.finish_and_clear();
     result
 }
@@ -783,7 +797,9 @@ async fn run_complete_file(
     };
     setup_scratch_dir(&relative_path)?;
 
-    let count: u64 = get_record_count(&path, "Datafusion".to_string());
+    // `update_test_file` re-parses the file internally, so we only need the
+    // count here — no need to keep the records around.
+    let count = count_records(&parse_records(&path)?, "Datafusion");
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
@@ -839,7 +855,7 @@ async fn run_complete_file_with_postgres(
     );
     setup_scratch_dir(&relative_path)?;
 
-    let count: u64 = get_record_count(&path, "postgresql".to_string());
+    let count = count_records(&parse_records(&path)?, "postgresql");
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
@@ -1019,6 +1035,14 @@ struct Options {
 
     #[clap(
         long,
+        env = "SLT_TIMING_DEBUG_SLOW_FILES",
+        default_value_t = false,
+        help = "Log a warning line to stderr for each file that takes longer than 30s"
+    )]
+    timing_debug_slow_files: bool,
+
+    #[clap(
+        long,
         value_name = "MODE",
         help = "Control colored output",
         default_value_t = ColorChoice::Auto
@@ -1068,31 +1092,27 @@ impl Options {
 
     /// Determine if colour output should be enabled, respecting --color, NO_COLOR, CARGO_TERM_COLOR, and terminal detection
     fn is_colored(&self) -> bool {
-        // NO_COLOR takes precedence
+        // NO_COLOR takes precedence over every other signal.
         if std::env::var_os("NO_COLOR").is_some() {
             return false;
         }
 
-        match self.color {
+        // If --color is Auto, defer to CARGO_TERM_COLOR (also Auto if unset
+        // or unrecognised). Any Always/Never resolves immediately.
+        let choice = match self.color {
+            ColorChoice::Auto => std::env::var("CARGO_TERM_COLOR")
+                .ok()
+                .and_then(|v| ColorChoice::from_str(&v).ok())
+                .unwrap_or(ColorChoice::Auto),
+            other => other,
+        };
+
+        match choice {
             ColorChoice::Always => true,
             ColorChoice::Never => false,
             ColorChoice::Auto => {
-                // CARGO_TERM_COLOR takes precedence over auto-detection
-                let cargo_term_color = <ColorChoice as FromStr>::from_str(
-                    &std::env::var("CARGO_TERM_COLOR")
-                        .unwrap_or_else(|_| "auto".to_string()),
-                )
-                .unwrap_or(ColorChoice::Auto);
-                match cargo_term_color {
-                    ColorChoice::Always => true,
-                    ColorChoice::Never => false,
-                    ColorChoice::Auto => {
-                        // Auto for both CLI argument and CARGO_TERM_COLOR,
-                        // then use colors by default for non-dumb terminals
-                        stdout().is_terminal()
-                            && std::env::var("TERM").unwrap_or_default() != "dumb"
-                    }
-                }
+                stdout().is_terminal()
+                    && std::env::var("TERM").unwrap_or_default() != "dumb"
             }
         }
     }

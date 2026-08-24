@@ -232,6 +232,32 @@ impl TestContext {
     pub fn session_ctx(&self) -> &SessionContext {
         &self.ctx
     }
+
+    /// Apply a set of `key = value` config overrides to the underlying
+    /// `SessionContext` in-place. Used by the sqllogictest runner to sweep
+    /// `# configMatrix:` directives; keeps the session-state internals
+    /// hidden from callers.
+    ///
+    /// `origin` is a display label for error messages (typically the test
+    /// file path).
+    pub fn apply_config_overrides(
+        &self,
+        overrides: &[(String, String)],
+        origin: &Path,
+    ) -> Result<()> {
+        let state_ref = self.ctx.state_ref();
+        let mut state = state_ref.write();
+        let opts = state.config_mut().options_mut();
+        for (key, value) in overrides {
+            opts.set(key, value).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "configMatrix in {}: failed to set `{key}` = `{value}`: {e}",
+                    origin.display()
+                ))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 // ==============================================================================

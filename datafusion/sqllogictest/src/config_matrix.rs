@@ -57,12 +57,37 @@ pub fn parse_config_matrix_from_file(
     parse_config_matrix(&content, path)
 }
 
+/// Expand the matrix directives of `path` into the list of runs to perform.
+///
+/// Always returns at least one combination so callers can iterate with a
+/// single loop shape. An empty combination (`vec![]`) means "no matrix was
+/// declared" and is a no-op when applied to the session config.
+pub fn expand_matrix_runs(path: &Path) -> Result<Vec<ConfigMatrixCombination>> {
+    let combinations = parse_config_matrix_from_file(path)?;
+    if combinations.is_empty() {
+        Ok(vec![Vec::new()])
+    } else {
+        Ok(combinations)
+    }
+}
+
 /// Render a combination as `[configMatrix: k1=v1, k2=v2]` for CI logs.
 pub fn matrix_tag(combo: &[(String, String)]) -> String {
     format!(
         "[configMatrix: {}]",
         combo.iter().map(|(k, v)| format!("{k}={v}")).join(", ")
     )
+}
+
+/// Space-prefixed version of [`matrix_tag`] suitable for appending to a
+/// message. Returns an empty string when no matrix is active, otherwise
+/// `" [configMatrix: ...]"`.
+pub fn matrix_tag_suffix(combo: &[(String, String)]) -> String {
+    if combo.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", matrix_tag(combo))
+    }
 }
 
 /// Parse `# configMatrix:` directives out of the given file contents and
@@ -159,14 +184,10 @@ fn strip_directive_prefix(line: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    fn p() -> PathBuf {
-        PathBuf::from("test.slt")
-    }
+    use std::io::Write;
 
     fn parse(content: &str) -> Vec<ConfigMatrixCombination> {
-        parse_config_matrix(content, &p()).unwrap()
+        parse_config_matrix(content, Path::new("test.slt")).unwrap()
     }
 
     #[test]
@@ -227,20 +248,27 @@ mod tests {
 
     #[test]
     fn rejects_missing_equals() {
-        let err =
-            parse_config_matrix("# configMatrix: bogus_no_equals\n", &p()).unwrap_err();
+        let err = parse_config_matrix(
+            "# configMatrix: bogus_no_equals\n",
+            Path::new("test.slt"),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("<key>=<v1>"));
     }
 
     #[test]
     fn rejects_missing_key() {
-        let err = parse_config_matrix("# configMatrix: =true,false\n", &p()).unwrap_err();
+        let err =
+            parse_config_matrix("# configMatrix: =true,false\n", Path::new("test.slt"))
+                .unwrap_err();
         assert!(err.to_string().contains("missing config key"));
     }
 
     #[test]
     fn rejects_empty_values() {
-        let err = parse_config_matrix("# configMatrix: some.key=\n", &p()).unwrap_err();
+        let err =
+            parse_config_matrix("# configMatrix: some.key=\n", Path::new("test.slt"))
+                .unwrap_err();
         assert!(err.to_string().contains("no values provided"));
     }
 
@@ -329,5 +357,40 @@ mod tests {
             ("b".to_string(), "x".to_string()),
         ];
         assert_eq!(matrix_tag(&combo), "[configMatrix: a=1, b=x]");
+    }
+
+    #[test]
+    fn expand_matrix_runs_returns_single_empty_combo_when_no_matrix() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"# just a comment\nquery I\nSELECT 1\n----\n1\n")
+            .unwrap();
+        let runs = expand_matrix_runs(file.path()).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].is_empty());
+    }
+
+    #[test]
+    fn expand_matrix_runs_returns_all_combinations() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(
+            b"# configMatrix: a=1,2\n\
+              # configMatrix: b=x,y\n\
+              query I\nSELECT 1\n----\n1\n",
+        )
+        .unwrap();
+        let runs = expand_matrix_runs(file.path()).unwrap();
+        assert_eq!(runs.len(), 4);
+        assert!(runs.iter().all(|r| !r.is_empty()));
+    }
+
+    #[test]
+    fn matrix_tag_suffix_is_empty_for_empty_combo() {
+        assert_eq!(matrix_tag_suffix(&[]), "");
+    }
+
+    #[test]
+    fn matrix_tag_suffix_prepends_space() {
+        let combo = vec![("k".to_string(), "1".to_string())];
+        assert_eq!(matrix_tag_suffix(&combo), " [configMatrix: k=1]");
     }
 }
