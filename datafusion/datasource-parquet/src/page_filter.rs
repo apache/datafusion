@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use super::metrics::ParquetFileMetrics;
 use crate::ParquetAccessPlan;
+use crate::metadata::has_untrusted_min_max_order;
 
 use arrow::array::BooleanArray;
 use arrow::{
@@ -490,6 +491,7 @@ struct PagesPruningStatistics<'a> {
     column_index: &'a ParquetColumnIndex,
     offset_index: &'a ParquetOffsetIndex,
     page_offsets: &'a Vec<PageLocation>,
+    trusted_min_max: bool,
 }
 
 impl<'a> PagesPruningStatistics<'a> {
@@ -529,6 +531,12 @@ impl<'a> PagesPruningStatistics<'a> {
             return None;
         };
         let page_offsets = offset_index_metadata.page_locations();
+        let file_metadata = parquet_metadata.file_metadata();
+        let trusted_min_max = !has_untrusted_min_max_order(
+            file_metadata.schema_descr(),
+            file_metadata.column_orders().map(Vec::as_slice),
+            parquet_column_index,
+        );
 
         Some(Self {
             row_group_index,
@@ -537,6 +545,7 @@ impl<'a> PagesPruningStatistics<'a> {
             column_index,
             offset_index,
             page_offsets,
+            trusted_min_max,
         })
     }
 
@@ -563,6 +572,9 @@ impl<'a> PagesPruningStatistics<'a> {
 }
 impl PruningStatistics for PagesPruningStatistics<'_> {
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        if !self.trusted_min_max {
+            return None;
+        }
         match self.converter.data_page_mins(
             self.column_index,
             self.offset_index,
@@ -577,6 +589,9 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
     }
 
     fn max_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
+        if !self.trusted_min_max {
+            return None;
+        }
         match self.converter.data_page_maxes(
             self.column_index,
             self.offset_index,

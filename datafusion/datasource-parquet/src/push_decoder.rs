@@ -232,6 +232,11 @@ impl RowGroupPruner {
             .collect::<Vec<_>>();
         let stats = RowGroupPruningStatistics {
             parquet_schema: self.parquet_metadata.file_metadata().schema_descr(),
+            column_orders: self
+                .parquet_metadata
+                .file_metadata()
+                .column_orders()
+                .map(Vec::as_slice),
             row_group_metadatas,
             arrow_schema: self.arrow_schema.as_ref(),
             // Match the existing static row-group pruning behavior: when a
