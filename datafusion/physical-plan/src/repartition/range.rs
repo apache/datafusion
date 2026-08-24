@@ -18,13 +18,13 @@
 //! Routers for range partitioning.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::compute::SortOptions;
 use arrow::datatypes::*;
 use arrow::row::{OwnedRow, RowConverter, SortField};
-use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
 use datafusion_physical_expr::SplitPoint;
 
 /// An router for assigning rows to range partitions.
@@ -39,8 +39,6 @@ enum RangeRouterInner {
     Primitive(PrimitiveRangeRouter),
     /// Universal fast path using Arrow's RowConverter for arbitrary types and composite keys.
     Row(RowConverterRangeRouter),
-    /// Fallback for rare types not supported by RowConverter.
-    Fallback(FallbackRangeRouter),
 }
 
 impl RangeRouter {
@@ -50,15 +48,9 @@ impl RangeRouter {
         sort_options: &[SortOptions],
         split_points: &[SplitPoint],
     ) -> Result<Self> {
-        if split_points.is_empty() {
-            return Ok(Self::new_fallback(
-                split_points.to_vec(),
-                sort_options.to_vec(),
-            ));
-        }
-
         // Try single-column primitive fast path
         if data_types.len() == 1
+            && !sort_options.is_empty()
             && let Some(primitive_router) =
                 PrimitiveRangeRouter::try_new(split_points, sort_options[0])
         {
@@ -67,33 +59,12 @@ impl RangeRouter {
             });
         }
 
-        // Try RowConverter fast path
-        if let Some(row_router) =
-            RowConverterRangeRouter::try_new(data_types, sort_options, split_points)?
-        {
-            return Ok(Self {
-                inner: RangeRouterInner::Row(row_router),
-            });
-        }
-
-        // Fallback
-        Ok(Self::new_fallback(
-            split_points.to_vec(),
-            sort_options.to_vec(),
-        ))
-    }
-
-    /// Constructs a fallback router using dynamic row-by-row comparisons.
-    pub(crate) fn new_fallback(
-        split_points: Vec<SplitPoint>,
-        sort_options: Vec<SortOptions>,
-    ) -> Self {
-        Self {
-            inner: RangeRouterInner::Fallback(FallbackRangeRouter {
-                split_points,
-                sort_options,
-            }),
-        }
+        // Try RowConverter path
+        let row_router =
+            RowConverterRangeRouter::try_new(data_types, sort_options, split_points)?;
+        Ok(Self {
+            inner: RangeRouterInner::Row(row_router),
+        })
     }
 
     /// Number of split points configured in this router.
@@ -101,7 +72,6 @@ impl RangeRouter {
         match &self.inner {
             RangeRouterInner::Primitive(r) => r.num_split_points(),
             RangeRouterInner::Row(r) => r.num_split_points(),
-            RangeRouterInner::Fallback(r) => r.num_split_points(),
         }
     }
 
@@ -120,7 +90,6 @@ impl RangeRouter {
                 }
             }
             RangeRouterInner::Row(r) => r.route_indices(arrays, indices),
-            RangeRouterInner::Fallback(r) => r.route_indices(arrays, indices),
         }
     }
 
@@ -139,7 +108,6 @@ impl RangeRouter {
                 }
             }
             RangeRouterInner::Row(r) => r.route_partition_ids(arrays, partition_ids),
-            RangeRouterInner::Fallback(r) => r.route_partition_ids(arrays, partition_ids),
         }
     }
 }
@@ -403,22 +371,24 @@ impl<T: ArrowNativeTypeOp + Ord + Copy + Send + Sync + 'static> PrimitiveValuesR
         if array.null_count() == 0 {
             let values = array.values().as_ref();
             if !descending {
-                for &val in values {
-                    let p = split_points.partition_point(|&sp| sp <= val);
-                    partition_ids.push(p as u64);
-                }
+                partition_ids.extend(
+                    values
+                        .iter()
+                        .map(|&val| split_points.partition_point(|&sp| sp <= val) as u64),
+                );
             } else {
-                for &val in values {
-                    let p = split_points.partition_point(|&sp| sp >= val);
-                    partition_ids.push(p as u64);
-                }
+                partition_ids.extend(
+                    values
+                        .iter()
+                        .map(|&val| split_points.partition_point(|&sp| sp >= val) as u64),
+                );
             }
         } else {
             let null_partition =
                 (if nulls_first { 0 } else { split_points.len() }) as u64;
-            for idx in 0..array.len() {
+            partition_ids.extend((0..array.len()).map(|idx| {
                 if array.is_null(idx) {
-                    partition_ids.push(null_partition);
+                    null_partition
                 } else {
                     let val = array.value(idx);
                     let p = if !descending {
@@ -426,9 +396,9 @@ impl<T: ArrowNativeTypeOp + Ord + Copy + Send + Sync + 'static> PrimitiveValuesR
                     } else {
                         split_points.partition_point(|&sp| sp >= val)
                     };
-                    partition_ids.push(p as u64);
+                    p as u64
                 }
-            }
+            }));
         }
     }
 }
@@ -508,26 +478,24 @@ macro_rules! impl_float_values_router {
                 if array.null_count() == 0 {
                     let values = array.values().as_ref();
                     if !descending {
-                        for &val in values {
-                            let p = split_points.partition_point(|&sp| {
+                        partition_ids.extend(values.iter().map(|&val| {
+                            split_points.partition_point(|&sp| {
                                 sp.total_cmp(&val) != Ordering::Greater
-                            });
-                            partition_ids.push(p as u64);
-                        }
+                            }) as u64
+                        }));
                     } else {
-                        for &val in values {
-                            let p = split_points.partition_point(|&sp| {
+                        partition_ids.extend(values.iter().map(|&val| {
+                            split_points.partition_point(|&sp| {
                                 sp.total_cmp(&val) != Ordering::Less
-                            });
-                            partition_ids.push(p as u64);
-                        }
+                            }) as u64
+                        }));
                     }
                 } else {
                     let null_partition =
                         (if nulls_first { 0 } else { split_points.len() }) as u64;
-                    for idx in 0..array.len() {
+                    partition_ids.extend((0..array.len()).map(|idx| {
                         if array.is_null(idx) {
-                            partition_ids.push(null_partition);
+                            null_partition
                         } else {
                             let val = array.value(idx);
                             let p = if !descending {
@@ -539,9 +507,9 @@ macro_rules! impl_float_values_router {
                                     sp.total_cmp(&val) != Ordering::Less
                                 })
                             };
-                            partition_ids.push(p as u64);
+                            p as u64
                         }
-                    }
+                    }));
                 }
             }
         }
@@ -554,7 +522,7 @@ impl_float_values_router!(f64, Float64Array);
 /// Router backed by Arrow's RowConverter.
 #[derive(Debug, Clone)]
 struct RowConverterRangeRouter {
-    sort_fields: Vec<SortField>,
+    converter: Arc<RowConverter>,
     split_point_rows: Vec<OwnedRow>,
 }
 
@@ -563,7 +531,7 @@ impl RowConverterRangeRouter {
         data_types: &[DataType],
         sort_options: &[SortOptions],
         split_points: &[SplitPoint],
-    ) -> Result<Option<Self>> {
+    ) -> Result<Self> {
         let sort_fields = data_types
             .iter()
             .zip(sort_options)
@@ -571,28 +539,37 @@ impl RowConverterRangeRouter {
             .collect::<Vec<_>>();
 
         if !RowConverter::supports_fields(&sort_fields) {
-            return Ok(None);
+            return not_impl_err!(
+                "Range partitioning is not supported for data types: {:?}",
+                data_types
+            );
         }
 
-        let row_converter = RowConverter::new(sort_fields.clone())?;
+        let row_converter = RowConverter::new(sort_fields)?;
         let num_cols = data_types.len();
 
-        let mut split_point_arrays = Vec::with_capacity(num_cols);
-        for col_idx in 0..num_cols {
-            let col_scalars = split_points.iter().map(|sp| sp.values()[col_idx].clone());
-            let col_array = ScalarValue::iter_to_array(col_scalars)?;
-            split_point_arrays.push(col_array);
-        }
+        let split_point_rows = if split_points.is_empty() {
+            vec![]
+        } else {
+            let split_point_arrays = (0..num_cols)
+                .map(|col_idx| {
+                    let col_scalars =
+                        split_points.iter().map(|sp| sp.values()[col_idx].clone());
+                    ScalarValue::iter_to_array(col_scalars)
+                })
+                .collect::<Result<Vec<_>>>()?;
 
-        let rows = row_converter.convert_columns(&split_point_arrays)?;
-        let split_point_rows = (0..rows.num_rows())
-            .map(|i| rows.row(i).owned())
-            .collect::<Vec<_>>();
+            row_converter
+                .convert_columns(&split_point_arrays)?
+                .iter()
+                .map(|r| r.owned())
+                .collect()
+        };
 
-        Ok(Some(Self {
-            sort_fields,
+        Ok(Self {
+            converter: Arc::new(row_converter),
             split_point_rows,
-        }))
+        })
     }
 
     fn num_split_points(&self) -> usize {
@@ -600,13 +577,10 @@ impl RowConverterRangeRouter {
     }
 
     fn route_indices(&self, arrays: &[ArrayRef], indices: &mut [Vec<u32>]) -> Result<()> {
-        let row_converter = RowConverter::new(self.sort_fields.clone())?;
-        let rows = row_converter.convert_columns(arrays)?;
-        let num_rows = rows.num_rows();
+        let rows = self.converter.convert_columns(arrays)?;
         let sp_rows = &self.split_point_rows;
 
-        for row_idx in 0..num_rows {
-            let row = rows.row(row_idx);
+        for (row_idx, row) in rows.iter().enumerate() {
             let partition = sp_rows.partition_point(|sp| sp.as_ref() <= row.as_ref());
             indices[partition].push(row_idx as u32);
         }
@@ -618,82 +592,16 @@ impl RowConverterRangeRouter {
         arrays: &[ArrayRef],
         partition_ids: &mut Vec<u64>,
     ) -> Result<()> {
-        let row_converter = RowConverter::new(self.sort_fields.clone())?;
-        let rows = row_converter.convert_columns(arrays)?;
-        let num_rows = rows.num_rows();
+        let rows = self.converter.convert_columns(arrays)?;
         let sp_rows = &self.split_point_rows;
 
-        for row_idx in 0..num_rows {
-            let row = rows.row(row_idx);
-            let partition = sp_rows.partition_point(|sp| sp.as_ref() <= row.as_ref());
-            partition_ids.push(partition as u64);
-        }
+        partition_ids.extend(
+            rows.iter().map(|row| {
+                sp_rows.partition_point(|sp| sp.as_ref() <= row.as_ref()) as u64
+            }),
+        );
         Ok(())
     }
-}
-
-/// Fallback router using dynamic row-by-row comparisons.
-#[derive(Debug, Clone)]
-struct FallbackRangeRouter {
-    split_points: Vec<SplitPoint>,
-    sort_options: Vec<SortOptions>,
-}
-
-impl FallbackRangeRouter {
-    fn num_split_points(&self) -> usize {
-        self.split_points.len()
-    }
-
-    fn route_indices(&self, arrays: &[ArrayRef], indices: &mut [Vec<u32>]) -> Result<()> {
-        let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
-        let mut row_key_buffer = Vec::with_capacity(arrays.len());
-        for row_idx in 0..num_rows {
-            extract_row_at_idx_to_buf(arrays, row_idx, &mut row_key_buffer)?;
-            let partition = range_partition_id_fallback(
-                &row_key_buffer,
-                &self.split_points,
-                &self.sort_options,
-            )?;
-            indices[partition].push(row_idx as u32);
-        }
-        Ok(())
-    }
-
-    fn route_partition_ids(
-        &self,
-        arrays: &[ArrayRef],
-        partition_ids: &mut Vec<u64>,
-    ) -> Result<()> {
-        let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
-        let mut row_key_buffer = Vec::with_capacity(arrays.len());
-        for row_idx in 0..num_rows {
-            extract_row_at_idx_to_buf(arrays, row_idx, &mut row_key_buffer)?;
-            let partition = range_partition_id_fallback(
-                &row_key_buffer,
-                &self.split_points,
-                &self.sort_options,
-            )?;
-            partition_ids.push(partition as u64);
-        }
-        Ok(())
-    }
-}
-
-fn range_partition_id_fallback(
-    row_key: &[ScalarValue],
-    split_points: &[SplitPoint],
-    sort_options: &[SortOptions],
-) -> Result<usize> {
-    let mut low = 0;
-    let mut high = split_points.len();
-    while low < high {
-        let mid = low + (high - low) / 2;
-        match compare_rows(row_key, split_points[mid].values(), sort_options)? {
-            Ordering::Less => high = mid,
-            Ordering::Equal | Ordering::Greater => low = mid + 1,
-        }
-    }
-    Ok(low)
 }
 
 #[cfg(test)]
@@ -701,13 +609,39 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    fn make_split_points_1d(scalars: Vec<ScalarValue>) -> Vec<SplitPoint> {
+        scalars
+            .into_iter()
+            .map(|s| SplitPoint::new(vec![s]))
+            .collect()
+    }
+
+    fn assert_routing(
+        router: &RangeRouter,
+        arrays: &[ArrayRef],
+        expected_partition_ids: &[u64],
+        expected_indices: Option<&[Vec<u32>]>,
+    ) -> Result<()> {
+        let mut partition_ids = Vec::new();
+        router.route_partition_ids(arrays, &mut partition_ids)?;
+        assert_eq!(partition_ids, expected_partition_ids);
+
+        if let Some(expected) = expected_indices {
+            let mut indices = vec![vec![]; expected.len()];
+            router.route_indices(arrays, &mut indices)?;
+            assert_eq!(indices, expected);
+        }
+
+        Ok(())
+    }
+
     #[test]
     fn test_primitive_router_i64_asc() -> Result<()> {
-        let split_points = vec![
-            SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
-            SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
-            SplitPoint::new(vec![ScalarValue::Int64(Some(30))]),
-        ];
+        let split_points = make_split_points_1d(vec![
+            ScalarValue::Int64(Some(10)),
+            ScalarValue::Int64(Some(20)),
+            ScalarValue::Int64(Some(30)),
+        ]);
         let sort_options = vec![SortOptions {
             descending: false,
             nulls_first: true,
@@ -728,36 +662,21 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        let mut partition_ids = Vec::new();
-        router.route_partition_ids(&[Arc::clone(&input)], &mut partition_ids)?;
-        // Split points: 10, 20, 30. Partitions: 0 (<10), 1 (10..20), 2 (20..30), 3 (>=30).
-        // For 5: <10 -> 0
-        // For 10: <=10 -> 1 (partition_point returns index where sp <= val is false, so sp=10 <= 10 is true -> idx 1)
-        // For 15: <=10 true, <=20 false -> 1
-        // For 20: <=20 true, <=30 false -> 2
-        // For 25: -> 2
-        // For 30: -> 3
-        // For 35: -> 3
-        // For None (nulls_first = true): -> 0
-        assert_eq!(partition_ids, vec![0, 1, 1, 2, 2, 3, 3, 0]);
-
-        let mut indices = vec![vec![]; 4];
-        router.route_indices(&[input], &mut indices)?;
-        assert_eq!(indices[0], vec![0, 7]);
-        assert_eq!(indices[1], vec![1, 2]);
-        assert_eq!(indices[2], vec![3, 4]);
-        assert_eq!(indices[3], vec![5, 6]);
-
-        Ok(())
+        assert_routing(
+            &router,
+            &[input],
+            &[0, 1, 1, 2, 2, 3, 3, 0],
+            Some(&[vec![0, 7], vec![1, 2], vec![3, 4], vec![5, 6]]),
+        )
     }
 
     #[test]
     fn test_primitive_router_i64_desc() -> Result<()> {
-        let split_points = vec![
-            SplitPoint::new(vec![ScalarValue::Int64(Some(30))]),
-            SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
-            SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
-        ];
+        let split_points = make_split_points_1d(vec![
+            ScalarValue::Int64(Some(30)),
+            ScalarValue::Int64(Some(20)),
+            ScalarValue::Int64(Some(10)),
+        ]);
         let sort_options = vec![SortOptions {
             descending: true,
             nulls_first: false,
@@ -778,28 +697,20 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        let mut partition_ids = Vec::new();
-        router.route_partition_ids(&[Arc::clone(&input)], &mut partition_ids)?;
-        // DESC split points: 30, 20, 10.
-        // For 35: sp >= 35 is false for all -> 0
-        // For 30: sp >= 30 is true for 30 (idx 0), false for rest -> 1
-        // For 25: sp >= 25 is true for 30 -> 1
-        // For 20: sp >= 20 is true for 30, 20 -> 2
-        // For 15: -> 2
-        // For 10: -> 3
-        // For 5: -> 3
-        // For None (nulls_first = false): -> 3
-        assert_eq!(partition_ids, vec![0, 1, 1, 2, 2, 3, 3, 3]);
-
-        Ok(())
+        assert_routing(
+            &router,
+            &[input],
+            &[0, 1, 1, 2, 2, 3, 3, 3],
+            Some(&[vec![0], vec![1, 2], vec![3, 4], vec![5, 6, 7]]),
+        )
     }
 
     #[test]
     fn test_float_router() -> Result<()> {
-        let split_points = vec![
-            SplitPoint::new(vec![ScalarValue::Float64(Some(0.0))]),
-            SplitPoint::new(vec![ScalarValue::Float64(Some(100.0))]),
-        ];
+        let split_points = make_split_points_1d(vec![
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(100.0)),
+        ]);
         let sort_options = vec![SortOptions {
             descending: false,
             nulls_first: false,
@@ -818,20 +729,21 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        let mut partition_ids = Vec::new();
-        router.route_partition_ids(&[input], &mut partition_ids)?;
-        assert_eq!(partition_ids, vec![0, 1, 1, 2, 2, 2]);
-
-        Ok(())
+        assert_routing(
+            &router,
+            &[input],
+            &[0, 1, 1, 2, 2, 2],
+            Some(&[vec![0], vec![1, 2], vec![3, 4, 5]]),
+        )
     }
 
     #[test]
     fn test_row_converter_strings() -> Result<()> {
-        let split_points = vec![
-            SplitPoint::new(vec![ScalarValue::Utf8(Some("d".to_string()))]),
-            SplitPoint::new(vec![ScalarValue::Utf8(Some("m".to_string()))]),
-            SplitPoint::new(vec![ScalarValue::Utf8(Some("s".to_string()))]),
-        ];
+        let split_points = make_split_points_1d(vec![
+            ScalarValue::Utf8(Some("d".to_string())),
+            ScalarValue::Utf8(Some("m".to_string())),
+            ScalarValue::Utf8(Some("s".to_string())),
+        ]);
         let sort_options = vec![SortOptions {
             descending: false,
             nulls_first: true,
@@ -852,11 +764,12 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        let mut partition_ids = Vec::new();
-        router.route_partition_ids(&[input], &mut partition_ids)?;
-        assert_eq!(partition_ids, vec![0, 1, 1, 2, 2, 3, 3, 0]);
-
-        Ok(())
+        assert_routing(
+            &router,
+            &[input],
+            &[0, 1, 1, 2, 2, 3, 3, 0],
+            Some(&[vec![0, 7], vec![1, 2], vec![3, 4], vec![5, 6]]),
+        )
     }
 
     #[test]
@@ -894,10 +807,24 @@ mod tests {
         let col2 = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "a", "z", "a"]))
             as ArrayRef;
 
-        let mut partition_ids = Vec::new();
-        router.route_partition_ids(&[col1, col2], &mut partition_ids)?;
-        assert_eq!(partition_ids, vec![0, 1, 1, 2, 3, 3, 3]);
+        assert_routing(
+            &router,
+            &[col1, col2],
+            &[0, 1, 1, 2, 3, 3, 3],
+            Some(&[vec![0], vec![1, 2], vec![3], vec![4, 5, 6]]),
+        )
+    }
 
-        Ok(())
+    #[test]
+    fn test_router_empty_split_points() -> Result<()> {
+        let split_points = vec![];
+        let sort_options = vec![SortOptions::default()];
+        let data_types = vec![DataType::Int64];
+
+        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
+        assert_eq!(router.num_split_points(), 0);
+
+        let input = Arc::new(Int64Array::from(vec![10, 20, 30])) as ArrayRef;
+        assert_routing(&router, &[input], &[0, 0, 0], Some(&[vec![0, 1, 2]]))
     }
 }

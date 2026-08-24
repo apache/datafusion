@@ -52,7 +52,6 @@ use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array}
 use arrow::compute::take_arrays;
 use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
-#[cfg(any(test, feature = "proto"))]
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -781,6 +780,10 @@ impl PhysicalExpr for RangeExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        if self.split_points.is_empty() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(0))));
+        }
+
         let arrays = evaluate_expressions_to_arrays(self.on_columns.iter(), batch)?;
         let mut partition_ids = Vec::with_capacity(batch.num_rows());
         self.router
@@ -1006,10 +1009,10 @@ impl BatchPartitioner {
     /// # Parameters
     /// - `range_partitioning`: `RangePartitioning` struct used for ordering, split points, and number of partitions
     /// - `timer`: Metric used to record time spent during repartitioning.
-    pub fn new_range_partitioner(
+    pub fn try_new_range_partitioner(
         range_partitioning: &RangePartitioning,
         timer: metrics::Time,
-    ) -> Self {
+    ) -> Result<Self> {
         let ordering = range_partitioning.ordering().clone();
         let split_points = range_partitioning.split_points();
         let num_partitions = range_partitioning.partition_count();
@@ -1021,19 +1024,16 @@ impl BatchPartitioner {
         } else {
             vec![]
         };
-        let router = RangeRouter::try_new(&data_types, &sort_options, split_points)
-            .unwrap_or_else(|_| {
-                RangeRouter::new_fallback(split_points.to_vec(), sort_options)
-            });
+        let router = RangeRouter::try_new(&data_types, &sort_options, split_points)?;
 
-        Self {
+        Ok(Self {
             state: BatchPartitionerState::Range {
                 ordering,
                 router,
                 indices: vec![vec![]; num_partitions],
             },
             timer,
-        }
+        })
     }
 
     /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
@@ -1069,7 +1069,7 @@ impl BatchPartitioner {
                 ))
             }
             Partitioning::Range(range_repartitioning) => {
-                Ok(Self::new_range_partitioner(&range_repartitioning, timer))
+                Self::try_new_range_partitioner(&range_repartitioning, timer)
             }
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
@@ -1241,6 +1241,11 @@ impl BatchPartitioner {
 
         if reordered_indices.is_empty() {
             return Ok(vec![]);
+        }
+
+        if partition_ranges.len() == 1 && partition_ranges[0].2 == batch.num_rows() {
+            let (partition, _, _) = partition_ranges[0];
+            return Ok(vec![Ok((partition, batch.clone()))]);
         }
 
         let batches = {

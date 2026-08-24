@@ -141,8 +141,11 @@ fn bench_range_repartition_i64_uniform(c: &mut Criterion) {
             BenchmarkId::new("partitions", num_partitions),
             &num_partitions,
             |b, _| {
-                let mut partitioner =
-                    BatchPartitioner::new_range_partitioner(&range_part, Time::default());
+                let mut partitioner = BatchPartitioner::try_new_range_partitioner(
+                    &range_part,
+                    Time::default(),
+                )
+                .unwrap();
                 b.iter(|| {
                     partitioner
                         .partition(batch.clone(), |p, b| {
@@ -189,8 +192,11 @@ fn bench_range_repartition_i64_sequential(c: &mut Criterion) {
             BenchmarkId::new("partitions", num_partitions),
             &num_partitions,
             |b, _| {
-                let mut partitioner =
-                    BatchPartitioner::new_range_partitioner(&range_part, Time::default());
+                let mut partitioner = BatchPartitioner::try_new_range_partitioner(
+                    &range_part,
+                    Time::default(),
+                )
+                .unwrap();
                 b.iter(|| {
                     partitioner
                         .partition(batch.clone(), |p, b| {
@@ -237,8 +243,11 @@ fn bench_range_repartition_utf8_uniform(c: &mut Criterion) {
             BenchmarkId::new("partitions", num_partitions),
             &num_partitions,
             |b, _| {
-                let mut partitioner =
-                    BatchPartitioner::new_range_partitioner(&range_part, Time::default());
+                let mut partitioner = BatchPartitioner::try_new_range_partitioner(
+                    &range_part,
+                    Time::default(),
+                )
+                .unwrap();
                 b.iter(|| {
                     partitioner
                         .partition(batch.clone(), |p, b| {
@@ -290,8 +299,11 @@ fn bench_range_repartition_composite_i64(c: &mut Criterion) {
             BenchmarkId::new("partitions", num_partitions),
             &num_partitions,
             |b, _| {
-                let mut partitioner =
-                    BatchPartitioner::new_range_partitioner(&range_part, Time::default());
+                let mut partitioner = BatchPartitioner::try_new_range_partitioner(
+                    &range_part,
+                    Time::default(),
+                )
+                .unwrap();
                 b.iter(|| {
                     partitioner
                         .partition(batch.clone(), |p, b| {
