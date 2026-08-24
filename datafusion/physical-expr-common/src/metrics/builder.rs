@@ -273,7 +273,7 @@ impl<'a> MetricBuilder<'a> {
         let gauge = Gauge::new();
         self.with_category(MetricCategory::Bytes)
             .with_partition(partition)
-            .build(MetricValue::BytesGauge {
+            .build(MetricValue::Gauge {
                 name: gauge_name.into(),
                 gauge: gauge.clone(),
             });
@@ -289,7 +289,7 @@ impl<'a> MetricBuilder<'a> {
     ) -> Count {
         let count = Count::new();
         self.with_category(MetricCategory::Bytes)
-            .build(MetricValue::BytesCount {
+            .build(MetricValue::Count {
                 name: counter_name.into(),
                 count: count.clone(),
             });

@@ -26,6 +26,7 @@ mod value;
 
 use datafusion_common::HashMap;
 pub use datafusion_common::format::{MetricCategory, MetricType};
+use datafusion_common::human_readable_size;
 use parking_lot::Mutex;
 use std::{
     borrow::Cow,
@@ -126,6 +127,18 @@ impl Display for Metric {
 
         // and now the value
         write!(f, "=")?;
+
+        if self.metric_category == Some(MetricCategory::Bytes) {
+            match &self.value {
+                MetricValue::Count { count, .. } => {
+                    return write!(f, "{}", human_readable_size(count.value()));
+                }
+                MetricValue::Gauge { gauge, .. } => {
+                    return write!(f, "{}", human_readable_size(gauge.value()));
+                }
+                _ => {}
+            }
+        }
 
         write!(f, "{}", self.value)
     }
@@ -301,7 +314,6 @@ impl MetricsSet {
     pub fn sum_by_name(&self, metric_name: &str) -> Option<MetricValue> {
         self.sum(|m| match m.value() {
             MetricValue::Count { name, .. } => name == metric_name,
-            MetricValue::BytesCount { name, .. } => name == metric_name,
             MetricValue::Time { name, .. } => name == metric_name,
             MetricValue::OutputRows(_) => false,
             MetricValue::ElapsedCompute(_) => false,
@@ -312,7 +324,6 @@ impl MetricsSet {
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
-            MetricValue::BytesGauge { name, .. } => name == metric_name,
             MetricValue::PeakMemoryUsage { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
@@ -803,15 +814,21 @@ mod tests {
             MetricBuilder::new(&metrics).global_bytes_counter("bytes_written");
         bytes_written.add(three_gib);
 
-        // A generic (non-byte) Count/Gauge tagged Bytes must NOT be
-        // reinterpreted based on category - only the dedicated
-        // BytesCount/BytesGauge variants get byte formatting. This is the
-        // explicit-typing fix for #24203, replacing an earlier approach that
-        // reinterpreted any Bytes-category Count/Gauge at Display time.
+        // A generic Count/Gauge explicitly tagged Bytes must ALSO be
+        // byte-formatted at Display time - see #24203. `MetricValue` is a
+        // public, already-released exhaustive enum, so dedicated
+        // BytesCount/BytesGauge variants would be a SemVer break; instead
+        // `Display for Metric` reinterprets any Bytes-category Count/Gauge.
         let generic_bytes_gauge = MetricBuilder::new(&metrics)
             .with_category(MetricCategory::Bytes)
-            .gauge("right_input_rows", 0);
+            .gauge("right_input_bytes", 0);
         generic_bytes_gauge.add(three_gib);
+
+        // A generic Count/Gauge with NO Bytes category must keep
+        // count-formatting (human_readable_count), not byte-formatting.
+        let generic_rows_gauge =
+            MetricBuilder::new(&metrics).gauge("right_input_rows", 0);
+        generic_rows_gauge.add(three_gib);
 
         let rendered: Vec<String> = metrics
             .clone_inner()
@@ -838,8 +855,14 @@ mod tests {
         assert!(
             rendered
                 .iter()
+                .any(|s| s == "right_input_bytes{partition=0}=3.0 GB"),
+            "a generic Gauge tagged Bytes should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
                 .any(|s| s == "right_input_rows{partition=0}=3.22 B"),
-            "a generic Gauge must keep count-formatting even when tagged Bytes, got: {rendered:?}"
+            "a generic Gauge with no Bytes category must keep count-formatting, got: {rendered:?}"
         );
     }
 

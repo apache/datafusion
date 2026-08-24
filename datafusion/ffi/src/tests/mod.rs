@@ -232,13 +232,14 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     FFI_ExecutionPlan::new(plan, None)
 }
 
-/// Registers real [`MetricValue::BytesCount`] and [`MetricValue::BytesGauge`]
-/// metrics (via the same [`MetricBuilder::bytes_counter`] and
-/// [`MetricBuilder::bytes_gauge`] constructors production code uses for
+/// Registers real Bytes-category [`MetricValue::Count`] and
+/// [`MetricValue::Gauge`] metrics (via the same [`MetricBuilder::bytes_counter`]
+/// and [`MetricBuilder::bytes_gauge`] constructors production code uses for
 /// `bytes_scanned`/`stream_memory_usage`) on the returned plan, so the
-/// consumer-side integration test can exercise these variants through a real
-/// cross-library `metrics()` FFI call rather than only the in-process
-/// `FFI_MetricValue` conversion tests in `physical_expr::metrics`.
+/// consumer-side integration test can exercise the category-aware
+/// byte-formatting `Display` logic through a real cross-library `metrics()`
+/// FFI call rather than only the in-process `FFI_MetricValue` conversion
+/// tests in `physical_expr::metrics`.
 ///
 /// This is deliberately exported as its own top-level symbol rather than a
 /// new field on [`ForeignLibraryModule`]: that struct is public and
@@ -249,8 +250,8 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
 /// separate exported symbol, loaded the same way [`load_module`] loads
 /// `datafusion_ffi_get_module`, avoids touching that struct's layout at all.
 ///
-/// [`MetricValue::BytesCount`]: datafusion_physical_expr_common::metrics::MetricValue::BytesCount
-/// [`MetricValue::BytesGauge`]: datafusion_physical_expr_common::metrics::MetricValue::BytesGauge
+/// [`MetricValue::Count`]: datafusion_physical_expr_common::metrics::MetricValue::Count
+/// [`MetricValue::Gauge`]: datafusion_physical_expr_common::metrics::MetricValue::Gauge
 #[unsafe(no_mangle)]
 pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_ExecutionPlan
 {
