@@ -723,6 +723,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.right().schema(),
             &self.join_type,
         );
+
         // Remaps the join keys and the filter's column indices to the
         // projected children, and declines the pushdown if the projection
         // drops a column the filter needs.

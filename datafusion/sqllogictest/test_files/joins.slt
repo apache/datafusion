@@ -2887,6 +2887,56 @@ NULL 1970-01-04 789
 NULL NULL 0
 NULL NULL 100000
 
+# Regression test: projection optimization through SortMergeJoinExec must keep
+# JoinFilter columns available when the output projection does not select them.
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query TT
+explain
+select t1.column2 as left_b1, t2.column2 as right_b1
+from (values (100, 1, 0)) t1
+join (values (10, 1)) t2
+  on t1.column2 = t2.column2
+ and t1.column1 > t2.column1;
+----
+logical_plan
+01)Projection: t1.column2 AS left_b1, t2.column2 AS right_b1
+02)--Inner Join: t1.column2 = t2.column2 Filter: t1.column1 > t2.column1
+03)----SubqueryAlias: t1
+04)------Projection: column1, column2
+05)--------Values: (Int64(100), Int64(1), Int64(0))
+06)----SubqueryAlias: t2
+07)------Values: (Int64(10), Int64(1))
+physical_plan
+01)ProjectionExec: expr=[column2@0 as left_b1, column2@1 as right_b1]
+02)--SortMergeJoinExec: join_type=Inner, on=[(column2@1, column2@1)], filter=column1@0 > column1@1, projection=[column2@1, column2@3]
+03)----SortExec: expr=[column2@1 ASC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----SortExec: expr=[column2@1 ASC], preserve_partitioning=[false]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select t1.column2 as left_b1, t2.column2 as right_b1
+from (values (100, 1, 0)) t1
+join (values (10, 1)) t2
+  on t1.column2 = t2.column2
+ and t1.column1 > t2.column1;
+----
+1 1
+
+# A filter-rejected match in a left join must produce a null-extended row after
+# the filter columns have been projected away.
+query II rowsort
+select t1.column2 as left_b1, t2.column2 as right_b1
+from (values (100, 1, 0), (5, 2, 0)) t1
+left join (values (10, 1), (20, 2)) t2
+  on t1.column2 = t2.column2
+ and t1.column1 > t2.column1;
+----
+1 1
+2 NULL
+
 ####
 # Config teardown
 ####
