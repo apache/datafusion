@@ -355,7 +355,7 @@ $ mkdir -p /tmp/output_branch
 $ git checkout my_branch
 $ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
-./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
+uv run ./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
 ```
 
 To use `compare.py` as a pass/fail gate (this is what CI does), pass one or both

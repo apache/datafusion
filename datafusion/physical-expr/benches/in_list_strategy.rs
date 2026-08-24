@@ -38,6 +38,7 @@
 //! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 64, 256 |
 //! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 32, 128 |
 //! | 128-bit interval cases | IntervalMonthDayNano | small lists | 4 |
+//! | Decimal128 cases | Decimal128 | larger lists | 5, 64 |
 //! | Utf8 short-string cases | Utf8 | 8-byte strings | 4, 64, 256 |
 //! | Utf8 long-string cases | Utf8 | 24-byte strings | 4, 64, 256 |
 //! | Utf8View short-string cases | Utf8View | 8-byte strings | 4, 16, 64, 256 |
@@ -458,6 +459,23 @@ fn bench_primitive(c: &mut Criterion) {
                     match_pct as f64 / 100.0,
                     |rng| rng.random(),
                     |v| ScalarValue::Int64(Some(v)),
+                ),
+            );
+        }
+    }
+
+    // Decimal128: benchmark the first hash-set list size (5) and a larger list (64).
+    for list_size in [5, 64] {
+        for match_pct in MATCH_RATES {
+            bench_numeric::<i128, Decimal128Array>(
+                c,
+                "primitive",
+                &format!("decimal128/large_list/list={list_size}/match={match_pct}%"),
+                &NumericBenchConfig::new(
+                    list_size,
+                    match_pct as f64 / 100.0,
+                    |rng| i128::from(rng.random::<i64>()),
+                    |v| ScalarValue::Decimal128(Some(v), 38, 10),
                 ),
             );
         }

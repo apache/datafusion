@@ -42,18 +42,38 @@
 //! resulting ~1.0x would read as "PWMJ is no faster".
 //!
 //! ## Axes
-//! - **join type**: `EXISTS` (LeftSemi) and `NOT EXISTS` (LeftAnti).
-//! - **match regime**: the fraction of left rows that have at least one matching right
-//!   row, set by shifting the right-side key range relative to the left one:
+//! - **join type**: `EXISTS` (LeftSemi) and `NOT EXISTS` (LeftAnti), plus `RIGHT SEMI` and
+//!   `RIGHT ANTI` written out as joins.
+//! - **match regime**: the fraction of rows on the marked side that have at least one match
+//!   on the other, set by shifting the right-side key range relative to the left one:
 //!   `all_match` (100%), `no_match` (0%) and `half_match` (~50%, where the buffered side
 //!   ends up only partially marked). Semi output size grows with that fraction; Anti
 //!   output size shrinks.
+//!
+//! ## Right existence joins
+//! `RightSemi` / `RightAnti` mark the *streamed* side, and go through the same case runner,
+//! data, regimes and guards as the left ones, so the two halves of existence-join support can
+//! be read side by side from one run. Two things differ, both forced:
+//!
+//! - The join type is **written out** (`RIGHT SEMI JOIN`) rather than reached through
+//!   `EXISTS`: a decorrelated `EXISTS` gives `LeftSemi`, and which side a nested-loop join
+//!   marks is its own choice, so a subquery cannot pin these join types.
+//! - There is **no `SortExec`** in the enabled arm's plan. `∃l. l.key < r.key` is
+//!   `min(lhs.key) < r.key` -- one comparison against one buffered key -- so that side is
+//!   folded, not ordered.
+//!
+//! The **same three key offsets** serve both halves, each read against the other side's
+//! extreme: a left row survives `EXISTS` iff `lhs.key < max(rhs.key)`, a right row survives
+//! `RIGHT SEMI` iff `min(lhs.key) < rhs.key`.
 
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::measurement::WallTime;
+use criterion::{
+    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
+};
 use datafusion::datasource::MemTable;
 use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -139,14 +159,124 @@ fn create_context(right_offset: i32, pwmj: bool, schema: &SchemaRef) -> SessionC
     ctx
 }
 
-/// `EXISTS` / `NOT EXISTS` over the range correlation `lhs.key < rhs.key`.
-fn query(exists: bool) -> String {
-    let negation = if exists { "" } else { "NOT " };
-    format!(
-        "SELECT lhs.key, lhs.payload FROM lhs \
-         WHERE {negation}EXISTS (SELECT 1 FROM rhs WHERE lhs.key < rhs.key)"
-    )
+/// The join type a case exercises, one variant per `JoinType` this file covers. Which side is
+/// marked differs, and so does how the join has to be expressed in SQL.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// `EXISTS`, decorrelated to `LeftSemi`; marks `lhs`, the buffered side.
+    LeftSemi,
+    /// `NOT EXISTS`, decorrelated to `LeftAnti`.
+    LeftAnti,
+    /// `RIGHT SEMI`, written out; marks `rhs`, the streamed side.
+    RightSemi,
+    /// `RIGHT ANTI`, written out.
+    RightAnti,
 }
+
+impl Kind {
+    /// Whether this join keeps the marked rows that matched, rather than the ones that did not.
+    ///
+    /// The two are complements, which is why one expected row count covers both.
+    fn keeps_matched(self) -> bool {
+        matches!(self, Kind::LeftSemi | Kind::RightSemi)
+    }
+
+    /// The query, over the range relation `lhs.key < rhs.key`, projecting whichever side this
+    /// join type emits.
+    fn sql(self) -> &'static str {
+        match self {
+            Kind::LeftSemi => {
+                "SELECT lhs.key, lhs.payload FROM lhs \
+                 WHERE EXISTS (SELECT 1 FROM rhs WHERE lhs.key < rhs.key)"
+            }
+            Kind::LeftAnti => {
+                "SELECT lhs.key, lhs.payload FROM lhs \
+                 WHERE NOT EXISTS (SELECT 1 FROM rhs WHERE lhs.key < rhs.key)"
+            }
+            Kind::RightSemi => {
+                "SELECT rhs.key, rhs.payload FROM lhs \
+                 RIGHT SEMI JOIN rhs ON lhs.key < rhs.key"
+            }
+            Kind::RightAnti => {
+                "SELECT rhs.key, rhs.payload FROM lhs \
+                 RIGHT ANTI JOIN rhs ON lhs.key < rhs.key"
+            }
+        }
+    }
+
+    /// Benchmark-id prefix. The left ones are unprefixed, which is what they were called before
+    /// this file covered both halves.
+    fn label(self) -> &'static str {
+        match self {
+            Kind::LeftSemi => "semi",
+            Kind::LeftAnti => "anti",
+            Kind::RightSemi => "right_semi",
+            Kind::RightAnti => "right_anti",
+        }
+    }
+
+    /// Plan fragment every arm must contain. Only the Semi/Anti half of the join type is pinned,
+    /// not the side: the planner is free to swap the nested-loop inputs, so the arms can disagree
+    /// on the side while computing the same thing.
+    fn plan_fragment(self) -> &'static str {
+        if self.keeps_matched() { "Semi" } else { "Anti" }
+    }
+
+    /// Rows on the marked side: this join emits either those that matched or the rest. Both
+    /// tables are the same size, so this is spelled out only because which side is marked is the
+    /// whole difference between the two halves.
+    fn marked_rows(self) -> usize {
+        match self {
+            Kind::LeftSemi | Kind::LeftAnti => LEFT_ROWS,
+            Kind::RightSemi | Kind::RightAnti => RIGHT_ROWS,
+        }
+    }
+}
+
+/// Every join type covered, in the order cases run.
+const KINDS: [Kind; 4] = [
+    Kind::LeftSemi,
+    Kind::LeftAnti,
+    Kind::RightSemi,
+    Kind::RightAnti,
+];
+
+/// How much of the marked side has a match, set by where the `rhs` key range sits relative to
+/// the `lhs` one.
+#[derive(Clone, Copy)]
+enum Fraction {
+    /// Saturated: every marked row matches.
+    All,
+    /// Saturated the other way: none does.
+    None,
+    /// A genuine mix, ~50%.
+    Half,
+}
+
+impl Fraction {
+    /// Marked rows that have a match, or `None` when the answer is only pinned down as a mix.
+    fn expected_matched_rows(self, marked_rows: usize) -> Option<usize> {
+        match self {
+            Fraction::All => Some(marked_rows),
+            Fraction::None => Some(0),
+            Fraction::Half => None,
+        }
+    }
+}
+
+/// The three regimes, shared by both halves. The offsets are the same for each, because each is
+/// read against the *other* side's extreme: shifting the `rhs` range up saturates `EXISTS` via
+/// `max(rhs.key)` and `RIGHT SEMI` via `min(lhs.key)` alike, and shifting it down empties both.
+const REGIMES: [(&str, i32, Fraction); 3] = [
+    // Right keys entirely above the left range.
+    ("all_match", KEY_SPAN, Fraction::All),
+    // Right keys entirely below it, so a left-marking scan walks the whole buffered side
+    // without marking anything.
+    ("no_match", -KEY_SPAN, Fraction::None),
+    // Ranges half-overlap, so a left-marking scan marks only a suffix of the buffered side and
+    // its depth varies per streamed row.
+    ("half_match", -KEY_SPAN / 2, Fraction::Half),
+];
 
 fn physical_plan(
     ctx: &SessionContext,
@@ -205,80 +335,137 @@ fn run(plan: Arc<dyn ExecutionPlan>, ctx: &SessionContext, rt: &Runtime) -> usiz
     })
 }
 
+/// One point in a sweep: which join, over what data, and what it must emit.
+struct Case<'a> {
+    kind: Kind,
+    /// Regime name, used in the benchmark id.
+    regime: &'a str,
+    /// Shifts the `rhs` key range relative to the `lhs` one, setting the fraction of rows on the
+    /// marked side that have a match.
+    right_offset: i32,
+    /// Marked rows that have a match, or `None` when the answer is only pinned down as a mix.
+    /// A semi join emits exactly those and an anti join the complement, so one number covers
+    /// both.
+    expected_matched_rows: Option<usize>,
+}
+
+/// Plan both arms of one case, report and cross-check them, then time them.
+fn bench_case(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    rt: &Runtime,
+    schema: &SchemaRef,
+    case: &Case<'_>,
+) {
+    let &Case {
+        kind,
+        regime,
+        right_offset,
+        expected_matched_rows,
+    } = case;
+    let sql = kind.sql();
+    let label = kind.label();
+
+    // Plan and check both arms before timing either, so the operators they picked are on screen
+    // ahead of the numbers those operators qualify.
+    let arms: Vec<(String, SessionContext, &str)> = [
+        ("pwmj_enabled", true, PWMJ_OR_NLJ),
+        ("nlj", false, NLJ_ONLY),
+    ]
+    .into_iter()
+    .map(|(arm, pwmj, operators)| {
+        let ctx = create_context(right_offset, pwmj, schema);
+        let name = format!("{arm}_{label}_{regime}");
+        let planned = assert_plan_operator(
+            &physical_plan(&ctx, rt, sql),
+            &[kind.plan_fragment()],
+            operators,
+            &name,
+        );
+        println!("{name}: planned {planned}");
+        (name, ctx, planned)
+    })
+    .collect();
+
+    if arms.iter().all(|(_, _, planned)| *planned == arms[0].2) {
+        println!(
+            "note: {label}_{regime}: both arms planned {}, so the ratio between them \
+             measures nothing about PWMJ",
+            arms[0].2
+        );
+    }
+
+    // Both arms have to agree on the answer, or the comparison is between a fast operator and a
+    // wrong one.
+    let rows: Vec<usize> = arms
+        .iter()
+        .map(|(_, ctx, _)| run(physical_plan(ctx, rt, sql), ctx, rt))
+        .collect();
+    assert_eq!(
+        rows[0], rows[1],
+        "{label}_{regime}: pwmj_enabled and nlj disagree ({} vs {} rows)",
+        rows[0], rows[1]
+    );
+
+    // ...and the regime has to be the shape its name claims, or the sweep measures nothing.
+    let marked_rows = kind.marked_rows();
+    match expected_matched_rows {
+        Some(matched) => {
+            let expected = if kind.keeps_matched() {
+                matched
+            } else {
+                marked_rows - matched
+            };
+            assert_eq!(
+                rows[0], expected,
+                "{label}_{regime}: expected {expected} rows, got {}",
+                rows[0]
+            );
+        }
+        None => assert!(
+            rows[0] > 0 && rows[0] < marked_rows,
+            "{label}_{regime}: {} rows is all-or-nothing, adjust the data shape",
+            rows[0]
+        ),
+    }
+
+    for (name, ctx, _) in &arms {
+        // Plan afresh in the untimed setup rather than reusing one plan: the buffered side of
+        // `PiecewiseMergeJoinExec` is cached in a `OnceAsync` on the exec -- the visited-indices
+        // bitmap and final-pass counter on the left path, the folded min/max on the right one --
+        // so a second `collect` over the same instance would not repeat the work.
+        group.bench_function(BenchmarkId::new(name.as_str(), RIGHT_ROWS), |b| {
+            b.iter_batched(
+                || physical_plan(ctx, rt, sql),
+                |plan| run(plan, ctx, rt),
+                BatchSize::SmallInput,
+            )
+        });
+    }
+}
+
 fn bench_pwmj_semi_anti_sql(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let s = schema();
-
-    // An existence join needs only *one* match per left row, so all that matters is where
-    // `max(rhs.key)` falls inside the left range: a left row survives `EXISTS` iff
-    // `lhs.key < max(rhs.key)`. Shifting the right range up therefore saturates at
-    // all-match; only shifting it *down* leaves part of the left side unmatched.
-    let regimes: [(&str, i32); 3] = [
-        // Right keys entirely above the left range: every left row matches.
-        ("all_match", KEY_SPAN),
-        // Right keys entirely below the left range: no left row matches, so the scan
-        // walks the whole buffered side without marking anything.
-        ("no_match", -KEY_SPAN),
-        // Ranges half-overlap: ~50% of left rows match, so only a suffix of the buffered
-        // side gets marked and the scan depth varies per streamed row.
-        ("half_match", -KEY_SPAN / 2),
-    ];
 
     let mut group = c.benchmark_group("pwmj_vs_nlj_semi_anti_sql");
     // Nested-loop is O(n*m); keep sample counts modest so the suite finishes.
     group.sample_size(10);
 
-    for (regime, right_offset) in regimes {
-        // Only the Semi/Anti half of the join type is pinned, not the side: with PWMJ
-        // disabled the planner swaps the nested-loop inputs, so the same `EXISTS` plans as
-        // `RightSemi` there and `LeftSemi` under PWMJ.
-        for (exists, join_type) in [(true, "Semi"), (false, "Anti")] {
-            let sql = query(exists);
-            let label = if exists { "semi" } else { "anti" };
-
-            // Plan and check both arms before timing either, so the operators they picked
-            // are on screen ahead of the numbers those operators qualify.
-            let arms: Vec<(String, SessionContext, &str)> = [
-                ("pwmj_enabled", true, PWMJ_OR_NLJ),
-                ("nlj", false, NLJ_ONLY),
-            ]
-            .into_iter()
-            .map(|(arm, pwmj, operators)| {
-                let ctx = create_context(right_offset, pwmj, &s);
-                let name = format!("{arm}_{label}_{regime}");
-                let planned = assert_plan_operator(
-                    &physical_plan(&ctx, &rt, &sql),
-                    &[join_type],
-                    operators,
-                    &name,
-                );
-                println!("{name}: planned {planned}");
-                (name, ctx, planned)
-            })
-            .collect();
-
-            if arms.iter().all(|(_, _, planned)| *planned == arms[0].2) {
-                println!(
-                    "note: {label}_{regime}: both arms planned {}, so the ratio between \
-                     them measures nothing about PWMJ",
-                    arms[0].2
-                );
-            }
-
-            for (name, ctx, _) in &arms {
-                // Plan afresh in the untimed setup rather than reusing one plan: the
-                // buffered side of `PiecewiseMergeJoinExec` (its visited-indices bitmap
-                // and final-pass partition counter) is cached in a `OnceAsync` on the
-                // exec, so a second `collect` over the same instance would not repeat
-                // the work.
-                group.bench_function(BenchmarkId::new(name.as_str(), RIGHT_ROWS), |b| {
-                    b.iter_batched(
-                        || physical_plan(ctx, &rt, &sql),
-                        |plan| run(plan, ctx, &rt),
-                        BatchSize::SmallInput,
-                    )
-                });
-            }
+    // Match fraction, at one size, for both halves.
+    for (regime, right_offset, fraction) in REGIMES {
+        for kind in KINDS {
+            bench_case(
+                &mut group,
+                &rt,
+                &s,
+                &Case {
+                    kind,
+                    regime,
+                    right_offset,
+                    expected_matched_rows: fraction
+                        .expected_matched_rows(kind.marked_rows()),
+                },
+            );
         }
     }
 

@@ -409,7 +409,7 @@ impl Accumulator for VarianceAccumulator {
         Ok(ScalarValue::Float64(match self.count {
             0 => None,
             1 => {
-                if let StatsType::Population = self.stats_type {
+                if self.stats_type == StatsType::Population {
                     Some(0.0)
                 } else {
                     None
@@ -486,10 +486,10 @@ impl VarianceGroupsAccumulator {
         let _ = emit_to.take_needed(&mut self.means);
         let m2s = emit_to.take_needed(&mut self.m2s);
 
-        if let StatsType::Sample = self.stats_type {
-            counts.iter_mut().for_each(|count| {
+        if self.stats_type == StatsType::Sample {
+            for count in &mut counts {
                 *count = count.saturating_sub(1);
-            });
+            }
         }
         let nulls = NullBuffer::from_iter(counts.iter().map(|&count| count != 0));
         let variance = m2s

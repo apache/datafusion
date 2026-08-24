@@ -1725,7 +1725,7 @@ fn append_probe_indices_in_order(
     // Set previous index as the start index for the initial loop:
     let mut prev_index = range.start as u32;
     // Zip the two iterators.
-    debug_assert!(build_indices.len() == probe_indices.len());
+    debug_assert_eq!(build_indices.len(), probe_indices.len());
     for (build_index, probe_index) in build_indices
         .values()
         .into_iter()
@@ -1833,6 +1833,7 @@ impl BuildProbeJoinMetrics {
             .ratio_metrics("avg_fanout", partition);
 
         Self {
+            baseline,
             build_time,
             build_input_batches,
             build_input_rows,
@@ -1840,7 +1841,6 @@ impl BuildProbeJoinMetrics {
             join_time,
             input_batches,
             input_rows,
-            baseline,
             probe_hit_rate,
             avg_fanout,
         }
