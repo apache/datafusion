@@ -6968,7 +6968,7 @@ async fn test_dataframe_from_columns() -> Result<()> {
     let strings: ArrayRef =
         Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
 
-    let df = DataFrame::from_columns(vec![
+    let columns = [
         ("bool", bools),
         ("i8", i8s),
         ("i16", i16s),
@@ -6982,10 +6982,10 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("f32", f32s),
         ("f64", f64s),
         ("str", strings),
-    ])?;
+    ];
 
-    assert_eq!(df.schema().fields().len(), 13);
-    assert_eq!(df.clone().count().await?, 3);
+    let df1 = DataFrame::from_columns(columns.clone())?;
+    let df2 = DataFrame::from_columns(columns.to_vec())?;
 
     let expected_types = [
         ("bool", DataType::Boolean),
@@ -7003,26 +7003,31 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("str", DataType::Utf8),
     ];
 
-    let schema = df.schema();
+    for df in [df1, df2] {
+        assert_eq!(df.schema().fields().len(), expected_types.len());
+        assert_eq!(df.clone().count().await?, 3);
 
-    for (name, data_type) in expected_types {
-        assert_eq!(schema.field_with_name(None, name)?.data_type(), &data_type);
+        let schema = df.schema();
+
+        for (name, data_type) in &expected_types {
+            assert_eq!(schema.field_with_name(None, *name)?.data_type(), data_type);
+        }
+
+        let rows = df.sort(vec![col("i32").sort(true, true)])?;
+
+        assert_batches_eq!(
+            &[
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+                "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+                "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+                "| false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
+                "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
+                "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            ],
+            &rows.collect().await?
+        );
     }
-
-    let rows = df.sort(vec![col("i32").sort(true, true)])?;
-
-    assert_batches_eq!(
-        &[
-            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
-            "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
-            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
-            "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
-            "| false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
-            "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
-            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
-        ],
-        &rows.collect().await?
-    );
 
     Ok(())
 }
