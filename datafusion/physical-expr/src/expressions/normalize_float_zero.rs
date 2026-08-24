@@ -106,11 +106,18 @@ impl PhysicalExpr for NormalizeFloatZeroExpr {
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        Ok(children[0].clone())
+        Interval::try_new(
+            normalize_float_zero_scalar(children[0].lower().clone()),
+            normalize_float_zero_scalar(children[0].upper().clone()),
+        )
     }
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        Ok(children[0].clone().with_strictly_order_preserving(false))
+        let range = self.evaluate_bounds(&[&children[0].range])?;
+        Ok(children[0]
+            .clone()
+            .with_range(range)
+            .with_strictly_order_preserving(false))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -167,6 +174,8 @@ mod tests {
 
     use arrow::array::{ArrayRef, AsArray, Float64Array};
     use datafusion_common::ScalarValue;
+    use datafusion_expr::sort_properties::SortProperties;
+    use half::f16;
 
     use crate::expressions::{Column, Literal};
 
@@ -194,6 +203,53 @@ mod tests {
             panic!("literal evaluation must return a Float64 scalar");
         };
         assert_eq!(value.to_bits(), 0.0_f64.to_bits());
+        Ok(())
+    }
+
+    #[test]
+    fn normalizes_signed_zero_bounds_and_properties() -> Result<()> {
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        let cases = [
+            (
+                ScalarValue::Float16(Some(f16::NEG_ZERO)),
+                ScalarValue::Float16(Some(f16::ZERO)),
+            ),
+            (
+                ScalarValue::Float32(Some(-0.0)),
+                ScalarValue::Float32(Some(0.0)),
+            ),
+            (
+                ScalarValue::Float64(Some(-0.0)),
+                ScalarValue::Float64(Some(0.0)),
+            ),
+        ];
+
+        for (negative_zero, positive_zero) in cases {
+            let child_range =
+                Interval::try_new(negative_zero.clone(), negative_zero.clone())?;
+            let expected_range =
+                Interval::try_new(positive_zero.clone(), positive_zero.clone())?;
+            let child_properties = ExprProperties::new_unknown()
+                .with_order(SortProperties::Singleton)
+                .with_range(child_range.clone())
+                .with_preserves_lex_ordering(true)
+                .with_strictly_order_preserving(true);
+            let expr = NormalizeFloatZeroExpr::new(Arc::new(Literal::new(negative_zero)));
+
+            let ColumnarValue::Scalar(value) = expr.evaluate(&batch)? else {
+                panic!("literal evaluation must return a scalar");
+            };
+            let bounds = expr.evaluate_bounds(&[&child_range])?;
+            assert_eq!(value, positive_zero);
+            assert_eq!(bounds, expected_range);
+            assert!(bounds.contains_value(&value)?);
+
+            let properties = expr.get_properties(&[child_properties])?;
+            assert_eq!(properties.sort_properties, SortProperties::Singleton);
+            assert_eq!(properties.range, expected_range);
+            assert!(properties.preserves_lex_ordering);
+            assert!(!properties.strictly_order_preserving);
+        }
         Ok(())
     }
 }
