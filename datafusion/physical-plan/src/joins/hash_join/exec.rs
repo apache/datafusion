@@ -999,6 +999,11 @@ impl HashJoinExec {
 
     /// Set the dynamic filter on this hash join.
     ///
+    /// Setting a dynamic filter is what makes the join compute and publish
+    /// build-side bounds during execution. [`Self::handle_child_pushdown_result`]
+    /// sets one after finding a consumer for it in the probe side. Callers wiring a
+    /// filter up by hand take on that check themselves.
+    ///
     /// Resets any internal state that depends on any existing dynamic filter.
     ///
     /// Validates that the filter's children reference valid columns in
@@ -1449,20 +1454,9 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        // Only compute a dynamic filter when the probe subtree contains a consumer.
-        // Searching from `self` would always find the producer expression owned by this join.
-        let enable_dynamic_filter_pushdown = if self
+        let enable_dynamic_filter_pushdown = self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
-        {
-            self.dynamic_filter
-                .as_ref()
-                .and_then(|df| df.filter.expression_id())
-                .map(|id| plan_contains_expression_id(&self.right, id))
-                .transpose()?
-                .unwrap_or(false)
-        } else {
-            false
-        };
+            && self.dynamic_filter.is_some();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -1814,21 +1808,40 @@ impl ExecutionPlan for HashJoinExec {
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
-            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
-            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
             if let Ok(dynamic_filter) =
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = self
-                    .builder()
-                    .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        build_accumulator: OnceLock::new(),
-                    }))
-                    .build_exec()?;
-                result = result.with_updated_node(new_node);
+                // Note that we don't check `PushedDownPredicate::discriminant`: a node
+                // that replies `PushedDown::No` may still retain the filter for
+                // statistics pruning, so the reply does not tell us whether anyone will
+                // actually read the filter. Instead we look for a consumer holding the
+                // expression in the probe subtree.
+                //
+                // `self` here is the join with its post-pushdown children, so anything
+                // that accepted the filter is already wired into `self.right`. Searching
+                // from `self` would always find the producer expression pushed by this
+                // join. This is the last chance to make the decision: the Post-phase
+                // `FilterPushdown` rule is the final rule that mutates the plan.
+                let has_consumer = dynamic_filter
+                    .expression_id()
+                    .map(|id| plan_contains_expression_id(&self.right, id))
+                    .transpose()?
+                    .unwrap_or(false);
+                if has_consumer {
+                    // Our self filter reached a consumer: rebuild the node holding onto
+                    // the dynamic filter so that `execute` populates it from the build
+                    // side. If it did not, we leave `dynamic_filter` as `None` and skip
+                    // the (not cheap) bounds accumulation entirely.
+                    let new_node = self
+                        .builder()
+                        .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
+                            filter: dynamic_filter,
+                            build_accumulator: OnceLock::new(),
+                        }))
+                        .build_exec()?;
+                    result = result.with_updated_node(new_node);
+                }
             }
         }
         Ok(result)
