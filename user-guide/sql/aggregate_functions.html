@@ -745,11 +745,11 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 <section id="id15">
 <h4>Example<a class="headerlink" href="#id15" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">first_value</span><span class="p">(</span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">other_column</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">first_value</span><span class="p">(</span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">other_column</span><span class="p">)</span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">first_element</span><span class="w">                                 </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">+</span><span class="c1">------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">first_value</span><span class="p">(</span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">other_column</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">first_element</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>

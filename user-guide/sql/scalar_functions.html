@@ -1245,11 +1245,11 @@ The random seed is unique to each row.</p>
 <section id="id58">
 <h4>Example<a class="headerlink" href="#id58" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">round</span><span class="p">(</span><span class="mi">3</span><span class="p">.</span><span class="mi">14159</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">--------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">round</span><span class="p">(</span><span class="mi">3</span><span class="p">.</span><span class="mi">14159</span><span class="p">)</span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="w">          </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------+</span>
+<span class="o">+</span><span class="c1">----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">round</span><span class="p">(</span><span class="mi">3</span><span class="p">.</span><span class="mi">14159</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="w">            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+</span>
 </pre></div>
 </div>
 </section>
@@ -1559,7 +1559,7 @@ This can be used to perform the inverse operation of <a class="reference interna
 <span class="o">|</span><span class="w"> </span><span class="n">nvl</span><span class="p">(</span><span class="k">NULL</span><span class="p">,</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;a&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="w">                   </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------+\</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">nvl</span><span class="p">(</span><span class="s1">&#39;b&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;a&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">--------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">nvl</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;b&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;a&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
@@ -3163,17 +3163,17 @@ Can be a constant, column, or function.</p></li>
 <section id="id181">
 <h4>Example<a class="headerlink" href="#id181" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">date_trunc</span><span class="p">(</span><span class="s1">&#39;month&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;2024-05-15T10:30:00&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">date_trunc</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;month&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2024-05-15T10:30:00&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2024</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">01</span><span class="n">T00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="w">                           </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2024</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">01</span><span class="n">T00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">date_trunc</span><span class="p">(</span><span class="s1">&#39;hour&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;2024-05-15T10:30:00&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">date_trunc</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;hour&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2024-05-15T10:30:00&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2024</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">15</span><span class="n">T10</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="w">                          </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2024</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">15</span><span class="n">T10</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -3372,17 +3372,17 @@ an error will be returned. NULL formats are skipped. If every format is NULL the
 <section id="id195">
 <h4>Example<a class="headerlink" href="#id195" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2023-01-31&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2023-01-31&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2023/01/31&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%Y-%m-%d&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%Y/%m/%d&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2023/01/31&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%Y-%m-%d&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%Y/%m/%d&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                                                          </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs">here</a></p>
@@ -3668,7 +3668,7 @@ only supported at the end of the string preceded by a space.</p></li>
 <span class="o">|</span><span class="w"> </span><span class="n">to_timestamp_nanos</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;03:59:00.123456789 05-17-2023&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%c&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%+&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%H:%M:%S%.f %m-%d-%Y&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">17</span><span class="n">T03</span><span class="p">:</span><span class="mi">59</span><span class="p">:</span><span class="mi">00</span><span class="p">.</span><span class="mi">123456789</span><span class="w">                                                                                </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs">here</a></p>
@@ -3967,7 +3967,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id219">
 <h4>Example<a class="headerlink" href="#id219" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_any_value</span><span class="p">([</span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_any_value</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="k">NULL</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                                   </span><span class="o">|</span>
@@ -4030,11 +4030,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id225">
 <h4>Example<a class="headerlink" href="#id225" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_avg</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">----------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_avg</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="w">                        </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="w">                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4260,17 +4260,17 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id246">
 <h4>Example<a class="headerlink" href="#id246" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span><span class="w">           </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]</span><span class="w">                                              </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]</span><span class="w">                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]);</span><span class="w">           </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]</span><span class="w">                                              </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_except</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]);</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]</span><span class="w">                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4301,11 +4301,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id249">
 <h4>Example<a class="headerlink" href="#id249" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_filter</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_filter</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">]</span><span class="w">                                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">]</span><span class="w">                                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4427,11 +4427,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id261">
 <h4>Example<a class="headerlink" href="#id261" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_has_any</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_has_any</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]),</span><span class="w"> </span><span class="n">List</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                     </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4618,11 +4618,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id278">
 <h4>Example<a class="headerlink" href="#id278" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_normalize</span><span class="p">([</span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">.</span><span class="mi">0</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_normalize</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">4</span><span class="p">.</span><span class="mi">0</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">0</span><span class="p">.</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">8</span><span class="p">]</span><span class="w">                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">0</span><span class="p">.</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">8</span><span class="p">]</span><span class="w">                       </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4678,11 +4678,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id284">
 <h4>Example<a class="headerlink" href="#id284" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_pop_front</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_pop_front</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w">                        </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w">                         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4716,11 +4716,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">                                            </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_position</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_position</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                                                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                                                      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4858,11 +4858,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">+</span><span class="c1">----------------------------------------------+</span>
 
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_remove</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="k">NULL</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                              </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4896,11 +4896,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">+</span><span class="c1">--------------------------------------------------+</span>
 
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_remove_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="k">NULL</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                     </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4935,11 +4935,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
 
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove_n</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_remove_n</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="k">NULL</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                            </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5162,11 +5162,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id326">
 <h4>Example<a class="headerlink" href="#id326" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_scale</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------+</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_scale</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">]),</span><span class="n">Float64</span><span class="p">(</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">.</span><span class="mi">0</span><span class="p">]</span><span class="w">                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------+</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">.</span><span class="mi">0</span><span class="p">]</span><span class="w">                               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5294,11 +5294,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id338">
 <h4>Example<a class="headerlink" href="#id338" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_sum</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">----------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_sum</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="p">.</span><span class="mi">0</span><span class="w">                        </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="p">.</span><span class="mi">0</span><span class="w">                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5359,11 +5359,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id344">
 <h4>Example<a class="headerlink" href="#id344" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_transform</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="o">*</span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_transform</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span><span class="w">       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">]</span><span class="w">                          </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_transform</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">]</span><span class="w">                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5492,11 +5492,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id355">
 <h4>Example<a class="headerlink" href="#id355" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">cosine_distance</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">0</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">.</span><span class="mi">0</span><span class="p">]),</span><span class="n">List</span><span class="p">([</span><span class="mi">0</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="w">                                           </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="w">                                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5608,11 +5608,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id364">
 <h4>Example<a class="headerlink" href="#id364" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">inner_product</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">4</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">.</span><span class="mi">0</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">inner_product</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="p">]),</span><span class="n">List</span><span class="p">([</span><span class="mi">4</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">5</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="mi">6</span><span class="p">.</span><span class="mi">0</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">32</span><span class="p">.</span><span class="mi">0</span><span class="w">                                                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">32</span><span class="p">.</span><span class="mi">0</span><span class="w">                                                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5891,11 +5891,11 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="id370">
 <h4>Example<a class="headerlink" href="#id370" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span><span class="w">                         </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------+</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span><span class="w">                          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
 
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="nb">DATE</span><span class="w"> </span><span class="s1">&#39;1992-09-01&#39;</span><span class="p">,</span><span class="w"> </span><span class="nb">DATE</span><span class="w"> </span><span class="s1">&#39;1993-03-01&#39;</span><span class="p">,</span><span class="w"> </span><span class="nb">INTERVAL</span><span class="w"> </span><span class="s1">&#39;1&#39;</span><span class="w"> </span><span class="k">MONTH</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------------------------------+</span>
@@ -5925,16 +5925,16 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <h4>Example<a class="headerlink" href="#id372" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="s1">&#39;abc##def&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;##&#39;</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39;abc##def&#39;</span><span class="p">))</span><span class="w">  </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39;abc##def&#39;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;abc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;def&#39;</span><span class="p">]</span><span class="w">                    </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="s1">&#39;abc def&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39; &#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;def&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">---------------------------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39;abc def&#39;</span><span class="p">),</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">),</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39;def&#39;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;abc&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">]</span><span class="w">                               </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;abc&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">]</span><span class="w">                                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6536,11 +6536,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="id409">
 <h4>Example<a class="headerlink" href="#id409" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_field</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">arrow_field</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="w">                                       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">arrow_field</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="w">                                        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="n">lit</span><span class="p">,</span><span class="w"> </span><span class="n">data_type</span><span class="p">:</span><span class="w"> </span><span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="k">nullable</span><span class="p">:</span><span class="w"> </span><span class="k">false</span><span class="p">,</span><span class="w"> </span><span class="n">metadata</span><span class="p">:</span><span class="w"> </span><span class="err">{}}</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------------+</span>
 
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_field</span><span class="p">(</span><span class="mi">1</span><span class="p">)[</span><span class="s1">&#39;data_type&#39;</span><span class="p">];</span>
 <span class="o">+</span><span class="c1">-----------------------------------+</span>
@@ -6574,11 +6574,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">k</span><span class="p">:</span><span class="w"> </span><span class="n">v</span><span class="err">}</span><span class="w">                     </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_metadata</span><span class="p">(</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;k&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="k">table</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">arrow_metadata</span><span class="p">(</span><span class="k">table</span><span class="p">.</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;k&#39;</span><span class="p">)</span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">v</span><span class="w">                             </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">arrow_metadata</span><span class="p">(</span><span class="k">table</span><span class="p">.</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;k&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">v</span><span class="w">                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -6817,15 +6817,15 @@ evaluated outside a file scan, or was not pushed down into one), direct evaluati
 <section id="id426">
 <h4>Example<a class="headerlink" href="#id426" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_metadata</span><span class="p">(</span><span class="n">with_metadata</span><span class="p">(</span><span class="n">column1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;unit&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ms&#39;</span><span class="p">),</span><span class="w"> </span><span class="s1">&#39;unit&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="p">(</span><span class="k">values</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">arrow_metadata</span><span class="p">(</span><span class="n">with_metadata</span><span class="p">(</span><span class="n">column1</span><span class="p">,</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;unit&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;ms&quot;</span><span class="p">)),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;unit&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">ms</span><span class="w">                                                            </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">ms</span><span class="w">                                                                          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------------------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_metadata</span><span class="p">(</span><span class="n">with_metadata</span><span class="p">(</span><span class="n">column1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;unit&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ms&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;source&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;sensor&#39;</span><span class="p">))</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="p">(</span><span class="k">values</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">));</span>
-<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="k">source</span><span class="p">:</span><span class="w"> </span><span class="n">sensor</span><span class="p">,</span><span class="w"> </span><span class="n">unit</span><span class="p">:</span><span class="w"> </span><span class="n">ms</span><span class="err">}</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------+</span>
 </pre></div>
 </div>
 </section>
