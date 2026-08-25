@@ -172,7 +172,7 @@ pub(crate) struct NestedLoopJoinStream {
 impl Stream for NestedLoopJoinStream {
     type Item = Result<RecordBatch>;
 
-    /// See the comments [`NestedLoopJoinExec`] for high-level design ideas.
+    /// See the comments [`super::NestedLoopJoinExec`] for high-level design ideas.
     ///
     /// # Implementation
     ///
