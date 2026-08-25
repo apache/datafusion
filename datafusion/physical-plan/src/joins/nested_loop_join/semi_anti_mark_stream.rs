@@ -36,7 +36,8 @@ use crate::spill::replayable_spill_input::ReplayableStreamSource;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
-use arrow::array::BooleanBufferBuilder;
+use arrow::array::{BooleanArray, BooleanBufferBuilder};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::{BatchCoalescer, concat_batches};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -256,6 +257,9 @@ impl SemiAntiMarkNestedLoopJoinStream {
     ) -> Result<()> {
         let mut left_chunk: Option<Arc<JoinLeftData>> = None;
         let mut is_last_chunk: bool = false;
+
+        let mut right_batch: Option<RecordBatch> = None;
+        let right_batch_matched: Option<BooleanArray> = None;
         loop {
             match self.state {
                 // # SAMNLJState transitions
@@ -308,9 +312,18 @@ impl SemiAntiMarkNestedLoopJoinStream {
                     let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
-                    match self.handle_fetching_right(cx) {
-                        ControlFlow::Continue(()) => continue,
-                        ControlFlow::Break(poll) => return poll,
+                    if let Some(curr_right_batch) = self.handle_fetching_right().await? {
+                        right_batch = Some(curr_right_batch);
+                        self.state = SAMNLJState::ProbeRight;
+                        // Prepare right bitmap
+                        if self.join_side == JoinSide::Right {
+                            let zeroed_buf =
+                                BooleanBuffer::new_unset(curr_right_batch.num_rows());
+                            right_batch_matched =
+                                Some(BooleanArray::new(zeroed_buf, None));
+                        }
+                    } else {
+                        self.state = SAMNLJState::ProbeEnd;
                     }
                 }
 
@@ -741,41 +754,34 @@ impl SemiAntiMarkNestedLoopJoinStream {
     ///
     /// In memory-limited mode during the first pass, each right batch is also
     /// written to a spill file so it can be re-read on subsequent passes.
-    async fn handle_fetching_right(&mut self) -> Result<(RecordBatch, bool)> {
-        match self
-            .right_data
-            .as_mut()
-            .expect("right_data must be present while fetching right")
-            .next
-            .await
-        {
-            Some(Ok(right_batch)) => {
-                // Update metrics
-                let right_batch_rows = right_batch.num_rows();
-                self.metrics.join_metrics.input_rows.add(right_batch_rows);
-                self.metrics.join_metrics.input_batches.add(1);
+    async fn handle_fetching_right(&mut self) -> Result<Option<RecordBatch>> {
+        loop {
+            match self
+                .right_data
+                .as_mut()
+                .expect("right_data must be present while fetching right")
+                .next()
+                .await
+            {
+                Some(Ok(right_batch)) => {
+                    // Update metrics
+                    let right_batch_rows = right_batch.num_rows();
+                    self.metrics.join_metrics.input_rows.add(right_batch_rows);
+                    self.metrics.join_metrics.input_batches.add(1);
 
-                // Skip the empty batch
-                if right_batch_rows == 0 {
-                    return ControlFlow::Continue(());
+                    // Skip the empty batch
+                    if right_batch_rows == 0 {
+                        continue;
+                    }
+
+                    return Ok(Some(right_batch));
                 }
-
-                // Prepare right bitmap
-                if self.should_track_unmatched_right {
-                    let zeroed_buf = BooleanBuffer::new_unset(right_batch_rows);
-                    self.current_right_batch_matched =
-                        Some(BooleanArray::new(zeroed_buf, None));
+                Some(Err(e)) => return Err(e),
+                None => {
+                    // Right side exhausted: probing for the current left chunk
+                    // is finished.
+                    return Ok(None);
                 }
-
-                self.state = NLJState::ProbeRight;
-            }
-            Some(Err(e)) => return Err(e),
-            None => {
-                // Right side exhausted: probing for the current left chunk
-                // is finished. `ProbeEnd` reports probe completion before
-                // emitting unmatched-left rows.
-                self.state = NLJState::ProbeEnd;
-                ControlFlow::Continue(())
             }
         }
     }
