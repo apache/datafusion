@@ -39,6 +39,7 @@ use crate::{
     PhysicalSortRequirement,
 };
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
@@ -1319,28 +1320,30 @@ impl EquivalenceProperties {
             .unwrap_or_else(|_| ExprProperties::new_unknown())
     }
 
-    /// Returns true when `expr` is a (possibly non-strict) monotonic function of
-    /// `range_key` plus literals, such as `date_bin(interval, timestamp)` or
-    /// `date_trunc(unit, timestamp)`.
+    /// Returns true when `transformed_expr` is a same-direction monotonic
+    /// transform of `source_expr` plus literals, such as
+    /// `date_bin(interval, timestamp)` or `date_trunc(unit, timestamp)`.
     ///
-    /// The identity `expr == range_key` returns false so callers can treat "emit
-    /// the key as-is" separately from "emit a function of the key".
-    pub(crate) fn is_monotonic_function_of(
+    /// The identity `transformed_expr == source_expr` returns false so callers
+    /// can treat "emit the key as-is" separately from "emit a function of the
+    /// key". Order-reversing transforms such as `-x` also return false.
+    pub(crate) fn check_monotonic_transform(
         &self,
-        expr: &Arc<dyn PhysicalExpr>,
-        range_key: &Arc<dyn PhysicalExpr>,
+        transformed_expr: &Arc<dyn PhysicalExpr>,
+        source_expr: &Arc<dyn PhysicalExpr>,
     ) -> bool {
-        if expr.eq(range_key) {
+        if transformed_expr.eq(source_expr) {
             return false;
         }
+        let options = SortOptions::default();
         let dependencies = Dependencies::new(std::iter::once(PhysicalSortExpr::new(
-            Arc::clone(range_key),
-            Default::default(),
+            Arc::clone(source_expr),
+            options,
         )));
         matches!(
-            get_expr_properties(expr, &dependencies, &self.schema)
+            get_expr_properties(transformed_expr, &dependencies, &self.schema)
                 .map(|properties| properties.sort_properties),
-            Ok(SortProperties::Ordered(_))
+            Ok(SortProperties::Ordered(got)) if got == options
         )
     }
 
