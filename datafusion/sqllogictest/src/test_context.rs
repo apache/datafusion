@@ -240,6 +240,10 @@ impl TestContext {
     ///
     /// `origin` is a display label for error messages (typically the test
     /// file path).
+    ///
+    /// Note this sets config options directly rather than going through
+    /// `SessionContext`'s `SET` handling, so it does not dispatch
+    /// `datafusion.runtime.*` keys or refresh config-dependent UDFs.
     pub fn apply_config_overrides(
         &self,
         overrides: &[(String, String)],
@@ -249,11 +253,9 @@ impl TestContext {
         let mut state = state_ref.write();
         let opts = state.config_mut().options_mut();
         for (key, value) in overrides {
+            // `ConfigOptions::set` already names the key in its error.
             opts.set(key, value).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "configMatrix in {}: failed to set `{key}` = `{value}`: {e}",
-                    origin.display()
-                ))
+                e.context(format!("configMatrix in {}", origin.display()))
             })?;
         }
         Ok(())

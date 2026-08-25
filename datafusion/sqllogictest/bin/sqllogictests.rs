@@ -23,9 +23,10 @@ use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err}
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
-    df_value_validator, expand_matrix_runs, matrix_tag_suffix, read_dir_recursive,
+    ConfigMatrixCombination, CurrentlyExecutingSqlTracker, DFColumnType, DataFusion,
+    Filter, TestContext, df_value_validator, expand_matrix_runs, read_dir_recursive,
     setup_scratch_dir, should_skip_file, should_skip_record, value_normalizer,
+    with_matrix_context,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -63,6 +64,7 @@ const TPCH_PREFIX: &str = "tpch";
 const SQLITE_PREFIX: &str = "sqlite";
 const ENCRYPTED_PARQUET_FILE: &str = "encrypted_parquet.slt";
 const ERRS_PER_FILE_LIMIT: usize = 10;
+const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
 
 #[derive(Debug)]
 struct FileTiming {
@@ -72,6 +74,7 @@ struct FileTiming {
 
 type DataFusionConfigChangeErrors = Arc<Mutex<Vec<String>>>;
 
+/// Turn any recorded config-drift errors into a single failure.
 fn config_change_result(
     config_change_errors: &DataFusionConfigChangeErrors,
 ) -> Result<()> {
@@ -124,6 +127,7 @@ async fn run_tests() -> Result<()> {
     env_logger::init();
 
     let options: Options = Parser::parse();
+    let timing_debug_slow_files = is_env_truthy(TIMING_DEBUG_SLOW_FILES_ENV);
     if options.list {
         // nextest parses stdout, so print messages to stderr
         eprintln!("NOTICE: --list option unsupported, quitting");
@@ -272,7 +276,7 @@ async fn run_tests() -> Result<()> {
                 };
 
                 let elapsed = file_start.elapsed();
-                if options.timing_debug_slow_files && elapsed.as_secs() > 30 {
+                if timing_debug_slow_files && elapsed.as_secs() > 30 {
                     eprintln!(
                         "Slow file: {} took {:.1}s",
                         relative_path_for_timing.display(),
@@ -321,55 +325,59 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
-    let mut file_timings = Vec::with_capacity(file_results.len());
-    let mut errors = Vec::new();
-    for (result, test_file_path, current_sql, elapsed) in file_results {
-        file_timings.push(FileTiming {
-            relative_path: test_file_path.clone(),
-            elapsed,
-        });
-        let err = match result {
-            Err(e) => {
-                let error = DataFusionError::External(Box::new(e));
-                let current_sql = current_sql.get_currently_running_sqls();
-                Some(if current_sql.is_empty() {
-                    error.context(format!(
-                        "failure in {} with no currently running sql tracked",
-                        test_file_path.display()
-                    ))
-                } else if current_sql.len() == 1 {
-                    let sql = &current_sql[0];
-                    error.context(format!(
-                        "failure in {} for sql {sql}",
-                        test_file_path.display()
-                    ))
-                } else {
-                    let sqls = current_sql
-                        .iter()
-                        .enumerate()
-                        .map(|(i, sql)| format!("\n[{}]: {}", i + 1, sql))
-                        .collect::<String>();
-                    error.context(format!(
-                        "failure in {} for multiple currently running sqls: {}",
-                        test_file_path.display(),
-                        sqls
-                    ))
-                })
-            }
-            Ok(thread_result) => thread_result.err(),
-        };
-        if let Some(err) = err {
-            errors.push(err);
-        }
-    }
+    let mut file_timings: Vec<FileTiming> = file_results
+        .iter()
+        .map(|(_, path, _, elapsed)| FileTiming {
+            relative_path: path.clone(),
+            elapsed: *elapsed,
+        })
+        .collect();
 
-    file_timings.sort_unstable_by(|a, b| {
+    file_timings.sort_by(|a, b| {
         b.elapsed
             .cmp(&a.elapsed)
             .then_with(|| a.relative_path.cmp(&b.relative_path))
     });
 
     print_timing_summary(&options, &file_timings)?;
+
+    let errors: Vec<_> = file_results
+        .into_iter()
+        .filter_map(|(result, test_file_path, current_sql, _)| {
+            // Filter out any Ok() leaving only the DataFusionErrors
+            match result {
+                Err(e) => {
+                    let error = DataFusionError::External(Box::new(e));
+                    let current_sql = current_sql.get_currently_running_sqls();
+
+                    if current_sql.is_empty() {
+                        Some(error.context(format!(
+                            "failure in {} with no currently running sql tracked",
+                            test_file_path.display()
+                        )))
+                    } else if current_sql.len() == 1 {
+                        let sql = &current_sql[0];
+                        Some(error.context(format!(
+                            "failure in {} for sql {sql}",
+                            test_file_path.display()
+                        )))
+                    } else {
+                        let sqls = current_sql
+                            .iter()
+                            .enumerate()
+                            .map(|(i, sql)| format!("\n[{}]: {}", i + 1, sql))
+                            .collect::<String>();
+                        Some(error.context(format!(
+                            "failure in {} for multiple currently running sqls: {}",
+                            test_file_path.display(),
+                            sqls
+                        )))
+                    }
+                }
+                Ok(thread_result) => thread_result.err(),
+            }
+        })
+        .collect();
 
     m.println(format!(
         "Completed {} test files in {}",
@@ -412,6 +420,55 @@ fn print_timing_summary(options: &Options, file_timings: &[FileTiming]) -> Resul
     Ok(())
 }
 
+fn is_env_truthy(name: &str) -> bool {
+    std::env::var_os(name)
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+/// Per-combination scaffolding shared by the runner paths that support
+/// `# configMatrix:`.
+struct MatrixRun {
+    test_ctx: TestContext,
+    pb: ProgressBar,
+}
+
+/// Build a fresh context with `combo`'s config applied, reset the scratch
+/// dir, and add a progress bar. Returns `None` when the file is not
+/// supported by this build and should be skipped.
+///
+/// Applying the overrides here keeps them ahead of runner construction, which
+/// snapshots the config to detect drift; overrides applied afterwards would be
+/// reported as the test mutating its own config.
+async fn prepare_matrix_run(
+    relative_path: &Path,
+    combo: &ConfigMatrixCombination,
+    mp: &MultiProgress,
+    mp_style: &ProgressStyle,
+    count: u64,
+) -> Result<Option<MatrixRun>> {
+    let Some(test_ctx) = TestContext::try_new_for_test_file(relative_path).await else {
+        return Ok(None);
+    };
+    setup_scratch_dir(relative_path)?;
+    test_ctx.apply_config_overrides(combo, relative_path)?;
+
+    let pb = mp.add(ProgressBar::new(count));
+    pb.set_style(mp_style.clone());
+    // Keep this a single whitespace-free token: the engines parse
+    // `pb.message()` back apart on spaces to track slow-query counts.
+    pb.set_message(relative_path.display().to_string());
+
+    Ok(Some(MatrixRun { test_ctx, pb }))
+}
+
+/// Run the test file under Substrait round-trip, once per `# configMatrix:`
+/// combination.
 #[cfg(feature = "substrait")]
 async fn run_test_file_substrait_round_trip(
     test_file: TestFile,
@@ -427,86 +484,38 @@ async fn run_test_file_substrait_round_trip(
         relative_path,
     } = test_file;
 
-    let mut records = parse_records(&path)?;
+    let records = parse_records(&path)?;
     let count = count_records(&records, "DatafusionSubstraitRoundTrip");
 
-    let combos = expand_matrix_runs(&path)?;
-    let last = combos.len() - 1;
-    for (i, combo) in combos.iter().enumerate() {
-        let records = if i == last {
-            std::mem::take(&mut records)
-        } else {
-            records.clone()
+    for combo in expand_matrix_runs(&path)? {
+        let Some(MatrixRun { test_ctx, pb }) =
+            prepare_matrix_run(&relative_path, &combo, &mp, &mp_style, count).await?
+        else {
+            info!("Skipping: {}", path.display());
+            return Ok(());
         };
-        run_test_file_substrait_round_trip_once(
-            path.clone(),
-            relative_path.clone(),
-            records,
-            count,
-            validator,
-            mp.clone(),
-            mp_style.clone(),
-            filters,
-            currently_executing_sql_tracker.clone(),
-            colored_output,
-            combo,
-        )
-        .await?;
+
+        let mut runner = sqllogictest::Runner::new(|| async {
+            Ok(DataFusionSubstraitRoundTrip::new(
+                test_ctx.session_ctx().clone(),
+                relative_path.clone(),
+                pb.clone(),
+            )
+            .with_currently_executing_sql_tracker(
+                currently_executing_sql_tracker.clone(),
+            ))
+        });
+        runner.add_label("DatafusionSubstraitRoundTrip");
+        runner.with_column_validator(strict_column_validator);
+        runner.with_normalizer(value_normalizer);
+        runner.with_validator(validator);
+        let res =
+            run_file_in_runner(&path, &records, &mut runner, filters, colored_output)
+                .await;
+        pb.finish_and_clear();
+        with_matrix_context(res, &combo)?;
     }
     Ok(())
-}
-
-/// Run a single pass of the test file under Substrait round-trip. If `combo`
-/// is non-empty, the config values are applied to a fresh `SessionContext`
-/// before the runner starts, and any failure banner is annotated with the
-/// matrix key/value.
-#[cfg(feature = "substrait")]
-#[expect(clippy::too_many_arguments)]
-async fn run_test_file_substrait_round_trip_once(
-    path: PathBuf,
-    relative_path: PathBuf,
-    records: Vec<Record<DFColumnType>>,
-    count: u64,
-    validator: Validator,
-    mp: MultiProgress,
-    mp_style: ProgressStyle,
-    filters: &[Filter],
-    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
-    colored_output: bool,
-    combo: &[(String, String)],
-) -> Result<()> {
-    let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
-        info!("Skipping: {}", path.display());
-        return Ok(());
-    };
-    setup_scratch_dir(&relative_path)?;
-
-    test_ctx.apply_config_overrides(combo, &relative_path)?;
-
-    let matrix_suffix = matrix_tag_suffix(combo);
-
-    let pb = mp.add(ProgressBar::new(count));
-
-    pb.set_style(mp_style);
-    pb.set_message(format!("{}{matrix_suffix}", relative_path.display()));
-
-    let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusionSubstraitRoundTrip::new(
-            test_ctx.session_ctx().clone(),
-            relative_path.clone(),
-            pb.clone(),
-        )
-        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone()))
-    });
-    runner.add_label("DatafusionSubstraitRoundTrip");
-    runner.with_column_validator(strict_column_validator);
-    runner.with_normalizer(value_normalizer);
-    runner.with_validator(validator);
-    let res =
-        run_file_in_runner(path, records, &mut runner, filters, colored_output, combo)
-            .await;
-    pb.finish_and_clear();
-    res
 }
 
 #[cfg(not(feature = "substrait"))]
@@ -526,6 +535,7 @@ async fn run_test_file_substrait_round_trip(
     exec_err!("Cannot run substrait round-trip: the 'substrait' feature is not enabled")
 }
 
+/// Run the test file once per `# configMatrix:` combination.
 async fn run_test_file(
     test_file: TestFile,
     validator: Validator,
@@ -540,130 +550,73 @@ async fn run_test_file(
         relative_path,
     } = test_file;
 
-    let mut records = parse_records(&path)?;
+    let records = parse_records(&path)?;
     let count = count_records(&records, "Datafusion");
 
-    let combos = expand_matrix_runs(&path)?;
-    let last = combos.len() - 1;
-    for (i, combo) in combos.iter().enumerate() {
-        let records = if i == last {
-            std::mem::take(&mut records)
-        } else {
-            records.clone()
+    for combo in expand_matrix_runs(&path)? {
+        let Some(MatrixRun { test_ctx, pb }) =
+            prepare_matrix_run(&relative_path, &combo, &mp, &mp_style, count).await?
+        else {
+            info!("Skipping: {}", path.display());
+            return Ok(());
         };
-        run_test_file_once(
-            path.clone(),
-            relative_path.clone(),
-            records,
-            count,
-            validator,
-            mp.clone(),
-            mp_style.clone(),
-            filters,
-            currently_executing_sql_tracker.clone(),
-            colored_output,
-            combo,
-        )
-        .await?;
+
+        // If DataFusion configuration has changed during test file runs, errors will be
+        // pushed to this vec.
+        // HACK: managed externally because `sqllogictest` is an external dependency, and
+        // it doesn't have an API to directly access the inner runner.
+        let config_change_errors = Arc::new(Mutex::new(Vec::new()));
+        let mut runner = sqllogictest::Runner::new(|| async {
+            Ok(DataFusion::new(
+                test_ctx.session_ctx().clone(),
+                relative_path.clone(),
+                pb.clone(),
+            )
+            .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone())
+            .with_config_change_errors(Arc::clone(&config_change_errors)))
+        });
+        runner.add_label("Datafusion");
+        runner.with_column_validator(strict_column_validator);
+        runner.with_normalizer(value_normalizer);
+        runner.with_validator(validator);
+        let res =
+            run_file_in_runner(&path, &records, &mut runner, filters, colored_output)
+                .await;
+        pb.finish_and_clear();
+
+        // Check the config is unchanged only when the per-record loop succeeded.
+        let res = match res {
+            Ok(()) => {
+                runner.shutdown_async().await;
+                config_change_result(&config_change_errors)
+            }
+            Err(e) => Err(e),
+        };
+        with_matrix_context(res, &combo)?;
     }
     Ok(())
 }
 
-/// Run a single pass of the test file. If `combo` is non-empty, the config
-/// values are applied to a fresh `SessionContext` before the runner starts,
-/// and any failure banner is annotated with the matrix key/value.
-#[expect(clippy::too_many_arguments)]
-async fn run_test_file_once(
-    path: PathBuf,
-    relative_path: PathBuf,
-    records: Vec<Record<DFColumnType>>,
-    count: u64,
-    validator: Validator,
-    mp: MultiProgress,
-    mp_style: ProgressStyle,
-    filters: &[Filter],
-    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
-    colored_output: bool,
-    combo: &[(String, String)],
-) -> Result<()> {
-    let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
-        info!("Skipping: {}", path.display());
-        return Ok(());
-    };
-
-    setup_scratch_dir(&relative_path)?;
-
-    test_ctx.apply_config_overrides(combo, &relative_path)?;
-
-    // Progress bar suffix identifying the active matrix combination (empty
-    // when no matrix is in play). Failure banners are tagged separately
-    // inside `run_file_in_runner` so the tag lands next to the record count.
-    let matrix_suffix = matrix_tag_suffix(combo);
-
-    let pb = mp.add(ProgressBar::new(count));
-
-    pb.set_style(mp_style);
-    pb.set_message(format!("{}{matrix_suffix}", relative_path.display()));
-
-    // If DataFusion configuration has changed during test file runs, errors will be
-    // pushed to this vec.
-    // HACK: managed externally because `sqllogictest` is an external dependency, and
-    // it doesn't have an API to directly access the inner runner.
-    let config_change_errors = Arc::new(Mutex::new(Vec::new()));
-    let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusion::new(
-            test_ctx.session_ctx().clone(),
-            relative_path.clone(),
-            pb.clone(),
-        )
-        .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone())
-        .with_config_change_errors(Arc::clone(&config_change_errors)))
-    });
-    runner.add_label("Datafusion");
-    runner.with_column_validator(strict_column_validator);
-    runner.with_normalizer(value_normalizer);
-    runner.with_validator(validator);
-    let res =
-        run_file_in_runner(path, records, &mut runner, filters, colored_output, combo)
-            .await;
-    pb.finish_and_clear();
-    res?;
-
-    // Config-drift check runs only when the per-record loop succeeded.
-    // Tag any drift error with the active combination to match the placement
-    // `run_file_in_runner` uses for per-record errors.
-    runner.shutdown_async().await;
-    config_change_result(&config_change_errors).map_err(|e| {
-        if matrix_suffix.is_empty() {
-            e
-        } else {
-            DataFusionError::External(format!("{e}{matrix_suffix}").into())
-        }
-    })
-}
-
 async fn run_file_in_runner<D, M>(
-    path: PathBuf,
-    records: Vec<Record<DFColumnType>>,
+    path: &Path,
+    records: &[Record<DFColumnType>],
     runner: &mut sqllogictest::Runner<D, M>,
     filters: &[Filter],
     colored_output: bool,
-    combo: &[(String, String)],
 ) -> Result<()>
 where
     D: AsyncDB<ColumnType = DFColumnType>,
     M: MakeConnection<Conn = D>,
 {
-    let path = path.canonicalize()?;
     let mut errs = vec![];
-    for record in records.into_iter() {
+    for record in records {
         if let Record::Halt { .. } = record {
             break;
         }
-        if should_skip_record::<D>(&record, filters) {
+        if should_skip_record::<D>(record, filters) {
             continue;
         }
-        if let Err(err) = runner.run_async(record).await {
+        if let Err(err) = runner.run_async(record.clone()).await {
             if colored_output {
                 errs.push(format!("{}", err.display(true)));
             } else {
@@ -673,12 +626,8 @@ where
     }
 
     if !errs.is_empty() {
-        let matrix_suffix = matrix_tag_suffix(combo);
-        let mut msg = format!(
-            "{} errors in file {}{matrix_suffix}\n\n",
-            errs.len(),
-            path.display(),
-        );
+        let path = path.canonicalize()?;
+        let mut msg = format!("{} errors in file {}\n\n", errs.len(), path.display());
         for (i, err) in errs.iter().enumerate() {
             if i >= ERRS_PER_FILE_LIMIT {
                 msg.push_str(&format!(
@@ -754,8 +703,7 @@ async fn run_test_file_with_postgres(
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    let result =
-        run_file_in_runner(path, records, &mut runner, filters, false, &[]).await;
+    let result = run_file_in_runner(&path, &records, &mut runner, filters, false).await;
     pb.finish_and_clear();
     result
 }
@@ -790,6 +738,18 @@ async fn run_complete_file(
     } = test_file;
 
     info!("Using complete mode to complete: {}", path.display());
+
+    // `update_test_file` rewrites the file in place from a single run, so it
+    // cannot represent one expected-output set per matrix combination. Refuse
+    // rather than silently baking in the results of one combination.
+    if expand_matrix_runs(&path)?.iter().any(|c| !c.is_empty()) {
+        return exec_err!(
+            "Cannot use --complete on {}: it declares `# configMatrix:` \
+             directives, and completion would overwrite the file with the \
+             output of a single combination",
+            relative_path.display()
+        );
+    }
 
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
@@ -1035,14 +995,6 @@ struct Options {
 
     #[clap(
         long,
-        env = "SLT_TIMING_DEBUG_SLOW_FILES",
-        default_value_t = false,
-        help = "Log a warning line to stderr for each file that takes longer than 30s"
-    )]
-    timing_debug_slow_files: bool,
-
-    #[clap(
-        long,
         value_name = "MODE",
         help = "Control colored output",
         default_value_t = ColorChoice::Auto
@@ -1092,27 +1044,31 @@ impl Options {
 
     /// Determine if colour output should be enabled, respecting --color, NO_COLOR, CARGO_TERM_COLOR, and terminal detection
     fn is_colored(&self) -> bool {
-        // NO_COLOR takes precedence over every other signal.
+        // NO_COLOR takes precedence
         if std::env::var_os("NO_COLOR").is_some() {
             return false;
         }
 
-        // If --color is Auto, defer to CARGO_TERM_COLOR (also Auto if unset
-        // or unrecognised). Any Always/Never resolves immediately.
-        let choice = match self.color {
-            ColorChoice::Auto => std::env::var("CARGO_TERM_COLOR")
-                .ok()
-                .and_then(|v| ColorChoice::from_str(&v).ok())
-                .unwrap_or(ColorChoice::Auto),
-            other => other,
-        };
-
-        match choice {
+        match self.color {
             ColorChoice::Always => true,
             ColorChoice::Never => false,
             ColorChoice::Auto => {
-                stdout().is_terminal()
-                    && std::env::var("TERM").unwrap_or_default() != "dumb"
+                // CARGO_TERM_COLOR takes precedence over auto-detection
+                let cargo_term_color = <ColorChoice as FromStr>::from_str(
+                    &std::env::var("CARGO_TERM_COLOR")
+                        .unwrap_or_else(|_| "auto".to_string()),
+                )
+                .unwrap_or(ColorChoice::Auto);
+                match cargo_term_color {
+                    ColorChoice::Always => true,
+                    ColorChoice::Never => false,
+                    ColorChoice::Auto => {
+                        // Auto for both CLI argument and CARGO_TERM_COLOR,
+                        // then use colors by default for non-dumb terminals
+                        stdout().is_terminal()
+                            && std::env::var("TERM").unwrap_or_default() != "dumb"
+                    }
+                }
             }
         }
     }

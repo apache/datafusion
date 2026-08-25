@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Apache DataFusion SqlLogicTest
+# Apache DataFusion sqllogictest
 
 [Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
@@ -195,8 +195,10 @@ Runs the same `.slt` once per combination of config values. Each directive is a 
 - Repeat the directive to nest keys. Values are the cartesian product.
 - Whitespace-trimmed and deduped; repeated keys merge value lists.
 - Unknown key or invalid value fails fast, naming the file, key, and value.
-- Supported by the default runner and by `--substrait-round-trip`; `--complete` and the Postgres runner ignore matrix directives.
-- Test failures include `[configMatrix: k=v, ...]` at the end of the `N errors in file …` banner line.
+- Supported by the default runner and by `--substrait-round-trip`. `--complete`
+  rejects a file that declares directives, since it would overwrite the file
+  with the output of a single combination. The Postgres runner ignores them.
+- Test failures are prefixed with the combination that produced them.
 
 Nested example (2 × 2 = 4 runs):
 
@@ -215,10 +217,12 @@ select count(*) from int96_from_spark
 6
 ```
 
-Failure banner:
+Failure output:
 
 ```text
-External error: 1 errors in file .../parquet_int96_matrix.slt [configMatrix: datafusion.execution.parquet.coerce_int96=ms, datafusion.execution.parquet.coerce_int96_tz=UTC]
+[configMatrix: datafusion.execution.parquet.coerce_int96=ms, datafusion.execution.parquet.coerce_int96_tz=UTC]
+caused by
+External error: 1 errors in file .../parquet_int96_matrix.slt
 ```
 
 # Reference

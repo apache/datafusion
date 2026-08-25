@@ -33,21 +33,23 @@ use std::path::Path;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err};
 use itertools::Itertools;
 
-const DIRECTIVE_MARKER: &str = "configmatrix:";
+/// Matched case-insensitively, so this spelling is only the documented one.
+const DIRECTIVE_MARKER: &str = "configMatrix:";
 
 /// A single point in the matrix, expressed as an ordered list of
 /// `(key, value)` pairs to apply before running the file.
 pub type ConfigMatrixCombination = Vec<(String, String)>;
 
 /// Read the file at `path`, extract all `# configMatrix:` directives, and
-/// expand them into the cartesian product of `(key, value)` combinations.
+/// expand them into the list of runs to perform.
 ///
-/// Returns an empty vec if no directives are present. Fails with a
-/// user-friendly error if a directive is malformed (missing key, missing
-/// values, empty value list).
-pub fn parse_config_matrix_from_file(
-    path: &Path,
-) -> Result<Vec<ConfigMatrixCombination>> {
+/// Always returns at least one combination so callers can iterate with a
+/// single loop shape. A single empty combination (`vec![vec![]]`) means "no
+/// matrix was declared" and is a no-op when applied to the session config.
+///
+/// Fails with a user-friendly error if a directive is malformed (missing key,
+/// missing values, empty value list).
+pub fn expand_matrix_runs(path: &Path) -> Result<Vec<ConfigMatrixCombination>> {
     let content = fs::read_to_string(path).map_err(|e| {
         exec_datafusion_err!(
             "Failed to read {} for configMatrix parsing: {e}",
@@ -57,42 +59,28 @@ pub fn parse_config_matrix_from_file(
     parse_config_matrix(&content, path)
 }
 
-/// Expand the matrix directives of `path` into the list of runs to perform.
-///
-/// Always returns at least one combination so callers can iterate with a
-/// single loop shape. An empty combination (`vec![]`) means "no matrix was
-/// declared" and is a no-op when applied to the session config.
-pub fn expand_matrix_runs(path: &Path) -> Result<Vec<ConfigMatrixCombination>> {
-    let combinations = parse_config_matrix_from_file(path)?;
-    if combinations.is_empty() {
-        Ok(vec![Vec::new()])
-    } else {
-        Ok(combinations)
-    }
-}
-
-/// Render a combination as `[configMatrix: k1=v1, k2=v2]` for CI logs.
-pub fn matrix_tag(combo: &[(String, String)]) -> String {
+/// Render a combination as `[configMatrix: k1=v1, k2=v2]`.
+fn matrix_tag(combo: &[(String, String)]) -> String {
     format!(
         "[configMatrix: {}]",
         combo.iter().map(|(k, v)| format!("{k}={v}")).join(", ")
     )
 }
 
-/// Space-prefixed version of [`matrix_tag`] suitable for appending to a
-/// message. Returns an empty string when no matrix is active, otherwise
-/// `" [configMatrix: ...]"`.
-pub fn matrix_tag_suffix(combo: &[(String, String)]) -> String {
+/// Annotate a failed `result` with the combination that produced it, so CI
+/// logs name the swept values. A no-op when no matrix is active.
+pub fn with_matrix_context<T>(
+    result: Result<T>,
+    combo: &[(String, String)],
+) -> Result<T> {
     if combo.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", matrix_tag(combo))
+        return result;
     }
+    result.map_err(|e| e.context(matrix_tag(combo)))
 }
 
-/// Parse `# configMatrix:` directives out of the given file contents and
-/// return the fully expanded cartesian product. `path` is used only for
-/// error messages.
+/// Parse directives out of the given file contents and return the fully
+/// expanded cartesian product. `path` is used only for error messages.
 ///
 /// Values inside a directive are trimmed and deduplicated (first occurrence
 /// wins). Directives that reuse a key are merged into a single dimension.
@@ -100,68 +88,57 @@ fn parse_config_matrix(
     content: &str,
     path: &Path,
 ) -> Result<Vec<ConfigMatrixCombination>> {
-    let mut dims: Vec<(String, Vec<String>)> = Vec::new();
+    // Borrowed from `content` throughout; owned only in the product below.
+    let mut dims: Vec<(&str, Vec<&str>)> = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         let Some(rest) = strip_directive_prefix(line) else {
             continue;
         };
-        let line_num = idx + 1;
-        let (key, values_str) = rest.split_once('=').ok_or_else(|| {
+        let invalid_cfg_matrix = |detail: String| {
             DataFusionError::Configuration(format!(
-                "Invalid configMatrix directive in {}:{}: expected \
-                 `# configMatrix: <key>=<v1>,<v2>[,...]`, got `{}`",
+                "Invalid configMatrix directive in {}:{}: {detail}",
                 path.display(),
-                line_num,
-                rest
+                idx + 1
+            ))
+        };
+
+        let (key, values_str) = rest.split_once('=').ok_or_else(|| {
+            invalid_cfg_matrix(format!(
+                "expected `# configMatrix: <key>=<v1>,<v2>[,...]`, got `{rest}`"
             ))
         })?;
 
-        let key = key.trim().to_string();
+        let key = key.trim();
         if key.is_empty() {
-            return Err(DataFusionError::Configuration(format!(
-                "Invalid configMatrix directive in {}:{}: missing config key",
-                path.display(),
-                line_num
-            )));
+            return Err(invalid_cfg_matrix("missing config key".to_string()));
         }
 
-        let values: Vec<String> = values_str
+        let values: Vec<&str> = values_str
             .split(',')
-            .map(|v| v.trim().to_string())
+            .map(str::trim)
             .filter(|v| !v.is_empty())
-            .unique()
             .collect();
         if values.is_empty() {
-            return Err(DataFusionError::Configuration(format!(
-                "Invalid configMatrix directive in {}:{}: no values provided for `{}`",
-                path.display(),
-                line_num,
-                key
+            return Err(invalid_cfg_matrix(format!(
+                "no values provided for `{key}`"
             )));
         }
 
         // Merge into any earlier entry for the same key so a repeated
-        // directive is idempotent (union of values, first-seen order).
-        if let Some((_, existing)) = dims.iter_mut().find(|(k, _)| k == &key) {
-            for v in values {
-                if !existing.contains(&v) {
-                    existing.push(v);
-                }
-            }
-        } else {
-            dims.push((key, values));
+        // directive is idempotent. Duplicates are removed once, below.
+        match dims.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, existing)) => existing.extend(values),
+            None => dims.push((key, values)),
         }
     }
 
-    if dims.is_empty() {
-        return Ok(Vec::new());
-    }
     Ok(dims
         .into_iter()
         .map(|(k, vs)| {
             vs.into_iter()
-                .map(move |v| (k.clone(), v))
-                .collect::<Vec<_>>()
+                .unique()
+                .map(|v| (k.to_string(), v.to_string()))
+                .collect_vec()
         })
         .multi_cartesian_product()
         .collect())
@@ -192,8 +169,10 @@ mod tests {
 
     #[test]
     fn parses_no_directives() {
+        // Zero dimensions expand to exactly one empty combination: "run the
+        // file once, unmodified".
         let content = "# ordinary comment\nquery I\nSELECT 1\n----\n1\n";
-        assert!(parse(content).is_empty());
+        assert_eq!(parse(content), vec![Vec::new()]);
     }
 
     #[test]
@@ -273,6 +252,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_values_on_a_repeated_key() {
+        let err = parse_config_matrix(
+            "# configMatrix: k=1,2\n# configMatrix: k=\n",
+            Path::new("test.slt"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no values provided"));
+    }
+
+    #[test]
     fn deduplicates_repeated_values_preserving_first_order() {
         let combos = parse("# configMatrix: some.key=false,true,false,true,false\n");
         assert_eq!(combos.len(), 2);
@@ -347,7 +336,7 @@ mod tests {
 
     #[test]
     fn ignores_non_comment_lines_with_marker_text() {
-        assert!(parse("SELECT 'configMatrix: foo=bar';\n").is_empty());
+        assert_eq!(parse("SELECT 'configMatrix: foo=bar';\n"), vec![Vec::new()]);
     }
 
     #[test]
@@ -384,13 +373,21 @@ mod tests {
     }
 
     #[test]
-    fn matrix_tag_suffix_is_empty_for_empty_combo() {
-        assert_eq!(matrix_tag_suffix(&[]), "");
+    fn with_matrix_context_is_noop_for_empty_combo() {
+        let err: Result<()> = Err(exec_datafusion_err!("boom"));
+        // No matrix active: the error passes through untouched.
+        assert_eq!(
+            with_matrix_context(err, &[]).unwrap_err().to_string(),
+            exec_datafusion_err!("boom").to_string()
+        );
     }
 
     #[test]
-    fn matrix_tag_suffix_prepends_space() {
+    fn with_matrix_context_names_the_combination() {
         let combo = vec![("k".to_string(), "1".to_string())];
-        assert_eq!(matrix_tag_suffix(&combo), " [configMatrix: k=1]");
+        let err: Result<()> = Err(exec_datafusion_err!("boom"));
+        let msg = with_matrix_context(err, &combo).unwrap_err().to_string();
+        assert!(msg.starts_with("[configMatrix: k=1]"), "got {msg}");
+        assert!(msg.contains("boom"), "got {msg}");
     }
 }
