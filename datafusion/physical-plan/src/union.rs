@@ -31,7 +31,6 @@ use super::{
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
-use crate::check_if_same_properties;
 use crate::execution_plan::{
     CardinalityEffect, InvariantLevel, boundedness_from_children,
     check_default_invariants, emission_type_from_children,
@@ -45,6 +44,7 @@ use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, ProjectionExpr, make_with_child};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ObservedStream;
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -330,23 +330,40 @@ impl ExecutionPlan for UnionExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                inputs: children,
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => UnionExec::try_new(children),
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        UnionExec::try_new(children)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -557,7 +574,17 @@ impl ExecutionPlan for UnionExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `UnionExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            inputs,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let inputs = ctx.encode_children(inputs)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Union(
@@ -580,8 +607,10 @@ impl UnionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Union,
             "UnionExec",
         );
-        let inputs = union
-            .inputs
+        // Destructure exhaustively so that a new field on `UnionExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::UnionExecNode { inputs } = union;
+        let inputs = inputs
             .iter()
             .map(|input| ctx.decode_child(input))
             .collect::<Result<Vec<_>>>()?;
@@ -716,28 +745,47 @@ impl ExecutionPlan for InterleaveExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                inputs: children,
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                // New children are no longer interleavable, which might be a bug of optimization rewrite.
+                assert_or_internal_err!(
+                    can_interleave(children.iter()),
+                    "Can not create InterleaveExec: new children can not be interleaved"
+                );
+                Ok(Arc::new(InterleaveExec::try_new(children)?))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // New children are no longer interleavable, which might be a bug of optimization rewrite.
-        assert_or_internal_err!(
-            can_interleave(children.iter()),
-            "Can not create InterleaveExec: new children can not be interleaved"
-        );
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(InterleaveExec::try_new(children)?))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            inputs: children,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -818,7 +866,17 @@ impl ExecutionPlan for InterleaveExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `InterleaveExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            inputs,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let inputs = ctx.encode_children(inputs)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Interleave(
@@ -841,8 +899,10 @@ impl InterleaveExec {
             protobuf::physical_plan_node::PhysicalPlanType::Interleave,
             "InterleaveExec",
         );
-        let inputs = interleave
-            .inputs
+        // Destructure exhaustively so that a new field on `InterleaveExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::InterleaveExecNode { inputs } = interleave;
+        let inputs = inputs
             .iter()
             .map(|input| ctx.decode_child(input))
             .collect::<Result<Vec<_>>>()?;
@@ -880,6 +940,22 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     }
 
     let first_schema = inputs[0].schema();
+
+    // Fast path: when every input already shares the first input's schema, the
+    // field-by-field metadata/nullability merge below is redundant work that
+    // scales as O(n^2 * fields). This is common in practice: unions built from
+    // repartitioned copies of the same plan (e.g. observed in InfluxDB) hand us
+    // children that all carry the exact same schema. A pointer-equality check
+    // catches the shared-`Arc` case for free, and a content `==` comparison
+    // catches distinct-but-equal schemas; both let us return early and hand back
+    // the first schema unchanged.
+    if inputs[1..].iter().all(|input| {
+        let schema = input.schema();
+        Arc::ptr_eq(&schema, &first_schema) || schema == first_schema
+    }) {
+        return Ok(first_schema);
+    }
+
     let first_field_count = first_schema.fields().len();
 
     // validate that all inputs have the same number of fields
@@ -1588,6 +1664,36 @@ mod tests {
         // Check that we have 2 inputs
         assert_eq!(union.inputs().len(), 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_schema_fast_path_content_equal() -> Result<()> {
+        // Inputs whose schemas are pointer-distinct but structurally equal must
+        // take the content-equality (`==`) fast path and still produce a schema
+        // equal to the shared one, matching the slow-path merge exactly.
+        let schema = create_test_schema()?;
+        let distinct: SchemaRef = Arc::new((*schema).clone());
+        // Guard the branch under test: these must NOT be the same allocation, so
+        // the fast path is reached via `==` rather than `Arc::ptr_eq`.
+        assert!(!Arc::ptr_eq(&schema, &distinct));
+
+        let memory_exec1 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let memory_exec2 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&distinct), None)?);
+        let memory_exec3 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&distinct), None)?);
+
+        // Capture the first child's schema before it is moved into the union.
+        let first_input_schema = memory_exec1.schema();
+        let union_plan =
+            UnionExec::try_new(vec![memory_exec1, memory_exec2, memory_exec3])?;
+
+        // The fast path returns the first child's schema Arc unchanged. Assert
+        // pointer equality (not just `==`): a slow-path merge would build a new,
+        // merely-equal Schema, so only ptr-eq proves the merge was skipped.
+        assert!(Arc::ptr_eq(&union_plan.schema(), &first_input_schema));
         Ok(())
     }
 

@@ -87,15 +87,16 @@ use crate::filter_pushdown::{
 use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
+    SortOrderPushdownResult, validate_child_count,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::{Result, Statistics, assert_eq_or_internal_err};
+use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::SchedulingType;
+use crate::execution_plan::{SchedulingType, replace_children_if_necessary};
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt};
@@ -275,27 +276,41 @@ impl ExecutionPlan for CooperativeExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq_or_internal_err!(
-            children.len(),
-            1,
-            "CooperativeExec requires exactly one child"
-        );
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -332,9 +347,10 @@ impl ExecutionPlan for CooperativeExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(
-                Arc::new(self.clone()).with_new_children(vec![new_input])?,
-            )),
+            Some(new_input) => Ok(Some(replace_children_if_necessary(
+                Arc::new(self.clone()),
+                vec![new_input],
+            )?)),
             None => Ok(None),
         }
     }
@@ -365,11 +381,13 @@ impl ExecutionPlan for CooperativeExec {
 
         match child.try_pushdown_sort(order)? {
             SortOrderPushdownResult::Exact { inner } => {
-                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                let new_exec =
+                    replace_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
                 Ok(SortOrderPushdownResult::Exact { inner: new_exec })
             }
             SortOrderPushdownResult::Inexact { inner } => {
-                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                let new_exec =
+                    replace_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
                 Ok(SortOrderPushdownResult::Inexact { inner: new_exec })
             }
             SortOrderPushdownResult::Unsupported => {
@@ -384,7 +402,15 @@ impl ExecutionPlan for CooperativeExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CooperativeExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Derived from the input's properties at construction time.
+            properties: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Cooperative(Box::new(
@@ -414,11 +440,12 @@ impl CooperativeExec {
             protobuf::physical_plan_node::PhysicalPlanType::Cooperative,
             "CooperativeExec",
         );
-        let input = ctx.decode_required_child(
-            cooperative.input.as_deref(),
-            "CooperativeExec",
-            "input",
-        )?;
+        // Destructure exhaustively so that a new field on
+        // `CooperativeExecNode` is a compile error here rather than a silently
+        // dropped field.
+        let protobuf::CooperativeExecNode { input } = &**cooperative;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "CooperativeExec", "input")?;
         Ok(Arc::new(CooperativeExec::new(input)))
     }
 }

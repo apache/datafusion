@@ -239,13 +239,7 @@ impl FileSource for JsonSource {
             &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots(
-            self.projection
-                .source
-                .iter()
-                .map(|proj_expr| &proj_expr.expr),
-            f,
-        )
+        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
     /// Emit a `JsonScan` node wrapping the shared base config.
@@ -280,13 +274,12 @@ impl JsonSource {
         use datafusion_datasource::source::DataSourceExec;
         use datafusion_proto_models::protobuf;
 
-        let scan = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) => scan,
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not a JsonScan"
-                );
-            }
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not a JsonScan"
+            );
         };
 
         let base_conf = scan.base_conf.as_ref().ok_or_else(|| {

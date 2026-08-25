@@ -25,8 +25,8 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
-    StatisticsContext,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions, StatisticsArgs, StatisticsContext,
 };
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -185,7 +185,10 @@ unsafe extern "C" fn with_new_children_fn_wrapper(
         .collect();
 
     let children = sresult_return!(children);
-    let new_plan = sresult_return!(inner_plan.with_new_children(children));
+    let new_plan = sresult_return!(inner_plan.replace_children(
+        children,
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute)
+    ));
 
     FFI_Result::Ok(FFI_ExecutionPlan::new(new_plan, runtime))
 }
@@ -302,7 +305,7 @@ fn pass_runtime_to_children(
             // If the parent is foreign and the child is local to this library, then when
             // we called `children()` above we will get something other than a
             // `ForeignExecutionPlan`. In this case wrap the plan in a `ForeignExecutionPlan`
-            // because when we call `with_new_children` below it will extract the
+            // because when we call `replace_children` below it will extract the
             // FFI plan that does contain the runtime.
             if plan_is_foreign && !child.is::<ForeignExecutionPlan>() {
                 updated_children = true;
@@ -315,7 +318,12 @@ fn pass_runtime_to_children(
         })
         .collect::<Result<Vec<_>>>()?;
     if updated_children {
-        Arc::clone(plan).with_new_children(children).map(Some)
+        Arc::clone(plan)
+            .replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+            .map(Some)
     } else {
         Ok(None)
     }
@@ -453,9 +461,10 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self.children.iter().collect()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let children = children
             .into_iter()
@@ -465,6 +474,16 @@ impl ExecutionPlan for ForeignExecutionPlan {
             unsafe { df_result!((self.plan.with_new_children)(&self.plan, children))? };
 
         (&new_plan).try_into()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -621,9 +640,10 @@ pub mod tests {
             self.children.iter().collect()
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(EmptyExec {
                 props: Arc::clone(&self.props),
@@ -633,6 +653,16 @@ pub mod tests {
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
             }))
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -777,7 +807,10 @@ pub mod tests {
         assert_eq!(parent_foreign.children().len(), 0);
         assert_eq!(child_foreign.children().len(), 0);
 
-        let parent_foreign = parent_foreign.with_new_children(vec![child_foreign])?;
+        let parent_foreign = parent_foreign.replace_children(
+            vec![child_foreign],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         assert_eq!(parent_foreign.children().len(), 1);
 
         // Version 2: Adding child to the local plan
@@ -787,7 +820,10 @@ pub mod tests {
         let child_foreign = <Arc<dyn ExecutionPlan>>::try_from(&child_local)?;
 
         let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let parent_plan = parent_plan.with_new_children(vec![child_foreign])?;
+        let parent_plan = parent_plan.replace_children(
+            vec![child_foreign],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let mut parent_local = FFI_ExecutionPlan::new(parent_plan, None);
         parent_local.library_marker_id = crate::mock_foreign_marker_id;
         let parent_foreign = <Arc<dyn ExecutionPlan>>::try_from(&parent_local)?;

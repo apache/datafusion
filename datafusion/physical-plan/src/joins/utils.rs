@@ -1725,7 +1725,7 @@ fn append_probe_indices_in_order(
     // Set previous index as the start index for the initial loop:
     let mut prev_index = range.start as u32;
     // Zip the two iterators.
-    debug_assert!(build_indices.len() == probe_indices.len());
+    debug_assert_eq!(build_indices.len(), probe_indices.len());
     for (build_index, probe_index) in build_indices
         .values()
         .into_iter()
@@ -1754,6 +1754,7 @@ fn append_probe_indices_in_order(
 /// Metrics for build & probe joins
 #[derive(Clone, Debug)]
 pub(crate) struct BuildProbeJoinMetrics {
+    // Keep these metric descriptions in sync with docs/source/user-guide/metrics.md.
     pub(crate) baseline: BaselineMetrics,
     /// Total time for collecting build-side of join
     pub(crate) build_time: metrics::Time,
@@ -1763,15 +1764,17 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) build_input_rows: metrics::Count,
     /// Memory used by build-side in bytes
     pub(crate) build_mem_used: metrics::Gauge,
-    /// Total time for joining probe-side batches to the build-side batches
+    /// Total time for join processing after build-side collection
     pub(crate) join_time: metrics::Time,
     /// Number of batches consumed by probe-side of this operator
     pub(crate) input_batches: metrics::Count,
     /// Number of rows consumed by probe-side this operator
     pub(crate) input_rows: metrics::Count,
-    /// Fraction of probe rows that found more than one match
+    /// Fraction of probe rows with at least one build-side join-key match before
+    /// applying any join filter
     pub(crate) probe_hit_rate: metrics::RatioMetrics,
-    /// Average number of build matches per matched probe row
+    /// Average number of build-side join-key matches per matched probe row before
+    /// applying any join filter
     pub(crate) avg_fanout: metrics::RatioMetrics,
 }
 
@@ -1830,6 +1833,7 @@ impl BuildProbeJoinMetrics {
             .ratio_metrics("avg_fanout", partition);
 
         Self {
+            baseline,
             build_time,
             build_input_batches,
             build_input_rows,
@@ -1837,7 +1841,6 @@ impl BuildProbeJoinMetrics {
             join_time,
             input_batches,
             input_rows,
-            baseline,
             probe_hit_rate,
             avg_fanout,
         }
