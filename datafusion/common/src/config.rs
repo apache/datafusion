@@ -1587,6 +1587,16 @@ config_namespace! {
         /// unavailable. Disabled by default.
         pub double_star_join_reorder: bool, default = false
 
+        /// When set to true, the physical plan optimizer will reorder joins that form a
+        /// "helix": a chain of diamonds, where consecutive relations are linked by two
+        /// parallel paths rather than one. Because a helix contains cycles, rules that
+        /// require a tree cannot reorder it. Every join order of the graph is searched
+        /// and the cheapest is chosen, using a cost model driven by table statistics.
+        /// The rule leaves the plan untouched when the join graph has a different
+        /// shape, when the statistics are unavailable, or when the plan is already in
+        /// the chosen order. Disabled by default.
+        pub helix_join_reorder: bool, default = false
+
         /// When set to true, the physical plan optimizer uses the pluggable
         /// `StatisticsRegistry` for statistics propagation across operators.
         /// This enables more accurate cardinality estimates compared to each

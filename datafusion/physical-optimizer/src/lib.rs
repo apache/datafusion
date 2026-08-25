@@ -35,6 +35,7 @@ pub mod ensure_requirements;
 // modules keep their public paths.
 pub use ensure_requirements::{enforce_distribution, enforce_sorting};
 pub mod filter_pushdown;
+pub mod helix_join_reorder;
 pub mod join_selection;
 pub mod limit_pushdown;
 pub mod limit_pushdown_past_window;

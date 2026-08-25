@@ -26,6 +26,7 @@ use crate::double_star_join_reorder::DoubleStarJoinReorder;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
+use crate::helix_join_reorder::HelixJoinReorder;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -100,6 +101,12 @@ impl PhysicalOptimizer {
             // this rule emits, not about the one it replaced. Disabled unless
             // `datafusion.optimizer.double_star_join_reorder` is set.
             Arc::new(DoubleStarJoinReorder::new()),
+            // Reorders "helix" join graphs using statistics, for the same
+            // reason and in the same window. The two cannot contend for a
+            // clump: a double star is a tree and a helix contains cycles, so
+            // whichever runs first the other declines that graph anyway.
+            // Disabled unless `datafusion.optimizer.helix_join_reorder` is set.
+            Arc::new(HelixJoinReorder::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
             // EnsureRequirements rule as it decides whether to add additional repartitioning and
