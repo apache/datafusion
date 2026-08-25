@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
     ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
     CustomTableScanNode, DmlNode, SortExprNodeCollection, dml_node,
@@ -702,7 +701,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
-            CustomScan(scan) => {
+            LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
                 let schema = Arc::new(schema);
                 let mut projection = None;
@@ -1532,7 +1531,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec
                         .try_encode_table_provider(table_name, provider, &mut bytes)
                         .map_err(|e| context!("Error serializing custom table", e))?;
-                    let scan = CustomScan(CustomTableScanNode {
+                    let scan = LogicalPlanType::CustomScan(CustomTableScanNode {
                         table_name: Some(protobuf::TableReference::from(
                             table_name.clone(),
                         )),

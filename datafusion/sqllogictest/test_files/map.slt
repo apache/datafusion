@@ -1199,3 +1199,27 @@ SELECT * FROM map_null_insert;
 
 statement ok
 DROP TABLE map_null_insert;
+
+# Primitive Map assignment casts keep Arrow's existing behavior. They must not
+# use the nested Struct evolution path merely because Map entries are Struct-backed.
+statement ok
+CREATE TABLE map_primitive_cast_insert AS
+SELECT map([arrow_cast(1, 'Int32')], [arrow_cast(10, 'Int32')]) AS m;
+
+statement ok
+INSERT INTO map_primitive_cast_insert VALUES (MAP {2: 20});
+
+query ? rowsort
+SELECT * FROM map_primitive_cast_insert;
+----
+{1: 10}
+{2: 20}
+
+statement error DataFusion error: Execution error: map key must be unique, duplicate key found: a
+INSERT INTO map_primitive_cast_insert VALUES (MAP {'a': 1, 'a': 10});
+
+statement error Execution error: map key cannot be null
+INSERT INTO map_primitive_cast_insert VALUES (MAP {NULL: 1});
+
+statement ok
+DROP TABLE map_primitive_cast_insert;

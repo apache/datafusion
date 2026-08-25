@@ -1343,7 +1343,7 @@ fn rewrite_projection(
 /// Creates a new LogicalPlan::Filter node.
 ///
 /// Deprecated: use [`Filter::try_new`] directly.
-#[deprecated]
+#[deprecated(since = "55.0.0", note = "Use `Filter::try_new` instead")]
 pub fn make_filter(predicate: Expr, input: Arc<LogicalPlan>) -> Result<LogicalPlan> {
     Filter::try_new(predicate, input).map(LogicalPlan::Filter)
 }

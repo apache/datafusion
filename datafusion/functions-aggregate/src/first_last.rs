@@ -242,11 +242,11 @@ fn groups_accumulator_supported(args: &AccumulatorArgs) -> bool {
     syntax_example = "first_value(expression [ORDER BY expression])",
     sql_example = r#"```sql
 > SELECT first_value(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| first_value(column_name ORDER BY other_column)|
-+-----------------------------------------------+
-| first_element                                 |
-+-----------------------------------------------+
++------------------------------------------------+
+| first_value(column_name ORDER BY other_column) |
++------------------------------------------------+
+| first_element                                  |
++------------------------------------------------+
 ```"#,
     standard_argument(name = "expression",)
 )]
@@ -450,7 +450,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             return Ok(true);
         }
 
-        debug_assert!(new_ordering_values.len() == self.ordering_req.len());
+        debug_assert_eq!(new_ordering_values.len(), self.ordering_req.len());
         let current_ordering = &self.orderings[group_idx];
         compare_rows(current_ordering, new_ordering_values, &self.sort_options).map(|x| {
             if self.pick_first_in_group {
@@ -509,7 +509,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         self.state.update(group_idx, array, idx)?;
         self.is_sets.set_bit(group_idx, true);
 
-        debug_assert!(orderings.len() == self.ordering_req.len());
+        debug_assert_eq!(orderings.len(), self.ordering_req.len());
         let old_size = ScalarValue::size_of_vec(&self.orderings[group_idx]);
         self.orderings[group_idx].clear();
         self.orderings[group_idx].extend_from_slice(orderings);
@@ -681,7 +681,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
                 ordering_cols.push(Vec::with_capacity(self.orderings.len()));
             }
             for row in orderings.into_iter() {
-                debug_assert!(row.len() == self.ordering_req.len());
+                debug_assert_eq!(row.len(), self.ordering_req.len());
                 for (col_idx, ordering) in row.into_iter().enumerate() {
                     ordering_cols[col_idx].push(ordering);
                 }
@@ -708,9 +708,8 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
 
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
 
-        let (is_set_arr, val_and_order_cols) = match values.split_last() {
-            Some(result) => result,
-            None => return internal_err!("Empty row in FIRST_VALUE"),
+        let Some((is_set_arr, val_and_order_cols)) = values.split_last() else {
+            return internal_err!("Empty row in FIRST_VALUE");
         };
 
         let is_set_arr = as_boolean_array(is_set_arr)?;

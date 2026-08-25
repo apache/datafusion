@@ -112,6 +112,7 @@ use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Sessio
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
+use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexSet;
 use itertools::{Itertools, multiunzip};
@@ -153,22 +154,20 @@ pub struct DefaultPhysicalPlanner {
 #[async_trait]
 impl PhysicalPlanner for DefaultPhysicalPlanner {
     /// Create a physical plan from a logical plan
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(plan) = self
-            .handle_explain_or_analyze(logical_plan, session_state)
-            .await?
-        {
-            return Ok(plan);
-        }
-        let plan = self
-            .create_initial_plan(logical_plan, session_state)
-            .await?;
-
-        self.optimize_physical_plan(plan, session_state, |_, _| {})
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn create_physical_plan<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        logical_plan: &'life1 LogicalPlan,
+        session_state: &'life2 dyn Session,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_physical_plan_boxed(logical_plan, session_state)
     }
 
     /// Create a physical expression from a logical expression
@@ -190,6 +189,34 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
             session_state.execution_props(),
             planning_ctx,
         )
+    }
+}
+
+impl DefaultPhysicalPlanner {
+    fn create_physical_plan_boxed<'a>(
+        &'a self,
+        logical_plan: &'a LogicalPlan,
+        session_state: &'a dyn Session,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.create_physical_plan_inner(logical_plan, session_state))
+    }
+
+    async fn create_physical_plan_inner(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if let Some(plan) = self
+            .handle_explain_or_analyze(logical_plan, session_state)
+            .await?
+        {
+            return Ok(plan);
+        }
+        let plan = self
+            .create_initial_plan(logical_plan, session_state)
+            .await?;
+
+        self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
 }
 
@@ -329,7 +356,7 @@ impl DefaultPhysicalPlanner {
         &'a self,
         logical_plan: &'a LogicalPlan,
         session_state: &'a dyn Session,
-    ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
             // When `enable_physical_uncorrelated_scalar_subquery` is disabled, the
             // `ScalarSubqueryToJoin` optimizer rule rewrites all uncorrelated
@@ -593,14 +620,11 @@ impl DefaultPhysicalPlanner {
                             .await?;
                     }
 
-                    let plan = match maybe_plan {
-                        Some(plan) => plan,
-                        None => {
-                            return plan_err!(
-                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
-                                scan.table_name
-                            );
-                        }
+                    let Some(plan) = maybe_plan else {
+                        return plan_err!(
+                            "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                            scan.table_name
+                        );
                     };
 
                     self.ensure_schema_matches(projected_schema, &plan, || {
@@ -1194,7 +1218,8 @@ impl DefaultPhysicalPlanner {
                     .config()
                     .options()
                     .optimizer
-                    .default_filter_selectivity;
+                    .default_filter_selectivity
+                    .get();
                 let filter_exec: Arc<dyn ExecutionPlan> =
                     Arc::new(filter.with_default_selectivity(selectivity)?);
                 filter_exec
@@ -1216,9 +1241,7 @@ impl DefaultPhysicalPlanner {
                     physical_partitioning,
                 )?)
             }
-            LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
-            }) => {
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let sort_exprs = create_physical_sort_exprs(
@@ -1577,11 +1600,13 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
+                        // PWMJ supports classic joins and Left Semi/Anti existence joins.
+                        // Right Semi/Anti and Mark joins are not implemented yet (they
+                        // would require swapping the inputs so the marked side is buffered),
+                        // so exclude them here and let them fall back to NestedLoopJoin.
                         && !matches!(
                             join_type,
-                            JoinType::LeftSemi
-                                | JoinType::RightSemi
-                                | JoinType::LeftAnti
+                            JoinType::RightSemi
                                 | JoinType::RightAnti
                                 | JoinType::LeftMark
                                 | JoinType::RightMark
@@ -2029,7 +2054,9 @@ fn create_cube_physical_expr(
     for null_count in 1..=num_of_exprs {
         for null_idx in (0..num_of_exprs).combinations(null_count) {
             let mut next_group: Vec<bool> = vec![false; num_of_exprs];
-            null_idx.into_iter().for_each(|i| next_group[i] = true);
+            for i in null_idx {
+                next_group[i] = true;
+            }
             groups.push(next_group);
         }
     }
@@ -2533,7 +2560,7 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
@@ -2560,7 +2587,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 }
 
 /// Create an aggregate expression from a logical expression or an alias
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
@@ -3509,7 +3536,7 @@ mod tests {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _projection: Option<&Vec<usize>>,
+            _projection: Option<&[usize]>,
             _filters: &[Expr],
             _limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -5497,7 +5524,7 @@ digraph {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _projection: Option<&Vec<usize>>,
+            _projection: Option<&[usize]>,
             _filters: &[Expr],
             _limit: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
