@@ -161,9 +161,13 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 timer.stop();
                 Ok(bool_arr)
             })
-            // Convert rather than format: converting leaves the original error
-            // in the source chain, so callers can still recover it (for example
-            // with `DataFusionError::find_root`)
+            // Convert rather than format, and keep the context: a plain
+            // conversion of a `DataFusionError::ArrowError` yields a bare
+            // `ArrowError`, which carries only a `String` and no source, so once
+            // the decoder re-wraps it as `ParquetError::External` nothing in the
+            // chain is a `DataFusionError` any more. Wrapping in a context first
+            // routes it to `ArrowError::ExternalError`, which keeps the original
+            // error recoverable (for example with `DataFusionError::find_root`).
             .map_err(|e| e.context("Error evaluating filter predicate").into())
     }
 }

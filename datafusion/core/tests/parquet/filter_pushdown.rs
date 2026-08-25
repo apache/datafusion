@@ -26,7 +26,7 @@
 //! select * from data limit 10;
 //! ```
 
-use arrow::array::{ArrayRef, StringArray};
+use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::compute::concat_batches;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -761,10 +761,16 @@ async fn pushed_down_predicate_reports_the_original_error() {
     let tempdir = TempDir::new_in(Path::new(".")).unwrap();
     let path = tempdir.path().join("cast_error.parquet");
 
-    let batch = RecordBatch::try_from_iter(vec![(
-        "s",
-        Arc::new(StringArray::from(vec!["not_an_int"])) as ArrayRef,
-    )])
+    // `v` is never referenced by the predicate, so the projection always has a
+    // column that only the scan can supply and a narrow-projection pushdown
+    // heuristic has no reason to decline this scan
+    let batch = RecordBatch::try_from_iter(vec![
+        (
+            "s",
+            Arc::new(StringArray::from(vec!["not_an_int"])) as ArrayRef,
+        ),
+        ("v", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+    ])
     .unwrap();
     let mut writer =
         ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), None).unwrap();
@@ -784,10 +790,13 @@ async fn pushed_down_predicate_reports_the_original_error() {
         .await
         .unwrap();
 
-    // The predicate has to reach the decoder for this test to mean anything
     let plan = df.clone().create_physical_plan().await.unwrap();
     let plan = displayable(plan.as_ref()).indent(false).to_string();
-    assert!(!plan.contains("FilterExec"), "{plan}");
+    assert!(
+        !plan.contains("FilterExec"),
+        "the predicate has to reach the decoder for this test to mean anything, \
+         but a FilterExec here means pushdown was declined:\n{plan}"
+    );
 
     let err = df.collect().await.unwrap_err();
     let root = err.find_root();
