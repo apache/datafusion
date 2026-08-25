@@ -1332,7 +1332,10 @@ impl TreeRenderVisitor<'_, '_> {
     fn adjust_text_for_rendering(source: &str, max_render_width: usize) -> String {
         let render_width = source.chars().count();
         if render_width > max_render_width {
-            let truncated = &source[..max_render_width - 3];
+            let truncated = source
+                .chars()
+                .take(max_render_width - 3)
+                .collect::<String>();
             format!("{truncated}...")
         } else {
             let total_spaces = max_render_width - render_width;
@@ -1394,7 +1397,7 @@ impl TreeRenderVisitor<'_, '_> {
                     last_possible_split = character_pos;
                 }
 
-                result.push(source[start_pos..last_possible_split].to_string());
+                result.push(chars[start_pos..last_possible_split].iter().collect());
                 render_width = character_pos - last_possible_split;
                 start_pos = last_possible_split;
                 character_pos = last_possible_split;
@@ -1409,9 +1412,9 @@ impl TreeRenderVisitor<'_, '_> {
             render_width += char_width;
         }
 
-        if source.len() > start_pos {
+        if chars.len() > start_pos {
             // append the remainder of the input
-            result.push(source[start_pos..].to_string());
+            result.push(chars[start_pos..].iter().collect());
         }
     }
 
@@ -1501,7 +1504,30 @@ mod tests {
         ReplaceChildrenOptions,
     };
 
-    use super::DisplayableExecutionPlan;
+    use super::{DisplayableExecutionPlan, TreeRenderVisitor};
+
+    #[test]
+    fn test_tree_renderer_splits_multibyte_characters() {
+        let source = "weather_code_emoji🌤weather_code_text🌧conditions";
+        let mut lines = Vec::new();
+        TreeRenderVisitor::split_string_buffer(source, &mut lines);
+
+        assert_eq!(lines.concat(), source);
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.chars().count()
+                    <= TreeRenderVisitor::NODE_RENDER_WIDTH - 2)
+        );
+    }
+
+    #[test]
+    fn test_tree_renderer_truncates_multibyte_characters() {
+        assert_eq!(
+            TreeRenderVisitor::adjust_text_for_rendering("weather🌤conditions", 12,),
+            "weather🌤c..."
+        );
+    }
 
     #[derive(Debug, Clone, Copy)]
     enum TestStatsExecPlan {
