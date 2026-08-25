@@ -176,7 +176,7 @@ fn validate_aggregate(batches: &[RecordBatch], asc: bool) -> Result<()> {
     let batch = batches.first().unwrap();
     assert_eq!(batch.num_rows(), LIMIT);
 
-    let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
+    let actual = pretty_format_batches(batches)?.to_string().to_lowercase();
     let expected_asc = r#"
 +--------------------------+
 | max(traces.timestamp_ms) |
@@ -254,7 +254,7 @@ fn validate_aggregate_distinct(batches: &[RecordBatch], asc: bool) -> Result<()>
     let batch = batches.first().unwrap();
     assert_eq!(batch.num_rows(), LIMIT);
 
-    let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
+    let actual = pretty_format_batches(batches)?.to_string().to_lowercase();
 
     let expected_asc = r#"
 +----+

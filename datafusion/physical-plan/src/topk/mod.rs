@@ -1802,7 +1802,7 @@ impl PartitionedTopKRank {
                             batch: evicted_batch,
                             index: evicted_index,
                             row_bytes: evicted_bytes,
-                        }) = state.heap.add(entry_ref, row, sub_idx)
+                        }) = state.heap.add(entry_ref, row.as_ref(), sub_idx, true)
                         {
                             // Compare the new boundary (post-eviction heap
                             // top) against the evicted row's bytes — both
