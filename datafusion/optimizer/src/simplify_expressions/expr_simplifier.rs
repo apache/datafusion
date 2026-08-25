@@ -1178,30 +1178,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if !info.nullable(&right)? && is_zero(&left) => Transformed::yes(*left),
 
-            // !A & A -> 0 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseAnd,
-                right,
-            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_zero(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
-            // A & !A -> 0 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseAnd,
-                right,
-            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_zero(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
             // (..A..) & A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1252,30 +1228,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 right,
             }) if is_zero(&left) => Transformed::yes(*right),
 
-            // !A | A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseOr,
-                right,
-            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
-            // A | !A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseOr,
-                right,
-            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
             // (..A..) | A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1325,30 +1277,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: BitwiseXor,
                 right,
             }) if !info.nullable(&right)? && is_zero(&left) => Transformed::yes(*right),
-
-            // !A ^ A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseXor,
-                right,
-            }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
-
-            // A ^ !A -> -1 (if A not nullable)
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: BitwiseXor,
-                right,
-            }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(
-                    ScalarValue::new_negative_one(&info.get_data_type(&left)?)?,
-                    None,
-                ))
-            }
 
             // (..A..) ^ A --> (the expression without A, if number of A is odd, otherwise one A)
             Expr::BinaryExpr(BinaryExpr {
@@ -1410,11 +1338,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // Rules for Not
             //
             Expr::Not(inner) => Transformed::yes(negate_clause(*inner)),
-
-            //
-            // Rules for Negative
-            //
-            Expr::Negative(inner) => Transformed::yes(distribute_negation(*inner)),
 
             //
             // Rules for Case
@@ -3115,47 +3038,24 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_negated_bitwise_and() {
-        // !c3 & c3 --> 0
-        let expr = (-col("c3_non_null")) & col("c3_non_null");
-        let expected = lit(0i64);
+    fn test_preserve_arithmetic_negation() {
+        let c3 = col("c3_non_null");
+        let expressions = [
+            (-c3.clone()) & c3.clone(),
+            c3.clone() & (-c3.clone()),
+            (-c3.clone()) | c3.clone(),
+            c3.clone() | (-c3.clone()),
+            (-c3.clone()) ^ c3.clone(),
+            c3.clone() ^ (-c3.clone()),
+            -bitwise_and(col("c3"), c3.clone()),
+            -bitwise_or(col("c3"), c3.clone()),
+            // The inner negation can overflow for the signed minimum.
+            -(-c3),
+        ];
 
-        assert_eq!(simplify(expr), expected);
-        // c3 & !c3 --> 0
-        let expr = col("c3_non_null") & (-col("c3_non_null"));
-        let expected = lit(0i64);
-
-        assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
-    fn test_simplify_negated_bitwise_or() {
-        // !c3 | c3 --> -1
-        let expr = (-col("c3_non_null")) | col("c3_non_null");
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
-
-        // c3 | !c3 --> -1
-        let expr = col("c3_non_null") | (-col("c3_non_null"));
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
-    }
-
-    #[test]
-    fn test_simplify_negated_bitwise_xor() {
-        // !c3 ^ c3 --> -1
-        let expr = (-col("c3_non_null")) ^ col("c3_non_null");
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
-
-        // c3 ^ !c3 --> -1
-        let expr = col("c3_non_null") ^ (-col("c3_non_null"));
-        let expected = lit(-1i64);
-
-        assert_eq!(simplify(expr), expected);
+        for expr in expressions {
+            assert_eq!(simplify(expr.clone()), expr);
+        }
     }
 
     #[test]
@@ -3338,20 +3238,6 @@ mod tests {
         assert_eq!(simplify(expr), expected);
         // !(!c3) --> c3
         let expr = col("c3").not().not();
-        let expected = col("c3");
-        assert_eq!(simplify(expr), expected);
-
-        // Laws with bitwise operations
-        // !(c3 & c4) --> !c3 | !c4
-        let expr = -bitwise_and(col("c3"), col("c4"));
-        let expected = bitwise_or(-col("c3"), -col("c4"));
-        assert_eq!(simplify(expr), expected);
-        // !(c3 | c4) --> !c3 & !c4
-        let expr = -bitwise_or(col("c3"), col("c4"));
-        let expected = bitwise_and(-col("c3"), -col("c4"));
-        assert_eq!(simplify(expr), expected);
-        // !(!c3) --> c3
-        let expr = -(-col("c3"));
         let expected = col("c3");
         assert_eq!(simplify(expr), expected);
     }
