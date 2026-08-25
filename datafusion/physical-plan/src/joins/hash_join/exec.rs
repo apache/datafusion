@@ -5726,17 +5726,29 @@ mod tests {
 
     #[test]
     fn lookup_join_hashmap_compares_view_build_keys_with_utf8_probe_keys() -> Result<()> {
+        let build_schema =
+            Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, false)]));
         let build_keys: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
         let probe_keys: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let build_batch = RecordBatch::try_new(
+            Arc::clone(&build_schema),
+            vec![Arc::clone(&build_keys)],
+        )?;
         let build_view_keys = cast(&build_keys, &DataType::Utf8View)?;
         let random_state = RandomState::with_seed(0);
         let mut build_hashes = vec![0; build_keys.len()];
-        create_hashes([&build_keys], &random_state, &mut build_hashes)?;
-
-        let mut table = HashTable::with_capacity(2);
-        table.insert_unique(build_hashes[0], (build_hashes[0], 1u32), |(hash, _)| *hash);
-        table.insert_unique(build_hashes[1], (build_hashes[1], 2u32), |(hash, _)| *hash);
-        let join_hash_map = JoinHashMapU32::new(table, vec![0, 0]);
+        let mut join_hash_map = JoinHashMapU32::with_capacity(build_keys.len());
+        update_hash(
+            &[Arc::new(Column::new("key", 0))],
+            &build_batch,
+            &mut join_hash_map,
+            0,
+            &random_state,
+            &mut build_hashes,
+            0,
+            true,
+            NullEquality::NullEqualsNothing,
+        )?;
 
         let mut probe_hashes = vec![0; probe_keys.len()];
         create_hashes([&probe_keys], &random_state, &mut probe_hashes)?;
