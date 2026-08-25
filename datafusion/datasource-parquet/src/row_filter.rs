@@ -69,7 +69,7 @@ use std::sync::Arc;
 
 use arrow::array::BooleanArray;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
+use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -161,14 +161,14 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 timer.stop();
                 Ok(bool_arr)
             })
-            // Convert rather than format, and keep the context: a plain
-            // conversion of a `DataFusionError::ArrowError` yields a bare
-            // `ArrowError`, which carries only a `String` and no source, so once
-            // the decoder re-wraps it as `ParquetError::External` nothing in the
-            // chain is a `DataFusionError` any more. Wrapping in a context first
-            // routes it to `ArrowError::ExternalError`, which keeps the original
-            // error recoverable (for example with `DataFusionError::find_root`).
-            .map_err(|e| e.context("Error evaluating filter predicate").into())
+            // `ExternalError` is the only `ArrowError` variant that keeps a
+            // source, and therefore the only one that leaves the original error
+            // recoverable (see `DataFusionError::find_root`)
+            .map_err(|e| {
+                ArrowError::ExternalError(Box::new(
+                    e.context("Error evaluating filter predicate"),
+                ))
+            })
     }
 }
 
@@ -530,7 +530,6 @@ impl<'a> RowFilterGenerator<'a> {
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Fields};
-    use arrow::error::ArrowError;
     use datafusion_common::{DataFusionError, ScalarValue};
 
     use arrow::array::{
