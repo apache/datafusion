@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_common::display::GraphvizBuilder;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
@@ -516,21 +516,6 @@ impl<'a> DisplayableExecutionPlan<'a> {
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
             metric_names: self.metric_names.clone(),
-        }
-    }
-
-    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
-    pub fn to_stringified(
-        &self,
-        verbose: bool,
-        plan_type: PlanType,
-        explain_format: DisplayFormatType,
-    ) -> StringifiedPlan {
-        match (&explain_format, &plan_type) {
-            (DisplayFormatType::TreeRender, PlanType::FinalPhysicalPlan) => {
-                StringifiedPlan::new(plan_type, self.tree_render().to_string())
-            }
-            _ => StringifiedPlan::new(plan_type, self.indent(verbose).to_string()),
         }
     }
 }
@@ -1352,7 +1337,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
+            let extra_left_space = usize::from(!total_spaces.is_multiple_of(2));
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),

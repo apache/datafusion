@@ -280,9 +280,8 @@ pub trait AggregateWindowExpr: WindowExpr {
             let window_state = window_agg_state
                 .get_mut(partition_row)
                 .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
-            let accumulator = match &mut window_state.window_fn {
-                WindowFn::Aggregate(accumulator) => accumulator,
-                _ => unreachable!(),
+            let WindowFn::Aggregate(accumulator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;

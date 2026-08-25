@@ -212,7 +212,7 @@ pub fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())?
+        .ordering_satisfy(sort_exprs[0..=common_prefix_length].to_vec())?
     {
         common_prefix_length += 1;
     }

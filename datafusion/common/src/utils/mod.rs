@@ -950,7 +950,7 @@ pub mod datafusion_strsim {
             let mut distance_b = i;
 
             for (j, b_elem) in b.into_iter().enumerate() {
-                let cost = if a_elem == b_elem { 0usize } else { 1usize };
+                let cost = usize::from(a_elem != b_elem);
                 let distance_a = distance_b + cost;
                 distance_b = cache[j];
                 result = min(result + 1, min(distance_a, distance_b + 1));
@@ -1032,7 +1032,7 @@ pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    result.sort();
+    result.sort_unstable();
     result
 }
 

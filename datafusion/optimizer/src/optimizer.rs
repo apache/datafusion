@@ -963,7 +963,7 @@ mod tests {
             .enumerate()
             .map(|(i, (qualifier, field))| {
                 let metadata =
-                    [("key".into(), format!("value {i}"))].into_iter().collect();
+                    std::iter::once(("key".into(), format!("value {i}"))).collect();
 
                 let new_arrow_field = field.as_ref().clone().with_metadata(metadata);
                 (qualifier.cloned(), Arc::new(new_arrow_field))
@@ -1043,9 +1043,8 @@ mod tests {
             plan: LogicalPlan,
             _config: &dyn OptimizerConfig,
         ) -> Result<Transformed<LogicalPlan>> {
-            let projection = match plan {
-                LogicalPlan::Projection(p) => p,
-                _ => return Ok(Transformed::no(plan)),
+            let LogicalPlan::Projection(projection) = plan else {
+                return Ok(Transformed::no(plan));
             };
 
             let expr = Expr::from(Column::from(projection.schema.qualified_field(0)));
