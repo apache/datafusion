@@ -2236,8 +2236,12 @@ mod tests {
 
     use arrow::array::Decimal128Array;
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
-        datatypes::TimeUnit,
+        array::{
+            BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+            UInt64Array,
+        },
+        buffer::NullBuffer,
+        datatypes::{Int32Type, TimeUnit},
     };
     use datafusion_expr::expr::InList;
     use datafusion_expr::{BinaryExpr, Expr, cast, is_null, try_cast};
@@ -3668,6 +3672,7 @@ mod tests {
                 )?;
                 let predicate =
                     large_string_pruning_predicate(Arc::clone(&expr), schema)?;
+                let last_value = format!("k{:06}", (count - 1) * 10);
                 let stats = TestStatistics::new().with(
                     "c1",
                     ContainerStats::new_utf8(
@@ -3680,6 +3685,12 @@ mod tests {
                             None,
                             Some("k000020"),
                             Some("k000005"),
+                            // Single bounds exclude the domain, but equality
+                            // with either endpoint must remain eligible.
+                            Some("z"),
+                            None,
+                            Some(last_value.as_str()),
+                            None,
                         ],
                         [
                             Some("k000000"),
@@ -3690,14 +3701,21 @@ mod tests {
                             Some("k000010"),
                             None,
                             Some("k000015"),
+                            None,
+                            Some("j9"),
+                            None,
+                            Some("k000000"),
                         ],
                     )
-                    .with_null_counts([Some(0); 8])
-                    .with_row_counts([Some(1); 8]),
+                    .with_null_counts([Some(0); 12])
+                    .with_row_counts([Some(1); 12]),
                 );
                 assert_eq!(
                     predicate.prune(&stats)?,
-                    [true, false, true, false, false, true, true, true],
+                    [
+                        true, false, true, false, false, true, true, true, false, false,
+                        true, true,
+                    ],
                     "count={count}, type={data_type:?}"
                 );
                 assert!(Arc::ptr_eq(predicate.orig_expr(), &expr));
@@ -3719,6 +3737,71 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_preserves_dictionary_nulls() -> Result<()> {
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+        let values = (0..21)
+            .map(|i| {
+                let value = ScalarValue::from(format!("k{i:06}")).cast_to(&data_type)?;
+                Ok(Arc::new(phys_expr::Literal::new(value)) as PhysicalExprRef)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expr = phys_expr::in_list(
+            Arc::new(phys_expr::Column::new("c1", 0)),
+            values,
+            &false,
+            &schema,
+        )?;
+        let predicate = large_string_pruning_predicate(expr, schema)?;
+        // NULL dictionary values can have nonempty payloads. Neither payload
+        // may become a bound when a valid key references the NULL value.
+        let (offsets, values, _) =
+            StringArray::from(vec!["z", "zz", "", "", "k000010", "x"]).into_parts();
+        let dictionary_values: ArrayRef = Arc::new(StringArray::new(
+            offsets,
+            values,
+            Some(NullBuffer::from(vec![false, true, false, true, true, true])),
+        ));
+        let bounds = |keys: Vec<Option<i32>>| -> Result<ArrayRef> {
+            Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(&dictionary_values),
+            )?))
+        };
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new()
+                .with_min(bounds(vec![
+                    Some(0), // NULL with payload "z"
+                    Some(3), // empty string
+                    Some(4), // matching singleton
+                    Some(5), // disjoint singleton
+                    None,    // NULL keys
+                    Some(2), // NULL values in both bounds
+                    Some(1), // inverted known bounds
+                ])?)
+                .with_max(bounds(vec![
+                    Some(1),
+                    Some(2),
+                    Some(4),
+                    Some(5),
+                    None,
+                    Some(2),
+                    Some(3),
+                ])?)
+                .with_null_counts([Some(0); 7])
+                .with_row_counts([Some(1); 7]),
+        );
+        assert_eq!(
+            predicate.prune(&stats)?,
+            [true, true, true, false, true, true, true]
+        );
         Ok(())
     }
 
