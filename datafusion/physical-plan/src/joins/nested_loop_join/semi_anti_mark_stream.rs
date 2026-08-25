@@ -41,7 +41,9 @@ use arrow::buffer::BooleanBuffer;
 use arrow::compute::{BatchCoalescer, concat_batches};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
+use datafusion_common::{
+    DataFusionError, JoinSide, Result, internal_datafusion_err, internal_err,
+};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::{TryEmitter, async_try_stream};
 use datafusion_expr::JoinType;
@@ -259,7 +261,9 @@ impl SemiAntiMarkNestedLoopJoinStream {
         let mut is_last_chunk: bool = false;
 
         let mut right_batch: Option<RecordBatch> = None;
-        let right_batch_matched: Option<BooleanArray> = None;
+        let mut right_batch_matched: Option<BooleanArray> = None;
+
+        let mut is_left_result_emitter = false;
         loop {
             match self.state {
                 // # SAMNLJState transitions
@@ -313,12 +317,13 @@ impl SemiAntiMarkNestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     if let Some(curr_right_batch) = self.handle_fetching_right().await? {
+                        let right_batch_num_rows = curr_right_batch.num_rows();
                         right_batch = Some(curr_right_batch);
                         self.state = SAMNLJState::ProbeRight;
                         // Prepare right bitmap
                         if self.join_side == JoinSide::Right {
                             let zeroed_buf =
-                                BooleanBuffer::new_unset(curr_right_batch.num_rows());
+                                BooleanBuffer::new_unset(right_batch_num_rows);
                             right_batch_matched =
                                 Some(BooleanArray::new(zeroed_buf, None));
                         }
@@ -348,7 +353,7 @@ impl SemiAntiMarkNestedLoopJoinStream {
                     let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
-                    match self.handle_probe_right() {
+                    match self.handle_probe_right(left_chunk) {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
@@ -382,8 +387,8 @@ impl SemiAntiMarkNestedLoopJoinStream {
                 //    Probing for the current left chunk is finished. Report
                 //    probe completion exactly once (decrementing the shared
                 //    probe-threads counter) and record whether this stream is
-                //    the unmatched-left emitter, then always advance to
-                //    `EmitLeftUnmatched`.
+                //    the left side emitter, then always advance to
+                //    `EmitLeftResult`.
                 SAMNLJState::ProbeEnd => {
                     debug!("[SAMNLJState] Entering: {:?}", self.state);
 
@@ -391,11 +396,17 @@ impl SemiAntiMarkNestedLoopJoinStream {
                     let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
-                    match self.handle_probe_end() {
-                        ControlFlow::Continue(()) => continue,
-                        ControlFlow::Break(poll) => {
-                            return self.metrics.join_metrics.baseline.record_poll(poll);
-                        }
+                    if let Some(left_data) = left_chunk.as_ref() {
+                        // Decrement the shared counter exactly once for this stream/chunk. The
+                        // last stream to finish probing (the one that drives the counter to
+                        // zero) becomes the unmatched-left emitter.
+                        let is_emitter = left_data.report_probe_completed();
+                        is_left_result_emitter = is_emitter;
+                        self.state = SAMNLJState::EmitLeftResult;
+                    } else {
+                        return Err(internal_datafusion_err!(
+                            "LeftData should be available"
+                        ));
                     }
                 }
 
@@ -750,6 +761,7 @@ impl SemiAntiMarkNestedLoopJoinStream {
     // ========================================================================
     // Functions for the FetchingRight state
     // ========================================================================
+
     /// Handle FetchingRight state - fetch next right batch and prepare for processing.
     ///
     /// In memory-limited mode during the first pass, each right batch is also
@@ -785,4 +797,8 @@ impl SemiAntiMarkNestedLoopJoinStream {
             }
         }
     }
+
+    // ========================================================================
+    // Functions for the ProbeRight state
+    // ========================================================================
 }
