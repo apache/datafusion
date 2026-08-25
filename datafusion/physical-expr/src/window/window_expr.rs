@@ -27,6 +27,7 @@ use arrow::array::BooleanArray;
 use arrow::array::{Array, ArrayRef, new_empty_array};
 use arrow::compute::SortOptions;
 use arrow::compute::filter as arrow_filter;
+use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
@@ -350,6 +351,40 @@ pub trait AggregateWindowExpr: WindowExpr {
             None => None,
         };
 
+        // Whole-partition aggregates update once, so their arguments do not need
+        // to preserve the input row alignment.
+        if self.is_constant_in_partition() {
+            if not_end {
+                let field = self.field()?;
+                let out_type = field.data_type();
+                return Ok(new_empty_array(out_type));
+            }
+            let values = match filter_mask {
+                Some(mask) => {
+                    let expressions = self.expressions();
+                    let requires_selection = expressions
+                        .iter()
+                        .any(|expr| !can_evaluate_window_arg_unfiltered(expr.as_ref()));
+                    if requires_selection && mask.has_true() {
+                        let filtered_batch = filter_record_batch(record_batch, mask)?;
+                        evaluate_expressions_to_arrays(&expressions, &filtered_batch)?
+                    } else {
+                        let values = expressions
+                            .iter()
+                            .map(|expr| {
+                                evaluate_window_arg(expr.as_ref(), record_batch, mask)
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        filter_arrays(&values, mask)?
+                    }
+                }
+                None => self.evaluate_args(record_batch)?,
+            };
+            accumulator.update_batch(&values)?;
+            let value = accumulator.evaluate()?;
+            return value.to_array_of_size(record_batch.num_rows());
+        }
+
         // Columns and literals keep their original alignment. Other arguments are
         // evaluated only on selected rows and scattered back to the row indices used
         // by window frames.
@@ -362,22 +397,6 @@ pub trait AggregateWindowExpr: WindowExpr {
             None => self.evaluate_args(record_batch)?,
         };
 
-        if self.is_constant_in_partition() {
-            if not_end {
-                let field = self.field()?;
-                let out_type = field.data_type();
-                return Ok(new_empty_array(out_type));
-            }
-            let values = if let Some(mask) = filter_mask {
-                // Apply mask to all argument arrays before a single update
-                filter_arrays(&values, mask)?
-            } else {
-                values
-            };
-            accumulator.update_batch(&values)?;
-            let value = accumulator.evaluate()?;
-            return value.to_array_of_size(record_batch.num_rows());
-        }
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
         // We iterate on each row to perform a running calculation.
