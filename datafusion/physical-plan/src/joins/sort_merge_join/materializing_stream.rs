@@ -1677,69 +1677,65 @@ impl MaterializingSortMergeJoinStream {
             .any(|(_, _, right)| right.null_count() > 0);
         let source_offset = usize::from(needs_null_sentinel);
 
-        // A group spans only a handful of buffered batches, so a linear
-        // scan beats hashing here. Measured over 8192 rows in 2048 chunks,
-        // against a `HashMap<usize, usize>` built in one pass and read back
-        // in a second (what this used to do):
+        // Map each distinct `buffered_batch_idx` to a contiguous source
+        // index for `interleave`. The keys are positions in
+        // `self.buffered_data.batches`, and `BufferedData::scanning_advance`
+        // walks that deque in order, so they form a dense run: a
+        // direct-addressed table over `min..=max` resolves every chunk in
+        // O(1), with no hashing and no key comparison.
         //
-        //   distinct sources |  hashmap  |  linear scan
-        //   -----------------+-----------+-------------
-        //                  4 |  21.5 us  |   5.0 us
-        //                 16 |  22.0 us  |   9.4 us
-        //                 32 |  22.4 us  |  13.6 us
-        //                 64 |  22.9 us  |  23.5 us
-        //                128 |  24.1 us  |  44.8 us
+        // A linear `position()` scan over `source_batches` is not enough
+        // here, even though a freeze holds at most `batch_size` pairs.
+        // `pair_streamed_row_with_group` restarts the buffered scan at batch
+        // 0 for *every* streamed row of the key group (`scanning_reset`), so
+        // the chunk sequence cycles `0,1,..,S-1,0,1,..` and the chunk count
+        // is not bounded by the distinct-source count `S`. The scan is then
+        // O(chunks * S), and nothing bounds `S`: `SortMergeJoinExec` accepts
+        // arbitrary `ExecutionPlan` children, so one emitting tiny batches
+        // pushes `S` towards `batch_size`.
         //
-        // `std::collections::HashMap` hashes with SipHash-1-3, so a single
-        // `usize` lookup costs several ns of serial latency before the probe
-        // begins, while a scan over a handful of `usize` is one L1-resident
-        // cache line with a perfectly predicted trip count. The map is also
-        // purely additive state: `source_batches` has to be built regardless
-        // (`source_data` is gathered from it), so hashing means maintaining
-        // two containers holding the same keys.
+        // Measured over 8192 rows in 2048 chunks, against a
+        // `HashMap<usize, usize>` built in one pass and read back in a
+        // second:
         //
-        // The crossover is ~32 distinct sources. That bound follows from how
-        // pairs accumulate, not from any assumption about key skew:
+        //   distinct sources |  hashmap  |  linear scan  |  direct table
+        //   -----------------+-----------+---------------+--------------
+        //                  4 |   19.7 us |       4.5 us  |      4.8 us
+        //                 32 |   20.7 us |      13.0 us  |      5.0 us
+        //                128 |   23.5 us |      42.7 us  |      5.1 us
+        //               1024 |   48.1 us |     281.7 us  |      5.8 us
+        //               8192 |  293.3 us |    8347.6 us  |     16.9 us
         //
-        //   1. `pair_streamed_row_with_group` appends exactly one pair per
-        //      buffered row and re-checks `num_unfrozen_pairs() < batch_size`
-        //      before each append, so at most `batch_size` pairs accumulate
-        //      between two `freeze_streamed()` calls.
-        //   2. `BufferedData::scanning_advance` walks the group's rows in
-        //      order, so those pairs cover a *contiguous run* of buffered
-        //      rows.
-        //   3. So the distinct `buffered_batch_idx` values seen here are the
-        //      batches spanned by at most `batch_size` consecutive buffered
-        //      rows: `len(source_batches) <= batch_size / R + 1`, where `R`
-        //      is the smallest buffered batch in that run.
+        // The last row is the degenerate shape a one-row-per-batch child
+        // produces: 8192 chunks of a single row each, all from distinct
+        // buffered batches. 8.3 ms of index construction, in one freeze.
         //
-        // The assumption is therefore not "key groups are narrow" — a group
-        // of any width still only contributes `batch_size` rows per freeze —
-        // but "buffered batches are not tiny relative to `batch_size`".
-        // Exceeding 32 sources needs `R < batch_size / 31`, i.e. under ~264
-        // rows per batch at the default `batch_size` of 8192. The buffered
-        // side of a merge join is sorted input, and every operator that
-        // normally feeds it emits ~`batch_size` batches: `SortExec` chunks
-        // its output with `sort_batch_chunked(.., batch_size)`, and
-        // `FilterExec` and `RepartitionExec` each embed a
-        // `LimitedBatchCoalescer` targeting `batch_size`.
-        //
-        // If something does feed tiny batches, this degrades gradually rather
-        // than falling off a cliff, and never affects correctness: at 4
-        // sources this loop is ~13% of the cost of the `interleave` calls it
-        // feeds (3 columns, 8192 rows), so even the 128-source case above
-        // leaves `interleave` the dominant term.
+        // The table ties the scan where the scan is at its best (a handful
+        // of sources): both stay in L1 and neither hashes, whereas
+        // `std::collections::HashMap` uses SipHash-1-3 and pays several ns
+        // of serial latency before each probe begins. Unlike the scan, it
+        // stays flat. `source_batches` has to be built regardless
+        // (`source_data` is gathered from it), so the table is the only
+        // added state, sized by the span of buffered batches this freeze
+        // touches rather than by the whole buffer.
+        let (min_batch_idx, max_batch_idx) = matched_chunks
+            .iter()
+            .fold((usize::MAX, 0usize), |(lo, hi), (batch_idx, _, _)| {
+                (lo.min(*batch_idx), hi.max(*batch_idx))
+            });
+        // Sentinel for "no source index assigned to this buffered batch yet".
+        const UNSEEN: usize = usize::MAX;
+        let mut source_of_batch = vec![UNSEEN; max_batch_idx - min_batch_idx + 1];
         let mut source_batches: Vec<usize> = Vec::new();
         let mut interleave_indices: Vec<(usize, usize)> =
             Vec::with_capacity(total_matched_rows);
         for (batch_idx, _, right) in matched_chunks {
-            let source = match source_batches.iter().position(|b| b == batch_idx) {
-                Some(pos) => pos + source_offset,
-                None => {
-                    source_batches.push(*batch_idx);
-                    source_batches.len() - 1 + source_offset
-                }
-            };
+            let slot = &mut source_of_batch[batch_idx - min_batch_idx];
+            if *slot == UNSEEN {
+                *slot = source_batches.len();
+                source_batches.push(*batch_idx);
+            }
+            let source = *slot + source_offset;
             if right.null_count() == 0 {
                 // Hot path: no per-row null check, and `values()` avoids
                 // the bounds check `value(i)` would repeat.

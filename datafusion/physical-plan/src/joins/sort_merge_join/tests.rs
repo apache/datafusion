@@ -4137,6 +4137,90 @@ async fn join_filtered_with_multiple_buffered_batches() -> Result<()> {
     Ok(())
 }
 
+/// A single key group spanning many buffered batches, re-scanned once per
+/// streamed row.
+///
+/// `pair_streamed_row_with_group` walks the group from buffered batch 0 for
+/// *every* streamed row (`scanning_reset`), and freezes whenever `batch_size`
+/// pairs have accumulated -- which happens mid-scan when `batch_size` is not a
+/// multiple of the group size. So one `freeze_streamed()` can see chunks whose
+/// `buffered_batch_idx` wraps (`.. 4, 5, 0, 1 ..`) or never reaches 0 at all,
+/// rather than a single ascending run. `materialize_right_columns` maps those
+/// indices to `interleave` source slots, so it must not assume either.
+///
+/// 6 one-row buffered batches x 2 streamed rows at `batch_size` 5 produces
+/// freezes covering batches `[0,1,2,3,4]`, `[5,0,1,2,3]` (wrapped) and
+/// `[4,5]` (no zero).
+#[tokio::test]
+async fn join_with_group_spanning_batches_rescanned_per_streamed_row() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_l", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_r", DataType::Int32, false),
+    ]));
+
+    // Two streamed rows sharing one key, so the buffered group is scanned twice.
+    let left = build_table_from_batches(vec![RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1])),
+            Arc::new(Int32Array::from(vec![10, 20])),
+        ],
+    )?]);
+
+    // One row per batch, all the same key: the group spans all 6 batches.
+    let right_batches: Vec<RecordBatch> = (1..=6)
+        .map(|i| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(Int32Array::from(vec![i * 100])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("key", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("key", &right.schema())?) as _,
+    )];
+
+    // 5 does not divide the 6-row group, so freezes land mid-scan.
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(5)),
+    );
+    let join = join(left, right, on, Inner)?;
+    let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 1   | 10    | 1   | 100   |
+    | 1   | 10    | 1   | 200   |
+    | 1   | 10    | 1   | 300   |
+    | 1   | 10    | 1   | 400   |
+    | 1   | 10    | 1   | 500   |
+    | 1   | 10    | 1   | 600   |
+    | 1   | 20    | 1   | 100   |
+    | 1   | 20    | 1   | 200   |
+    | 1   | 20    | 1   | 300   |
+    | 1   | 20    | 1   | 400   |
+    | 1   | 20    | 1   | 500   |
+    | 1   | 20    | 1   | 600   |
+    +-----+-------+-----+-------+
+    ");
+
+    Ok(())
+}
+
 /// Returns the column names on the schema
 fn columns(schema: &Schema) -> Vec<String> {
     schema.fields().iter().map(|f| f.name().clone()).collect()
