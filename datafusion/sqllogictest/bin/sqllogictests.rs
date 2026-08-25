@@ -23,10 +23,9 @@ use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err}
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    ConfigMatrixCombination, CurrentlyExecutingSqlTracker, DFColumnType, DataFusion,
-    Filter, TestContext, df_value_validator, expand_matrix_runs, read_dir_recursive,
-    setup_scratch_dir, should_skip_file, should_skip_record, value_normalizer,
-    with_matrix_context,
+    CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
+    df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
+    should_skip_record, test_configurations, value_normalizer,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -74,7 +73,6 @@ struct FileTiming {
 
 type DataFusionConfigChangeErrors = Arc<Mutex<Vec<String>>>;
 
-/// Turn any recorded config-drift errors into a single failure.
 fn config_change_result(
     config_change_errors: &DataFusionConfigChangeErrors,
 ) -> Result<()> {
@@ -431,44 +429,6 @@ fn is_env_truthy(name: &str) -> bool {
         })
 }
 
-/// Per-combination scaffolding shared by the runner paths that support
-/// `# configMatrix:`.
-struct MatrixRun {
-    test_ctx: TestContext,
-    pb: ProgressBar,
-}
-
-/// Build a fresh context with `combo`'s config applied, reset the scratch
-/// dir, and add a progress bar. Returns `None` when the file is not
-/// supported by this build and should be skipped.
-///
-/// Applying the overrides here keeps them ahead of runner construction, which
-/// snapshots the config to detect drift; overrides applied afterwards would be
-/// reported as the test mutating its own config.
-async fn prepare_matrix_run(
-    relative_path: &Path,
-    combo: &ConfigMatrixCombination,
-    mp: &MultiProgress,
-    mp_style: &ProgressStyle,
-    count: u64,
-) -> Result<Option<MatrixRun>> {
-    let Some(test_ctx) = TestContext::try_new_for_test_file(relative_path).await else {
-        return Ok(None);
-    };
-    setup_scratch_dir(relative_path)?;
-    test_ctx.apply_config_overrides(combo, relative_path)?;
-
-    let pb = mp.add(ProgressBar::new(count));
-    pb.set_style(mp_style.clone());
-    // Keep this a single whitespace-free token: the engines parse
-    // `pb.message()` back apart on spaces to track slow-query counts.
-    pb.set_message(relative_path.display().to_string());
-
-    Ok(Some(MatrixRun { test_ctx, pb }))
-}
-
-/// Run the test file under Substrait round-trip, once per `# configMatrix:`
-/// combination.
 #[cfg(feature = "substrait")]
 async fn run_test_file_substrait_round_trip(
     test_file: TestFile,
@@ -484,16 +444,23 @@ async fn run_test_file_substrait_round_trip(
         relative_path,
     } = test_file;
 
+    // Parsed once and replayed for every configuration.
     let records = parse_records(&path)?;
     let count = count_records(&records, "DatafusionSubstraitRoundTrip");
 
-    for combo in expand_matrix_runs(&path)? {
-        let Some(MatrixRun { test_ctx, pb }) =
-            prepare_matrix_run(&relative_path, &combo, &mp, &mp_style, count).await?
+    for test_configuration in test_configurations(&path)? {
+        let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await
         else {
             info!("Skipping: {}", path.display());
             return Ok(());
         };
+        setup_scratch_dir(&relative_path)?;
+        // Before the engine is built: it snapshots config to detect drift.
+        test_ctx.apply_config_overrides(test_configuration.settings(), &relative_path)?;
+
+        let pb = mp.add(ProgressBar::new(count));
+        pb.set_style(mp_style.clone());
+        pb.set_message(relative_path.display().to_string());
 
         let mut runner = sqllogictest::Runner::new(|| async {
             Ok(DataFusionSubstraitRoundTrip::new(
@@ -509,12 +476,14 @@ async fn run_test_file_substrait_round_trip(
         runner.with_column_validator(strict_column_validator);
         runner.with_normalizer(value_normalizer);
         runner.with_validator(validator);
-        let res =
+        let result =
             run_file_in_runner(&path, &records, &mut runner, filters, colored_output)
                 .await;
         pb.finish_and_clear();
-        with_matrix_context(res, &combo)?;
+
+        test_configuration.attribute_failure(result)?;
     }
+
     Ok(())
 }
 
@@ -535,7 +504,6 @@ async fn run_test_file_substrait_round_trip(
     exec_err!("Cannot run substrait round-trip: the 'substrait' feature is not enabled")
 }
 
-/// Run the test file once per `# configMatrix:` combination.
 async fn run_test_file(
     test_file: TestFile,
     validator: Validator,
@@ -550,16 +518,23 @@ async fn run_test_file(
         relative_path,
     } = test_file;
 
+    // Parsed once and replayed for every configuration.
     let records = parse_records(&path)?;
     let count = count_records(&records, "Datafusion");
 
-    for combo in expand_matrix_runs(&path)? {
-        let Some(MatrixRun { test_ctx, pb }) =
-            prepare_matrix_run(&relative_path, &combo, &mp, &mp_style, count).await?
+    for test_configuration in test_configurations(&path)? {
+        let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await
         else {
             info!("Skipping: {}", path.display());
             return Ok(());
         };
+        setup_scratch_dir(&relative_path)?;
+        // Before the engine is built: it snapshots config to detect drift.
+        test_ctx.apply_config_overrides(test_configuration.settings(), &relative_path)?;
+
+        let pb = mp.add(ProgressBar::new(count));
+        pb.set_style(mp_style.clone());
+        pb.set_message(relative_path.display().to_string());
 
         // If DataFusion configuration has changed during test file runs, errors will be
         // pushed to this vec.
@@ -579,21 +554,19 @@ async fn run_test_file(
         runner.with_column_validator(strict_column_validator);
         runner.with_normalizer(value_normalizer);
         runner.with_validator(validator);
-        let res =
+        let result =
             run_file_in_runner(&path, &records, &mut runner, filters, colored_output)
                 .await;
         pb.finish_and_clear();
 
-        // Check the config is unchanged only when the per-record loop succeeded.
-        let res = match res {
-            Ok(()) => {
-                runner.shutdown_async().await;
-                config_change_result(&config_change_errors)
-            }
-            Err(e) => Err(e),
-        };
-        with_matrix_context(res, &combo)?;
+        test_configuration.attribute_failure(result)?;
+
+        // If there was no correctness error, check that the config is unchanged.
+        runner.shutdown_async().await;
+        test_configuration
+            .attribute_failure(config_change_result(&config_change_errors))?;
     }
+
     Ok(())
 }
 
@@ -739,14 +712,13 @@ async fn run_complete_file(
 
     info!("Using complete mode to complete: {}", path.display());
 
-    // `update_test_file` rewrites the file in place from a single run, so it
-    // cannot represent one expected-output set per matrix combination. Refuse
-    // rather than silently baking in the results of one combination.
-    if expand_matrix_runs(&path)?.iter().any(|c| !c.is_empty()) {
+    // `update_test_file` rewrites the file from a single run, so it cannot hold
+    // one expected-output set per configuration.
+    if test_configurations(&path)?.iter().any(|c| !c.is_empty()) {
         return exec_err!(
             "Cannot use --complete on {}: it declares `# configMatrix:` \
              directives, and completion would overwrite the file with the \
-             output of a single combination",
+             output of a single configuration",
             relative_path.display()
         );
     }
@@ -757,8 +729,7 @@ async fn run_complete_file(
     };
     setup_scratch_dir(&relative_path)?;
 
-    // `update_test_file` re-parses the file internally, so we only need the
-    // count here — no need to keep the records around.
+    // `update_test_file` re-parses the file itself, so only the count is needed.
     let count = count_records(&parse_records(&path)?, "Datafusion");
     let pb = mp.add(ProgressBar::new(count));
 

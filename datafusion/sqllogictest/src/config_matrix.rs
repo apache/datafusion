@@ -15,86 +15,88 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parsing of `# configMatrix:` directives in SLT files.
-//!
-//! A directive has the form:
+//! `# configMatrix:` directives sweep DataFusion config across repeated runs of
+//! one SLT file:
 //!
 //! ```text
-//! # configMatrix: <key>=<v1>,<v2>[,<v3>...]
+//! # configMatrix: <key>=<v1>,<v2>[,...]
 //! ```
 //!
-//! Multiple directives combine as a cartesian product. The runner will
-//! execute the whole file once per combination, applying the given values to
-//! `SessionContext` config before each run.
+//! This module validates directives, dedups their values, and expands them into
+//! the [`TestConfiguration`]s the runner applies to a session. Repeated
+//! directives combine as a cartesian product.
 
+use std::fmt;
 use std::fs;
 use std::path::Path;
 
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err};
 use itertools::Itertools;
 
-/// Matched case-insensitively, so this spelling is only the documented one.
+/// Compared case-insensitively; this spelling is the documented one.
 const DIRECTIVE_MARKER: &str = "configMatrix:";
 
-/// A single point in the matrix, expressed as an ordered list of
-/// `(key, value)` pairs to apply before running the file.
-pub type ConfigMatrixCombination = Vec<(String, String)>;
+/// Config values to apply before a single run of an SLT file.
+///
+/// Empty when the file declared no directives, which means "run once,
+/// unmodified".
+#[derive(Debug)]
+pub struct TestConfiguration(Vec<(String, String)>);
 
-/// Read the file at `path`, extract all `# configMatrix:` directives, and
-/// expand them into the list of runs to perform.
+impl TestConfiguration {
+    /// The `key = value` pairs to set on the session.
+    pub fn settings(&self) -> &[(String, String)] {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Prefix a failure with the configuration that produced it, so a sweep
+    /// names the values that broke. No-op when no directives were declared.
+    pub fn attribute_failure<T>(&self, result: Result<T>) -> Result<T> {
+        if self.is_empty() {
+            return result;
+        }
+        result.map_err(|e| e.context(self.to_string()))
+    }
+}
+
+impl fmt::Display for TestConfiguration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[configMatrix: {}]",
+            self.0.iter().map(|(k, v)| format!("{k}={v}")).join(", ")
+        )
+    }
+}
+
+/// Validate, dedup, and expand the directives declared by `path`.
 ///
-/// Always returns at least one combination so callers can iterate with a
-/// single loop shape. A single empty combination (`vec![vec![]]`) means "no
-/// matrix was declared" and is a no-op when applied to the session config.
-///
-/// Fails with a user-friendly error if a directive is malformed (missing key,
-/// missing values, empty value list).
-pub fn expand_matrix_runs(path: &Path) -> Result<Vec<ConfigMatrixCombination>> {
+/// Never empty: a file without directives yields one empty
+/// [`TestConfiguration`], so callers keep a single loop shape.
+pub fn test_configurations(path: &Path) -> Result<Vec<TestConfiguration>> {
     let content = fs::read_to_string(path).map_err(|e| {
         exec_datafusion_err!(
             "Failed to read {} for configMatrix parsing: {e}",
             path.display()
         )
     })?;
-    parse_config_matrix(&content, path)
+    parse_configurations(&content, path)
 }
 
-/// Render a combination as `[configMatrix: k1=v1, k2=v2]`.
-fn matrix_tag(combo: &[(String, String)]) -> String {
-    format!(
-        "[configMatrix: {}]",
-        combo.iter().map(|(k, v)| format!("{k}={v}")).join(", ")
-    )
-}
+/// `path` is used only for error messages.
+fn parse_configurations(content: &str, path: &Path) -> Result<Vec<TestConfiguration>> {
+    // Dimensions borrow `content`; values are owned only in the product below.
+    let mut dimensions: Vec<(&str, Vec<&str>)> = Vec::new();
 
-/// Annotate a failed `result` with the combination that produced it, so CI
-/// logs name the swept values. A no-op when no matrix is active.
-pub fn with_matrix_context<T>(
-    result: Result<T>,
-    combo: &[(String, String)],
-) -> Result<T> {
-    if combo.is_empty() {
-        return result;
-    }
-    result.map_err(|e| e.context(matrix_tag(combo)))
-}
-
-/// Parse directives out of the given file contents and return the fully
-/// expanded cartesian product. `path` is used only for error messages.
-///
-/// Values inside a directive are trimmed and deduplicated (first occurrence
-/// wins). Directives that reuse a key are merged into a single dimension.
-fn parse_config_matrix(
-    content: &str,
-    path: &Path,
-) -> Result<Vec<ConfigMatrixCombination>> {
-    // Borrowed from `content` throughout; owned only in the product below.
-    let mut dims: Vec<(&str, Vec<&str>)> = Vec::new();
     for (idx, line) in content.lines().enumerate() {
-        let Some(rest) = strip_directive_prefix(line) else {
+        let Some(directive) = strip_directive_prefix(line) else {
             continue;
         };
-        let invalid_cfg_matrix = |detail: String| {
+        let invalid = |detail: String| {
             DataFusionError::Configuration(format!(
                 "Invalid configMatrix directive in {}:{}: {detail}",
                 path.display(),
@@ -102,55 +104,54 @@ fn parse_config_matrix(
             ))
         };
 
-        let (key, values_str) = rest.split_once('=').ok_or_else(|| {
-            invalid_cfg_matrix(format!(
-                "expected `# configMatrix: <key>=<v1>,<v2>[,...]`, got `{rest}`"
+        let (key, values) = directive.split_once('=').ok_or_else(|| {
+            invalid(format!(
+                "expected `# configMatrix: <key>=<v1>,<v2>[,...]`, got `{directive}`"
             ))
         })?;
 
         let key = key.trim();
         if key.is_empty() {
-            return Err(invalid_cfg_matrix("missing config key".to_string()));
+            return Err(invalid("missing config key".to_string()));
         }
 
-        let values: Vec<&str> = values_str
+        let values: Vec<&str> = values
             .split(',')
             .map(str::trim)
-            .filter(|v| !v.is_empty())
+            .filter(|value| !value.is_empty())
             .collect();
         if values.is_empty() {
-            return Err(invalid_cfg_matrix(format!(
-                "no values provided for `{key}`"
-            )));
+            return Err(invalid(format!("no values provided for `{key}`")));
         }
 
-        // Merge into any earlier entry for the same key so a repeated
-        // directive is idempotent. Duplicates are removed once, below.
-        match dims.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, existing)) => existing.extend(values),
-            None => dims.push((key, values)),
+        // A repeated key unions its values instead of adding a dimension.
+        match dimensions.iter_mut().find(|(seen, _)| *seen == key) {
+            Some((_, merged)) => merged.extend(values),
+            None => dimensions.push((key, values)),
         }
     }
 
-    Ok(dims
+    Ok(dimensions
         .into_iter()
-        .map(|(k, vs)| {
-            vs.into_iter()
+        .map(|(key, values)| {
+            // Dedup keeps first-seen order.
+            values
+                .into_iter()
                 .unique()
-                .map(|v| (k.to_string(), v.to_string()))
+                .map(|value| (key.to_string(), value.to_string()))
                 .collect_vec()
         })
         .multi_cartesian_product()
+        .map(TestConfiguration)
         .collect())
 }
 
-/// Strip a leading comment marker and any `configMatrix:` prefix (case
-/// insensitive). Returns the remainder if the line is a directive.
+/// Text after `configMatrix:` when `line` is a directive comment. Tolerates
+/// `##` banners and any marker casing.
 fn strip_directive_prefix(line: &str) -> Option<&str> {
     let after_hash = line.trim_start().strip_prefix('#')?;
     let after_hash = after_hash.trim_start_matches('#').trim_start();
 
-    // Case-insensitive match of the marker; key/values keep their original case.
     let (marker, rest) = after_hash.split_at_checked(DIRECTIVE_MARKER.len())?;
     if !marker.eq_ignore_ascii_case(DIRECTIVE_MARKER) {
         return None;
@@ -163,33 +164,46 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn parse(content: &str) -> Vec<ConfigMatrixCombination> {
-        parse_config_matrix(content, Path::new("test.slt")).unwrap()
+    /// Settings of every configuration parsed from `content`.
+    fn parse(content: &str) -> Vec<Vec<(String, String)>> {
+        parse_configurations(content, Path::new("test.slt"))
+            .unwrap()
+            .into_iter()
+            .map(|test_configuration| test_configuration.0)
+            .collect()
+    }
+
+    fn test_configuration(settings: &[(&str, &str)]) -> TestConfiguration {
+        TestConfiguration(
+            settings
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        )
     }
 
     #[test]
     fn parses_no_directives() {
-        // Zero dimensions expand to exactly one empty combination: "run the
-        // file once, unmodified".
+        // Zero dimensions expand to exactly one empty configuration.
         let content = "# ordinary comment\nquery I\nSELECT 1\n----\n1\n";
         assert_eq!(parse(content), vec![Vec::new()]);
     }
 
     #[test]
     fn parses_single_directive() {
-        let combos = parse(
+        let configurations = parse(
             "# configMatrix: datafusion.optimizer.enable_piecewise_merge_join=true,false\n",
         );
-        assert_eq!(combos.len(), 2);
+        assert_eq!(configurations.len(), 2);
         assert_eq!(
-            combos[0],
+            configurations[0],
             vec![(
                 "datafusion.optimizer.enable_piecewise_merge_join".to_string(),
                 "true".to_string(),
             )]
         );
         assert_eq!(
-            combos[1],
+            configurations[1],
             vec![(
                 "datafusion.optimizer.enable_piecewise_merge_join".to_string(),
                 "false".to_string(),
@@ -199,25 +213,25 @@ mod tests {
 
     #[test]
     fn parses_case_insensitive_marker() {
-        let combos =
+        let configurations =
             parse("## CONFIGMATRIX: datafusion.execution.batch_size=1024,4096\n");
-        assert_eq!(combos.len(), 2);
-        assert_eq!(combos[0][0].0, "datafusion.execution.batch_size");
+        assert_eq!(configurations.len(), 2);
+        assert_eq!(configurations[0][0].0, "datafusion.execution.batch_size");
     }
 
     #[test]
     fn parses_multiple_directives_and_computes_cartesian_product() {
-        let combos = parse("# configMatrix: a=1,2\n# configMatrix: b=x,y,z\n");
-        assert_eq!(combos.len(), 6);
+        let configurations = parse("# configMatrix: a=1,2\n# configMatrix: b=x,y,z\n");
+        assert_eq!(configurations.len(), 6);
         assert_eq!(
-            combos[0],
+            configurations[0],
             vec![
                 ("a".to_string(), "1".to_string()),
                 ("b".to_string(), "x".to_string()),
             ]
         );
         assert_eq!(
-            combos[5],
+            configurations[5],
             vec![
                 ("a".to_string(), "2".to_string()),
                 ("b".to_string(), "z".to_string()),
@@ -227,7 +241,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_equals() {
-        let err = parse_config_matrix(
+        let err = parse_configurations(
             "# configMatrix: bogus_no_equals\n",
             Path::new("test.slt"),
         )
@@ -238,7 +252,7 @@ mod tests {
     #[test]
     fn rejects_missing_key() {
         let err =
-            parse_config_matrix("# configMatrix: =true,false\n", Path::new("test.slt"))
+            parse_configurations("# configMatrix: =true,false\n", Path::new("test.slt"))
                 .unwrap_err();
         assert!(err.to_string().contains("missing config key"));
     }
@@ -246,14 +260,14 @@ mod tests {
     #[test]
     fn rejects_empty_values() {
         let err =
-            parse_config_matrix("# configMatrix: some.key=\n", Path::new("test.slt"))
+            parse_configurations("# configMatrix: some.key=\n", Path::new("test.slt"))
                 .unwrap_err();
         assert!(err.to_string().contains("no values provided"));
     }
 
     #[test]
     fn rejects_empty_values_on_a_repeated_key() {
-        let err = parse_config_matrix(
+        let err = parse_configurations(
             "# configMatrix: k=1,2\n# configMatrix: k=\n",
             Path::new("test.slt"),
         )
@@ -263,75 +277,77 @@ mod tests {
 
     #[test]
     fn deduplicates_repeated_values_preserving_first_order() {
-        let combos = parse("# configMatrix: some.key=false,true,false,true,false\n");
-        assert_eq!(combos.len(), 2);
-        assert_eq!(combos[0][0].1, "false");
-        assert_eq!(combos[1][0].1, "true");
+        let configurations =
+            parse("# configMatrix: some.key=false,true,false,true,false\n");
+        assert_eq!(configurations.len(), 2);
+        assert_eq!(configurations[0][0].1, "false");
+        assert_eq!(configurations[1][0].1, "true");
     }
 
     #[test]
     fn strips_whitespace_around_values() {
-        let combos = parse("# configMatrix: k= 1024 ,\t2048  , \t4096\n");
-        let values: Vec<&str> = combos.iter().map(|c| c[0].1.as_str()).collect();
+        let configurations = parse("# configMatrix: k= 1024 ,\t2048  , \t4096\n");
+        let values: Vec<&str> = configurations.iter().map(|c| c[0].1.as_str()).collect();
         assert_eq!(values, vec!["1024", "2048", "4096"]);
     }
 
     #[test]
     fn strips_whitespace_around_key_and_around_equals() {
-        let combos = parse(
+        let configurations = parse(
             "#   configMatrix:   datafusion.execution.batch_size  =  1024 , 2048  \n",
         );
-        assert_eq!(combos.len(), 2);
-        assert_eq!(combos[0][0].0, "datafusion.execution.batch_size");
+        assert_eq!(configurations.len(), 2);
+        assert_eq!(configurations[0][0].0, "datafusion.execution.batch_size");
     }
 
     #[test]
     fn dedup_runs_after_whitespace_is_stripped() {
         // `1024`, ` 1024`, and `\t1024  ` all normalize to the same value.
-        let combos = parse("# configMatrix: k= 1024 , 1024,\t1024  \n");
-        assert_eq!(combos.len(), 1);
-        assert_eq!(combos[0][0].1, "1024");
+        let configurations = parse("# configMatrix: k= 1024 , 1024,\t1024  \n");
+        assert_eq!(configurations.len(), 1);
+        assert_eq!(configurations[0][0].1, "1024");
     }
 
     #[test]
     fn trailing_and_repeated_commas_are_ignored() {
-        let combos = parse("# configMatrix: k=1024,,2048,\n");
-        let values: Vec<&str> = combos.iter().map(|c| c[0].1.as_str()).collect();
+        let configurations = parse("# configMatrix: k=1024,,2048,\n");
+        let values: Vec<&str> = configurations.iter().map(|c| c[0].1.as_str()).collect();
         assert_eq!(values, vec!["1024", "2048"]);
     }
 
     #[test]
     fn merges_repeated_directives_for_same_key() {
-        let combos = parse(
+        let configurations = parse(
             "# configMatrix: datafusion.execution.batch_size=1024,2048\n\
              # configMatrix: datafusion.execution.batch_size=1024,2048\n",
         );
-        assert_eq!(combos.len(), 2);
+        assert_eq!(configurations.len(), 2);
     }
 
     #[test]
     fn merges_repeated_directives_unioning_values() {
-        let combos = parse("# configMatrix: k=1024,2048\n# configMatrix: k=2048,4096\n");
-        let values: Vec<&str> = combos.iter().map(|c| c[0].1.as_str()).collect();
+        let configurations =
+            parse("# configMatrix: k=1024,2048\n# configMatrix: k=2048,4096\n");
+        let values: Vec<&str> = configurations.iter().map(|c| c[0].1.as_str()).collect();
         assert_eq!(values, vec!["1024", "2048", "4096"]);
     }
 
     #[test]
     fn nested_matrices_expand_as_cartesian_product() {
-        let combos = parse(
+        let configurations = parse(
             "# configMatrix: datafusion.execution.batch_size=1024,2048\n\
              # configMatrix: datafusion.execution.param1=true,false\n",
         );
-        assert_eq!(combos.len(), 4);
-        for combo in &combos {
-            assert_eq!(combo.len(), 2);
-            assert_eq!(combo[0].0, "datafusion.execution.batch_size");
-            assert_eq!(combo[1].0, "datafusion.execution.param1");
+        assert_eq!(configurations.len(), 4);
+        for configuration in &configurations {
+            assert_eq!(configuration.len(), 2);
+            assert_eq!(configuration[0].0, "datafusion.execution.batch_size");
+            assert_eq!(configuration[1].0, "datafusion.execution.param1");
         }
-        assert_eq!(combos[0][0].1, "1024");
-        assert_eq!(combos[0][1].1, "true");
-        assert_eq!(combos[3][0].1, "2048");
-        assert_eq!(combos[3][1].1, "false");
+        assert_eq!(configurations[0][0].1, "1024");
+        assert_eq!(configurations[0][1].1, "true");
+        assert_eq!(configurations[3][0].1, "2048");
+        assert_eq!(configurations[3][1].1, "false");
     }
 
     #[test]
@@ -340,26 +356,25 @@ mod tests {
     }
 
     #[test]
-    fn matrix_tag_formats_key_value_pairs() {
-        let combo = vec![
-            ("a".to_string(), "1".to_string()),
-            ("b".to_string(), "x".to_string()),
-        ];
-        assert_eq!(matrix_tag(&combo), "[configMatrix: a=1, b=x]");
+    fn displays_key_value_pairs() {
+        assert_eq!(
+            test_configuration(&[("a", "1"), ("b", "x")]).to_string(),
+            "[configMatrix: a=1, b=x]"
+        );
     }
 
     #[test]
-    fn expand_matrix_runs_returns_single_empty_combo_when_no_matrix() {
+    fn test_configurations_yields_one_empty_entry_when_no_matrix() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(b"# just a comment\nquery I\nSELECT 1\n----\n1\n")
             .unwrap();
-        let runs = expand_matrix_runs(file.path()).unwrap();
-        assert_eq!(runs.len(), 1);
-        assert!(runs[0].is_empty());
+        let configurations = test_configurations(file.path()).unwrap();
+        assert_eq!(configurations.len(), 1);
+        assert!(configurations[0].is_empty());
     }
 
     #[test]
-    fn expand_matrix_runs_returns_all_combinations() {
+    fn test_configurations_yields_every_combination() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(
             b"# configMatrix: a=1,2\n\
@@ -367,26 +382,30 @@ mod tests {
               query I\nSELECT 1\n----\n1\n",
         )
         .unwrap();
-        let runs = expand_matrix_runs(file.path()).unwrap();
-        assert_eq!(runs.len(), 4);
-        assert!(runs.iter().all(|r| !r.is_empty()));
+        let configurations = test_configurations(file.path()).unwrap();
+        assert_eq!(configurations.len(), 4);
+        assert!(configurations.iter().all(|c| !c.is_empty()));
     }
 
     #[test]
-    fn with_matrix_context_is_noop_for_empty_combo() {
+    fn attribute_failure_is_noop_without_directives() {
         let err: Result<()> = Err(exec_datafusion_err!("boom"));
-        // No matrix active: the error passes through untouched.
         assert_eq!(
-            with_matrix_context(err, &[]).unwrap_err().to_string(),
+            test_configuration(&[])
+                .attribute_failure(err)
+                .unwrap_err()
+                .to_string(),
             exec_datafusion_err!("boom").to_string()
         );
     }
 
     #[test]
-    fn with_matrix_context_names_the_combination() {
-        let combo = vec![("k".to_string(), "1".to_string())];
+    fn attribute_failure_names_the_configuration() {
         let err: Result<()> = Err(exec_datafusion_err!("boom"));
-        let msg = with_matrix_context(err, &combo).unwrap_err().to_string();
+        let msg = test_configuration(&[("k", "1")])
+            .attribute_failure(err)
+            .unwrap_err()
+            .to_string();
         assert!(msg.starts_with("[configMatrix: k=1]"), "got {msg}");
         assert!(msg.contains("boom"), "got {msg}");
     }

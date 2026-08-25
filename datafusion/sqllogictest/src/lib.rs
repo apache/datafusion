@@ -47,9 +47,7 @@ mod filters;
 mod test_context;
 mod util;
 
-pub use config_matrix::{
-    ConfigMatrixCombination, expand_matrix_runs, with_matrix_context,
-};
+pub use config_matrix::{TestConfiguration, test_configurations};
 pub use filters::*;
 pub use test_context::TestContext;
 pub use test_file::TestFile;
