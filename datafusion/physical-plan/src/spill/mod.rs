@@ -146,7 +146,12 @@ const SPILL_BATCH_MEMORY_MARGIN: usize = 4096;
 /// ```
 ///
 /// This costs one copy per message, which the decoder already paid for
-/// spanning messages, without the doubling reallocation.
+/// spanning messages, without the doubling reallocation. Measured on the
+/// `spill_io` benchmark, the copy is not visible end to end for batches at
+/// or above the 128 KB read chunk, where skipping the doubling gather makes
+/// framing the faster of the two, and costs a few percent for batches small
+/// enough that several share a chunk, which are exactly the batches whose
+/// accounting it fixes.
 struct MessageFramer {
     state: FramerState,
 }
@@ -283,6 +288,28 @@ impl MessageFramer {
         }
         Ok(None)
     }
+
+    /// Checks that the stream ended on a message boundary.
+    ///
+    /// This mirrors [`StreamDecoder::finish`]: a stream is complete either
+    /// when the end-of-stream marker was read, or when it ends right after a
+    /// message. Framing moves the partial bytes of a truncated file out of
+    /// the decoder's own scratch space and into the framer, so without this
+    /// check a truncated spill file would silently decode as a shorter
+    /// stream instead of erroring.
+    fn finish(&self) -> Result<()> {
+        match &self.state {
+            FramerState::Finished
+            | FramerState::Prefix {
+                read: 0,
+                continuation: false,
+                ..
+            } => Ok(()),
+            _ => datafusion_common::exec_err!(
+                "Unexpected end of spill file: the IPC stream ends mid-message"
+            ),
+        }
+    }
 }
 
 impl FramerState {
@@ -416,6 +443,11 @@ impl Stream for SpillReaderStream {
                 None => {
                     this.is_done = true;
 
+                    // The framer holds the bytes of an incomplete trailing
+                    // message, so it is the one that detects truncation.
+                    if let Err(e) = this.framer.finish() {
+                        return Poll::Ready(Some(Err(e)));
+                    }
                     if let Err(e) = this.decoder.finish() {
                         return Poll::Ready(Some(Err(e.into())));
                     }
@@ -823,6 +855,14 @@ mod tests {
     /// Reading a spill file back must not inflate the batches' memory
     /// footprint: the decoder is zero-copy, so without framing every small
     /// batch would keep a whole read chunk alive, see [`MessageFramer`].
+    ///
+    /// Regression test for
+    /// <https://github.com/apache/datafusion/issues/17340>. Without framing
+    /// these 50 batches read back at 131072 bytes each, against a 22992 byte
+    /// maximum recorded at spill time, and the whole 345 KB stream is
+    /// accounted for as 5.9 MB. Note that this is not a counting bug that a
+    /// shared-buffer aware counter could net out: holding only 5 of the 50
+    /// batches still pins every read chunk, so the memory really is retained.
     #[tokio::test]
     async fn test_read_back_does_not_inflate_batch_memory() -> Result<()> {
         use arrow::array::{ListArray, StringViewArray};
@@ -957,6 +997,129 @@ mod tests {
         for chunk_size in [1, 3, 7, 64, 1000, ipc.len()] {
             frame_and_decode(&ipc, chunk_size, &batches);
         }
+    }
+
+    /// Decodes `ipc` the way the reader did before framing, returning the
+    /// number of batches or `Err` if the stream is not a complete one.
+    fn decode_unframed(ipc: &[u8]) -> std::result::Result<usize, ()> {
+        let mut decoder = StreamDecoder::new();
+        let mut buffer = Buffer::from(ipc);
+        let mut batches = 0;
+        while !buffer.is_empty() {
+            match decoder.decode(&mut buffer) {
+                Ok(Some(_)) => batches += 1,
+                Ok(None) => {}
+                Err(_) => return Err(()),
+            }
+        }
+        decoder.finish().map_err(|_| ())?;
+        Ok(batches)
+    }
+
+    /// Same as [`decode_unframed`], but through the [`MessageFramer`].
+    fn decode_framed(ipc: &[u8]) -> std::result::Result<usize, ()> {
+        let mut framer = MessageFramer::new();
+        let mut decoder = StreamDecoder::new();
+        let mut input = Buffer::from(ipc);
+        let mut batches = 0;
+        while !input.is_empty() {
+            let Some(buffers) = framer.push(&mut input).map_err(|_| ())? else {
+                continue;
+            };
+            for mut buffer in buffers {
+                while !buffer.is_empty() {
+                    match decoder.decode(&mut buffer) {
+                        Ok(Some(_)) => batches += 1,
+                        Ok(None) => {}
+                        Err(_) => return Err(()),
+                    }
+                }
+            }
+        }
+        framer.finish().map_err(|_| ())?;
+        decoder.finish().map_err(|_| ())?;
+        Ok(batches)
+    }
+
+    /// Framing must not weaken the reader's detection of a corrupt or cut
+    /// short spill file. The partial bytes of an incomplete trailing message
+    /// end up in the [`MessageFramer`] instead of the decoder's own scratch
+    /// space, so the framer has to report them, see [`MessageFramer::finish`].
+    ///
+    /// Truncated at every possible offset, framed decoding must accept and
+    /// reject exactly what unframed decoding does.
+    #[test]
+    fn test_message_framer_reports_truncation_like_the_decoder() {
+        let batches: Vec<RecordBatch> = (0..3)
+            .map(|b| {
+                build_table_i32(
+                    ("a", &(0..50).map(|i| b * 50 + i).collect::<Vec<_>>()),
+                    ("b", &(0..50).collect::<Vec<_>>()),
+                    ("c", &(0..50).collect::<Vec<_>>()),
+                )
+            })
+            .collect();
+
+        let mut ipc = vec![];
+        let mut writer = StreamWriter::try_new(&mut ipc, &batches[0].schema()).unwrap();
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let mut complete = 0;
+        for cut in 0..=ipc.len() {
+            let truncated = &ipc[..cut];
+            let framed = decode_framed(truncated);
+            assert_eq!(
+                framed,
+                decode_unframed(truncated),
+                "framed and unframed decoding disagree on a stream cut to {cut} bytes"
+            );
+            complete += usize::from(framed.is_ok());
+        }
+        // Cutting anywhere but on a message boundary must be an error, so
+        // only the empty stream, the three batches and the end-of-stream
+        // marker may decode cleanly.
+        assert_eq!(complete, 5);
+        assert_eq!(decode_framed(&ipc), Ok(batches.len()));
+    }
+
+    /// End-to-end: a spill file cut short mid-message must error rather than
+    /// silently read back as a shorter stream.
+    #[tokio::test]
+    async fn test_truncated_spill_file_errors() -> Result<()> {
+        let batch = build_table_i32(
+            ("a", &(0..100).collect::<Vec<_>>()),
+            ("b", &(100..200).collect::<Vec<_>>()),
+            ("c", &(200..300).collect::<Vec<_>>()),
+        );
+        let schema = batch.schema();
+        let batches = vec![batch.clone(), batch];
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+        let spill_file = spill_manager
+            .spill_record_batch_and_finish(&batches, "Test")?
+            .unwrap();
+
+        // Truncate the file mid-message: drop the 8 byte end-of-stream
+        // marker plus part of the last batch's body.
+        let path = spill_file.path().unwrap().to_path_buf();
+        let len = std::fs::metadata(&path)?.len();
+        let f = std::fs::OpenOptions::new().write(true).open(&path)?;
+        f.set_len(len - 8 - 13)?;
+        drop(f);
+
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+        let result = collect(stream).await;
+        assert!(
+            result.is_err(),
+            "truncated spill file should error, got Ok with {} batches",
+            result.as_ref().map(|b| b.len()).unwrap_or(0)
+        );
+        Ok(())
     }
 
     #[tokio::test]
