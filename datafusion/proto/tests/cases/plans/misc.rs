@@ -63,134 +63,104 @@ fn roundtrip_analyze() -> Result<()> {
     let metric_categories = vec![MetricCategory::Rows, MetricCategory::Timing];
     let analyze = Arc::new(
         AnalyzeExec::builder(true, true, input, Arc::clone(&schema))
-            // `Summary` is non-default and was previously reset to
-            // `[Summary, Dev]` by the protobuf round-trip.
-            .with_metric_types(vec![MetricType::Summary])
             .with_metric_categories(Some(metric_categories.clone()))
             .with_format(ExplainFormat::Tree)
             .build(),
     );
 
     let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
     let roundtripped = roundtrip_test_and_return(
         analyze,
         &ctx,
-        &codec,
+        &DefaultPhysicalExtensionCodec {},
         &DefaultPhysicalProtoConverter {},
     )?;
-    let roundtripped_analyze = roundtripped.downcast_ref::<AnalyzeExec>().unwrap();
+    let roundtripped = roundtripped.downcast_ref::<AnalyzeExec>().unwrap();
 
-    assert_eq!(roundtripped_analyze.schema(), schema);
-    assert!(roundtripped_analyze.verbose());
-    assert!(roundtripped_analyze.show_statistics());
+    assert_eq!(roundtripped.schema(), schema);
+    assert!(roundtripped.verbose());
+    assert!(roundtripped.show_statistics());
     assert_eq!(
-        roundtripped_analyze.metric_categories(),
+        roundtripped.metric_categories(),
         Some(metric_categories.as_slice())
     );
-    assert_eq!(roundtripped_analyze.format(), &ExplainFormat::Tree);
+    assert_eq!(roundtripped.format(), &ExplainFormat::Tree);
     assert!(
-        roundtripped_analyze
+        roundtripped
             .input()
             .downcast_ref::<PlaceholderRowExec>()
             .is_some()
-    );
-
-    let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
-    let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
-        node.physical_plan_type
-    else {
-        unreachable!("expected AnalyzeExecNode")
-    };
-    assert!(analyze.has_metric_types);
-    assert_eq!(
-        analyze.metric_types,
-        vec![protobuf::MetricType::Summary as i32]
     );
     Ok(())
 }
 
 #[test]
-fn roundtrip_analyze_dev_and_empty_metric_types() -> Result<()> {
+fn roundtrip_analyze_metric_types() -> Result<()> {
+    use protobuf::MetricType as ProtoMetricType;
+
     let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+
     for (metric_types, expected) in [
         (
-            vec![MetricType::Dev],
-            vec![protobuf::MetricType::Dev as i32],
+            Some(vec![MetricType::Summary]),
+            vec![ProtoMetricType::Summary as i32],
         ),
-        (vec![], vec![]),
+        (
+            Some(vec![MetricType::Dev]),
+            vec![ProtoMetricType::Dev as i32],
+        ),
+        (Some(vec![]), vec![]),
+        (
+            None,
+            vec![ProtoMetricType::Summary as i32, ProtoMetricType::Dev as i32],
+        ),
     ] {
+        let legacy = metric_types.is_none();
         let schema = Arc::new(Schema::new(vec![
             Field::new("plan_type", DataType::Utf8, false),
             Field::new("plan", DataType::Utf8, false),
         ]));
         let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
-        let analyze = Arc::new(
-            AnalyzeExec::builder(false, false, input, schema)
-                .with_metric_types(metric_types)
-                .build(),
-        );
+        let builder = AnalyzeExec::builder(false, false, input, schema);
+        let analyze = Arc::new(match metric_types {
+            Some(metric_types) => builder.with_metric_types(metric_types).build(),
+            None => builder.build(),
+        });
+        let mut node = PhysicalPlanNode::try_from_physical_plan(analyze, &codec)?;
 
-        let roundtripped = roundtrip_test_and_return(
-            analyze,
-            &SessionContext::new(),
-            &codec,
-            &DefaultPhysicalProtoConverter {},
-        )?;
-        let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
         let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
-            node.physical_plan_type
+            node.physical_plan_type.as_mut()
+        else {
+            unreachable!("expected AnalyzeExecNode")
+        };
+        if legacy {
+            analyze.has_metric_types = false;
+            analyze.metric_types.clear();
+        }
+
+        let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        #[cfg(feature = "json")]
+        let node: PhysicalPlanNode =
+            serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        let roundtripped = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+        let mut node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+            node.physical_plan_type.as_mut()
         else {
             unreachable!("expected AnalyzeExecNode")
         };
         assert!(analyze.has_metric_types);
         assert_eq!(analyze.metric_types, expected);
+        if expected == [ProtoMetricType::Summary as i32] {
+            analyze.metric_types = vec![i32::MAX];
+            let error = node
+                .try_into_physical_plan(&ctx.task_ctx(), &codec)
+                .unwrap_err();
+            assert!(error.strip_backtrace().contains("unknown MetricType"));
+        }
     }
-    Ok(())
-}
-
-#[test]
-fn decode_analyze_without_metric_types_uses_defaults() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("plan_type", DataType::Utf8, false),
-        Field::new("plan", DataType::Utf8, false),
-    ]));
-    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
-    let analyze = Arc::new(AnalyzeExec::builder(false, false, input, schema).build());
-    let codec = DefaultPhysicalExtensionCodec {};
-    let mut node = PhysicalPlanNode::try_from_physical_plan(analyze, &codec)?;
-
-    let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
-        node.physical_plan_type.as_mut()
-    else {
-        unreachable!("expected AnalyzeExecNode")
-    };
-    analyze.has_metric_types = false;
-    analyze.metric_types.clear();
-
-    // Round-trip through bytes to simulate a plan written before the field was
-    // added to AnalyzeExecNode.
-    let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let ctx = SessionContext::new();
-    let roundtripped = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
-
-    // Re-encode the plan to inspect the restored private state without adding
-    // a public accessor solely for this test.
-    let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
-    let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
-        node.physical_plan_type
-    else {
-        unreachable!("expected AnalyzeExecNode")
-    };
-    assert!(analyze.has_metric_types);
-    assert_eq!(
-        analyze.metric_types,
-        vec![
-            protobuf::MetricType::Summary as i32,
-            protobuf::MetricType::Dev as i32,
-        ]
-    );
     Ok(())
 }
 
