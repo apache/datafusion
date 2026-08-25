@@ -940,6 +940,91 @@ mod tests {
         Ok(())
     }
 
+    /// The workload from <https://github.com/apache/datafusion/issues/17340>,
+    /// reduced to a single spilled run.
+    ///
+    /// `memory_limit::test_stringview_external_sort` sorts 200 batches of 1000
+    /// random 100 byte strings under a 60 MB pool, producing around 10 spilled
+    /// runs of about 20 batches each. This spills one such run and reads it
+    /// back through the same [`SpillManager`] calls the external sorter and the
+    /// multi-level merge use: the spill records the largest batch's memory size,
+    /// and the merge reserves its budget from that number, so a batch that comes
+    /// back bigger is memory the merge is using without having reserved it.
+    ///
+    /// Each batch here is around 167 KB, larger than the 128 KB read chunk, so
+    /// every IPC message spans chunks. Without framing the decoder gathers such
+    /// a message into a `Vec` grown by doubling and the batch keeps the spare
+    /// capacity, so these batches read back at about 255 KB each against the
+    /// ~167 KB recorded at spill time - half again the budget the merge
+    /// reserved for them, which is the discrepancy the issue reports.
+    #[tokio::test]
+    async fn test_stringview_spill_read_back_memory_accounting() -> Result<()> {
+        use arrow::array::StringViewArray;
+        use rand::Rng;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("strings", DataType::Utf8View, false),
+            Field::new("random_numbers", DataType::Int32, false),
+        ]));
+
+        // 100 random bytes per string, as in the issue's reproducer: long
+        // enough that the views point into a data buffer rather than inlining,
+        // and random so nothing dedupes.
+        let mut rng = rand::rng();
+        let batches: Vec<RecordBatch> = (0..20)
+            .map(|_| {
+                let strings: Vec<String> = (0..1000)
+                    .map(|_| {
+                        (0..100)
+                            .map(|_| rng.random_range(0..=u8::MAX) as char)
+                            .collect()
+                    })
+                    .collect();
+                let numbers: Vec<i32> =
+                    (0..1000).map(|_| rng.random_range(0..=1000)).collect();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringViewArray::from(strings)) as ArrayRef,
+                        Arc::new(Int32Array::from(numbers)) as ArrayRef,
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+
+        // The same call the external sorter spills a sorted run with: the
+        // returned size is what the merge budgets against.
+        let (spill_file, max_record_batch_memory) = spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                batches
+                    .iter()
+                    .map(Ok::<_, datafusion_common::DataFusionError>),
+                "Test",
+            )?
+            .unwrap();
+
+        let stream = spill_manager
+            .read_spill_as_stream(spill_file, Some(max_record_batch_memory))?;
+        let read_back = collect(stream).await?;
+        assert_eq!(read_back.len(), batches.len());
+
+        for (written, read) in batches.iter().zip(&read_back) {
+            assert_eq!(written, read);
+            let size = get_record_batch_memory_size(read);
+            assert!(
+                size <= max_record_batch_memory + SPILL_BATCH_MEMORY_MARGIN,
+                "read-back batch retains {size} bytes, but the merge only \
+                 reserved for {max_record_batch_memory} bytes"
+            );
+        }
+        Ok(())
+    }
+
     /// Frames an IPC stream delivered in chunks of `chunk_size` bytes and
     /// decodes it, checking that every batch is intact and that its buffers
     /// are backed by an allocation no larger than its own message body.
