@@ -1458,7 +1458,7 @@ impl FileScanConfig {
                 FileGroup::new(
                     file_group_indices
                         .into_iter()
-                        .map(|idx| flattened_files[idx].clone())
+                        .map(|idx| flattened_files[statistics.file_index(idx)].clone())
                         .collect(),
                 )
             })
@@ -1527,7 +1527,7 @@ impl FileScanConfig {
             .map(|file_group_indices| {
                 file_group_indices
                     .into_iter()
-                    .map(|idx| flattened_files[idx].clone())
+                    .map(|idx| flattened_files[statistics.file_index(idx)].clone())
                     .collect()
             })
             .collect())
@@ -3701,6 +3701,26 @@ mod tests {
             "Expected Inexact due to NULLs, got {result:?}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn exact_empty_file_does_not_report_sort_column_nulls() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let empty_file = PartitionedFile::new("empty.parquet", 1).with_statistics(
+            Arc::new(Statistics {
+                num_rows: Precision::Exact(0),
+                ..Default::default()
+            }),
+        );
+
+        assert!(!sort_pushdown::any_file_has_nulls_in_sort_columns(
+            &[FileGroup::new(vec![empty_file])],
+            &[sort_expr],
+            &schema,
+            None,
+        ));
     }
 
     #[test]

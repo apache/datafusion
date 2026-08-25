@@ -351,7 +351,8 @@ pub(crate) fn sort_files_within_groups_by_statistics(
         let already_sorted = sorted_indices
             .iter()
             .enumerate()
-            .all(|(pos, (idx, _))| pos == *idx);
+            .all(|(pos, (idx, _))| pos == statistics.file_index(*idx))
+            && statistics.file_count() == files.len();
 
         let sorted_group: FileGroup = if already_sorted {
             group.clone()
@@ -359,7 +360,7 @@ pub(crate) fn sort_files_within_groups_by_statistics(
             any_reordered = true;
             sorted_indices
                 .iter()
-                .map(|(idx, _)| files[*idx].clone())
+                .map(|(idx, _)| files[statistics.file_index(*idx)].clone())
                 .collect()
         };
 
@@ -406,6 +407,9 @@ pub(crate) fn any_file_has_nulls_in_sort_columns(
             let Some(stats) = file.statistics.as_ref() else {
                 return true; // No stats, assume nulls exist
             };
+            if stats.num_rows == Precision::Exact(0) {
+                continue;
+            }
             for col in &sort_columns {
                 let stat_idx = projection_indices
                     .map(|p| p[col.index()])

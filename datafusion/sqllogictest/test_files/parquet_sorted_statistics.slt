@@ -81,6 +81,15 @@ STORED AS PARQUET;
 ----
 3
 
+# Add a zero-row file without ordering metadata. It contributes no rows and
+# therefore must not invalidate the ordering from the non-empty files.
+query I
+COPY (SELECT * FROM src_table WHERE FALSE)
+TO 'test_files/scratch/parquet_sorted_statistics/test_table/partition_col=D/empty.parquet'
+STORED AS PARQUET;
+----
+0
+
 
 # Create a table from generated parquet files:
 statement ok
@@ -274,7 +283,54 @@ logical_plan
 02)--TableScan: test_table projection=[constant_col]
 physical_plan
 01)SortPreservingMergeExec: [constant_col@0 ASC NULLS LAST]
-02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet]]}, projection=[constant_col], output_ordering=[constant_col@0 ASC NULLS LAST], file_type=parquet
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=D/empty.parquet]]}, projection=[constant_col], output_ordering=[constant_col@0 ASC NULLS LAST], file_type=parquet
+
+# Verify ordering can also be inferred from the non-empty files when the empty
+# file has no Parquet sorting_columns metadata.
+statement ok
+DROP TABLE test_table;
+
+statement ok
+CREATE EXTERNAL TABLE inferred_test_table (
+  partition_col TEXT NOT NULL,
+  int_col INT NOT NULL,
+  descending_col INT NOT NULL,
+  string_col TEXT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  date_col DATE NOT NULL,
+  overlapping_col INT NOT NULL,
+  constant_col INT NOT NULL,
+  nulls_first_col INT,
+  nulls_last_col INT
+)
+STORED AS PARQUET
+PARTITIONED BY (partition_col)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/test_table';
+
+query TT
+EXPLAIN SELECT int_col
+FROM inferred_test_table
+ORDER BY int_col;
+----
+logical_plan
+01)Sort: inferred_test_table.int_col ASC NULLS LAST
+02)--TableScan: inferred_test_table projection=[int_col]
+physical_plan
+01)SortPreservingMergeExec: [int_col@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet]]}, projection=[int_col], output_ordering=[int_col@0 ASC NULLS LAST], file_type=parquet
+
+query I rowsort
+SELECT int_col FROM inferred_test_table;
+----
+1
+2
+3
+4
+5
+6
+7
+8
+9
 
 # Config reset
 

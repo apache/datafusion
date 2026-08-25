@@ -25,11 +25,11 @@ use std::sync::Arc;
 use crate::PartitionedFile;
 use crate::file_groups::FileGroup;
 
-use arrow::array::RecordBatch;
+use arrow::array::{ArrayRef, RecordBatch, new_empty_array};
 use arrow::compute::SortColumn;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{Row, Rows};
-use datafusion_common::stats::NdvFallback;
+use datafusion_common::stats::{NdvFallback, Precision};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
@@ -44,6 +44,8 @@ pub(crate) struct MinMaxStatistics {
     min_by_sort_order: Rows,
     max_by_sort_order: Rows,
     sort_order: LexOrdering,
+    /// Maps statistics row indices to input file indices when empty files were skipped.
+    file_indices: Option<Vec<usize>>,
 }
 
 impl MinMaxStatistics {
@@ -64,23 +66,42 @@ impl MinMaxStatistics {
         self.max_by_sort_order.row(idx)
     }
 
+    /// Return the input file index for a statistics row.
+    pub fn file_index(&self, idx: usize) -> usize {
+        self.file_indices
+            .as_ref()
+            .map_or(idx, |indices| indices[idx])
+    }
+
+    /// Return the number of files with min/max statistics.
+    pub fn file_count(&self) -> usize {
+        self.file_indices
+            .as_ref()
+            .map_or_else(|| self.min_by_sort_order.num_rows(), Vec::len)
+    }
+
     pub fn new_from_files<'a>(
         projected_sort_order: &LexOrdering, // Sort order with respect to projected schema
         projected_schema: &SchemaRef,       // Projected schema
         projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
         files: impl IntoIterator<Item = &'a PartitionedFile>,
     ) -> Result<Self> {
-        let Some(statistics_and_partition_values) = files
-            .into_iter()
-            .map(|file| {
-                file.statistics
-                    .as_ref()
-                    .zip(Some(file.partition_values.as_slice()))
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
-            return plan_err!("Parquet file missing statistics");
-        };
+        let mut file_indices: Option<Vec<usize>> = None;
+        let mut statistics_and_partition_values = vec![];
+        for (file_index, file) in files.into_iter().enumerate() {
+            let Some(statistics) = file.statistics.as_ref() else {
+                return plan_err!("Parquet file missing statistics");
+            };
+            if statistics.num_rows == Precision::Exact(0) {
+                file_indices.get_or_insert_with(|| (0..file_index).collect());
+                continue;
+            }
+            if let Some(file_indices) = &mut file_indices {
+                file_indices.push(file_index);
+            }
+            statistics_and_partition_values
+                .push((statistics, file.partition_values.as_slice()));
+        }
 
         // Helper function to get min/max statistics for a given column of projected_schema
         let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
@@ -146,9 +167,10 @@ impl MinMaxStatistics {
                 let (min, max) = get_min_max(i).map_err(|e| {
                     e.context(format!("get min/max for column: '{}'", c.name()))
                 })?;
+                let data_type = projected_schema.field(c.index()).data_type();
                 Ok((
-                    ScalarValue::iter_to_array(min)?,
-                    ScalarValue::iter_to_array(max)?,
+                    scalar_values_to_array(min, data_type)?,
+                    scalar_values_to_array(max, data_type)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()
@@ -171,7 +193,10 @@ impl MinMaxStatistics {
                 )
             })?;
 
-        Self::new(&min_max_sort_order, &min_max_schema, min_batch, max_batch)
+        let mut statistics =
+            Self::new(&min_max_sort_order, &min_max_schema, min_batch, max_batch)?;
+        statistics.file_indices = file_indices;
+        Ok(statistics)
     }
 
     #[expect(clippy::needless_pass_by_value)]
@@ -259,6 +284,7 @@ impl MinMaxStatistics {
             min_by_sort_order: min.map_err(|e| e.context("build min rows"))?,
             max_by_sort_order: max.map_err(|e| e.context("build max rows"))?,
             sort_order: sort_order.clone(),
+            file_indices: None,
         })
     }
 
@@ -276,6 +302,17 @@ impl MinMaxStatistics {
             .iter()
             .zip(self.min_by_sort_order.iter().skip(1))
             .all(|(max, next_min)| max <= next_min)
+    }
+}
+
+fn scalar_values_to_array(
+    scalar_values: Vec<ScalarValue>,
+    data_type: &DataType,
+) -> Result<ArrayRef> {
+    if scalar_values.is_empty() {
+        Ok(new_empty_array(data_type))
+    } else {
+        ScalarValue::iter_to_array(scalar_values)
     }
 }
 
@@ -501,5 +538,56 @@ mod tests {
                 .contains("statistics not found for partition"),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn min_max_statistics_ignores_empty_files_without_column_stats() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+        let files = [
+            file_with_stats("high.parquet", utf8_file_stats(1, "m", "z")),
+            file_with_stats(
+                "empty.parquet",
+                Statistics {
+                    num_rows: Precision::Exact(0),
+                    ..Default::default()
+                },
+            ),
+            file_with_stats("low.parquet", utf8_file_stats(1, "a", "l")),
+        ];
+
+        let statistics =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())?;
+        let sorted_file_indices = statistics
+            .min_values_sorted()
+            .into_iter()
+            .map(|(statistics_index, _)| statistics.file_index(statistics_index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sorted_file_indices, vec![2, 0]);
+        assert!(!statistics.is_sorted());
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_statistics_accepts_all_empty_files() -> Result<()> {
+        let schema = test_schema();
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+        let files = [file_with_stats(
+            "empty.parquet",
+            Statistics {
+                num_rows: Precision::Exact(0),
+                ..Default::default()
+            },
+        )];
+
+        let statistics =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())?;
+
+        assert!(statistics.min_values_sorted().is_empty());
+        assert!(statistics.is_sorted());
+        Ok(())
     }
 }
