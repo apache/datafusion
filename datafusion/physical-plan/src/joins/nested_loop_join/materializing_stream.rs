@@ -192,11 +192,11 @@ pub(super) enum NLJState {
 /// reference so other partitions can read from the same file.
 pub(crate) struct LeftSpillData {
     /// SpillManager used to read the spill file (has the left schema)
-    spill_manager: SpillManager,
+    pub spill_manager: SpillManager,
     /// The spill file containing all left-side batches
-    spill_file: Arc<dyn SpillFile>,
+    pub spill_file: Arc<dyn SpillFile>,
     /// Left-side schema
-    schema: SchemaRef,
+    pub schema: SchemaRef,
 }
 
 /// Tracks the state of the memory-limited spill fallback for NLJ.
@@ -233,29 +233,29 @@ pub(crate) enum SpillState {
 pub(crate) struct SpillStateActive {
     /// Shared future for left-side spill data. All partitions wait on
     /// the same future — the first to poll triggers the actual spill.
-    left_spill_fut: OnceFut<LeftSpillData>,
+    pub left_spill_fut: OnceFut<LeftSpillData>,
     /// Left input stream for incremental chunk reading (from spill file).
     /// None until `left_spill_fut` resolves.
-    left_stream: Option<SendableRecordBatchStream>,
+    pub left_stream: Option<SendableRecordBatchStream>,
     /// Left-side schema (set once `left_spill_fut` resolves)
-    left_schema: Option<SchemaRef>,
+    pub left_schema: Option<SchemaRef>,
     /// Memory reservation for left-side buffering
-    reservation: MemoryReservation,
+    pub reservation: MemoryReservation,
     /// Accumulated left batches for the current chunk
-    pending_batches: Vec<RecordBatch>,
+    pub pending_batches: Vec<RecordBatch>,
     /// Right input that spills on the first pass and replays from spill later.
-    right_input: ReplayableStreamSource,
+    pub right_input: ReplayableStreamSource,
     /// Per-batch accumulated right bitmaps across all left chunks.
     /// Index = right batch sequence number (0-based, non-empty batches only).
     /// Only populated when `should_track_unmatched_right` is true.
-    global_right_bitmaps: Vec<BooleanBuffer>,
+    pub global_right_bitmaps: Vec<BooleanBuffer>,
     /// Separate reservation for `global_right_bitmaps`. These buffers live
     /// for the full operator lifetime (not per-chunk), so they must be
     /// tracked separately from `reservation`, which gets `resize(0)`-ed
     /// between chunks.
-    global_right_bitmaps_reservation: MemoryReservation,
+    pub global_right_bitmaps_reservation: MemoryReservation,
     /// Current right batch sequence index within the current pass.
-    right_batch_index: usize,
+    pub right_batch_index: usize,
 }
 
 impl SpillStateActive {

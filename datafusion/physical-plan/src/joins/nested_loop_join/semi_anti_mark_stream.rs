@@ -22,21 +22,31 @@
 
 use std::future::poll_fn;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use super::materializing_stream::{
-    JoinLeftData, NestedLoopJoinMetrics, SAMNLJState, SpillState,
+    JoinLeftData, NestedLoopJoinMetrics, SpillState, SpillStateActive,
 };
 use crate::SendableRecordBatchStream;
-use crate::joins::utils::{ColumnIndex, JoinFilter, OnceFut};
+use crate::joins::nested_loop_join::materializing_stream::LeftSpillData;
+use crate::joins::utils::{
+    ColumnIndex, JoinFilter, OnceFut, need_produce_result_in_final,
+};
+use crate::spill::replayable_spill_input::ReplayableStreamSource;
+use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
-use arrow::compute::BatchCoalescer;
+use arrow::array::BooleanBufferBuilder;
+use arrow::compute::{BatchCoalescer, concat_batches};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, JoinSide};
+use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::{TryEmitter, async_try_stream};
 use datafusion_expr::JoinType;
+use futures::StreamExt;
 use log::debug;
+use parking_lot::Mutex;
 
 /// Note that we're using the explicit state management even with the async generator pattern
 /// The motivation behind this is due to the complexity for NLJ
@@ -123,8 +133,6 @@ pub(crate) struct SemiAntiMarkNestedLoopJoinStream {
     right_data: Option<SendableRecordBatchStream>,
     /// the build-side table data of the nested loop join
     left_data: OnceFut<JoinLeftData>,
-    /// the current buffered left data to join
-    buffered_left_data: Option<Arc<JoinLeftData>>,
 
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
@@ -246,6 +254,8 @@ impl SemiAntiMarkNestedLoopJoinStream {
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        let mut left_chunk: Option<Arc<JoinLeftData>> = None;
+        let mut is_last_chunk: bool = false;
         loop {
             match self.state {
                 // # SAMNLJState transitions
@@ -262,7 +272,11 @@ impl SemiAntiMarkNestedLoopJoinStream {
                     let build_metric = self.metrics.join_metrics.build_time.clone();
                     let _build_timer = build_metric.timer();
 
-                    self.handle_buffering_left().await?;
+                    let (curr_left_chunk, curr_is_last_chunk) =
+                        self.handle_buffering_left().await?;
+                    left_chunk = Some(curr_left_chunk);
+                    is_last_chunk = curr_is_last_chunk;
+                    self.state = SAMNLJState::FetchingRight;
                 }
 
                 // # SAMNLJState transitions:
@@ -438,46 +452,38 @@ impl SemiAntiMarkNestedLoopJoinStream {
         }
     }
 
+    // ========================================================================
+    // Functions for the BufferingLeft state
+    // ========================================================================
+
     /// Handle BufferingLeft state - prepare left side batches.
     ///
     /// In standard mode, uses OnceFut to load all left data at once.
     /// In memory-limited mode, incrementally buffers left batches until the
     /// memory budget is reached or the left stream is exhausted.
-    async fn handle_buffering_left(&mut self) -> Result<()> {
-        if self.is_memory_limited() {
-            self.handle_buffering_left_memory_limited()
-        } else {
+    ///
+    /// Returns a two-tuple of the (left chunk, boolean indicating whether this is the last chunk)
+    async fn handle_buffering_left(&mut self) -> Result<(Arc<JoinLeftData>, bool)> {
+        loop {
+            if self.is_memory_limited() {
+                return self.handle_buffering_left_memory_limited().await;
+            }
+
             // Standard path: use OnceFut
-            let left_data = poll_fn(|cx| {
-                self.left_data
-                    .get(cx)
-                    .map(|res| res.map(|data| data.batch.clone()))
-            })
-            .await;
-            match left_data {
-                Poll::Ready(Ok(left_data)) => {
-                    self.buffered_left_data = Some(left_data);
-                    self.left_exhausted = true;
-                    self.state = NLJState::FetchingRight;
-                    ControlFlow::Continue(())
-                }
-                Poll::Ready(Err(e)) => {
+            let left_data_result = poll_fn(|cx| self.left_data.get_shared(cx)).await;
+            match left_data_result {
+                Ok(left_data) => return Ok((left_data, true)),
+                Err(e) => {
                     if self.can_fallback_to_spill(&e) {
                         debug!(
                             "NestedLoopJoin: OnceFut failed with OOM, \
                              falling back to memory-limited mode"
                         );
-                        match self.initiate_fallback() {
-                            Ok(()) => ControlFlow::Continue(()),
-                            Err(fallback_err) => {
-                                ControlFlow::Break(Poll::Ready(Some(Err(fallback_err))))
-                            }
-                        }
+                        self.initiate_fallback()?;
                     } else {
-                        ControlFlow::Break(Poll::Ready(Some(Err(e))))
+                        return Err(e);
                     }
                 }
-                Poll::Pending => ControlFlow::Break(Poll::Pending),
             }
         }
     }
@@ -487,10 +493,9 @@ impl SemiAntiMarkNestedLoopJoinStream {
     /// Incrementally polls the left stream and accumulates batches until:
     /// - Memory reservation fails (chunk is full, more data remains)
     /// - Left stream is exhausted (this is the last/only chunk)
-    fn handle_buffering_left_memory_limited(
+    async fn handle_buffering_left_memory_limited(
         &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+    ) -> Result<(Arc<JoinLeftData>, bool)> {
         let SpillState::Active(active) = &mut self.spill_state else {
             unreachable!(
                 "handle_buffering_left_memory_limited called without Active spill state"
@@ -501,28 +506,13 @@ impl SemiAntiMarkNestedLoopJoinStream {
         // left_stream was consumed), wait for the shared left spill
         // future to resolve and then open a stream from the spill file.
         if active.left_stream.is_none() {
-            match active.left_spill_fut.get_shared(cx) {
-                Poll::Ready(Ok(spill_data)) => {
-                    match spill_data
-                        .spill_manager
-                        .read_spill_as_stream(Arc::clone(&spill_data.spill_file), None)
-                    {
-                        Ok(stream) => {
-                            active.left_schema = Some(Arc::clone(&spill_data.schema));
-                            active.left_stream = Some(stream);
-                        }
-                        Err(e) => {
-                            return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                        }
-                    }
-                }
-                Poll::Ready(Err(e)) => {
-                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                }
-                Poll::Pending => {
-                    return ControlFlow::Break(Poll::Pending);
-                }
-            }
+            let spill_data = poll_fn(|cx| active.left_spill_fut.get_shared(cx)).await?;
+
+            let stream = spill_data
+                .spill_manager
+                .read_spill_as_stream(Arc::clone(&spill_data.spill_file), None)?;
+            active.left_schema = Some(Arc::clone(&spill_data.schema));
+            active.left_stream = Some(stream);
         }
 
         let left_stream = active
@@ -530,12 +520,14 @@ impl SemiAntiMarkNestedLoopJoinStream {
             .as_mut()
             .expect("left_stream must be set after spill future resolves");
 
+        let is_last_chunk;
+
         // Poll left stream for more batches.
         // Note: pending_batches may already contain a batch from the
         // previous chunk iteration (the batch that triggered the memory limit).
         loop {
-            match left_stream.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(batch))) => {
+            match left_stream.next().await {
+                Some(Ok(batch)) => {
                     if batch.num_rows() == 0 {
                         continue;
                     }
@@ -548,8 +540,7 @@ impl SemiAntiMarkNestedLoopJoinStream {
                         // Push this batch into pending (it's already in memory)
                         // and stop buffering for this chunk.
                         active.pending_batches.push(batch);
-                        self.left_exhausted = false;
-                        self.left_buffered_in_one_pass = false;
+                        is_last_chunk = false;
                         break;
                     } else if !can_grow {
                         // No pending batches yet — we must accept this batch
@@ -562,45 +553,33 @@ impl SemiAntiMarkNestedLoopJoinStream {
                     self.metrics.join_metrics.build_input_rows.add(batch_rows);
                     active.pending_batches.push(batch);
                 }
-                Poll::Ready(Some(Err(e))) => {
-                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                }
-                Poll::Ready(None) => {
+                Some(Err(e)) => return Err(e),
+                None => {
                     // Left stream exhausted
-                    self.left_exhausted = true;
+                    is_last_chunk = true;
                     break;
-                }
-                Poll::Pending => {
-                    return ControlFlow::Break(Poll::Pending);
                 }
             }
         }
 
         // If the left stream is fully exhausted, release its resources so the
         // upstream pipeline can be torn down before we move on to probing.
-        if self.left_exhausted {
+        if is_last_chunk {
             active.left_stream = None;
         }
 
         if active.pending_batches.is_empty() {
             // No data at all — go directly to Done
-            self.left_exhausted = true;
-            self.state = NLJState::Done;
-            return ControlFlow::Continue(());
+            return internal_err!("Left spill stream produced no data");
         }
 
-        let merged_batch = match concat_batches(
+        let merged_batch = concat_batches(
             active
                 .left_schema
                 .as_ref()
                 .expect("left_schema must be set"),
             &active.pending_batches,
-        ) {
-            Ok(batch) => batch,
-            Err(e) => {
-                return ControlFlow::Break(Poll::Ready(Some(Err(e.into()))));
-            }
-        };
+        )?;
         active.pending_batches.clear();
 
         // Build visited bitmap if needed for this join type
@@ -630,20 +609,10 @@ impl SemiAntiMarkNestedLoopJoinStream {
             dummy_reservation,
         );
 
-        self.buffered_left_data = Some(Arc::new(left_data));
-
         active.right_batch_index = 0;
-        match active.right_input.open_pass() {
-            Ok(stream) => {
-                self.right_data = Some(stream);
-            }
-            Err(e) => {
-                return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-            }
-        }
+        self.right_data = Some(active.right_input.open_pass()?);
 
-        self.state = NLJState::FetchingRight;
-        ControlFlow::Continue(())
+        Ok((Arc::new(left_data), is_last_chunk))
     }
 
     /// Returns true if this stream is operating in memory-limited mode
@@ -758,10 +727,56 @@ impl SemiAntiMarkNestedLoopJoinStream {
             right_batch_index: 0,
         }));
 
-        // State stays BufferingLeft — next poll will enter
+        // State stays BufferingLeft — next iteration will enter
         // handle_buffering_left_memory_limited via is_memory_limited() check
-        self.state = NLJState::BufferingLeft;
+        self.state = SAMNLJState::BufferingLeft;
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Functions for the FetchingRight state
+    // ========================================================================
+    /// Handle FetchingRight state - fetch next right batch and prepare for processing.
+    ///
+    /// In memory-limited mode during the first pass, each right batch is also
+    /// written to a spill file so it can be re-read on subsequent passes.
+    async fn handle_fetching_right(&mut self) -> Result<(RecordBatch, bool)> {
+        match self
+            .right_data
+            .as_mut()
+            .expect("right_data must be present while fetching right")
+            .next
+            .await
+        {
+            Some(Ok(right_batch)) => {
+                // Update metrics
+                let right_batch_rows = right_batch.num_rows();
+                self.metrics.join_metrics.input_rows.add(right_batch_rows);
+                self.metrics.join_metrics.input_batches.add(1);
+
+                // Skip the empty batch
+                if right_batch_rows == 0 {
+                    return ControlFlow::Continue(());
+                }
+
+                // Prepare right bitmap
+                if self.should_track_unmatched_right {
+                    let zeroed_buf = BooleanBuffer::new_unset(right_batch_rows);
+                    self.current_right_batch_matched =
+                        Some(BooleanArray::new(zeroed_buf, None));
+                }
+
+                self.state = NLJState::ProbeRight;
+            }
+            Some(Err(e)) => return Err(e),
+            None => {
+                // Right side exhausted: probing for the current left chunk
+                // is finished. `ProbeEnd` reports probe completion before
+                // emitting unmatched-left rows.
+                self.state = NLJState::ProbeEnd;
+                ControlFlow::Continue(())
+            }
+        }
     }
 }
