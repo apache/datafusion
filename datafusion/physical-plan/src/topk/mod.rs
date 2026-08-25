@@ -961,15 +961,17 @@ impl TopKHeap {
             // a row evicts another row from the same in-flight batch
             // (entry not yet registered in the store).
             let evicted = if store_eviction {
-                let evicted_entry = if prev_min.batch_id == batch_entry.id {
-                    &batch_entry
+                let evicted_batch = if prev_min.batch_id == batch_entry.id {
+                    batch_entry.batch.clone()
                 } else {
                     self.store
                         .get(prev_min.batch_id)
                         .expect("evicted row's batch must be present in the store")
+                        .batch
+                        .clone()
                 };
                 Some(EvictedRow {
-                    batch: evicted_entry.batch.clone(),
+                    batch: evicted_batch,
                     index: prev_min.index,
                     row_bytes: prev_min.row.clone(),
                 })
