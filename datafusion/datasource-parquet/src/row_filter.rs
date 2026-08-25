@@ -161,11 +161,9 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 timer.stop();
                 Ok(bool_arr)
             })
-            // Convert rather than format the error: the decoder requires an
-            // `ArrowError`, and formatting collapses every failure into one
-            // untyped `ComputeError`. `From<DataFusionError> for ArrowError`
-            // leaves the original error in the source chain, so callers can
-            // still recover it (for example with `DataFusionError::find_root`).
+            // Convert rather than format: converting leaves the original error
+            // in the source chain, so callers can still recover it (for example
+            // with `DataFusionError::find_root`)
             .map_err(|e| e.context("Error evaluating filter predicate").into())
     }
 }
