@@ -200,3 +200,62 @@ SELECT * FROM test_delete_in;
 
 statement ok
 DROP TABLE test_delete_in;
+
+# Test DELETE with an IN or an EXISTS subquery in the WHERE clause
+# The optimizer rewrites the subquery into a semi join, so the condition cannot
+# reach the table provider as a filter. DataFusion rejects the statement instead
+# of deleting every row.
+statement ok
+CREATE TABLE test_delete_subquery AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE test_delete_subquery_src AS VALUES (2);
+
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE column1 IN (SELECT column1 FROM test_delete_subquery_src);
+
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE EXISTS (SELECT 1 FROM test_delete_subquery_src WHERE test_delete_subquery_src.column1 = test_delete_subquery.column1);
+
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE column1 NOT IN (SELECT column1 FROM test_delete_subquery_src);
+
+# Every row survives each rejected statement
+query I rowsort
+SELECT * FROM test_delete_subquery;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE test_delete_subquery_src;
+
+statement ok
+DROP TABLE test_delete_subquery;
+
+# Test DELETE with an always-false WHERE clause
+# The optimizer folds the predicate into an empty relation, so no filter reaches
+# the table provider. The statement affects no rows.
+statement ok
+CREATE TABLE test_delete_false AS VALUES (1), (2), (3);
+
+query I
+DELETE FROM test_delete_false WHERE false;
+----
+0
+
+query I
+DELETE FROM test_delete_false WHERE 1 = 2;
+----
+0
+
+query I rowsort
+SELECT * FROM test_delete_false;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE test_delete_false;

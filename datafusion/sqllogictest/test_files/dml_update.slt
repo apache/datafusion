@@ -284,3 +284,68 @@ SELECT * FROM test_update_div;
 
 statement ok
 DROP TABLE test_update_div;
+
+# Test UPDATE with an IN or an EXISTS subquery in the WHERE clause
+# The optimizer rewrites the subquery into a semi join, so the condition cannot
+# reach the table provider as a filter. DataFusion rejects the statement instead
+# of updating every row.
+statement ok
+CREATE TABLE test_update_subquery(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_update_subquery VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+CREATE TABLE test_update_subquery_src(id INT);
+
+statement ok
+INSERT INTO test_update_subquery_src VALUES (2);
+
+statement error DataFusion error: This feature is not implemented: UPDATE on table 'test_update_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+UPDATE test_update_subquery SET name = 'z' WHERE id IN (SELECT id FROM test_update_subquery_src);
+
+statement error DataFusion error: This feature is not implemented: UPDATE on table 'test_update_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+UPDATE test_update_subquery SET name = 'z' WHERE EXISTS (SELECT 1 FROM test_update_subquery_src WHERE test_update_subquery_src.id = test_update_subquery.id);
+
+# Every row keeps its value after each rejected statement
+query IT rowsort
+SELECT * FROM test_update_subquery;
+----
+1 a
+2 b
+3 c
+
+statement ok
+DROP TABLE test_update_subquery_src;
+
+statement ok
+DROP TABLE test_update_subquery;
+
+# Test UPDATE with an always-false WHERE clause
+# The optimizer folds the predicate into an empty relation, so no filter reaches
+# the table provider. The statement affects no rows.
+statement ok
+CREATE TABLE test_update_false(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_update_false VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+UPDATE test_update_false SET name = 'z' WHERE false;
+----
+0
+
+query I
+UPDATE test_update_false SET name = 'z' WHERE 1 = 2;
+----
+0
+
+query IT rowsort
+SELECT * FROM test_update_false;
+----
+1 a
+2 b
+3 c
+
+statement ok
+DROP TABLE test_update_false;
