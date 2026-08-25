@@ -20,13 +20,13 @@
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use super::materializing_stream::{
-    JoinLeftData, LeftSpillData, NestedLoopJoinMetrics, NestedLoopJoinStream, SpillState,
-    collect_left_input,
+use super::materializing_stream::NestedLoopJoinStream;
+use super::semi_anti_mark_stream::SemiAntiMarkNestedLoopJoinStream;
+use super::shared::{
+    JoinLeftData, LeftSpillData, NestedLoopJoinMetrics, SpillState, collect_left_input,
 };
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
-use crate::joins::nested_loop_join::semi_anti_mark_stream::SemiAntiMarkNestedLoopJoinStream;
 use crate::joins::utils::{
     ColumnIndex, JoinFilter, OnceAsync, build_join_schema, check_join_is_valid,
     estimate_join_statistics,
@@ -694,7 +694,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 | JoinType::LeftMark
                 | JoinType::RightMark
         ) {
-            Ok(Box::pin(SemiAntiMarkNestedLoopJoinStream::new(
+            SemiAntiMarkNestedLoopJoinStream::try_new(
                 self.schema(),
                 self.filter.clone(),
                 self.join_type,
@@ -704,7 +704,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 metrics,
                 batch_size,
                 spill_state,
-            )))
+            )
         } else {
             Ok(Box::pin(NestedLoopJoinStream::new(
                 self.schema(),

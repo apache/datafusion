@@ -20,8 +20,9 @@
 pub use exec::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 
 mod exec;
-pub(crate) mod materializing_stream;
-pub(crate) mod semi_anti_mark_stream;
+mod materializing_stream;
+mod semi_anti_mark_stream;
+mod shared;
 
 #[cfg(test)]
 mod tests;
