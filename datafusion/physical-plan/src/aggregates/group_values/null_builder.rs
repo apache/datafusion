@@ -19,7 +19,7 @@ use arrow::array::NullBufferBuilder;
 use arrow::buffer::NullBuffer;
 
 /// Helper methods for NullBufferBuilder that are used in Group By columns
-pub(crate) trait MaybeNullBufferBuilder {
+pub(crate) trait NullBufferBuilderExt {
     fn empty() -> Self;
 
     /// Return true if the row at index `row` is null
@@ -36,7 +36,7 @@ pub(crate) trait MaybeNullBufferBuilder {
     fn might_have_nulls(&self) -> bool;
 }
 
-impl MaybeNullBufferBuilder for NullBufferBuilder {
+impl NullBufferBuilderExt for NullBufferBuilder {
     fn empty() -> Self {
         Self::new(0)
     }
@@ -61,10 +61,6 @@ impl MaybeNullBufferBuilder for NullBufferBuilder {
         new_builder.finish()
     }
 
-    /// Returns true if this builder might have any nulls
-    ///
-    /// This is guaranteed to be true if there are nulls
-    /// but may be true even if there are no nulls
     fn might_have_nulls(&self) -> bool {
         self.as_slice().is_some()
     }

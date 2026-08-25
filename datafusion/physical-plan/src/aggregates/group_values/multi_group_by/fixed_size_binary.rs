@@ -18,7 +18,7 @@
 use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
-use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeBinaryArray,
     NullBufferBuilder,
