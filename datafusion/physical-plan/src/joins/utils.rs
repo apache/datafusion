@@ -1355,7 +1355,8 @@ pub(crate) fn build_batch_from_indices(
     // 2. based on the pick, `take` items from the different RecordBatches
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
 
-    for column_index in column_indices {
+    for (output_idx, column_index) in column_indices.iter().enumerate() {
+        let expected_type = schema.field(output_idx).data_type();
         let array = if column_index.side == JoinSide::None {
             // For mark joins, the mark column is a true if the indices is not null, otherwise it will be false
             Arc::new(compute::is_not_null(probe_indices)?)
@@ -1366,7 +1367,7 @@ pub(crate) fn build_batch_from_indices(
                 // Therefore, it's possible we are empty but need to populate an n-length null array,
                 // where n is the length of the index array.
                 assert_eq!(build_indices.null_count(), build_indices.len());
-                new_null_array(array.data_type(), build_indices.len())
+                new_null_array(expected_type, build_indices.len())
             } else {
                 take(array.as_ref(), build_indices, None)?
             }
@@ -1380,6 +1381,12 @@ pub(crate) fn build_batch_from_indices(
             }
         };
 
+        let array = if array.data_type() == expected_type {
+            array
+        } else {
+            compute::cast(&array, expected_type)?
+        };
+
         columns.push(array);
     }
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
@@ -1391,7 +1398,7 @@ pub(crate) fn build_batch_from_indices(
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_empty_build_side(
     schema: &Schema,
-    build_batch: &RecordBatch,
+    _build_batch: &RecordBatch,
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
     join_type: JoinType,
@@ -1409,20 +1416,30 @@ pub(crate) fn build_batch_empty_build_side(
 
     let columns = column_indices
         .iter()
-        .map(|column_index| match column_index.side {
-            // left -> null array
-            JoinSide::Left => new_null_array(
-                build_batch.column(column_index.index).data_type(),
-                num_rows,
-            ),
-            // right -> respective right array
-            JoinSide::Right => Arc::clone(probe_batch.column(column_index.index)),
-            // right mark -> unset boolean array as there are no matches on the left side
-            JoinSide::None => {
-                Arc::new(BooleanArray::new(BooleanBuffer::new_unset(num_rows), None))
-            }
+        .enumerate()
+        .map(|(output_idx, column_index)| -> Result<ArrayRef> {
+            Ok(match column_index.side {
+                // left -> null array
+                JoinSide::Left => {
+                    new_null_array(schema.field(output_idx).data_type(), num_rows)
+                }
+                // right -> respective right array
+                JoinSide::Right => {
+                    let array = probe_batch.column(column_index.index);
+                    let expected_type = schema.field(output_idx).data_type();
+                    if array.data_type() == expected_type {
+                        Arc::clone(array)
+                    } else {
+                        compute::cast(array, expected_type)?
+                    }
+                }
+                // right mark -> unset boolean array as there are no matches on the left side
+                JoinSide::None => {
+                    Arc::new(BooleanArray::new(BooleanBuffer::new_unset(num_rows), None))
+                }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
@@ -2551,6 +2568,7 @@ mod tests {
 
     use super::*;
 
+    use arrow::array::AsArray;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
@@ -2561,6 +2579,45 @@ mod tests {
 
     fn assert_u32_values(array: &UInt32Array, expected: &[u32]) {
         assert_eq!(array.values().as_ref(), expected);
+    }
+
+    #[test]
+    fn build_batch_from_indices_restores_declared_string_type() -> Result<()> {
+        let output_schema =
+            Schema::new(vec![Field::new("build_string", DataType::Utf8, false)]);
+        let internal_schema = Arc::new(Schema::new(vec![Field::new(
+            "build_string",
+            DataType::Utf8View,
+            false,
+        )]));
+        let build_batch = RecordBatch::try_new(
+            internal_schema,
+            vec![Arc::new(StringViewArray::from(vec!["a", "b"]))],
+        )?;
+        let probe_batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        let build_indices = UInt64Array::from(vec![1, 0]);
+        let probe_indices = UInt32Array::from(vec![0, 0]);
+        let column_indices = vec![ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        }];
+
+        let result = build_batch_from_indices(
+            &output_schema,
+            &build_batch,
+            &probe_batch,
+            &build_indices,
+            &probe_indices,
+            &column_indices,
+            JoinSide::Left,
+            JoinType::Inner,
+        )?;
+
+        assert_eq!(result.column(0).data_type(), &DataType::Utf8);
+        let values = result.column(0).as_string::<i32>();
+        assert_eq!(values.value(0), "b");
+        assert_eq!(values.value(1), "a");
+        Ok(())
     }
 
     #[test]

@@ -69,8 +69,8 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{ArrayRef, BooleanBufferBuilder};
-use arrow::compute::concat_batches;
+use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder};
+use arrow::compute::{cast, concat_batches};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -106,6 +106,111 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
     SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
+
+/// Largest payload addressable by the signed 32-bit offsets used by
+/// [`DataType::Utf8`] and [`DataType::Binary`].
+const MAX_32BIT_OFFSET: usize = i32::MAX as usize;
+
+/// Returns the number of value bytes from `array` that `concat` would append.
+///
+/// Sliced byte arrays can retain a larger backing buffer, so use their first
+/// and last logical offsets rather than the backing buffer's allocation size.
+fn byte_array_value_len(array: &dyn Array) -> Option<usize> {
+    fn offset_span(offsets: &[i32]) -> usize {
+        let first = offsets.first().copied().unwrap_or_default();
+        let last = offsets.last().copied().unwrap_or(first);
+        (last - first) as usize
+    }
+
+    match array.data_type() {
+        DataType::Utf8 => Some(offset_span(array.as_string::<i32>().value_offsets())),
+        DataType::Binary => Some(offset_span(array.as_binary::<i32>().value_offsets())),
+        _ => None,
+    }
+}
+
+/// Chooses the physical schema used for the consolidated hash-join build batch.
+///
+/// A regular `Utf8` / `Binary` array has one value buffer addressed by signed
+/// 32-bit offsets. Concatenating build batches whose combined value buffers
+/// exceed [`MAX_32BIT_OFFSET`] therefore fails even though every input batch is
+/// valid. View arrays retain the input value buffers and concatenate only their
+/// fixed-size views, preserving direct indexing without the single-buffer
+/// limit.
+fn build_storage_schema(
+    schema: &SchemaRef,
+    batches: &[&RecordBatch],
+    max_32bit_offset: usize,
+) -> SchemaRef {
+    let fields: Vec<_> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(column_idx, field)| {
+            let target_type = match field.data_type() {
+                DataType::Utf8 | DataType::Binary => {
+                    let exceeds_limit = batches
+                        .iter()
+                        .filter_map(|batch| {
+                            byte_array_value_len(batch.column(column_idx))
+                        })
+                        .try_fold(0usize, |total, len| total.checked_add(len))
+                        .is_none_or(|total| total > max_32bit_offset);
+
+                    if exceeds_limit {
+                        match field.data_type() {
+                            DataType::Utf8 => DataType::Utf8View,
+                            DataType::Binary => DataType::BinaryView,
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        field.data_type().clone()
+                    }
+                }
+                _ => field.data_type().clone(),
+            };
+            Arc::new(field.as_ref().clone().with_data_type(target_type))
+        })
+        .collect();
+
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Consolidates build batches, converting only overflowing 32-bit byte arrays
+/// to their view equivalents.
+fn concat_build_batches<'a>(
+    schema: &SchemaRef,
+    batches: impl IntoIterator<Item = &'a RecordBatch>,
+    max_32bit_offset: usize,
+) -> Result<RecordBatch> {
+    let batches = batches.into_iter().collect::<Vec<_>>();
+    let storage_schema = build_storage_schema(schema, &batches, max_32bit_offset);
+
+    if storage_schema == *schema {
+        return Ok(concat_batches(schema, batches)?);
+    }
+
+    let converted = batches
+        .into_iter()
+        .map(|batch| {
+            let columns = batch
+                .columns()
+                .iter()
+                .zip(storage_schema.fields())
+                .map(|(array, field)| {
+                    if array.data_type() == field.data_type() {
+                        Ok(Arc::clone(array))
+                    } else {
+                        Ok(cast(array, field.data_type())?)
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(RecordBatch::try_new(Arc::clone(&storage_schema), columns)?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(concat_batches(&storage_schema, &converted)?)
+}
 
 #[expect(clippy::too_many_arguments)]
 fn try_create_array_map(
@@ -182,7 +287,7 @@ fn try_create_array_map(
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
     reservation.try_grow(mem_size)?;
 
-    let batch = concat_batches(schema, batches)?;
+    let batch = concat_build_batches(schema, batches, MAX_32BIT_OFFSET)?;
     let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
 
     let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
@@ -2733,7 +2838,8 @@ async fn collect_left_input(
             }
 
             // Merge all batches into a single batch, so we can directly index into the arrays
-            let batch = concat_batches(&schema, batches_iter.clone())?;
+            let batch =
+                concat_build_batches(&schema, batches_iter.clone(), MAX_32BIT_OFFSET)?;
 
             let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
@@ -2858,8 +2964,8 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, Date32Array, DictionaryArray, Int32Array, Int64Array,
-        StructArray, UInt32Array, UInt64Array,
+        Array, ArrayRef, BinaryArray, Date32Array, DictionaryArray, Int32Array,
+        Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
@@ -2881,6 +2987,87 @@ mod tests {
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    fn concat_build_batches_uses_views_only_for_overflowing_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("string", DataType::Utf8, false),
+            Field::new("binary", DataType::Binary, false),
+        ]));
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["abc"])) as ArrayRef,
+                Arc::new(BinaryArray::from_iter_values([b"a".as_ref()])) as ArrayRef,
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["def"])) as ArrayRef,
+                Arc::new(BinaryArray::from_iter_values([b"b".as_ref()])) as ArrayRef,
+            ],
+        )?;
+
+        let result = concat_build_batches(&schema, [&batch1, &batch2], 5)?;
+
+        assert_eq!(result.column(0).data_type(), &DataType::Utf8View);
+        assert_eq!(result.column(1).data_type(), &DataType::Binary);
+        assert_eq!(result.num_rows(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_batches_keeps_32_bit_offsets_at_the_limit() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "string",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["abc"]))],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["def"]))],
+        )?;
+
+        let result = concat_build_batches(&schema, [&batch1, &batch2], 6)?;
+
+        assert_eq!(result.column(0).data_type(), &DataType::Utf8);
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_batches_uses_binary_views_for_overflowing_binary() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "binary",
+            DataType::Binary,
+            false,
+        )]));
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(BinaryArray::from_iter_values([b"abc".as_ref()]))],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(BinaryArray::from_iter_values([b"def".as_ref()]))],
+        )?;
+
+        let result = concat_build_batches(&schema, [&batch1, &batch2], 5)?;
+
+        assert_eq!(result.column(0).data_type(), &DataType::BinaryView);
+        Ok(())
+    }
+
+    #[test]
+    fn byte_array_value_len_uses_logical_slice_offsets() {
+        let array = StringArray::from(vec!["discarded backing value", "x"]);
+        let sliced = array.slice(1, 1);
+
+        assert_eq!(byte_array_value_len(&sliced), Some(1));
+    }
 
     #[derive(Debug)]
     struct PartitionedTestExec {
@@ -5534,6 +5721,42 @@ mod tests {
         assert_eq!(left_ids, l);
         assert_eq!(right_ids, r);
 
+        Ok(())
+    }
+
+    #[test]
+    fn lookup_join_hashmap_compares_view_build_keys_with_utf8_probe_keys() -> Result<()> {
+        let build_keys: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let probe_keys: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let build_view_keys = cast(&build_keys, &DataType::Utf8View)?;
+        let random_state = RandomState::with_seed(0);
+        let mut build_hashes = vec![0; build_keys.len()];
+        create_hashes([&build_keys], &random_state, &mut build_hashes)?;
+
+        let mut table = HashTable::with_capacity(2);
+        table.insert_unique(build_hashes[0], (build_hashes[0], 1u32), |(hash, _)| *hash);
+        table.insert_unique(build_hashes[1], (build_hashes[1], 2u32), |(hash, _)| *hash);
+        let join_hash_map = JoinHashMapU32::new(table, vec![0, 0]);
+
+        let mut probe_hashes = vec![0; probe_keys.len()];
+        create_hashes([&probe_keys], &random_state, &mut probe_hashes)?;
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
+        let (build_indices, probe_indices, _) = lookup_join_hashmap(
+            &join_hash_map,
+            &[build_view_keys],
+            &[probe_keys],
+            NullEquality::NullEqualsNothing,
+            &probe_hashes,
+            None,
+            8192,
+            (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
+        )?;
+
+        assert_eq!(build_indices, UInt64Array::from(vec![0, 1]));
+        assert_eq!(probe_indices, UInt32Array::from(vec![0, 1]));
         Ok(())
     }
 
