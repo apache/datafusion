@@ -192,6 +192,7 @@ fn benchmark_window_case(
     filter_percents: &[usize],
 ) {
     let mut group = c.benchmark_group(format!("window_aggregate_filter/{name}"));
+    group.sample_size(10);
 
     for &filter_percent in filter_percents {
         for &argument_kind in argument_kinds {
@@ -225,12 +226,8 @@ fn window_filter_benchmark(c: &mut Criterion) {
         &runtime,
         "bounded_cumulative",
         &cumulative_frame(),
-        &[
-            ArgumentKind::Column,
-            ArgumentKind::Divide,
-            ArgumentKind::Power,
-        ],
-        &[10, 30, 50],
+        &[ArgumentKind::Column, ArgumentKind::Power],
+        &[30],
     );
     benchmark_window_case(
         c,
@@ -245,8 +242,12 @@ fn window_filter_benchmark(c: &mut Criterion) {
         &runtime,
         "window_whole_partition",
         &whole_partition_frame(),
-        &[ArgumentKind::Column, ArgumentKind::Power],
-        &[30],
+        &[
+            ArgumentKind::Column,
+            ArgumentKind::Divide,
+            ArgumentKind::Power,
+        ],
+        &[10, 30, 50],
     );
 }
 
