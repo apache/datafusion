@@ -200,3 +200,53 @@ SELECT * FROM test_delete_in;
 
 statement ok
 DROP TABLE test_delete_in;
+
+# Test that EXPLAIN DELETE does not change the rows
+# The rows change when the plan runs, and EXPLAIN prints the plan without
+# running it.
+statement ok
+CREATE TABLE test_explain_delete AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query TT
+EXPLAIN DELETE FROM test_explain_delete WHERE column1 > 1;
+----
+logical_plan
+01)Dml: op=[Delete] table=[test_explain_delete]
+02)--Filter: test_explain_delete.column1 > Int64(1)
+03)----TableScan: test_explain_delete projection=[column1, column2]
+physical_plan
+01)CooperativeExec
+02)--MemDmlExec: op=Delete
+
+query TT
+EXPLAIN DELETE FROM test_explain_delete;
+----
+logical_plan
+01)Dml: op=[Delete] table=[test_explain_delete]
+02)--TableScan: test_explain_delete projection=[column1, column2]
+physical_plan
+01)CooperativeExec
+02)--MemDmlExec: op=Delete
+
+query IT rowsort
+SELECT * FROM test_explain_delete;
+----
+1 a
+2 b
+3 c
+
+# EXPLAIN ANALYZE runs the plan, so the rows do go
+query TT
+EXPLAIN ANALYZE DELETE FROM test_explain_delete WHERE column1 > 1;
+----
+Plan with Metrics
+01)CooperativeExec, metrics=[]
+02)--MemDmlExec: op=Delete, metrics=[]
+
+query IT rowsort
+SELECT * FROM test_explain_delete;
+----
+1 a
+
+statement ok
+DROP TABLE test_explain_delete;
