@@ -868,11 +868,16 @@ impl TopKData {
         match self {
             TopKData::Sorted(sorted) => sorted,
             TopKData::Raw(raw) => {
+                // TODO: sort_unstable is a lot faster, but changes order slightly...
+                //       when TopKRow Ord takes batch_id and index into account,
+                //       we get the same result for both
+                //let mut vec = raw.into_vec();
+                //vec.sort_unstable();
+                //vec
+
                 // BinaryHeap::into_sorted_vec is slow,
                 // see https://github.com/rust-lang/rust/issues/115357
-                let mut vec = raw.into_vec();
-                vec.sort_unstable();
-                vec
+                raw.into_sorted_vec()
             }
         }
     }
@@ -1107,7 +1112,7 @@ impl TopKHeap {
 /// also be primitive values)
 ///
 /// Reuses allocations to minimize runtime overhead of creating new Vecs
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct TopKRow {
     /// the value of the sort key for this row. This contains the
     /// bytes that could be stored in `OwnedRow` but uses `Vec<u8>` to
