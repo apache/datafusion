@@ -166,9 +166,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 timer.stop();
                 Ok(bool_arr)
             })
+            // `ExternalError` is the only `ArrowError` variant that keeps a
+            // source, and therefore the only one that leaves the original error
+            // recoverable (see `DataFusionError::find_root`)
             .map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Error evaluating filter predicate: {e:?}"
+                ArrowError::ExternalError(Box::new(
+                    e.context("Error evaluating filter predicate"),
                 ))
             })
     }
@@ -545,13 +548,13 @@ pub(crate) fn row_filter_from_prebuilt(
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Fields};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DataFusionError, ScalarValue};
 
     use arrow::array::{
         Int32Array, ListBuilder, StringArray, StringBuilder, StructArray,
     };
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_expr::{Expr, col};
+    use datafusion_expr::{Cast, Expr, col, lit};
     use datafusion_functions::core::get_field;
     use datafusion_functions_nested::array_has::{
         array_has_all_udf, array_has_any_udf, array_has_udf,
@@ -690,6 +693,82 @@ mod test {
 
         let filtered = row_filter.evaluate(first_rb);
         assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![true; 8])));
+    }
+
+    /// A predicate that fails while it is being evaluated must report the
+    /// original error, not an opaque string, so that callers can still tell a
+    /// user error apart from an internal one.
+    #[test]
+    fn evaluate_reports_the_original_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["not_an_int"]))],
+        )
+        .expect("record batch");
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().expect("reopen file"))
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // Casting the column in the file to `Int32` fails on this data
+        let expr = Expr::Cast(Cast::new(Box::new(col("s")), DataType::Int32)).eq(lit(1));
+        let expr = logical2physical(&expr, &file_schema);
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
+
+        let mut predicate = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let mut parquet_reader = parquet_reader_builder
+            .with_projection(predicate.projection().clone())
+            .build()
+            .expect("building reader");
+        let first_rb = parquet_reader
+            .next()
+            .expect("expected record batch")
+            .expect("expected error free record batch");
+
+        let err = predicate
+            .evaluate(first_rb)
+            .expect_err("evaluating the predicate should fail");
+
+        // The cast failure is still reachable, rather than being flattened into
+        // an untyped `ArrowError::ComputeError`
+        let err = DataFusionError::from(err);
+        let root = err.find_root();
+        assert!(
+            matches!(
+                root,
+                DataFusionError::ArrowError(inner, _)
+                    if matches!(inner.as_ref(), ArrowError::CastError(_))
+            ),
+            "expected the original cast error, got {root:?}"
+        );
+
+        // and the message still says where the failure happened
+        let message = err.to_string();
+        assert!(
+            message.contains("Error evaluating filter predicate"),
+            "{message}"
+        );
+        assert!(message.contains("Cannot cast string"), "{message}");
     }
 
     #[test]
