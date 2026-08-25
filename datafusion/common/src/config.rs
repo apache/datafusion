@@ -1573,7 +1573,7 @@ config_namespace! {
 
         /// When set to true, the optimizer will replace
         /// Filter(rank<=K) → Window(ROW_NUMBER/RANK/DENSE_RANK) patterns over
-        /// *unordered* input with a PartitionedTopKExec that maintains
+        /// unordered input with a PartitionedTopKExec that maintains
         /// per-partition heaps, avoiding a full sort of the input.
         /// When the window partition key has low cardinality, enabling this optimization
         /// can improve performance. However, for high cardinality keys, it may
