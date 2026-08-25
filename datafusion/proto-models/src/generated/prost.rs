@@ -2119,6 +2119,12 @@ pub struct AnalyzeExecNode {
     pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "7")]
     pub format: i32,
+    /// Whether metric_types is present. False means use SUMMARY and DEV.
+    #[prost(bool, tag = "8")]
+    pub has_metric_types: bool,
+    /// Types of metrics to display.
+    #[prost(enumeration = "super::datafusion_common::MetricType", repeated, tag = "9")]
+    pub metric_types: ::prost::alloc::vec::Vec<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {
