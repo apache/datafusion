@@ -243,12 +243,17 @@ impl FilterCandidateBuilder {
 ///
 /// Returns `None` if the expression cannot be pushed down (e.g., references
 /// unsupported nested types or columns not in the file).
+/// Struct casts are accepted only after schema adaptation, not while planning
+/// against the table schema: adaptation may insert another cast underneath an
+/// explicit cast, leaving an expression the runtime checker cannot handle.
 fn pushdown_columns(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
+    allow_struct_casts: bool,
 ) -> Result<Option<PushdownColumns>> {
     let allow_list_columns = supports_list_predicates(expr);
-    let mut checker = PushdownChecker::new(file_schema, allow_list_columns);
+    let mut checker =
+        PushdownChecker::new(file_schema, allow_list_columns, allow_struct_casts);
     expr.visit(&mut checker)?;
     Ok((!checker.prevents_pushdown()).then(|| checker.into_sorted_columns()))
 }
@@ -272,7 +277,7 @@ pub(crate) fn build_parquet_read_plan(
 ) -> Result<Option<(ParquetReadPlan, usize)>> {
     let schema_descr = metadata.file_metadata().schema_descr();
 
-    let Some(required_columns) = pushdown_columns(expr, file_schema)? else {
+    let Some(required_columns) = pushdown_columns(expr, file_schema, true)? else {
         return Ok(None);
     };
 
@@ -358,7 +363,7 @@ pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
 ) -> bool {
-    match pushdown_columns(expr, file_schema) {
+    match pushdown_columns(expr, file_schema, false) {
         Ok(Some(_)) => true,
         Ok(None) | Err(_) => false,
     }
@@ -1281,10 +1286,11 @@ mod test {
         let expr = get_field_expr.gt(Expr::Literal(ScalarValue::Int32(Some(5)), None));
         let expr = logical2physical(&expr, &file_schema);
 
-        let candidate = FilterCandidateBuilder::new(expr, file_schema)
-            .build(&metadata)
-            .expect("building candidate")
-            .expect("get_field filter on struct should be pushable");
+        let candidate =
+            FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building candidate")
+                .expect("get_field filter on struct should be pushable");
 
         // The filter accesses only s.value, so only Parquet leaf 1 is needed.
         // Leaf 2 (s.label) is not read, reducing unnecessary I/O.
@@ -1294,6 +1300,68 @@ mod test {
             candidate.read_plan.projection_mask, expected_mask,
             "projection_mask should select only the accessed struct field leaf"
         );
+
+        // Schema adaptation can leave a Struct cast intact. Its runtime filter
+        // must read every sibling, while planning still rejects explicit casts.
+        let cast_type = DataType::Struct(
+            vec![
+                Field::new("value", DataType::Int32, false),
+                Field::new("label", DataType::Int32, true),
+            ]
+            .into(),
+        );
+        let cast_field = get_field().call(vec![
+            datafusion_expr::cast(col("s"), cast_type),
+            lit("value"),
+        ]);
+        let projection = logical2physical(&cast_field, &file_schema);
+        let cast_predicate = logical2physical(&cast_field.gt(lit(5)), &file_schema);
+        assert!(!can_expr_be_pushed_down_with_schemas(
+            &cast_predicate,
+            &file_schema
+        ));
+        let candidate =
+            FilterCandidateBuilder::new(cast_predicate, Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building cast candidate")
+                .expect("an adapted struct cast must remain evaluable");
+        let expected_mask =
+            ProjectionMask::roots(metadata.file_metadata().schema_descr(), [1]);
+        assert_eq!(candidate.read_plan.projection_mask, expected_mask);
+        assert_eq!(
+            candidate.read_plan.projected_schema.as_ref(),
+            &file_schema.project(&[1]).unwrap()
+        );
+
+        // A simultaneous direct access must not prune siblings that the cast
+        // needs in the output projection either.
+        let projection_plan = crate::projection_read_plan::build_projection_read_plan(
+            [expr, projection],
+            &file_schema,
+            metadata.file_metadata().schema_descr(),
+        );
+        assert_eq!(projection_plan.projection_mask, expected_mask);
+        assert_eq!(
+            projection_plan.projected_schema,
+            candidate.read_plan.projected_schema
+        );
+
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .unwrap();
+        let batch = builder
+            .with_projection(row_filter.projection().clone())
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let error = row_filter.evaluate(batch).unwrap_err().to_string();
+        datafusion_common::assert_contains!(error, "While casting struct field 'label'");
     }
 
     /// Deeply nested get_field: get_field(struct_col, 'outer', 'inner') where the

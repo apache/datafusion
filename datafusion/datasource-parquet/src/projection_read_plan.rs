@@ -184,6 +184,9 @@ pub(crate) struct PushdownChecker<'schema> {
     cast_accesses: Vec<CastColumnAccess>,
     /// Whether to collect [`Self::cast_accesses`].
     collect_cast_accesses: bool,
+    /// Allow field access through a retained Struct cast after schema adaptation.
+    /// Planning keeps this disabled so explicit casts retain a residual filter.
+    allow_struct_casts: bool,
     /// Whether nested list columns are supported by the predicate semantics.
     allow_list_columns: bool,
     /// The Arrow schema of the parquet file.
@@ -191,7 +194,11 @@ pub(crate) struct PushdownChecker<'schema> {
 }
 
 impl<'schema> PushdownChecker<'schema> {
-    pub(crate) fn new(file_schema: &'schema Schema, allow_list_columns: bool) -> Self {
+    pub(crate) fn new(
+        file_schema: &'schema Schema,
+        allow_list_columns: bool,
+        allow_struct_casts: bool,
+    ) -> Self {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
@@ -200,6 +207,7 @@ impl<'schema> PushdownChecker<'schema> {
             struct_field_accesses: Vec::new(),
             cast_accesses: Vec::new(),
             collect_cast_accesses: false,
+            allow_struct_casts,
             allow_list_columns,
             file_schema,
         }
@@ -246,6 +254,56 @@ impl<'schema> PushdownChecker<'schema> {
         });
 
         None
+    }
+
+    /// Preserve a Struct cast retained by schema adaptation and read its full
+    /// root. Pruning siblings or moving the cast could change errors or nulls.
+    fn check_cast_struct_field_access(
+        &mut self,
+        func: &ScalarFunctionExpr,
+    ) -> Option<TreeNodeRecursion> {
+        if !self.allow_struct_casts {
+            return None;
+        }
+        let (source, field_names) = func.args().split_first()?;
+        if field_names.is_empty() {
+            return None;
+        }
+        let cast = source.downcast_ref::<CastExpr>()?;
+        let column = cast.expr().downcast_ref::<Column>()?;
+        let index = self.file_schema.index_of(column.name()).ok()?;
+        if !matches!(
+            self.file_schema.field(index).data_type(),
+            DataType::Struct(_)
+        ) {
+            return None;
+        }
+        let return_type = func.return_type();
+        if DataType::is_nested(return_type) && !self.is_nested_type_supported(return_type)
+        {
+            return None;
+        }
+
+        // Every key must resolve through Struct fields in the cast target.
+        // In particular, a key following a Map field is a runtime lookup.
+        let mut data_type = cast.cast_type();
+        for field_name in field_names {
+            let name = field_name
+                .downcast_ref::<Literal>()?
+                .value()
+                .try_as_str()
+                .flatten()?;
+            let DataType::Struct(fields) = data_type else {
+                return None;
+            };
+            data_type = fields
+                .iter()
+                .find(|field| field.name() == name)?
+                .data_type();
+        }
+
+        self.required_columns.push(index);
+        Some(TreeNodeRecursion::Jump)
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
@@ -344,6 +402,9 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
         if let Some(func) =
             ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(node.as_ref())
         {
+            if let Some(recursion) = self.check_cast_struct_field_access(func) {
+                return Ok(recursion);
+            }
             let args = func.args();
 
             if let Some(column) = args.first().and_then(|a| a.downcast_ref::<Column>()) {
@@ -524,7 +585,8 @@ pub(crate) fn build_projection_read_plan(
     let mut all_cast_accesses = Vec::new();
 
     for expr in exprs {
-        let mut checker = PushdownChecker::new(file_schema, true).with_cast_collection();
+        let mut checker =
+            PushdownChecker::new(file_schema, true, false).with_cast_collection();
         let _ = expr.visit(&mut checker);
         let columns = checker.into_sorted_columns();
 

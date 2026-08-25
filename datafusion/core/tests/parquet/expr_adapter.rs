@@ -791,6 +791,124 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
 }
 
 #[tokio::test]
+async fn test_explicit_struct_cast_projection_preserves_sibling_errors() -> Result<()> {
+    let physical_fields: Fields = vec![
+        Field::new("x", DataType::Int32, true),
+        Field::new("y", DataType::Utf8, true),
+    ]
+    .into();
+    let batch = RecordBatch::try_from_iter(vec![(
+        "s",
+        Arc::new(StructArray::new(
+            physical_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["bad"])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef,
+    )])?;
+    let table_schema = Arc::new(Schema::new(vec![Field::new(
+        "s",
+        DataType::Struct(
+            vec![
+                Field::new("x", DataType::Int64, true),
+                Field::new("y", DataType::Utf8, true),
+            ]
+            .into(),
+        ),
+        true,
+    )]));
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    write_parquet(batch, Arc::clone(&store), "explicit_cast/data.parquet").await;
+    let ctx = test_context();
+    register_memory_listing_table(&ctx, store, "memory:///explicit_cast/", table_schema)
+        .await;
+
+    // The file requires schema adaptation for x. The explicit SQL cast also
+    // converts y, and selecting x must not hide that invalid conversion.
+    let error = ctx
+        .sql("SELECT get_field(CAST(s AS STRUCT<x BIGINT, y INT>), 'x') FROM t")
+        .await?
+        .collect()
+        .await
+        .unwrap_err()
+        .to_string();
+    datafusion_common::assert_contains!(error, "While casting struct field 'y'");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_all_null_struct_decimal_cast_filter_pushdown() -> Result<()> {
+    use datafusion_physical_plan::{collect, displayable};
+
+    let physical_fields: Fields = vec![Field::new("x", DataType::Utf8, true)].into();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("row_id", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+        (
+            "s",
+            Arc::new(StructArray::new(
+                physical_fields,
+                vec![Arc::new(StringArray::from(vec![None::<&str>, None]))],
+                Some(NullBuffer::new_null(2)),
+            )) as ArrayRef,
+        ),
+    ])?;
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("row_id", DataType::Int32, false),
+        Field::new(
+            "s",
+            DataType::Struct(
+                vec![Field::new("x", DataType::Decimal128(10, -1), true)].into(),
+            ),
+            true,
+        ),
+    ]));
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    write_parquet(batch, Arc::clone(&store), "null_decimal/data.parquet").await;
+
+    for pushdown_filters in [false, true] {
+        let mut config = SessionConfig::new()
+            .with_collect_statistics(false)
+            .with_parquet_pruning(false)
+            .with_parquet_page_index_pruning(false);
+        config.options_mut().execution.parquet.pushdown_filters = pushdown_filters;
+        let ctx = SessionContext::new_with_config(config);
+        register_memory_listing_table(
+            &ctx,
+            Arc::clone(&store),
+            "memory:///null_decimal/",
+            Arc::clone(&table_schema),
+        )
+        .await;
+
+        for (predicate, expected_rows) in [("IS NULL", 2), ("IS NOT NULL", 0)] {
+            let plan = ctx
+                .sql(&format!(
+                    "SELECT row_id FROM t WHERE get_field(s, 'x') {predicate}"
+                ))
+                .await?
+                .create_physical_plan()
+                .await?;
+            if pushdown_filters {
+                let plan_text = displayable(plan.as_ref()).indent(false).to_string();
+                assert!(
+                    !plan_text.contains("FilterExec"),
+                    "the scan must fully handle the filter: {plan_text}"
+                );
+            }
+            let batches = collect(plan, ctx.task_ctx()).await?;
+            assert_eq!(
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                expected_rows,
+                "pushdown_filters={pushdown_filters}, predicate={predicate}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
     use std::collections::HashMap;
 
