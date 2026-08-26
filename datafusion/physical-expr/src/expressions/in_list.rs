@@ -263,15 +263,20 @@ impl InListExpr {
             protobuf::physical_expr_node::ExprType::InList,
             "InList",
         );
+        let protobuf::PhysicalInListNode {
+            expr,
+            list,
+            negated,
+        } = &**node;
 
         let expr =
-            ctx.decode_required_expression(node.expr.as_deref(), "InListExpr", "expr")?;
-        let list = ctx.decode_children_expressions(&node.list)?;
+            ctx.decode_required_expression(expr.as_deref(), "InListExpr", "expr")?;
+        let list = ctx.decode_children_expressions(list)?;
 
         Ok(Arc::new(InListExpr::try_new(
             expr,
             list,
-            node.negated,
+            *negated,
             ctx.schema(),
         )?))
     }
@@ -479,13 +484,21 @@ impl PhysicalExpr for InListExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            expr,
+            list,
+            negated,
+            // Lookup set rebuilt from `list` by `try_new` on decode.
+            static_filter: _,
+        } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
                 protobuf::PhysicalInListNode {
-                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
-                    list: ctx.encode_children_expressions(&self.list)?,
-                    negated: self.negated,
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
+                    list: ctx.encode_children_expressions(list)?,
+                    negated: *negated,
                 },
             ))),
         }))
