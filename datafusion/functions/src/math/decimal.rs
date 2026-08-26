@@ -82,7 +82,7 @@ where
     })
 }
 
-/// Compute the return precision for floor/ceil result to accomodate the result
+/// Compute the return precision for floor/ceil result to accommodate the result
 pub(super) fn decimal_floor_ceil_precision(
     precision: u8,
     scale: i8,
