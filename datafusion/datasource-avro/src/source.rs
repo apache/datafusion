@@ -189,6 +189,17 @@ impl FileSource for AvroSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        let Self {
+            // Serialized in `base` and used to rebuild the source on decode.
+            table_schema: _,
+            // Set from `FileScanConfig` when the scan is opened.
+            batch_size: _,
+            // Serialized in `base` and reapplied on decode.
+            projection: _,
+            // Runtime metrics, not part of the plan.
+            metrics: _,
+        } = self;
+
         let node = protobuf::AvroScanExecNode {
             base_conf: Some(base.try_to_proto(ctx)?),
         };
@@ -216,7 +227,9 @@ impl AvroSource {
             );
         };
 
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+        let protobuf::AvroScanExecNode { base_conf } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "AvroScanExecNode is missing required field 'base_conf'"
             )
