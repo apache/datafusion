@@ -1660,8 +1660,6 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                             final_result: false,
                         } => self.prepare_for_final_results_after_exhaustion(),
                         SHJStreamState::BothExhausted { final_result: true } => {
-                            self.reservation.free();
-                            self.metrics.stream_memory_usage.set(0);
                             return Poll::Ready(None);
                         }
                     };
@@ -2211,15 +2209,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn symmetric_hash_join_releases_reservation_when_complete() {
+    async fn symmetric_hash_join_retains_reservation_until_dropped() -> Result<()> {
+        let pool = Arc::new(RecordingMemoryPool::default());
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+            .build_arc()?;
+        let context = TaskContext::default().with_runtime(runtime);
         let schema = Arc::new(Schema::empty());
-        let mut stream = create_stream(NoopBatchTransformer::new(), schema);
-        stream.update_reservation().unwrap();
-        assert_ne!(stream.reservation.size(), 0);
+        let mut stream =
+            create_stream_with_context(NoopBatchTransformer::new(), schema, &context);
+        stream.update_reservation()?;
+        let reserved_size = stream.reservation.size();
+        assert_ne!(reserved_size, 0);
 
         stream.set_state(SHJStreamState::BothExhausted { final_result: true });
         assert!(stream.next().await.is_none());
-        assert_eq!(stream.reservation.size(), 0);
+        assert_eq!(stream.reservation.size(), reserved_size);
+        assert_eq!(stream.metrics.stream_memory_usage.value(), reserved_size);
+
+        drop(stream);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
     }
 
     fn assert_stream_deduplicates_nested_transformer_batch<T: BatchTransformer>(
