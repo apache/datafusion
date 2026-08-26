@@ -108,6 +108,7 @@ mod file_scan_config_serde {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
     use datafusion_datasource::file::FileSource;
+    use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource::file_scan_config::{
         FileScanConfig, FileScanConfigBuilder,
@@ -259,6 +260,7 @@ mod file_scan_config_serde {
             .with_statistics(table_statistics)
             .with_limit(Some(17))
             .with_batch_size(Some(256))
+            .with_file_compression_type(FileCompressionType::GZIP)
             .with_output_ordering(vec![ordering])
             .with_output_partitioning(output_partitioning)
             .build()
@@ -367,7 +369,24 @@ mod file_scan_config_serde {
         assert_eq!(decoded.file_groups[1].len(), 1);
         assert!(decoded.file_groups[0].files()[0].arrow_schema.is_some());
         assert!(decoded.file_groups[0].files()[1].arrow_schema.is_none());
+        assert_eq!(decoded.file_compression_type, FileCompressionType::GZIP);
 
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_decode_without_compression_uses_legacy_default() -> Result<()>
+    {
+        let serde = FileScanSerdeHarness::new();
+        let mut encoded = serde.encode(&test_config(None))?;
+        assert!(encoded.file_compression_type.is_some());
+
+        encoded.file_compression_type = None;
+        let decoded = serde.decode(&encoded)?;
+        assert_eq!(
+            decoded.file_compression_type,
+            FileCompressionType::UNCOMPRESSED
+        );
         Ok(())
     }
 
@@ -448,6 +467,16 @@ mod file_scan_config_serde {
         assert!(
             err.to_string()
                 .contains("ProjectionExpr missing expr field"),
+            "unexpected error: {err}"
+        );
+
+        let mut unknown_compression = valid;
+        unknown_compression.file_compression_type = Some(i32::MAX);
+        let err = serde
+            .decode(&unknown_compression)
+            .expect_err("unknown compression type must fail");
+        assert!(
+            err.to_string().contains("Unknown file compression type"),
             "unexpected error: {err}"
         );
 

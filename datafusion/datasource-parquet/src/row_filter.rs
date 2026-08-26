@@ -120,7 +120,12 @@ pub(crate) struct DatafusionArrowPredicate {
 }
 
 impl DatafusionArrowPredicate {
-    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
+    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`.
+    ///
+    /// Production code goes through [`prebuild_row_filter_candidates`] +
+    /// [`row_filter_from_prebuilt`]; this constructor remains as a test
+    /// convenience for exercising a single candidate.
+    #[cfg(test)]
     pub fn try_new(
         candidate: FilterCandidate,
         rows_pruned: metrics::Count,
@@ -161,9 +166,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 timer.stop();
                 Ok(bool_arr)
             })
+            // `ExternalError` is the only `ArrowError` variant that keeps a
+            // source, and therefore the only one that leaves the original error
+            // recoverable (see `DataFusionError::find_root`)
             .map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Error evaluating filter predicate: {e:?}"
+                ArrowError::ExternalError(Box::new(
+                    e.context("Error evaluating filter predicate"),
                 ))
             })
     }
@@ -401,16 +409,65 @@ pub fn build_row_filter(
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
-    let rows_pruned = &file_metrics.pushdown_rows_pruned;
-    let rows_matched = &file_metrics.pushdown_rows_matched;
-    let time = &file_metrics.row_pushdown_eval_time;
+    // Implemented on top of the prebuild split so there is a single place
+    // that splits conjuncts, orders candidates, and wires metrics — callers
+    // that build once per file go through the same code as the per-row-group
+    // rebuild path in `RowFilterContext`.
+    let Some(prebuilt) = prebuild_row_filter_candidates(expr, file_schema, metadata)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(row_filter_from_prebuilt(
+        &prebuilt,
+        reorder_predicates,
+        file_metrics,
+    )))
+}
 
+/// A precomputed [`FilterCandidate`] with its expression column-reassigned to
+/// the projected schema, ready to be wrapped into a [`DatafusionArrowPredicate`]
+/// on demand.
+///
+/// Extracting this from [`build_row_filter`] lets callers pay the tree-walk +
+/// column-resolution + `reassign_expr_columns` cost **once per file** instead
+/// of once per row group, which is the hot path for
+/// [`RowFilterContext::build_row_filter`](crate::push_decoder::RowFilterContext) rebuilds
+/// on `fully_matched → not-fully-matched` boundaries.
+#[derive(Clone, Debug)]
+pub(crate) struct PrebuiltRowFilterCandidate {
+    /// The predicate expression with all `Column` indices rewritten to point
+    /// into the projected file schema.
+    physical_expr: Arc<dyn PhysicalExpr>,
+    /// Projection mask over the parquet leaf columns needed to evaluate this
+    /// predicate.
+    projection_mask: ProjectionMask,
+    /// Precomputed sum-of-compressed-bytes for the referenced columns across
+    /// all row groups in the file. Used to sort predicates when
+    /// `reorder_predicates` is enabled. Stable across row groups within a
+    /// file, so we cache it once.
+    required_bytes: usize,
+}
+
+/// Precompute the list of [`PrebuiltRowFilterCandidate`]s for a predicate.
+///
+/// This is the expensive part of [`build_row_filter`]: split into conjuncts,
+/// resolve columns for each conjunct against the file schema, reassign
+/// `Column` indices, and compute the sort-order metadata. Doing it once per
+/// file (and reusing across row groups) avoids repeated `TreeNode::transform`
+/// walks and `Arc<PhysicalExpr>` allocations that showed up as top hot spots
+/// in TPCH profiles.
+///
+/// Returns `Ok(None)` when the predicate has no push-downable conjuncts, in
+/// which case callers should skip installing a `RowFilter` entirely.
+pub(crate) fn prebuild_row_filter_candidates(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    metadata: &ParquetMetaData,
+) -> Result<Option<Vec<PrebuiltRowFilterCandidate>>> {
     // Split into conjuncts:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
-
-    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
-    let mut candidates: Vec<FilterCandidate> = predicates
+    let candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
             FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
@@ -421,119 +478,83 @@ pub fn build_row_filter(
         .flatten()
         .collect();
 
-    // no candidates
     if candidates.is_empty() {
         return Ok(None);
     }
 
+    let prebuilt: Vec<PrebuiltRowFilterCandidate> = candidates
+        .into_iter()
+        .map(|candidate| {
+            let physical_expr = reassign_expr_columns(
+                Arc::clone(&candidate.expr),
+                &candidate.read_plan.projected_schema,
+            )?;
+            Ok(PrebuiltRowFilterCandidate {
+                physical_expr,
+                projection_mask: candidate.read_plan.projection_mask.clone(),
+                required_bytes: candidate.required_bytes,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Some(prebuilt))
+}
+
+/// Wrap a list of prebuilt candidates into a fresh [`RowFilter`], assigning
+/// per-predicate metric counters and (optionally) reordering by
+/// `required_bytes`. This is the cheap per-row-group rebuild path — no tree
+/// walks, no column resolution, only counter allocation.
+pub(crate) fn row_filter_from_prebuilt(
+    prebuilt: &[PrebuiltRowFilterCandidate],
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+) -> RowFilter {
+    let rows_pruned = &file_metrics.pushdown_rows_pruned;
+    let rows_matched = &file_metrics.pushdown_rows_matched;
+    let time = &file_metrics.row_pushdown_eval_time;
+
+    // Clone (cheap: Arc bumps + ProjectionMask clone) into a working list we
+    // can sort without disturbing the shared cache.
+    let mut ordered: Vec<&PrebuiltRowFilterCandidate> = prebuilt.iter().collect();
     if reorder_predicates {
-        candidates.sort_unstable_by_key(|c| c.required_bytes);
+        ordered.sort_unstable_by_key(|c| c.required_bytes);
     }
 
-    // To avoid double-counting metrics when multiple predicates are used:
-    // - All predicates should count rows_pruned (cumulative pruned rows)
-    // - Only the last predicate should count rows_matched (final result)
-    // This ensures: rows_matched + rows_pruned = total rows processed
-    let total_candidates = candidates.len();
-
-    candidates
+    let total = ordered.len();
+    let filters: Vec<Box<dyn ArrowPredicate>> = ordered
         .into_iter()
         .enumerate()
         .map(|(idx, candidate)| {
-            let is_last = idx == total_candidates - 1;
-
-            // All predicates share the pruned counter (cumulative)
+            let is_last = idx == total - 1;
             let predicate_rows_pruned = rows_pruned.clone();
-
-            // Only the last predicate tracks matched rows (final result)
             let predicate_rows_matched = if is_last {
                 rows_matched.clone()
             } else {
                 metrics::Count::new()
             };
-
-            DatafusionArrowPredicate::try_new(
-                candidate,
-                predicate_rows_pruned,
-                predicate_rows_matched,
-                time.clone(),
-            )
-            .map(|pred| Box::new(pred) as _)
+            Box::new(DatafusionArrowPredicate {
+                physical_expr: Arc::clone(&candidate.physical_expr),
+                projection_mask: candidate.projection_mask.clone(),
+                rows_pruned: predicate_rows_pruned,
+                rows_matched: predicate_rows_matched,
+                time: time.clone(),
+            }) as Box<dyn ArrowPredicate>
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
-}
-
-/// Builds row filters for a parquet decoder.
-///
-/// A [`RowFilter`] is owned by a decoder. The first filter is built eagerly
-/// during construction so the caller can attach it to the decoder via
-/// [`next_filter`](Self::next_filter) without a redundant build call.
-pub(crate) struct RowFilterGenerator<'a> {
-    predicate: Option<&'a Arc<dyn PhysicalExpr>>,
-    physical_file_schema: &'a SchemaRef,
-    file_metadata: &'a ParquetMetaData,
-    reorder_predicates: bool,
-    file_metrics: &'a ParquetFileMetrics,
-    first_row_filter: Option<RowFilter>,
-}
-
-impl<'a> RowFilterGenerator<'a> {
-    pub(crate) fn new(
-        predicate: Option<&'a Arc<dyn PhysicalExpr>>,
-        physical_file_schema: &'a SchemaRef,
-        file_metadata: &'a ParquetMetaData,
-        reorder_predicates: bool,
-        file_metrics: &'a ParquetFileMetrics,
-    ) -> Self {
-        let mut generator = Self {
-            predicate,
-            physical_file_schema,
-            file_metadata,
-            reorder_predicates,
-            file_metrics,
-            first_row_filter: None,
-        };
-        generator.first_row_filter = generator.build();
-        generator
-    }
-
-    pub(crate) fn next_filter(&mut self) -> Option<RowFilter> {
-        self.first_row_filter.take().or_else(|| self.build())
-    }
-
-    fn build(&self) -> Option<RowFilter> {
-        let predicate = self.predicate?;
-        match build_row_filter(
-            predicate,
-            self.physical_file_schema,
-            self.file_metadata,
-            self.reorder_predicates,
-            self.file_metrics,
-        ) {
-            Ok(Some(filter)) => Some(filter),
-            Ok(None) => None,
-            Err(e) => {
-                log::debug!(
-                    "Ignoring error building row filter for '{predicate:?}': {e}"
-                );
-                None
-            }
-        }
-    }
+        .collect();
+    RowFilter::new(filters)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Fields};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DataFusionError, ScalarValue};
 
     use arrow::array::{
         Int32Array, ListBuilder, StringArray, StringBuilder, StructArray,
     };
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_expr::{Expr, col};
+    use datafusion_expr::{Cast, Expr, col, lit};
     use datafusion_functions::core::get_field;
     use datafusion_functions_nested::array_has::{
         array_has_all_udf, array_has_any_udf, array_has_udf,
@@ -672,6 +693,82 @@ mod test {
 
         let filtered = row_filter.evaluate(first_rb);
         assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![true; 8])));
+    }
+
+    /// A predicate that fails while it is being evaluated must report the
+    /// original error, not an opaque string, so that callers can still tell a
+    /// user error apart from an internal one.
+    #[test]
+    fn evaluate_reports_the_original_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["not_an_int"]))],
+        )
+        .expect("record batch");
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().expect("reopen file"))
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // Casting the column in the file to `Int32` fails on this data
+        let expr = Expr::Cast(Cast::new(Box::new(col("s")), DataType::Int32)).eq(lit(1));
+        let expr = logical2physical(&expr, &file_schema);
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
+
+        let mut predicate = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let mut parquet_reader = parquet_reader_builder
+            .with_projection(predicate.projection().clone())
+            .build()
+            .expect("building reader");
+        let first_rb = parquet_reader
+            .next()
+            .expect("expected record batch")
+            .expect("expected error free record batch");
+
+        let err = predicate
+            .evaluate(first_rb)
+            .expect_err("evaluating the predicate should fail");
+
+        // The cast failure is still reachable, rather than being flattened into
+        // an untyped `ArrowError::ComputeError`
+        let err = DataFusionError::from(err);
+        let root = err.find_root();
+        assert!(
+            matches!(
+                root,
+                DataFusionError::ArrowError(inner, _)
+                    if matches!(inner.as_ref(), ArrowError::CastError(_))
+            ),
+            "expected the original cast error, got {root:?}"
+        );
+
+        // and the message still says where the failure happened
+        let message = err.to_string();
+        assert!(
+            message.contains("Error evaluating filter predicate"),
+            "{message}"
+        );
+        assert!(message.contains("Cannot cast string"), "{message}");
     }
 
     #[test]
