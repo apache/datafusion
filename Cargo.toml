@@ -422,16 +422,16 @@ incremental = false
 ## Temporary arrow-rs patch until 60.0.0 is released
 
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-avro = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "e1e71ea89b211758e20254296008f96e744ed138" }
+arrow = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-array = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-avro = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-buffer = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-cast = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-data = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-ipc = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-schema = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-select = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-string = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-ord = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-flight = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+parquet = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
