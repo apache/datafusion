@@ -262,45 +262,55 @@ fn bench_merge_tied_keys_slow_producers(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     // With 2 inputs the root comparison is the whole tree, so the tie breaker
     // balances all producers; with 4 it only balances the two sub-tree winners.
+    //
+    // Each case is run with the tie breaker both enabled and disabled so the
+    // pair measures what the tie breaker actually buys on this workload: if
+    // the two ever converge, the balancing has regressed into the
+    // lowest-index-wins baseline.
     for partitions in [2, 4] {
-        c.bench_function(
-            &format!("bench_merge_tied_keys_slow_producers/{partitions}_partitions"),
-            |b| {
-                b.iter(|| {
-                    rt.block_on(async {
-                        let streams = (0..partitions)
-                            .map(|_| {
-                                let s = RecordBatchStreamAdapter::new(
-                                    Arc::clone(&schema),
-                                    futures::stream::iter(batches.clone())
-                                        .map(|b| Ok(produce(b))),
-                                );
-                                spawn_buffered(Box::pin(s), 1)
-                            })
-                            .collect();
-                        let pool: Arc<dyn MemoryPool> =
-                            Arc::new(UnboundedMemoryPool::default());
-                        let merged = StreamingMergeBuilder::new()
-                            .with_streams(streams)
-                            .with_schema(Arc::clone(&schema))
-                            .with_expressions(&sort_order)
-                            .with_metrics(BaselineMetrics::new(
-                                &ExecutionPlanMetricsSet::new(),
-                                0,
-                            ))
-                            .with_batch_size(BATCH)
-                            .with_reservation(
-                                MemoryConsumer::new("bench").register(&pool),
-                            )
-                            .build()
-                            .unwrap();
-                        datafusion_physical_plan::common::collect(merged)
-                            .await
-                            .unwrap();
+        for (label, round_robin) in [("on", true), ("off", false)] {
+            c.bench_function(
+                &format!(
+                    "bench_merge_tied_keys_slow_producers/{partitions}_partitions/tie_breaker_{label}"
+                ),
+                |b| {
+                    b.iter(|| {
+                        rt.block_on(async {
+                            let streams = (0..partitions)
+                                .map(|_| {
+                                    let s = RecordBatchStreamAdapter::new(
+                                        Arc::clone(&schema),
+                                        futures::stream::iter(batches.clone())
+                                            .map(|b| Ok(produce(b))),
+                                    );
+                                    spawn_buffered(Box::pin(s), 1)
+                                })
+                                .collect();
+                            let pool: Arc<dyn MemoryPool> =
+                                Arc::new(UnboundedMemoryPool::default());
+                            let merged = StreamingMergeBuilder::new()
+                                .with_streams(streams)
+                                .with_schema(Arc::clone(&schema))
+                                .with_expressions(&sort_order)
+                                .with_metrics(BaselineMetrics::new(
+                                    &ExecutionPlanMetricsSet::new(),
+                                    0,
+                                ))
+                                .with_batch_size(BATCH)
+                                .with_reservation(
+                                    MemoryConsumer::new("bench").register(&pool),
+                                )
+                                .with_round_robin_tie_breaker(round_robin)
+                                .build()
+                                .unwrap();
+                            datafusion_physical_plan::common::collect(merged)
+                                .await
+                                .unwrap();
+                        })
                     })
-                })
-            },
-        );
+                },
+            );
+        }
     }
 }
 
