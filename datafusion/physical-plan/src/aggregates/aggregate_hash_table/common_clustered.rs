@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Common utilities for aggregate tables used in aggregations that inputs are ordered
-//! by the groups.
+//! Common utilities for aggregate tables with input clustered by group keys.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -27,13 +26,12 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo};
 
-use crate::InputOrderMode;
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::{GroupCompletion, GroupCompletionMode};
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
     evaluate_group_by,
@@ -46,14 +44,14 @@ use super::common::{
 };
 
 #[derive(Clone)]
-pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
+pub(in crate::aggregates) struct ClusteredAggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
     pub(super) submetrics: Vec<Arc<dyn AggregateMetrics>>,
 }
 
-impl OrderedAggregateTableMetrics {
+impl ClusteredAggregateTableMetrics {
     pub(in crate::aggregates) fn new(agg: &AggregateExec, partition: usize) -> Self {
         let metrics = AggregateTableMetrics::new(agg, partition);
         Self {
@@ -76,20 +74,20 @@ impl OrderedAggregateTableMetrics {
     }
 }
 
-/// Aggregate table shared by the ordered single, partial and final paths.
+/// Aggregate table shared by the clustered single, partial and final paths.
 ///
-/// # Ordering optimization
+/// # Group completion optimization
 ///
-/// The table consumes input batches while `GroupOrdering` tracks which groups
+/// The table consumes input batches while [`GroupCompletion`] tracks which groups
 /// are proven complete. Completed groups can be emitted before the input stream
-/// ends, which keeps memory bounded by the active ordered key range.
+/// ends, so completed groups no longer occupy the table.
 ///
 /// # Single, partial and final variant difference
 ///
 /// The partial and final aggregate tables implement the two stages of grouped
 /// aggregation, while the single aggregate table implements both stages in one
 /// table. See
-/// [`OrderedPartialAggregateStream`](crate::aggregates::ordered_partial_stream::OrderedPartialAggregateStream)
+/// [`ClusteredPartialAggregateStream`](crate::aggregates::clustered_partial_stream::ClusteredPartialAggregateStream)
 /// for the high-level plan shape.
 ///
 /// Example: `AVG(v) FILTER (WHERE v>0) GROUP BY k`
@@ -111,15 +109,15 @@ impl OrderedAggregateTableMetrics {
 ///
 /// # Marker Type
 ///
-/// `OrderedAggrMode` selects the aggregate semantics. For example,
-/// `OrderedAggregateTable::<PartialMarker>::new(...)` consumes raw rows
+/// `AggrMode` selects the aggregate semantics. For example,
+/// `ClusteredAggregateTable::<PartialMarker>::new(...)` consumes raw rows
 /// and emits partial states, while
-/// `OrderedAggregateTable::<FinalMarker>::new_with_input_order(...)`
+/// `ClusteredAggregateTable::<FinalMarker>::new_with_group_completion(...)`
 /// consumes partial states and emits final values.
 ///
 /// Shared methods live on `impl<T>`; single/partial/final behavior lives on
 /// marker-specific impls.
-pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
+pub(in crate::aggregates) struct ClusteredAggregateTable<AggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
 
@@ -139,26 +137,26 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Optional internal metrics owned by each aggregate expression.
     pub(super) aggregate_submetrics: Vec<Arc<dyn AggregateMetrics>>,
 
-    /// Group keys, ordering state, and accumulator states.
-    pub(super) buffer: OrderedAggregateTableBuffer,
+    /// Group keys, completion state, and accumulator states.
+    pub(super) buffer: ClusteredAggregateTableBuffer,
 
-    _mode: PhantomData<OrderedAggrMode>,
+    _mode: PhantomData<AggrMode>,
 }
 
-/// Buffer for the ordered aggregate table's group keys and accumulator states.
+/// Buffer for the clustered aggregate table's group keys and accumulator states.
 ///
-/// It accumulates input during aggregation and emits output rows as soon as the
-/// input ordering proves those groups are complete.
+/// It accumulates input during aggregation and emits output rows as soon as
+/// groups are known to be complete.
 ///
-/// [`GroupOrdering`] tracks when and how to do early emit.
+/// [`GroupCompletion`] tracks when and how to do early emit.
 /// [`GroupValues`] stores the physical group-key layout, while
 /// [`datafusion_expr::GroupsAccumulator`] stores per-group aggregate state.
-pub(super) struct OrderedAggregateTableBuffer {
+pub(super) struct ClusteredAggregateTableBuffer {
     /// GROUP BY expressions evaluated against input batches.
     pub(super) group_by: Arc<PhysicalGroupBy>,
 
-    /// Tracks how far ordered input allows this table to drain safely.
-    pub(super) group_ordering: GroupOrdering,
+    /// Tracks which groups are complete and can be emitted safely.
+    pub(super) group_completion: GroupCompletion,
 
     /// Interned group keys, in the same group-id order used by accumulators.
     pub(super) group_values: Box<dyn GroupValues>,
@@ -174,24 +172,24 @@ pub(super) struct OrderedAggregateTableBuffer {
 }
 
 /// Methods shared by all aggregate modes
-impl<AggrMode> OrderedAggregateTable<AggrMode> {
+impl<AggrMode> ClusteredAggregateTable<AggrMode> {
     #[expect(
         clippy::too_many_arguments,
-        reason = "keeps ordered single, partial and final table construction explicit"
+        reason = "keeps clustered single, partial and final table construction explicit"
     )]
     pub(super) fn new_for_mode(
         agg: &AggregateExec,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
         state_schema: SchemaRef,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        metrics: OrderedAggregateTableMetrics,
+        metrics: ClusteredAggregateTableMetrics,
     ) -> Result<Self> {
-        let group_ordering = GroupOrdering::try_new(input_order_mode)?;
+        let group_completion = GroupCompletion::try_new(group_completion_mode)?;
         let group_schema = agg.group_by().group_schema(input_schema)?;
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values = new_group_values(group_schema, &group_completion)?;
         let aggregate_arguments = aggregate_expressions(
             agg.aggr_expr(),
             aggregate_mode,
@@ -223,9 +221,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             aggregate_argument_metrics: metrics.aggregate_arguments,
             aggregate_accumulator_metrics: metrics.accumulator,
             aggregate_submetrics: metrics.submetrics,
-            buffer: OrderedAggregateTableBuffer {
+            buffer: ClusteredAggregateTableBuffer {
                 group_by: Arc::clone(agg.group_by()),
-                group_ordering,
+                group_completion,
                 group_values,
                 group_indices: vec![],
                 accumulators,
@@ -268,15 +266,15 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// Called after the input stream is exhausted and the last batch has been
     /// aggregated.
     ///
-    /// Updates the internal `GroupOrdering` so it can continue emitting until
+    /// Updates the internal [`GroupCompletion`] so it can continue emitting until
     /// the buffer is empty.
     pub(in crate::aggregates) fn input_done(&mut self) {
-        self.buffer.group_ordering.input_done();
+        self.buffer.group_completion.input_done();
     }
 
-    /// Returns the ordering state used to decide how memory pressure is handled.
-    pub(in crate::aggregates) fn group_ordering(&self) -> &GroupOrdering {
-        &self.buffer.group_ordering
+    /// Returns the completion state used to decide how memory pressure is handled.
+    pub(in crate::aggregates) fn group_completion(&self) -> &GroupCompletion {
+        &self.buffer.group_completion
     }
 
     /// Number of groups currently buffered.
@@ -297,12 +295,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .map(|acc| acc.size())
             .sum::<usize>()
             + self.buffer.group_values.size()
-            + self.buffer.group_ordering.size()
+            + self.buffer.group_completion.size()
             + self.buffer.group_indices.allocated_size()
     }
 
-    pub(in crate::aggregates) fn metrics(&self) -> OrderedAggregateTableMetrics {
-        OrderedAggregateTableMetrics {
+    pub(in crate::aggregates) fn metrics(&self) -> ClusteredAggregateTableMetrics {
+        ClusteredAggregateTableMetrics {
             group_by: self.group_by_metrics.clone(),
             aggregate_arguments: self.aggregate_argument_metrics.clone(),
             accumulator: Arc::clone(&self.aggregate_accumulator_metrics),
@@ -311,9 +309,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     }
 
     /// Takes every intermediate aggregate state and resets the table so it can
-    /// continue with a new ordered input segment.
+    /// continue with a new clustered input segment.
     ///
-    /// Unlike normal ordered emission, this operation is allowed to take the
+    /// Unlike normal group-completion emission, this operation is allowed to take the
     /// active (incomplete) groups. Partial aggregation can pass those states to
     /// its final stage, while single and final aggregation sort and spill them
     /// before replay.
@@ -346,7 +344,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         self.buffer.group_values.clear_shrink(0);
         self.buffer.group_indices.clear();
         self.buffer.group_indices.shrink_to_fit();
-        self.buffer.group_ordering.reset();
+        self.buffer.group_completion.reset();
 
         Ok(Some(batch))
     }
@@ -374,7 +372,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                     .intern(group_values, &mut self.buffer.group_indices)?;
                 let total_num_groups = self.buffer.group_values.len();
                 if total_num_groups > starting_num_groups {
-                    self.buffer.group_ordering.new_groups(
+                    self.buffer.group_completion.new_groups(
                         group_values,
                         &self.buffer.group_indices,
                         total_num_groups,
@@ -418,10 +416,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let output = self.group_by_metrics.time_emitting(|| {
             let mut output = self.buffer.group_values.emit(emit_to)?;
-            // `EmitTo::All` is only used after `input_done`, when the ordering
+            // `EmitTo::All` is only used after `input_done`, when the completion
             // state no longer tracks group indexes.
             if let EmitTo::First(n) = emit_to {
-                self.buffer.group_ordering.remove_groups(n);
+                self.buffer.group_completion.remove_groups(n);
             }
 
             for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array};
-use datafusion_physical_plan::aggregates::order::GroupOrderingPartial;
+use datafusion_physical_plan::aggregates::order::GroupCompletionPartial;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -34,20 +34,20 @@ fn create_test_arrays(num_columns: usize) -> Vec<ArrayRef> {
         .collect()
 }
 fn bench_new_groups(c: &mut Criterion) {
-    let mut group = c.benchmark_group("group_ordering_partial");
+    let mut group = c.benchmark_group("group_completion_partial");
 
-    // Test with 1, 2, 4, and 8 order indices
+    // Test with 1, 2, 4, and 8 grouping indices
     for num_columns in [1, 2, 4, 8] {
-        let order_indices: Vec<usize> = (0..num_columns).collect();
+        let grouping_indices: Vec<usize> = (0..num_columns).collect();
 
-        group.bench_function(format!("order_indices_{num_columns}"), |b| {
+        group.bench_function(format!("grouping_indices_{num_columns}"), |b| {
             let batch_group_values = create_test_arrays(num_columns);
             let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
 
             b.iter(|| {
-                let mut ordering =
-                    GroupOrderingPartial::try_new(order_indices.clone()).unwrap();
-                ordering
+                let mut completion =
+                    GroupCompletionPartial::try_new(grouping_indices.clone()).unwrap();
+                completion
                     .new_groups(&batch_group_values, &group_indices, BATCH_SIZE)
                     .unwrap();
             });

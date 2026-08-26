@@ -41,7 +41,6 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::{Column, col, lit};
-use datafusion_physical_plan::InputOrderMode;
 use test_utils::{StringBatchGenerator, add_empty_batches};
 
 use datafusion_execution::TaskContext;
@@ -49,7 +48,7 @@ use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, GroupCompletionMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::{ExecutionPlan, collect, displayable};
@@ -303,7 +302,7 @@ async fn streaming_aggregate_test() {
 /// two `AggregateExec` variants produce the same result: the pipeline breaking
 /// one over unordered input (`PartialHashAggregateStream`) and the
 /// non-pipeline breaking one over ordered input
-/// (`OrderedPartialAggregateStream`).
+/// (`ClusteredPartialAggregateStream`).
 async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
@@ -354,8 +353,8 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .unwrap(),
     );
     assert_ne!(
-        aggregate_exec_running.input_order_mode(),
-        &InputOrderMode::Linear,
+        aggregate_exec_running.group_completion_mode(),
+        &GroupCompletionMode::None,
         "running aggregate should observe ordered input for group_by: {group_by:?}"
     );
 
@@ -555,13 +554,17 @@ async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
 
         fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
             if let Some(exec) = node.downcast_ref::<AggregateExec>() {
+                assert_eq!(
+                    exec.properties().output_ordering().is_some(),
+                    self.expected_sort
+                );
                 if self.expected_sort {
                     assert!(matches!(
-                        exec.input_order_mode(),
-                        InputOrderMode::PartiallySorted(_) | InputOrderMode::Sorted
+                        exec.group_completion_mode(),
+                        GroupCompletionMode::Partial(_) | GroupCompletionMode::Full
                     ));
                 } else {
-                    assert_eq!(*exec.input_order_mode(), InputOrderMode::Linear);
+                    assert_eq!(*exec.group_completion_mode(), GroupCompletionMode::None);
                 }
             }
             Ok(TreeNodeRecursion::Continue)

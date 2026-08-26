@@ -15,71 +15,71 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate table for single aggregation when raw input is ordered.
+//! Aggregate table for final aggregation when partial-state input is clustered.
 //!
-//! See comments in [`super::ordered_partial_table`] for details.
+//! See comments in [`super::clustered_partial_table`] for details.
+
+use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::aggregates::aggregate_hash_table::SingleMarker;
+use crate::aggregates::aggregate_hash_table::FinalMarker;
+use crate::aggregates::order::GroupCompletionMode;
 use crate::aggregates::{AggregateExec, AggregateMode, group_values::AccumulatorPhase};
 
 use super::common::HashAggregateAccumulator;
-use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
+use super::common_clustered::{ClusteredAggregateTable, ClusteredAggregateTableMetrics};
 
-/// Implementation specific to single aggregation, where the table stores final
-/// aggregate values and the input rows are raw rows.
+/// Implementation specific to final aggregation, where the table stores partial
+/// aggregate states and the input rows are also partial states.
 ///
 /// Example: `AVG(x) GROUP BY k`
 ///
-/// - Aggregate table stores: `k, avg(x)`
-/// - Input rows: `k, x`
+/// - Aggregate table stores: `k, sum(x), count(x)`
+/// - Input rows: `k, sum(x), count(x)`
 ///
-/// See comments at [`OrderedAggregateTable`] for details.
-impl OrderedAggregateTable<SingleMarker> {
-    pub(in crate::aggregates) fn new(
+/// See comments at [`ClusteredAggregateTable`] for details.
+impl ClusteredAggregateTable<FinalMarker> {
+    pub(in crate::aggregates) fn new_with_group_completion(
         agg: &AggregateExec,
-        partition: usize,
+        input_schema: &SchemaRef,
         output_schema: SchemaRef,
-        state_schema: SchemaRef,
+        group_completion_mode: &GroupCompletionMode,
+        metrics: ClusteredAggregateTableMetrics,
     ) -> Result<Self> {
-        debug_assert!(matches!(
-            agg.mode,
-            AggregateMode::Single | AggregateMode::SinglePartitioned
-        ));
-
-        let input_schema = agg.input().schema();
-        let metrics = OrderedAggregateTableMetrics::new(agg, partition);
         Self::new_for_mode(
             agg,
-            &input_schema,
+            input_schema,
             output_schema,
-            state_schema,
-            &agg.input_order_mode,
-            &agg.mode,
-            agg.filter_expr().to_vec(),
+            Arc::clone(input_schema),
+            group_completion_mode,
+            &AggregateMode::Final,
+            vec![None; agg.aggr_expr().len()],
             metrics,
         )
     }
 
-    /// Aggregates one raw input batch and updates ordering information for any
-    /// newly observed groups.
+    /// Merges one partial-state input batch and updates completion state for
+    /// any newly observed groups.
     pub(in crate::aggregates) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
+        // `PhysicalGroupBy::as_final()` removes grouping sets while planning
+        // final aggregation, so clustered final aggregation sees one grouping.
+        debug_assert_eq!(evaluated_batch.grouping_set_args.len(), 1);
         self.aggregate_evaluated_batch(
             &evaluated_batch,
-            HashAggregateAccumulator::update_batch,
-            AccumulatorPhase::Update,
+            HashAggregateAccumulator::merge_batch,
+            AccumulatorPhase::Merge,
         )
     }
 
-    /// Materializes final results for all groups proven complete by the input
-    /// ordering, leaving the active ordered-key range in the table.
+    /// Materializes final results for all completed groups, leaving
+    /// the active contiguous-key range in the table.
     ///
     /// Returns None if there are no completed groups.
     pub(in crate::aggregates) fn take_completed_result_batch(
@@ -88,7 +88,7 @@ impl OrderedAggregateTable<SingleMarker> {
         if self.is_empty() {
             return Ok(None);
         }
-        let Some(emit_to) = self.group_ordering().emit_to() else {
+        let Some(emit_to) = self.group_completion().emit_to() else {
             return Ok(None);
         };
         self.materialize_groups(

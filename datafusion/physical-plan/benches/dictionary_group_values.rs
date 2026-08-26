@@ -29,7 +29,7 @@ use criterion::{
 };
 use datafusion_expr::EmitTo;
 use datafusion_physical_plan::aggregates::group_values::new_group_values;
-use datafusion_physical_plan::aggregates::order::{GroupOrdering, GroupOrderingFull};
+use datafusion_physical_plan::aggregates::order::{GroupCompletion, GroupCompletionFull};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -106,7 +106,7 @@ fn bench_intern_emit(c: &mut Criterion) {
                     b.iter_batched_ref(
                         || {
                             (
-                                new_group_values(schema.clone(), &GroupOrdering::None)
+                                new_group_values(schema.clone(), &GroupCompletion::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
                             )
@@ -151,7 +151,7 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
                     b.iter_batched_ref(
                         || {
                             (
-                                new_group_values(schema.clone(), &GroupOrdering::None)
+                                new_group_values(schema.clone(), &GroupCompletion::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
                             )
@@ -172,7 +172,7 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
     group.finish();
 }
 
-// GroupOrdering::Full -> GroupValuesColumn::<true>: scalar append_val/equal_to path.
+// GroupCompletion::Full -> GroupValuesColumn::<true>: scalar append_val/equal_to path.
 fn bench_scalar_append_equal(c: &mut Criterion) {
     let mut group = c.benchmark_group("dict_scalar_append_equal");
     let schema = dict_schema();
@@ -192,7 +192,7 @@ fn bench_scalar_append_equal(c: &mut Criterion) {
                         (
                             new_group_values(
                                 schema.clone(),
-                                &GroupOrdering::Full(GroupOrderingFull::new()),
+                                &GroupCompletion::Full(GroupCompletionFull::new()),
                             )
                             .unwrap(),
                             Vec::<usize>::with_capacity(size),
@@ -227,7 +227,7 @@ fn bench_take_n(c: &mut Criterion) {
             b.iter_batched_ref(
                 || {
                     (
-                        new_group_values(schema.clone(), &GroupOrdering::None).unwrap(),
+                        new_group_values(schema.clone(), &GroupCompletion::None).unwrap(),
                         Vec::<usize>::with_capacity(size),
                     )
                 },
@@ -298,7 +298,7 @@ fn bench_shared_values_arc(c: &mut Criterion) {
                 b.iter_batched_ref(
                     || {
                         (
-                            new_group_values(schema.clone(), &GroupOrdering::None)
+                            new_group_values(schema.clone(), &GroupCompletion::None)
                                 .unwrap(),
                             Vec::<usize>::with_capacity(size),
                         )

@@ -27,10 +27,11 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
+use super::GroupCompletionMode;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
+use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Hash aggregation can combine multiple partial stages before final
 /// evaluation. This stream implements the partial-reduce stage.
@@ -109,7 +110,7 @@ impl PartialReduceHashAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, super::AggregateMode::PartialReduce);
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
