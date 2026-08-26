@@ -131,19 +131,21 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
 /// For a `RecordBatch` with two columns: `col1` and `col2`, two columns are pointing
 /// to a sub-region of the same buffer.
 ///
+/// ```text
 /// {xxxxxxxxxxxxxxxxxxx} <--- buffer
 ///       ^    ^  ^    ^
 ///       |    |  |    |
 /// col1->{    }  |    |
 /// col2--------->{    }
+/// ```
 ///
 /// In the above case, `get_record_batch_memory_size` will return the size of
 /// the buffer, instead of the sum of `col1` and `col2`'s actual memory size.
 ///
-/// Note: Current `RecordBatch`.get_array_memory_size()` will double count the
-/// buffer memory size if multiple arrays within the batch are sharing the same
-/// `Buffer`. This method provides temporary fix until the issue is resolved:
-/// <https://github.com/apache/arrow-rs/issues/6439>
+/// Note: The current [`RecordBatch::get_array_memory_size`] will double count
+/// the buffer memory size if multiple arrays within the batch are sharing the
+/// same `Buffer`. This method provides a temporary fix until the issue is
+/// resolved: <https://github.com/apache/arrow-rs/issues/6439>
 pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
     RecordBatchMemoryCounter::new().count_batch(batch)
 }
