@@ -358,6 +358,17 @@ pub enum AggregateMode {
     /// This reduces shuffling traffic in a distributed setting. See
     /// <https://github.com/datafusion-contrib/datafusion-distributed/issues/360>
     /// for details.
+    ///
+    /// # Best-Effort Reduction
+    ///
+    /// `PartialReduce` is meant as an optimization: it reduces the volume of
+    /// intermediate state (for example, before sending it over the network),
+    /// and thus its output may not be fully reduced. In particular, an
+    /// implementation may emit partially merged state, or pass its input
+    /// through unchanged (for example, under memory pressure), so the same
+    /// group key may appear in multiple output batches. Consumers must merge
+    /// the output of a `PartialReduce` aggregation exactly as they would
+    /// merge the output of a `Partial` aggregation.
     PartialReduce,
 }
 
