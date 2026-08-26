@@ -7014,3 +7014,12 @@ ORDER BY x
 false 3
 true 2
 true 2
+
+statement error DataFusion error: Error during planning: 'first_value' does not support zero arguments
+SELECT first_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+statement error DataFusion error: Error during planning: 'last_value' does not support zero arguments
+SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
+SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)

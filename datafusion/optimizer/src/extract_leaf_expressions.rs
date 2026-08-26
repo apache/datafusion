@@ -134,15 +134,19 @@ impl OptimizerRule for ExtractLeafExpressions {
     }
 }
 
-/// Scans the current plan node's expressions for pre-existing
-/// `__datafusion_extracted_N` aliases and advances the generator
-/// counter past them to avoid collisions with user-provided aliases.
+/// Scans the plan for pre-existing `__datafusion_extracted_N` aliases and
+/// advances the generator counter past them to avoid collisions with
+/// user-provided aliases.
+///
+/// Subquery plans nested inside expressions are scanned as well: extraction
+/// rewrites with `transform_down_with_subqueries`, so it can generate aliases
+/// *inside* a subquery and would otherwise collide with a user alias there.
 fn advance_generator_past_existing(
     plan: &LogicalPlan,
     alias_generator: &AliasGenerator,
 ) -> Result<()> {
-    plan.apply(|plan| {
-        plan.expressions().iter().try_for_each(|expr| {
+    plan.apply_with_subqueries(|plan| {
+        plan.apply_expressions(|expr| {
             expr.apply(|e| {
                 if let Expr::Alias(alias) = e
                     && let Some(id) = alias
@@ -154,10 +158,8 @@ fn advance_generator_past_existing(
                     alias_generator.update_min_id(id);
                 }
                 Ok(TreeNodeRecursion::Continue)
-            })?;
-            Ok::<(), datafusion_common::error::DataFusionError>(())
-        })?;
-        Ok(TreeNodeRecursion::Continue)
+            })
+        })
     })
     .map(|_| ())
 }
@@ -1191,15 +1193,15 @@ fn try_push_into_inputs(
         input_schemas.iter().map(|s| schema_columns(s)).collect();
 
     // Route pairs and columns to the appropriate inputs
-    let per_input = match route_to_inputs(
+    let Some(per_input) = route_to_inputs(
         pairs,
         columns_needed,
         node,
         &input_column_sets,
         &input_schemas,
-    )? {
-        Some(routed) => routed,
-        None => return Ok(None),
+    )?
+    else {
+        return Ok(None);
     };
 
     let num_inputs = inputs.len();
@@ -3251,6 +3253,32 @@ mod tests {
                       Projection: right.id, leaf_udf(right.user, Utf8("t")) AS __datafusion_extracted_2
                         TableScan: right projection=[id, user]
         "#);
+        Ok(())
+    }
+
+    /// Pre-existing `__datafusion_extracted_N` aliases must advance the alias
+    /// generator even when they live inside a subquery plan, since extraction
+    /// descends into subqueries and would otherwise reuse the same alias.
+    #[test]
+    fn test_advance_generator_past_alias_in_subquery() -> Result<()> {
+        use datafusion_expr::in_subquery;
+
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .project(vec![
+                leaf_udf(col("user"), "name").alias("__datafusion_extracted_7"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_struct_named("outer")?)
+            .filter(in_subquery(col("id"), Arc::new(subquery)))?
+            .build()?;
+
+        let alias_generator = AliasGenerator::new();
+        advance_generator_past_existing(&plan, &alias_generator)?;
+
+        assert_eq!(
+            alias_generator.next(EXTRACTED_EXPR_PREFIX),
+            "__datafusion_extracted_8"
+        );
         Ok(())
     }
 }
