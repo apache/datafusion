@@ -2384,7 +2384,9 @@ mod tests {
     use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
-    use datafusion_common::assert_batches_eq;
+    use datafusion_common::{assert_batches_eq, exec_datafusion_err};
+    use datafusion_execution::memory_pool::GreedyMemoryPool;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{DynamicFilterTracking, expressions::col};
     use futures::TryStreamExt;
 
@@ -3041,10 +3043,7 @@ mod tests {
         val_sort_options: SortOptions,
         val_nullable: bool,
     ) -> Result<(Arc<Schema>, PartitionedTopK)> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("pk", DataType::Int32, false),
-            Field::new("val", DataType::Int32, val_nullable),
-        ]));
+        let schema = pk_val_schema(val_nullable);
 
         let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
         let pk_sort_expr = PhysicalSortExpr {
@@ -3161,6 +3160,95 @@ mod tests {
             "tie list grew {growth} bytes over 7 batches that contributed \
              1 row each; it is holding the source batches"
         );
+        Ok(())
+    }
+
+    /// The reservation must clear a *bounded* memory pool, not merely
+    /// report a plausible `size()`.
+    ///
+    /// The two tests above check what `size()` computes; this one checks
+    /// how that number is actually spent — `try_resize` against a real
+    /// pool, which is what returned `ResourcesExhausted` to the user.
+    ///
+    /// No byte constant is asserted. The limit is derived from the input
+    /// at run time, because the property under test is a ratio: retention
+    /// must be a small multiple of *one* input batch no matter how many
+    /// batches stream through, where whole-batch retention was
+    /// (partitions x batch) and needed ~P times as much. Only the ratio
+    /// has to hold as the size accounting is legitimately adjusted.
+    ///
+    /// Scope: the insert path only. `emit` drops the reservation before
+    /// it materializes ties, so emit-time growth is out of reach here.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_runs_under_bounded_memory_pool() -> Result<()> {
+        // P is the whole point: the old code pinned and charged one copy of
+        // each batch per partition that batch touched, so it needed ~P x the
+        // batch where the fix needs a constant multiple of it.
+        const P: i32 = 256;
+        const ROWS_PER_PARTITION: i32 = 32;
+        const ROWS: i32 = P * ROWS_PER_PARTITION;
+        const BATCHES: i32 = 16;
+        const K: usize = 2;
+
+        let schema = pk_val_schema(false);
+        let pks: Vec<i32> = (0..ROWS).map(|i| i % P).collect();
+        // Batch b's values all beat batch b-1's, so every batch is admitted
+        // by every partition and the batch it displaces must be released —
+        // the case that separates "charged once per batch" from "charged
+        // once per partition per batch". Within a batch a partition's
+        // values are distinct, so nothing ties at the boundary and each
+        // partition keeps exactly K rows throughout.
+        let vals = |b: i32| -> Vec<i32> {
+            (0..ROWS)
+                .map(|i| (BATCHES - b) * ROWS_PER_PARTITION + i / P)
+                .collect()
+        };
+
+        // A budget of 32 batches, derived from the data so no byte constant
+        // here goes stale. The operator legitimately holds ~8x the batch
+        // (row-encoding scratch for one batch, plus per-partition heap and
+        // map overhead), so this clears it ~4x over; the old whole-batch
+        // retention needed ~P = 256x the batch, which is 8x past the limit.
+        let batch_bytes =
+            get_record_batch_memory_size(&pk_val_batch(&schema, pks.clone(), vals(0))?);
+        let limit = 32 * batch_bytes;
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(limit)))
+            .build_arc()?;
+
+        let (schema, mut rk) = build_partitioned_topk_rank_with_runtime(K, &runtime)?;
+
+        let mut after_first = 0;
+        for b in 0..BATCHES {
+            let batch = pk_val_batch(&schema, pks.clone(), vals(b))?;
+            rk.insert_batch(&batch).map_err(|e| {
+                exec_datafusion_err!(
+                    "batch {b} of {BATCHES} failed under a {limit}-byte pool: {e}"
+                )
+            })?;
+            if b == 0 {
+                after_first = rk.size();
+            }
+        }
+
+        // Flat, not merely under the limit: the last 15 batches must not
+        // have added retention (in practice this is exactly equal). The 2x
+        // slack absorbs map and tie-list capacity growth, but not a batch's
+        // worth of pinned rows.
+        assert!(
+            rk.size() <= after_first * 2,
+            "retention grew from {after_first} to {} bytes across {BATCHES} \
+             batches; it tracks the input rather than a bounded window of it",
+            rk.size()
+        );
+
+        // A pool that was never pressed proves nothing, so pin down what the
+        // operator produced: K rows per partition, drawn from the last batch,
+        // whose values are the smallest seen.
+        let expected: Vec<(i32, i32)> = (0..P)
+            .flat_map(|pk| [(pk, ROWS_PER_PARTITION), (pk, ROWS_PER_PARTITION + 1)])
+            .collect();
+        assert_eq!(sorted_pk_val(rk.emit()?).await?, expected);
         Ok(())
     }
 
@@ -3325,6 +3413,15 @@ mod tests {
             assert_eq!(sorted_pk_val(state.emit()?).await?, expected, "{shape}");
         }
         Ok(())
+    }
+
+    /// The `(pk Int32, val Int32)` schema every `PartitionedTopK*` test
+    /// builds against. `val_nullable` is what the null-ordering tests vary.
+    fn pk_val_schema(val_nullable: bool) -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("val", DataType::Int32, val_nullable),
+        ]))
     }
 
     fn pk_val_batch(
@@ -3619,10 +3716,31 @@ mod tests {
         val_sort_options: SortOptions,
         val_nullable: bool,
     ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("pk", DataType::Int32, false),
-            Field::new("val", DataType::Int32, val_nullable),
-        ]));
+        build_partitioned_topk_rank_inner(
+            k,
+            val_sort_options,
+            val_nullable,
+            &Arc::new(RuntimeEnv::default()),
+        )
+    }
+
+    /// Variant of [`build_partitioned_topk_rank`] that takes the
+    /// [`RuntimeEnv`] to register the reservation against, so a test can
+    /// bound the memory pool the operator draws from.
+    fn build_partitioned_topk_rank_with_runtime(
+        k: usize,
+        runtime: &Arc<RuntimeEnv>,
+    ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
+        build_partitioned_topk_rank_inner(k, SortOptions::default(), false, runtime)
+    }
+
+    fn build_partitioned_topk_rank_inner(
+        k: usize,
+        val_sort_options: SortOptions,
+        val_nullable: bool,
+        runtime: &Arc<RuntimeEnv>,
+    ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
+        let schema = pk_val_schema(val_nullable);
 
         let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
         let pk_sort_expr = PhysicalSortExpr {
@@ -3645,7 +3763,7 @@ mod tests {
             order_expr,
             k,
             8, // batch_size
-            &Arc::new(RuntimeEnv::default()),
+            runtime,
             &ExecutionPlanMetricsSet::new(),
         )?;
         Ok((schema, state))
@@ -4011,10 +4129,7 @@ mod tests {
         val_sort_options: SortOptions,
         val_nullable: bool,
     ) -> Result<(Arc<Schema>, PartitionedTopKDenseRank)> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("pk", DataType::Int32, false),
-            Field::new("val", DataType::Int32, val_nullable),
-        ]));
+        let schema = pk_val_schema(val_nullable);
 
         let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
         let pk_sort_expr = PhysicalSortExpr {
