@@ -836,7 +836,10 @@ mod tests {
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
     };
-    use arrow::array::{ArrayRef, Int64Array, StringArray, StringBuilder};
+    use arrow::array::{
+        ArrayRef, Int64Array, LargeStringArray, StringArray, StringBuilder,
+        StringViewArray,
+    };
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::{DateTime, FixedOffset, Utc};
     use datafusion_common::{DataFusionError, assert_contains};
@@ -1164,41 +1167,48 @@ mod tests {
         let mut options = ConfigOptions::default();
         options.execution.time_zone = Some("-05:00".to_string());
 
+        // every string array flavor `handle`/`handle_multiple` dispatch on
+        let string_arrays: [fn(Vec<&str>) -> ArrayRef; 3] = [
+            |values| Arc::new(StringArray::from(values)) as ArrayRef,
+            |values| Arc::new(LargeStringArray::from(values)) as ArrayRef,
+            |values| Arc::new(StringViewArray::from(values)) as ArrayRef,
+        ];
+
         for (udf, time_unit) in udfs_and_timeunit() {
             let udf = udf.with_updated_config(&options).unwrap();
             let expected = udf.return_type(&[Utf8])?;
             assert_eq!(expected, Timestamp(time_unit, Some("-05:00".into())));
 
-            // both the single argument and the explicit format overloads
-            for args in [
-                vec![ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                    "2020-09-08T13:42:29",
-                ])) as ArrayRef)],
-                vec![
-                    ColumnarValue::Array(Arc::new(StringArray::from(vec![
-                        "2020-09-08 13:42:29",
-                    ])) as ArrayRef),
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                        "%Y-%m-%d %H:%M:%S".to_string(),
-                    ))),
-                ],
-            ] {
-                let arg_fields = args
-                    .iter()
-                    .map(|arg| Field::new("arg", arg.data_type(), true).into())
-                    .collect();
-                let result = udf.invoke_with_args(ScalarFunctionArgs {
-                    args,
-                    arg_fields,
-                    number_rows: 1,
-                    return_field: Field::new("f", expected.clone(), true).into(),
-                    config_options: Arc::new(options.clone()),
-                })?;
+            for string_array in string_arrays {
+                // both the single argument and the explicit format overloads
+                for args in [
+                    vec![ColumnarValue::Array(string_array(vec![
+                        "2020-09-08T13:42:29",
+                    ]))],
+                    vec![
+                        ColumnarValue::Array(string_array(vec!["2020-09-08 13:42:29"])),
+                        ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                            "%Y-%m-%d %H:%M:%S".to_string(),
+                        ))),
+                    ],
+                ] {
+                    let arg_fields = args
+                        .iter()
+                        .map(|arg| Field::new("arg", arg.data_type(), true).into())
+                        .collect();
+                    let result = udf.invoke_with_args(ScalarFunctionArgs {
+                        args,
+                        arg_fields,
+                        number_rows: 1,
+                        return_field: Field::new("f", expected.clone(), true).into(),
+                        config_options: Arc::new(options.clone()),
+                    })?;
 
-                let ColumnarValue::Array(array) = result else {
-                    panic!("expected an array result");
-                };
-                assert_eq!(array.data_type(), &expected);
+                    let ColumnarValue::Array(array) = result else {
+                        panic!("expected an array result");
+                    };
+                    assert_eq!(array.data_type(), &expected);
+                }
             }
         }
 
