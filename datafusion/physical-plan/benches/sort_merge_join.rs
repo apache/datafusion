@@ -45,6 +45,21 @@ fn build_sorted_batches(
     key_mod: usize,
     schema: &SchemaRef,
 ) -> Vec<RecordBatch> {
+    build_sorted_batches_with_size(num_rows, key_mod, 8192, schema)
+}
+
+/// Like [`build_sorted_batches`], but with an explicit output batch size.
+///
+/// `SortMergeJoinExec` takes arbitrary children, so the buffered side is not
+/// guaranteed to arrive in `batch_size`-sized batches. Small `batch_size`
+/// values make a single key group span many buffered batches, which is what
+/// drives `materialize_right_columns` onto its multi-source `interleave` path.
+fn build_sorted_batches_with_size(
+    num_rows: usize,
+    key_mod: usize,
+    batch_size: usize,
+    schema: &SchemaRef,
+) -> Vec<RecordBatch> {
     let mut rows: Vec<(i64, i64)> = (0..num_rows)
         .map(|i| ((i % key_mod) as i64, i as i64))
         .collect();
@@ -64,7 +79,6 @@ fn build_sorted_batches(
     )
     .unwrap();
 
-    let batch_size = 8192;
     let mut batches = Vec::new();
     let mut offset = 0;
     while offset < batch.num_rows() {
@@ -195,6 +209,40 @@ fn bench_smj(c: &mut Criterion) {
                 do_join(left, right, datafusion_common::JoinType::LeftAnti, &rt)
             })
         });
+    }
+
+    // Multi-source interleave path — one buffered key group spanning many
+    // small buffered batches.
+    //
+    // Every other case here keeps a key group inside a single buffered batch,
+    // so `materialize_right_columns` takes its single-source `take` fast path
+    // and never reaches `interleave`. Shrinking the buffered batch size makes
+    // a group span `group_rows / rows_per_batch` batches, which is what the
+    // source-index mapping is actually paid for. Four streamed rows share each
+    // key, so the buffered scan is re-walked per streamed row and freezes wrap
+    // mid-group.
+    {
+        let keys = 8;
+        let group_rows = 8192;
+        let left_batches = build_sorted_batches(keys * 4, keys, &s);
+        for rows_per_batch in [512, 64, 8] {
+            let right_batches = build_sorted_batches_with_size(
+                keys * group_rows,
+                keys,
+                rows_per_batch,
+                &s,
+            );
+            group.bench_function(
+                BenchmarkId::new("inner_group_spans_buffered_batches", rows_per_batch),
+                |b| {
+                    b.iter(|| {
+                        let left = make_exec(&left_batches, &s);
+                        let right = make_exec(&right_batches, &s);
+                        do_join(left, right, datafusion_common::JoinType::Inner, &rt)
+                    })
+                },
+            );
+        }
     }
 
     group.finish();
