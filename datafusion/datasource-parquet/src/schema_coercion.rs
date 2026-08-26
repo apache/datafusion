@@ -17,7 +17,7 @@
 
 //! Arrow-schema coercion utilities used by the Parquet reader to make a
 //! file schema match the table schema (binary→string, regular→view,
-//! INT96→Timestamp).
+//! INT96→Timestamp, plain->Dictionary).
 //!
 //! These helpers are independent of the [`ParquetFormat`](crate::file_format::ParquetFormat)
 //! type and several have been re-exported at the crate root for use by
@@ -51,34 +51,51 @@ pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
+    apply_file_schema_type_coercions_with_rle(table_schema, file_schema, false)
+}
+
+/// Like [`apply_file_schema_type_coercions`], but also coerces compatible
+/// string/binary file fields to dictionary types already present in the table
+/// schema.
+pub(crate) fn apply_file_schema_type_coercions_with_rle(
+    table_schema: &Schema,
+    file_schema: &Schema,
+    enable_rle_to_dictionary: bool,
+) -> Option<Schema> {
     let mut needs_view_transform = false;
     let mut needs_string_transform = false;
+    let mut needs_dict_transform = false;
 
     // Create a mapping of table field names to their data types for fast lookup
     // and simultaneously check if we need any transformations
     let table_fields: HashMap<_, _> = table_schema
         .fields()
         .iter()
-        .map(|f| {
-            let dt = f.data_type();
+        .map(|field| {
+            let data_type = field.data_type();
             // Check if we need view type transformation
-            if matches!(dt, &DataType::Utf8View | &DataType::BinaryView) {
+            if matches!(data_type, &DataType::Utf8View | &DataType::BinaryView) {
                 needs_view_transform = true;
             }
             // Check if we need string type transformation
             if matches!(
-                dt,
+                data_type,
                 &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
             ) {
                 needs_string_transform = true;
             }
+            if enable_rle_to_dictionary
+                && matches!(data_type, &DataType::Dictionary(_, _))
+            {
+                needs_dict_transform = true;
+            }
 
-            (f.name(), dt)
+            (field.name(), data_type)
         })
         .collect();
 
     // Early return if no transformation needed
-    if !needs_view_transform && !needs_string_transform {
+    if !needs_view_transform && !needs_string_transform && !needs_dict_transform {
         return None;
     }
 
@@ -120,10 +137,15 @@ pub fn apply_file_schema_type_coercions(
                     (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
                         return field_with_new_type(field, DataType::BinaryView);
                     }
+                    (DataType::Dictionary(_, _), _)
+                        if enable_rle_to_dictionary
+                            && can_promote_to_dictionary_type(field_type, table_type) =>
+                    {
+                        return field_with_new_type(field, (*table_type).clone());
+                    }
                     _ => {}
                 }
             }
-
             // If no transformation is needed, keep the original field
             Arc::clone(field)
         })
@@ -133,6 +155,114 @@ pub fn apply_file_schema_type_coercions(
         transformed_fields,
         file_schema.metadata.clone(),
     ))
+}
+
+fn dictionary_value_type(data_type: &DataType) -> Option<&DataType> {
+    match data_type {
+        DataType::Dictionary(_, value_type) => Some(value_type.as_ref()),
+        _ => None,
+    }
+}
+
+// Find the value type that can represent both sides without narrowing offsets
+// or crossing string/binary families.
+fn common_dictionary_value_type(
+    field_type: &DataType,
+    dictionary_value_type: &DataType,
+) -> Option<DataType> {
+    let field_type = match field_type {
+        DataType::Dictionary(_, field_value_type) => field_value_type.as_ref(),
+        _ => field_type,
+    };
+
+    match (field_type, dictionary_value_type) {
+        (DataType::Utf8, DataType::Utf8) => Some(DataType::Utf8),
+        (DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::LargeUtf8) => {
+            Some(DataType::LargeUtf8)
+        }
+        (DataType::Binary, DataType::Binary) => Some(DataType::Binary),
+        (
+            DataType::Binary | DataType::LargeBinary,
+            DataType::Binary | DataType::LargeBinary,
+        ) => Some(DataType::LargeBinary),
+        _ => None,
+    }
+}
+
+/// Allows safe widening into the table dictionary type.
+/// - `Utf8` to `Dictionary(Int32, LargeUtf8)`: allowed
+/// - `LargeBinary` to `Dictionary(Int32, Binary)`: rejected
+fn can_promote_to_dictionary_type(
+    file_field_type: &DataType,
+    table_dictionary_type: &DataType,
+) -> bool {
+    dictionary_value_type(table_dictionary_type).is_some_and(|dictionary_value_type| {
+        common_dictionary_value_type(file_field_type, dictionary_value_type)
+            .is_some_and(|common_type| &common_type == dictionary_value_type)
+    })
+}
+
+/// Normalize per-file schemas so that a column promoted to `Dictionary` in
+/// *any* file is promoted to the same `Dictionary` type in *all* files.
+///
+/// This lets [`Schema::try_merge`] accept directories that mix dictionary and
+/// plain encodings for the same column.
+pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
+    // First pass: record the dictionary type for every column that is Dictionary in
+    // at least one schema.
+    let mut dict_types: HashMap<String, DataType> = HashMap::new();
+    for schema in &schemas {
+        for field in schema.fields() {
+            if matches!(field.data_type(), DataType::Dictionary(_, _)) {
+                dict_types
+                    .entry(field.name().clone())
+                    .or_insert_with(|| field.data_type().clone());
+            }
+        }
+    }
+    if dict_types.is_empty() {
+        return schemas;
+    }
+
+    // Widen the recorded dictionary value type before promoting plain fields.
+    for schema in &schemas {
+        for field in schema.fields() {
+            let Some(dict_type) = dict_types.get_mut(field.name()) else {
+                continue;
+            };
+            let DataType::Dictionary(key_type, value_type) = dict_type else {
+                continue;
+            };
+            let key_type = key_type.clone();
+            let value_type = value_type.as_ref().clone();
+            if let Some(common_type) =
+                common_dictionary_value_type(field.data_type(), &value_type)
+            {
+                *dict_type = DataType::Dictionary(key_type, Box::new(common_type));
+            }
+        }
+    }
+
+    // Only promote fields whose type family matches the dictionary value type,
+    // so schema normalization does not reinterpret binary bytes as UTF-8.
+    schemas
+        .into_iter()
+        .map(|schema| {
+            let fields: Vec<Arc<Field>> = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    if let Some(dict_type) = dict_types.get(field.name())
+                        && can_promote_to_dictionary_type(field.data_type(), dict_type)
+                    {
+                        return field_with_new_type(field, dict_type.clone());
+                    }
+                    Arc::clone(field)
+                })
+                .collect();
+            Schema::new_with_metadata(fields, schema.metadata().clone())
+        })
+        .collect()
 }
 
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
@@ -438,6 +568,25 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
             DataType::Binary | DataType::LargeBinary => {
                 field_with_new_type(field, DataType::BinaryView)
             }
+            // Also rewrite the value type inside dictionary columns so that
+            // dict<_, Utf8> / dict<_, LargeUtf8> become dict<_, Utf8View> and
+            // dict<_, Binary> / dict<_, LargeBinary> become dict<_, BinaryView>.
+            DataType::Dictionary(key_type, value_type) => {
+                let new_value = match value_type.as_ref() {
+                    DataType::Utf8 | DataType::LargeUtf8 => Some(DataType::Utf8View),
+                    DataType::Binary | DataType::LargeBinary => {
+                        Some(DataType::BinaryView)
+                    }
+                    _ => None,
+                };
+                match new_value {
+                    Some(vt) => field_with_new_type(
+                        field,
+                        DataType::Dictionary(key_type.clone(), Box::new(vt)),
+                    ),
+                    None => Arc::clone(field),
+                }
+            }
             _ => Arc::clone(field),
         })
         .collect();
@@ -453,6 +602,22 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
             DataType::Binary => field_with_new_type(field, DataType::Utf8),
             DataType::LargeBinary => field_with_new_type(field, DataType::LargeUtf8),
             DataType::BinaryView => field_with_new_type(field, DataType::Utf8View),
+            // Keep binary_as_string consistent for dictionary value types.
+            DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+                DataType::Binary => field_with_new_type(
+                    field,
+                    DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8)),
+                ),
+                DataType::LargeBinary => field_with_new_type(
+                    field,
+                    DataType::Dictionary(key_type.clone(), Box::new(DataType::LargeUtf8)),
+                ),
+                DataType::BinaryView => field_with_new_type(
+                    field,
+                    DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8View)),
+                ),
+                _ => Arc::clone(field),
+            },
             _ => Arc::clone(field),
         })
         .collect();
@@ -727,5 +892,257 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    fn dict(value_type: DataType) -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type))
+    }
+
+    fn one_field_schema(data_type: DataType) -> Schema {
+        Schema::new(vec![Field::new("col", data_type, true)])
+    }
+
+    #[test]
+    fn uniform_dict_schemas_respects_value_type_families() {
+        // String/binary dictionary promotion must preserve the concrete value type
+        // family so schema merging does not silently reinterpret bytes as UTF-8.
+        let cases = vec![
+            (
+                "utf8",
+                dict(DataType::Utf8),
+                DataType::Utf8,
+                dict(DataType::Utf8),
+                dict(DataType::Utf8),
+            ),
+            (
+                "large_utf8",
+                dict(DataType::LargeUtf8),
+                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "utf8_large_utf8",
+                dict(DataType::Utf8),
+                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "binary",
+                dict(DataType::Binary),
+                DataType::Binary,
+                dict(DataType::Binary),
+                dict(DataType::Binary),
+            ),
+            (
+                "large_binary",
+                dict(DataType::LargeBinary),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "binary_large_binary",
+                dict(DataType::Binary),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "binary_not_utf8",
+                dict(DataType::Utf8),
+                DataType::Binary,
+                dict(DataType::Utf8),
+                DataType::Binary,
+            ),
+            (
+                "utf8_not_binary",
+                dict(DataType::Binary),
+                DataType::Utf8,
+                dict(DataType::Binary),
+                DataType::Utf8,
+            ),
+        ];
+
+        for (name, dict_type, plain_type, expected_dict_type, expected_plain_type) in
+            cases
+        {
+            let result = uniform_dict_schemas(vec![
+                one_field_schema(dict_type.clone()),
+                one_field_schema(plain_type),
+            ]);
+
+            assert_eq!(
+                result[0].field(0).data_type(),
+                &expected_dict_type,
+                "{name}"
+            );
+            assert_eq!(
+                result[1].field(0).data_type(),
+                &expected_plain_type,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn rle_schema_coercion_respects_dictionary_value_type() {
+        // Scan-time schema coercion can only use dictionary types already chosen by
+        // schema inference, and must leave incompatible file fields unchanged.
+        let cases = vec![
+            (
+                "utf8",
+                dict(DataType::Utf8),
+                DataType::Utf8,
+                dict(DataType::Utf8),
+            ),
+            (
+                "large_utf8",
+                dict(DataType::LargeUtf8),
+                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "large_utf8_to_utf8_dict_not_safe",
+                dict(DataType::Utf8),
+                DataType::LargeUtf8,
+                DataType::LargeUtf8,
+            ),
+            (
+                "utf8_to_large_utf8_dict",
+                dict(DataType::LargeUtf8),
+                DataType::Utf8,
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "binary",
+                dict(DataType::Binary),
+                DataType::Binary,
+                dict(DataType::Binary),
+            ),
+            (
+                "large_binary",
+                dict(DataType::LargeBinary),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "large_binary_to_binary_dict_not_safe",
+                dict(DataType::Binary),
+                DataType::LargeBinary,
+                DataType::LargeBinary,
+            ),
+            (
+                "binary_to_large_binary_dict",
+                dict(DataType::LargeBinary),
+                DataType::Binary,
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "binary_not_utf8",
+                dict(DataType::Utf8),
+                DataType::Binary,
+                DataType::Binary,
+            ),
+            (
+                "utf8_not_binary",
+                dict(DataType::Binary),
+                DataType::Utf8,
+                DataType::Utf8,
+            ),
+            (
+                "binary_not_int64_dict",
+                dict(DataType::Int64),
+                DataType::Binary,
+                DataType::Binary,
+            ),
+        ];
+
+        for (name, table_type, file_type, expected_type) in cases {
+            let table_schema = one_field_schema(table_type);
+            let file_schema = one_field_schema(file_type);
+
+            let output_type = apply_file_schema_type_coercions_with_rle(
+                &table_schema,
+                &file_schema,
+                true,
+            )
+            .as_ref()
+            .map(|s| s.field(0).data_type().clone())
+            .unwrap_or_else(|| file_schema.field(0).data_type().clone());
+
+            assert_eq!(output_type, expected_type, "{name}");
+        }
+
+        let table_schema = Schema::new(vec![
+            Field::new("dict_col", dict(DataType::Utf8), true),
+            Field::new("string_col", DataType::Utf8, true),
+        ]);
+        let file_schema = Schema::new(vec![
+            Field::new("dict_col", DataType::Utf8, true),
+            Field::new("string_col", DataType::Binary, true),
+        ]);
+        let result =
+            apply_file_schema_type_coercions_with_rle(&table_schema, &file_schema, false)
+                .unwrap();
+
+        assert_eq!(result.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(result.field(1).data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn transform_binary_to_string_rewrites_dict_binary_value_type() {
+        // binary_as_string must also rewrite dictionary value types.
+        let schema = Schema::new(vec![
+            Field::new(
+                "rle_binary",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Binary),
+                ),
+                true,
+            ),
+            Field::new(
+                "rle_large_binary",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::LargeBinary),
+                ),
+                true,
+            ),
+            Field::new("plain_binary", DataType::Binary, true),
+            Field::new(
+                "rle_utf8",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+        ]);
+
+        let result = transform_binary_to_string(&schema);
+
+        assert_eq!(
+            result.field(0).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            "Dict(Int32, Binary) must become Dict(Int32, Utf8)"
+        );
+        assert_eq!(
+            result.field(1).data_type(),
+            &DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::LargeUtf8)
+            ),
+            "Dict(Int32, LargeBinary) must become Dict(Int32, LargeUtf8)"
+        );
+        assert_eq!(
+            result.field(2).data_type(),
+            &DataType::Utf8,
+            "plain Binary must become Utf8"
+        );
+        assert_eq!(
+            result.field(3).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            "Dict(Int32, Utf8) must be unchanged"
+        );
     }
 }

@@ -251,6 +251,7 @@ datafusion.execution.parquet.data_pagesize_limit 1048576
 datafusion.execution.parquet.dictionary_enabled true
 datafusion.execution.parquet.dictionary_page_size_limit 1048576
 datafusion.execution.parquet.enable_page_index true
+datafusion.execution.parquet.enable_rle_to_dictionary false
 datafusion.execution.parquet.encoding NULL
 datafusion.execution.parquet.force_filter_selections false
 datafusion.execution.parquet.max_in_list_size 20
@@ -411,6 +412,7 @@ datafusion.execution.parquet.data_pagesize_limit 1048576 (writing) Sets best eff
 datafusion.execution.parquet.dictionary_enabled true (writing) Sets if dictionary encoding is enabled. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.dictionary_page_size_limit 1048576 (writing) Sets best effort maximum dictionary page size, in bytes
 datafusion.execution.parquet.enable_page_index true (reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.
+datafusion.execution.parquet.enable_rle_to_dictionary false (reading) If true, top-level string and binary Parquet columns with dictionary pages are inferred and scanned as `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of their plain value type. This applies only when DataFusion infers the table schema. Tables with a user-supplied schema are not promoted because the Parquet footer is not read at DDL time, so dictionary pages cannot be detected per column. See <https://github.com/apache/datafusion/issues/24112>
 datafusion.execution.parquet.encoding NULL (writing)  Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.force_filter_selections false (reading) Force the use of RowSelections for filter results, when pushdown_filters is enabled. If false, the reader will automatically choose between a RowSelection and a Bitmap based on the number and pattern of selected rows.
 datafusion.execution.parquet.max_in_list_size 20 Maximum number of input values in an `IN (...)` list eligible for min/max pruning. Lists above this cap, or a cap of 0, skip this rewrite; other predicates and Bloom-filter pruning remain available. Within the cap, nonempty lists of at most 20 values use the existing per-value rewrite. Larger positive, non-null literal string lists on a string column use a compact sorted domain. Other lists retain the existing per-value rewrite, so raising the cap can make those predicates expensive to build and evaluate. Defaults to 20.

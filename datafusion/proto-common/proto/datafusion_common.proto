@@ -619,6 +619,8 @@ message ParquetOptions {
 
   uint64 max_in_list_size = 38;
 
+  bool enable_rle_to_dictionary = 39;
+
   string created_by = 16;
 
   oneof coerce_int96_opt {
