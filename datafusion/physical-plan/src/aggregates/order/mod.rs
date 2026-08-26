@@ -28,6 +28,50 @@ use crate::InputOrderMode;
 pub use full::GroupOrderingFull;
 pub use partial::GroupOrderingPartial;
 
+/// Describes how an aggregate can determine that groups are complete.
+///
+/// This is distinct from [`InputOrderMode`], which describes the ordering of
+/// the input relative to the grouping expressions. Input ordering is one way
+/// to establish a group-completion mode, but the execution machinery only
+/// needs to know when it can safely emit completed groups.
+///
+/// For example, when grouping by `key`, both inputs have fully contiguous
+/// groups within the input partition:
+///
+/// ```text
+/// sorted:     A A B B C C
+/// not sorted: C C A A B B
+/// ```
+///
+/// In both cases, once the key changes, the previous key will not appear again,
+/// so its group is complete and can be emitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GroupCompletionMode {
+    /// No group can be known complete before the input ends.
+    None,
+    /// Rows with the same values at these grouping-expression indices form one
+    /// contiguous range. When those values change, every group in the previous
+    /// range is complete and can be emitted.
+    ///
+    /// For example, with `GROUP BY (a, b)`, `Partial(vec![0])` means all rows
+    /// for each value of `a` are contiguous, while an `(a, b)` tuple may recur
+    /// within that range.
+    Partial(Vec<usize>),
+    /// Rows with the same complete grouping tuple form one contiguous range.
+    /// When the tuple changes, the previous group can be emitted.
+    Full,
+}
+
+impl From<&InputOrderMode> for GroupCompletionMode {
+    fn from(value: &InputOrderMode) -> Self {
+        match value {
+            InputOrderMode::Linear => Self::None,
+            InputOrderMode::PartiallySorted(indices) => Self::Partial(indices.clone()),
+            InputOrderMode::Sorted => Self::Full,
+        }
+    }
+}
+
 /// Ordering information for each group in the hash table
 #[derive(Debug)]
 pub enum GroupOrdering {
@@ -40,15 +84,24 @@ pub enum GroupOrdering {
 }
 
 impl GroupOrdering {
-    /// Create a `GroupOrdering` for the specified ordering
+    /// Create a `GroupOrdering` for the specified input order mode.
     pub fn try_new(mode: &InputOrderMode) -> Result<Self> {
+        Self::try_new_for_group_completion(&GroupCompletionMode::from(mode))
+    }
+
+    /// Create a `GroupOrdering` for the specified group-completion mode.
+    pub(crate) fn try_new_for_group_completion(
+        mode: &GroupCompletionMode,
+    ) -> Result<Self> {
         match mode {
-            InputOrderMode::Linear => Ok(GroupOrdering::None),
-            InputOrderMode::PartiallySorted(order_indices) => {
+            GroupCompletionMode::None => Ok(GroupOrdering::None),
+            GroupCompletionMode::Partial(order_indices) => {
                 GroupOrderingPartial::try_new(order_indices.clone())
                     .map(GroupOrdering::Partial)
             }
-            InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new())),
+            GroupCompletionMode::Full => {
+                Ok(GroupOrdering::Full(GroupOrderingFull::new()))
+            }
         }
     }
 
