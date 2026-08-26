@@ -217,6 +217,39 @@ SELECT column1 as a from (values (1), (2)) f where f.column1 = 2;
 ----
 2
 
+# Regression: one optimizer pass must preserve anonymous nested projections.
+statement ok
+CREATE TABLE nested_projection(i INT);
+
+statement ok
+INSERT INTO nested_projection VALUES (3), (4), (5);
+
+statement ok
+SET datafusion.optimizer.max_passes = 1;
+
+query I rowsort
+SELECT i
+FROM (
+    SELECT i + 1 AS i
+    FROM (
+        SELECT i + 1 AS i
+        FROM (
+            SELECT i + 1 AS i
+            FROM nested_projection
+        )
+    )
+)
+----
+6
+7
+8
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+DROP TABLE nested_projection;
+
 # clean data
 statement ok
 DROP TABLE aggregate_simple;
