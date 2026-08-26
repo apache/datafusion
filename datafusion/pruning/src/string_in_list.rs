@@ -133,10 +133,16 @@ impl PhysicalExpr for StringInListPruningExpr {
                         if min > max {
                             return None;
                         }
+                        // Rust string ordering and these byte comparisons both use
+                        // unsigned lexicographic UTF-8 order. Statistics providers
+                        // must supply bounds in that order or mark them unavailable;
+                        // Parquet adapters already mask bounds with unusable ordering.
                         let index = self.values.partition_point(|v| v.as_bytes() < min);
                         Some(self.values.get(index).is_some_and(|v| v.as_bytes() <= max))
                     }
-                    // A single known bound can still exclude the whole domain.
+                    // A missing bound makes that end of the interval unbounded.
+                    // Exclude only when the whole domain lies beyond the known bound;
+                    // gaps within the domain and equality cannot prove disjointness.
                     (Some(min), None)
                         if self.values.last().is_some_and(|v| v.as_bytes() < min) =>
                     {

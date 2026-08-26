@@ -1821,7 +1821,7 @@ pub(crate) fn build_page_pruning_predicate(
 ) -> Arc<PagePruningAccessPlanFilter> {
     Arc::new(PagePruningAccessPlanFilter::new_with_max_in_list_size(
         predicate,
-        Arc::clone(file_schema),
+        file_schema,
         max_in_list_size,
     ))
 }

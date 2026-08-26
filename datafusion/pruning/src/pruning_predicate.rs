@@ -1629,6 +1629,9 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
+        // Preserve the existing per-value representation for lists within
+        // the default limit. Use the compact form only when callers raise
+        // the cap; MAX_IN_LIST_SIZE is not a measured performance crossover.
         if in_list.list().len() > MAX_IN_LIST_SIZE
             && in_list.list().len() <= max_in_list_size
             && let Some(pruning_expr) =

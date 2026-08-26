@@ -139,15 +139,15 @@ impl PagePruningResult {
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression, using the default `IN (...)` pruning limit.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
-        Self::new_with_max_in_list_size(expr, schema, MAX_IN_LIST_SIZE)
+        Self::new_with_max_in_list_size(expr, &schema, MAX_IN_LIST_SIZE)
     }
 
     /// Create a page filter using the same `IN (...)` limit as row-group pruning.
-    #[expect(clippy::needless_pass_by_value)]
     pub(crate) fn new_with_max_in_list_size(
         expr: &Arc<dyn PhysicalExpr>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         max_in_list_size: usize,
     ) -> Self {
         // extract any single column predicates
@@ -155,7 +155,7 @@ impl PagePruningAccessPlanFilter {
             .into_iter()
             .filter_map(|predicate| {
                 let pp = match PruningPredicateBuilder::new()
-                    .with_file_schema(Arc::clone(&schema))
+                    .with_file_schema(Arc::clone(schema))
                     .with_max_in_list_size(max_in_list_size)
                     .try_build(Arc::clone(predicate))
                 {
