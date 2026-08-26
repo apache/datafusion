@@ -616,6 +616,40 @@ mod tests {
         result
     }
 
+    #[test]
+    fn accumulator_phases_match_aggregate_mode() {
+        let cases: [(AggregateMode, &[AccumulatorPhase]); 6] = [
+            (
+                AggregateMode::Partial,
+                &[AccumulatorPhase::Update, AccumulatorPhase::State],
+            ),
+            (
+                AggregateMode::PartialReduce,
+                &[AccumulatorPhase::Merge, AccumulatorPhase::State],
+            ),
+            (
+                AggregateMode::Final,
+                &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate],
+            ),
+            (
+                AggregateMode::FinalPartitioned,
+                &[AccumulatorPhase::Merge, AccumulatorPhase::Evaluate],
+            ),
+            (
+                AggregateMode::Single,
+                &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate],
+            ),
+            (
+                AggregateMode::SinglePartitioned,
+                &[AccumulatorPhase::Update, AccumulatorPhase::Evaluate],
+            ),
+        ];
+
+        for (mode, expected) in cases {
+            assert!(accumulator_phases(&mode) == expected, "{mode:?}");
+        }
+    }
+
     #[tokio::test]
     async fn aggregate_stream_reports_per_aggregate_metrics() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
