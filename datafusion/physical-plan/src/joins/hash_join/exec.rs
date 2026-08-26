@@ -42,7 +42,7 @@ use crate::joins::hash_join::stream::{
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, reorder_output_after_swap,
-    swap_join_projection, update_hash,
+    swap_join_projection, update_hash_from_values,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
 use crate::metrics::{Count, MetricBuilder, MetricCategory};
@@ -69,8 +69,8 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder};
-use arrow::compute::{cast, concat_batches};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder, new_empty_array};
+use arrow::compute::{cast, concat, concat_batches};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -212,11 +212,81 @@ fn concat_build_batches<'a>(
     Ok(concat_batches(&storage_schema, &converted)?)
 }
 
+/// Concatenates the already-evaluated build-side join keys in the same row
+/// order as `build_batch`.
+///
+/// Direct column keys can reuse the corresponding consolidated build column.
+/// More complex expressions are never re-evaluated: their per-batch results
+/// are concatenated directly, using byte views if their combined 32-bit value
+/// buffers would overflow.
+fn concat_build_key_values<'a>(
+    on_left: &[PhysicalExprRef],
+    key_schema: &SchemaRef,
+    key_batches: impl IntoIterator<Item = &'a RecordBatch>,
+    build_batch: &RecordBatch,
+    max_32bit_offset: usize,
+) -> Result<Vec<ArrayRef>> {
+    let key_batches = key_batches.into_iter().collect::<Vec<_>>();
+
+    on_left
+        .iter()
+        .enumerate()
+        .map(|(key_idx, expr)| {
+            if let Some(column) = expr.downcast_ref::<Column>() {
+                return Ok(Arc::clone(build_batch.column(column.index())));
+            }
+
+            let data_type = key_schema.field(key_idx).data_type();
+            let arrays = key_batches
+                .iter()
+                .map(|batch| batch.column(key_idx).as_ref())
+                .collect::<Vec<_>>();
+
+            if arrays.is_empty() {
+                return Ok(new_empty_array(data_type));
+            }
+
+            let target_type = match data_type {
+                DataType::Utf8 | DataType::Binary => {
+                    let exceeds_limit = arrays
+                        .iter()
+                        .filter_map(|array| byte_array_value_len(*array))
+                        .try_fold(0usize, |total, len| total.checked_add(len))
+                        .is_none_or(|total| total > max_32bit_offset);
+
+                    match (data_type, exceeds_limit) {
+                        (DataType::Utf8, true) => DataType::Utf8View,
+                        (DataType::Binary, true) => DataType::BinaryView,
+                        _ => data_type.clone(),
+                    }
+                }
+                _ => data_type.clone(),
+            };
+
+            if &target_type == data_type {
+                return Ok(concat(&arrays)?);
+            }
+
+            let converted = arrays
+                .into_iter()
+                .map(|array| cast(array, &target_type))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let converted = converted
+                .iter()
+                .map(|array| array.as_ref())
+                .collect::<Vec<_>>();
+            Ok(concat(&converted)?)
+        })
+        .collect()
+}
+
 #[expect(clippy::too_many_arguments)]
 fn try_create_array_map(
     bounds: &Option<PartitionBounds>,
     schema: &SchemaRef,
     batches: &[RecordBatch],
+    key_schema: &SchemaRef,
+    key_batches: &[RecordBatch],
     on_left: &[PhysicalExprRef],
     reservation: &mut MemoryReservation,
     perfect_hash_join_small_build_threshold: usize,
@@ -228,9 +298,8 @@ fn try_create_array_map(
     }
 
     if null_equality == NullEquality::NullEqualsNull {
-        for batch in batches.iter() {
-            let arrays = evaluate_expressions_to_arrays(on_left, batch)?;
-            if arrays[0].null_count() > 0 {
+        for key_batch in key_batches {
+            if key_batch.column(0).null_count() > 0 {
                 return Ok(None);
             }
         }
@@ -288,7 +357,13 @@ fn try_create_array_map(
     reservation.try_grow(mem_size)?;
 
     let batch = concat_build_batches(schema, batches, MAX_32BIT_OFFSET)?;
-    let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
+    let left_values = concat_build_key_values(
+        on_left,
+        key_schema,
+        key_batches,
+        &batch,
+        MAX_32BIT_OFFSET,
+    )?;
 
     let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
@@ -2550,8 +2625,6 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 /// based on the actual data ranges can be pushed down to the probe side to
 /// eliminate unnecessary data early.
 struct CollectLeftAccumulator {
-    /// The physical expression to evaluate for each batch
-    expr: Arc<dyn PhysicalExpr>,
     /// Accumulator for tracking the minimum value across all batches
     min: MinAccumulator,
     /// Accumulator for tracking the maximum value across all batches
@@ -2583,26 +2656,24 @@ impl CollectLeftAccumulator {
             // Min/Max can operate on dictionary data but expect to be initialized with the underlying value type
             .map(|dt| dictionary_value_type(&dt))?;
         Ok(Self {
-            expr,
             min: MinAccumulator::try_new(&data_type)?,
             max: MaxAccumulator::try_new(&data_type)?,
         })
     }
 
-    /// Updates the accumulators with values from a new batch.
+    /// Updates the accumulators with values from one evaluated key array.
     ///
-    /// Evaluates the expression on the batch and updates both min and max
-    /// accumulators with the resulting values.
+    /// Updates both min and max accumulators with an already-evaluated join
+    /// key array.
     ///
     /// # Arguments
-    /// * `batch` - The record batch to process
+    /// * `array` - The evaluated join key values to process
     ///
     /// # Returns
-    /// Ok(()) if the update succeeds, or an error if expression evaluation fails
-    fn update_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let array = self.expr.evaluate(batch)?.into_array(batch.num_rows())?;
-        self.min.update_batch(std::slice::from_ref(&array))?;
-        self.max.update_batch(std::slice::from_ref(&array))?;
+    /// Ok(()) if the update succeeds
+    fn update_array(&mut self, array: &ArrayRef) -> Result<()> {
+        self.min.update_batch(std::slice::from_ref(array))?;
+        self.max.update_batch(std::slice::from_ref(array))?;
         Ok(())
     }
 
@@ -2623,6 +2694,9 @@ impl CollectLeftAccumulator {
 /// State for collecting the build-side data during hash join
 struct BuildSideState {
     batches: Vec<RecordBatch>,
+    /// Join-key expressions evaluated once for each corresponding input batch.
+    key_batches: Vec<RecordBatch>,
+    key_schema: SchemaRef,
     num_rows: usize,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
@@ -2642,8 +2716,23 @@ impl BuildSideState {
         schema: &SchemaRef,
         should_compute_dynamic_filters: bool,
     ) -> Result<Self> {
+        let key_schema = Arc::new(Schema::new(
+            on_left
+                .iter()
+                .enumerate()
+                .map(|(idx, expr)| {
+                    Ok(arrow_schema::Field::new(
+                        format!("join_key_{idx}"),
+                        expr.data_type(schema)?,
+                        true,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ));
         Ok(Self {
             batches: Vec::new(),
+            key_batches: Vec::new(),
+            key_schema,
             num_rows: 0,
             metrics,
             reservation,
@@ -2730,33 +2819,52 @@ async fn collect_left_input(
     )?;
 
     let state = left_stream
-        .try_fold(initial, |mut state, batch| async move {
-            // Update accumulators if computing bounds
-            if let Some(ref mut accumulators) = state.bounds_accumulators {
-                for accumulator in accumulators {
-                    accumulator.update_batch(&batch)?;
-                }
-            }
+        .try_fold(initial, |mut state, batch| {
+            let keys_values = evaluate_expressions_to_arrays(&on_left, &batch);
+            async move {
+                // Join-key expressions may not accept a different physical string
+                // representation, so evaluate them once against the original batch
+                // and retain their results for hashing and collision checks.
+                let keys_values = keys_values?;
 
-            // Decide if we spill or not
-            let batch_size = state.memory_counter.count_batch(&batch);
-            // Reserve memory for incoming batch
-            state.reservation.try_grow(batch_size)?;
-            // Update metrics
-            state.metrics.build_mem_used.add(batch_size);
-            state.metrics.build_input_batches.add(1);
-            state.metrics.build_input_rows.add(batch.num_rows());
-            // Update row count
-            state.num_rows += batch.num_rows();
-            // Push batch to output
-            state.batches.push(batch);
-            Ok(state)
+                // Update accumulators if computing bounds
+                if let Some(ref mut accumulators) = state.bounds_accumulators {
+                    for (accumulator, array) in accumulators.iter_mut().zip(&keys_values)
+                    {
+                        accumulator.update_array(array)?;
+                    }
+                }
+
+                let key_batch =
+                    RecordBatch::try_new(Arc::clone(&state.key_schema), keys_values)?;
+
+                // Decide if we spill or not
+                let batch_size = state.memory_counter.count_batch(&batch);
+                let key_batch_size = state.memory_counter.count_batch(&key_batch);
+                let Some(batch_size) = batch_size.checked_add(key_batch_size) else {
+                    return internal_err!("Build-side batch memory size overflow");
+                };
+                // Reserve memory for incoming batch
+                state.reservation.try_grow(batch_size)?;
+                // Update metrics
+                state.metrics.build_mem_used.add(batch_size);
+                state.metrics.build_input_batches.add(1);
+                state.metrics.build_input_rows.add(batch.num_rows());
+                // Update row count
+                state.num_rows += batch.num_rows();
+                // Push batch to output
+                state.batches.push(batch);
+                state.key_batches.push(key_batch);
+                Ok(state)
+            }
         })
         .await?;
 
     // Extract fields from state
     let BuildSideState {
         batches,
+        key_batches,
+        key_schema,
         num_rows,
         metrics,
         mut reservation,
@@ -2781,6 +2889,8 @@ async fn collect_left_input(
             &bounds,
             &schema,
             &batches,
+            &key_schema,
+            &key_batches,
             &on_left,
             &mut reservation,
             config.execution.perfect_hash_join_small_build_threshold,
@@ -2818,14 +2928,15 @@ async fn collect_left_input(
             let mut offset = 0;
 
             let batches_iter = batches.iter().rev();
+            let key_batches_iter = key_batches.iter().rev();
 
             // Updating hashmap starting from the last batch
-            for batch in batches_iter.clone() {
+            for key_batch in key_batches_iter.clone() {
                 hashes_buffer.clear();
-                hashes_buffer.resize(batch.num_rows(), 0);
-                update_hash(
-                    &on_left,
-                    batch,
+                hashes_buffer.resize(key_batch.num_rows(), 0);
+                update_hash_from_values(
+                    key_batch.columns(),
+                    key_batch.num_rows(),
                     &mut *hashmap,
                     offset,
                     &random_state,
@@ -2834,14 +2945,20 @@ async fn collect_left_input(
                     true,
                     null_equality,
                 )?;
-                offset += batch.num_rows();
+                offset += key_batch.num_rows();
             }
 
             // Merge all batches into a single batch, so we can directly index into the arrays
             let batch =
                 concat_build_batches(&schema, batches_iter.clone(), MAX_32BIT_OFFSET)?;
 
-            let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+            let left_values = concat_build_key_values(
+                &on_left,
+                &key_schema,
+                key_batches_iter,
+                &batch,
+                MAX_32BIT_OFFSET,
+            )?;
 
             (Map::HashMap(hashmap), batch, left_values)
         };
@@ -2955,7 +3072,7 @@ mod tests {
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::Boundedness;
     use crate::filter::FilterExecBuilder;
-    use crate::joins::hash_join::stream::lookup_join_hashmap;
+    use crate::joins::hash_join::stream::{adapt_probe_side_values, lookup_join_hashmap};
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::{
@@ -3058,6 +3175,72 @@ mod tests {
         let result = concat_build_batches(&schema, [&batch1, &batch2], 5)?;
 
         assert_eq!(result.column(0).data_type(), &DataType::BinaryView);
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_key_values_reuses_direct_build_column() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "string",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["abc"]))],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["def"]))],
+        )?;
+        let build_batch = concat_build_batches(&schema, [&batch1, &batch2], 5)?;
+        let on_left: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("string", 0))];
+
+        let values = concat_build_key_values(
+            &on_left,
+            &schema,
+            [&batch1, &batch2],
+            &build_batch,
+            5,
+        )?;
+
+        assert!(Arc::ptr_eq(&values[0], build_batch.column(0)));
+        assert_eq!(values[0].data_type(), &DataType::Utf8View);
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_key_values_uses_retained_expression_results() -> Result<()> {
+        let key_schema = Arc::new(Schema::new(vec![Field::new(
+            "computed_key",
+            DataType::Utf8,
+            true,
+        )]));
+        let key_batch1 = RecordBatch::try_new(
+            Arc::clone(&key_schema),
+            vec![Arc::new(StringArray::from(vec!["abc"]))],
+        )?;
+        let key_batch2 = RecordBatch::try_new(
+            Arc::clone(&key_schema),
+            vec![Arc::new(StringArray::from(vec!["def"]))],
+        )?;
+        let build_batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        let on_left: Vec<PhysicalExprRef> = vec![Arc::new(Literal::new(
+            ScalarValue::Utf8(Some("not re-evaluated".to_string())),
+        ))];
+
+        let values = concat_build_key_values(
+            &on_left,
+            &key_schema,
+            [&key_batch1, &key_batch2],
+            &build_batch,
+            5,
+        )?;
+
+        assert_eq!(values[0].data_type(), &DataType::Utf8View);
+        let values = values[0].as_string_view();
+        assert_eq!(values.value(0), "abc");
+        assert_eq!(values.value(1), "def");
         Ok(())
     }
 
@@ -5725,22 +5908,16 @@ mod tests {
     }
 
     #[test]
-    fn lookup_join_hashmap_compares_view_build_keys_with_utf8_probe_keys() -> Result<()> {
-        let build_schema =
-            Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, false)]));
+    fn probe_values_are_adapted_once_for_view_build_keys() -> Result<()> {
         let build_keys: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
         let probe_keys: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
-        let build_batch = RecordBatch::try_new(
-            Arc::clone(&build_schema),
-            vec![Arc::clone(&build_keys)],
-        )?;
         let build_view_keys = cast(&build_keys, &DataType::Utf8View)?;
         let random_state = RandomState::with_seed(0);
         let mut build_hashes = vec![0; build_keys.len()];
         let mut join_hash_map = JoinHashMapU32::with_capacity(build_keys.len());
-        update_hash(
-            &[Arc::new(Column::new("key", 0))],
-            &build_batch,
+        update_hash_from_values(
+            &[build_keys],
+            2,
             &mut join_hash_map,
             0,
             &random_state,
@@ -5752,12 +5929,17 @@ mod tests {
 
         let mut probe_hashes = vec![0; probe_keys.len()];
         create_hashes([&probe_keys], &random_state, &mut probe_hashes)?;
+        let probe_view_keys = adapt_probe_side_values(
+            std::slice::from_ref(&build_view_keys),
+            vec![probe_keys],
+        )?;
+        assert_eq!(probe_view_keys[0].data_type(), &DataType::Utf8View);
         let mut probe_indices_buffer = Vec::new();
         let mut build_indices_buffer = Vec::new();
         let (build_indices, probe_indices, _) = lookup_join_hashmap(
             &join_hash_map,
             &[build_view_keys],
-            &[probe_keys],
+            &probe_view_keys,
             NullEquality::NullEqualsNothing,
             &probe_hashes,
             None,
