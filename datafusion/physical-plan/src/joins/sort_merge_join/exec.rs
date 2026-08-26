@@ -35,7 +35,8 @@ use crate::joins::utils::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
     EmbeddedProjection, ProjectionExec, join_allows_pushdown, join_table_borders,
-    new_join_children, physical_to_column_exprs, try_embed_projection, update_join_on,
+    new_join_children, physical_to_column_exprs, try_embed_projection,
+    update_join_filter, update_join_on,
 };
 use crate::spill::spill_manager::SpillManager;
 use crate::statistics::{ChildStats, StatisticsArgs};
@@ -738,13 +739,31 @@ impl ExecutionPlan for SortMergeJoinExec {
             return try_embed_projection(projection, self);
         }
 
+        let left_field_size = self.left().schema().fields().len();
+        let left_projection = &projection_as_columns[0..=far_right_left_col_ind as usize];
+        let right_projection = &projection_as_columns[far_left_right_col_ind as usize..];
+
         let Some(new_on) = update_join_on(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
+            left_projection,
+            right_projection,
             self.on(),
-            self.left().schema().fields().len(),
+            left_field_size,
         ) else {
             return try_embed_projection(projection, self);
+        };
+
+        let new_filter = if let Some(filter) = self.filter() {
+            let Some(filter) = update_join_filter(
+                left_projection,
+                right_projection,
+                filter,
+                left_field_size,
+            ) else {
+                return try_embed_projection(projection, self);
+            };
+            Some(filter)
+        } else {
+            None
         };
 
         let (new_left, new_right) = new_join_children(
@@ -759,7 +778,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             Arc::new(new_left),
             Arc::new(new_right),
             new_on,
-            self.filter.clone(),
+            new_filter,
             self.join_type,
             self.sort_options.clone(),
             self.null_equality,

@@ -23,11 +23,16 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
+use super::fixed_size_binary_filter::instantiate_fixed_size_binary_filter;
 use super::primitive_filter::instantiate_primitive_filter;
 use super::static_filter::StaticFilterRef;
 
 pub(super) fn instantiate_static_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
+
+    if let Some(filter) = instantiate_fixed_size_binary_filter(&in_array)? {
+        return Ok(filter);
+    }
 
     if let Some(filter) = instantiate_primitive_filter(&in_array)? {
         return Ok(filter);

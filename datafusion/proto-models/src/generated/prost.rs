@@ -1947,6 +1947,14 @@ pub struct FileScanExecConf {
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
     #[prost(message, optional, tag = "15")]
     pub output_partitioning: ::core::option::Option<Partitioning>,
+    /// Compression used by formats such as CSV and JSON. Absent means uncompressed
+    /// for compatibility with payloads written before this field existed.
+    #[prost(
+        enumeration = "super::datafusion_common::CompressionTypeVariant",
+        optional,
+        tag = "16"
+    )]
+    pub file_compression_type: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1973,6 +1981,9 @@ pub struct CsvScanExecNode {
     pub newlines_in_values: bool,
     #[prost(bool, tag = "8")]
     pub truncate_rows: bool,
+    /// Custom one-byte line terminator. Absent means the default newline terminator.
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -1995,6 +2006,9 @@ pub mod csv_scan_exec_node {
 pub struct JsonScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+    /// Absent means newline-delimited JSON for compatibility with older payloads.
+    #[prost(bool, optional, tag = "2")]
+    pub newline_delimited: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {

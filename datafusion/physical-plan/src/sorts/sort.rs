@@ -1113,7 +1113,24 @@ impl SortExec {
     ///
     /// Validates that the filter's children reference valid columns in
     /// the sort's input schema.
+    #[deprecated(
+        since = "56.0.0",
+        note = "unused by DataFusion; `SortExec` restores its dynamic filter in `SortExec::try_from_proto`, which sets the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn with_dynamic_filter_expr(
+        self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        self.set_dynamic_filter(filter)
+    }
+
+    /// Replace the dynamic filter expression for this sort, resetting any
+    /// internal state which depends on the previous one and validating that the
+    /// filter's children reference valid columns in the sort's input schema.
+    ///
+    /// Only used to restore the filter when decoding a serialized plan: every
+    /// other code path creates the filter in [`SortExec::with_fetch`].
+    fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -1726,7 +1743,7 @@ impl SortExec {
                         "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
                     )
                 })?;
-            new_sort.with_dynamic_filter_expr(df)?
+            new_sort.set_dynamic_filter(df)?
         } else {
             new_sort
         };
@@ -3605,7 +3622,7 @@ mod tests {
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
 
-        // with_dynamic_filter replaces it with a new TopKDynamicFilters.
+        // set_dynamic_filter replaces it with a new TopKDynamicFilters.
         let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::new(Column::new("a", 0)) as _],
             lit(true),
@@ -3613,7 +3630,7 @@ mod tests {
         let new_id = new_df
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
-        let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let sort = sort.set_dynamic_filter(Arc::clone(&new_df))?;
         let produced = sort.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
         let restored_id = produced[0]
@@ -3725,7 +3742,7 @@ mod tests {
             [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
             input,
         )
-        .with_dynamic_filter_expr(dynamic_filter)?
+        .set_dynamic_filter(dynamic_filter)?
         .with_preserve_partitioning(true)
         .with_fetch(Some(2));
 
@@ -3774,7 +3791,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(sort.with_dynamic_filter_expr(df).is_err());
+        assert!(sort.set_dynamic_filter(df).is_err());
         Ok(())
     }
 

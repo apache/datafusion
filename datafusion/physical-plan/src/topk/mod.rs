@@ -810,14 +810,15 @@ impl TopK {
         // break into record batches as needed
         let mut batches = vec![];
         if let Some(mut batch) = heap.emit()? {
-            (&batch).record_output(&metrics.baseline);
-
             loop {
                 if batch.num_rows() <= batch_size {
+                    (&batch).record_output(&metrics.baseline);
                     batches.push(Ok(batch));
                     break;
                 } else {
-                    batches.push(Ok(batch.slice(0, batch_size)));
+                    let head = batch.slice(0, batch_size);
+                    (&head).record_output(&metrics.baseline);
+                    batches.push(Ok(head));
                     let remaining_length = batch.num_rows() - batch_size;
                     batch = batch.slice(batch_size, remaining_length);
                 }
@@ -1463,7 +1464,6 @@ impl PartitionedTopK {
         for pk in sorted_pks {
             let mut heap = heaps.remove(&pk).expect("key from heaps.keys()");
             if let Some(batch) = heap.emit()? {
-                (&batch).record_output(&metrics.baseline);
                 coalescer.push_batch(batch)?;
             }
         }
@@ -1471,6 +1471,7 @@ impl PartitionedTopK {
 
         let mut out: Vec<Result<RecordBatch>> = Vec::new();
         while let Some(b) = coalescer.next_completed_batch() {
+            (&b).record_output(&metrics.baseline);
             out.push(Ok(b));
         }
 
@@ -1872,7 +1873,6 @@ impl PartitionedTopKRank {
             let RankPartitionState { mut heap, ties } =
                 states.remove(&pk).expect("key from states.keys()");
             if let Some(batch) = heap.emit()? {
-                (&batch).record_output(&metrics.baseline);
                 coalescer.push_batch(batch)?;
             }
             for tie in ties {
@@ -1884,6 +1884,7 @@ impl PartitionedTopKRank {
 
         let mut out: Vec<Result<RecordBatch>> = Vec::new();
         while let Some(b) = coalescer.next_completed_batch() {
+            (&b).record_output(&metrics.baseline);
             out.push(Ok(b));
         }
 
@@ -2329,7 +2330,6 @@ impl PartitionedTopKDenseRank {
                         .batch;
                     let indices = UInt32Array::from(entry.row_indices);
                     let sub = take_record_batch(batch, &indices)?;
-                    (&sub).record_output(&metrics.baseline);
                     coalescer.push_batch(sub)?;
                 }
             }
@@ -2338,6 +2338,7 @@ impl PartitionedTopKDenseRank {
 
         let mut out: Vec<Result<RecordBatch>> = Vec::new();
         while let Some(b) = coalescer.next_completed_batch() {
+            (&b).record_output(&metrics.baseline);
             out.push(Ok(b));
         }
 
@@ -2381,6 +2382,7 @@ impl PartitionedTopKDenseRank {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::MetricValue;
     use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
@@ -2484,6 +2486,54 @@ mod tests {
             &ExecutionPlanMetricsSet::new(),
             filter,
         )
+    }
+
+    /// Reads the `output_batches` and `output_rows` metrics recorded by an emit.
+    fn output_batches_and_rows(metrics: &ExecutionPlanMetricsSet) -> (usize, usize) {
+        let metrics = metrics.clone_inner();
+        let batches = metrics
+            .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+            .expect("output_batches metric")
+            .as_usize();
+        (batches, metrics.output_rows().expect("output_rows metric"))
+    }
+
+    /// Regression test for #24468: `emit` splits the heap's single batch into
+    /// `batch_size` chunks, so `output_batches` must count each emitted chunk
+    /// rather than the one pre-split batch.
+    #[tokio::test]
+    async fn test_topk_output_batches_metric_counts_emitted_batches() -> Result<()> {
+        let schema = make_ab_schema();
+        let metrics = ExecutionPlanMetricsSet::new();
+        let sort_expr = PhysicalSortExpr {
+            expr: col("a", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        // k = 5 with batch_size = 2 => emitted batches of [2, 2, 1]
+        let mut topk = TopK::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![],
+            LexOrdering::from([sort_expr]),
+            5,
+            2,
+            Arc::new(RuntimeEnv::default()),
+            &metrics,
+            make_topk_filter(),
+        )?;
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(5), Some(4), Some(3), Some(2), Some(1), Some(0)],
+            &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        )?)?;
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        let row_counts: Vec<usize> = results.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(row_counts, vec![2, 2, 1]);
+        assert_eq!(output_batches_and_rows(&metrics), (3, 5));
+
+        Ok(())
     }
 
     fn make_ab_batch(
@@ -3452,6 +3502,56 @@ mod tests {
                 Arc::new(Int32Array::from(vals)),
             ],
         )?)
+    }
+
+    /// Companion to [`test_topk_output_batches_metric_counts_emitted_batches`] for
+    /// the partitioned emit path: rows from several per-partition heaps are
+    /// coalesced into `batch_size` batches, so the metric must count the
+    /// coalesced output rather than the per-partition inputs.
+    #[tokio::test]
+    async fn test_partitioned_topk_output_batches_metric_counts_emitted_batches()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]));
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let partition_sort_fields = build_sort_fields(
+            &[PhysicalSortExpr {
+                expr: Arc::clone(&pk_expr),
+                options: SortOptions::default(),
+            }],
+            &schema,
+        )?;
+        let metrics = ExecutionPlanMetricsSet::new();
+        // 3 per-partition heaps of 2 rows each, coalesced into 2 batches of 3
+        let mut state = PartitionedTopK::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            LexOrdering::from([PhysicalSortExpr {
+                expr: col("val", schema.as_ref())?,
+                options: SortOptions::default(),
+            }]),
+            2,
+            3, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &metrics,
+        )?;
+
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 1, 2, 2, 3, 3],
+            vec![10, 5, 20, 15, 30, 25],
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        let row_counts: Vec<usize> = results.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(row_counts, vec![3, 3]);
+        assert_eq!(output_batches_and_rows(&metrics), (2, 6));
+
+        Ok(())
     }
 
     /// Multiple distinct partition keys interleaved within a single
