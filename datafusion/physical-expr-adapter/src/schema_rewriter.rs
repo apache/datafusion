@@ -262,7 +262,7 @@ impl PhysicalExprAdapter for DefaultPhysicalExprAdapter {
         let mut rewriter = DefaultPhysicalExprAdapterRewriter {
             logical_file_schema: Arc::clone(&self.logical_file_schema),
             physical_file_schema: Arc::clone(&self.physical_file_schema),
-            generated_struct_casts: Vec::new(),
+            generated_struct_casts: HashMap::new(),
         };
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
@@ -274,7 +274,7 @@ struct DefaultPhysicalExprAdapterRewriter {
     physical_file_schema: SchemaRef,
     // Retain generated casts so their pointer identity remains reliable even
     // after a wider cast has been removed from the expression tree.
-    generated_struct_casts: Vec<Arc<dyn PhysicalExpr>>,
+    generated_struct_casts: HashMap<*const (), Arc<dyn PhysicalExpr>>,
 }
 
 /// Outcome of walking a `get_field` key path through nested struct fields.
@@ -313,6 +313,24 @@ fn resolve_field_path<'a>(
     }
 }
 
+/// Retain a field path without changing its ancestors' metadata or nullability.
+fn retain_field_path(field: &FieldRef, path: &[&str]) -> Option<FieldRef> {
+    let Some((name, rest)) = path.split_first() else {
+        return Some(Arc::clone(field));
+    };
+    let DataType::Struct(fields) = field.data_type() else {
+        return None;
+    };
+    let child = fields.iter().find(|child| child.name() == *name)?;
+    let child = retain_field_path(child, rest)?;
+    Some(Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(DataType::Struct(vec![child].into())),
+    ))
+}
+
 impl DefaultPhysicalExprAdapterRewriter {
     fn rewrite_expr(
         &mut self,
@@ -342,7 +360,8 @@ impl DefaultPhysicalExprAdapterRewriter {
             .downcast_ref::<CastExpr>()
             .is_some_and(|cast| matches!(cast.cast_type(), DataType::Struct(_)))
         {
-            self.generated_struct_casts.push(Arc::clone(expr));
+            self.generated_struct_casts
+                .insert(Arc::as_ptr(expr).cast::<()>(), Arc::clone(expr));
         }
     }
 
@@ -405,8 +424,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
         if !self
             .generated_struct_casts
-            .iter()
-            .any(|generated| Arc::ptr_eq(generated, source_expr))
+            .contains_key(&Arc::as_ptr(source_expr).cast::<()>())
         {
             return Ok(None);
         }
@@ -464,14 +482,25 @@ impl DefaultPhysicalExprAdapterRewriter {
 
         // Decimal conversions can fail during setup even for all-null inputs,
         // while a Struct cast skips its children when the parent is all null.
-        // Keep that shortcut, at the cost of reading the whole Struct for an
-        // evolved decimal field. Same-type metadata casts remain safe to narrow.
+        // Keep the Struct ancestors for that shortcut, but exclude unselected
+        // siblings whose conversions may fail. Same-type metadata casts remain
+        // safe to narrow to a scalar cast.
         let source_type = physical_struct_field.data_type();
         let target_type = logical_struct_field.data_type();
         if source_type != target_type
             && (source_type.is_decimal() || target_type.is_decimal())
         {
-            return Ok(None);
+            let Some(target_field) = retain_field_path(cast.target_field(), &field_path)
+            else {
+                return Ok(None);
+            };
+            let mut args = get_field_expr.args().to_vec();
+            args[0] = Arc::new(CastExpr::new_with_target_field(
+                Arc::clone(inner),
+                target_field,
+                Some(cast.cast_options().clone()),
+            ));
+            return Arc::clone(expr).with_new_children(args).map(Some);
         }
 
         // Rebuild `get_field` over the uncast struct so its return field is
@@ -1616,7 +1645,7 @@ mod tests {
         let rewriter = DefaultPhysicalExprAdapterRewriter {
             logical_file_schema: Arc::new(logical_schema),
             physical_file_schema: Arc::new(physical_schema),
-            generated_struct_casts: Vec::new(),
+            generated_struct_casts: HashMap::new(),
         };
 
         // Test that when a field exists in physical schema, it returns None
@@ -1911,6 +1940,70 @@ mod tests {
             };
             let get_field = extracted.downcast_ref::<ScalarFunctionExpr>().unwrap();
             assert!(get_field.args()[0].downcast_ref::<Column>().is_some());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_narrow_decimal_struct_cast_ignores_siblings() -> Result<()> {
+        use arrow::array::ArrayRef;
+        use datafusion_physical_expr::planner::logical2physical;
+
+        for nested in [false, true] {
+            let mut physical_fields = vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", DataType::Utf8, true),
+            ];
+            let mut logical_fields = vec![
+                Field::new("x", DataType::Decimal128(10, 2), true).with_metadata(
+                    HashMap::from([("logical_meta".to_string(), "1".to_string())]),
+                ),
+                Field::new("y", DataType::Int32, true),
+            ];
+            let mut column = Arc::new(StructArray::new(
+                physical_fields.clone().into(),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(StringArray::from(vec!["bad"])),
+                ],
+                None,
+            )) as ArrayRef;
+            let mut args = vec![datafusion_expr::col("s")];
+            if nested {
+                physical_fields = vec![
+                    Field::new("inner", DataType::Struct(physical_fields.into()), true),
+                    Field::new("y", DataType::Utf8, true),
+                ];
+                logical_fields = vec![
+                    Field::new("inner", DataType::Struct(logical_fields.into()), true),
+                    Field::new("y", DataType::Int32, true),
+                ];
+                column = Arc::new(StructArray::new(
+                    physical_fields.clone().into(),
+                    vec![column, Arc::new(StringArray::from(vec!["bad"]))],
+                    None,
+                ));
+                args.push(datafusion_expr::lit("inner"));
+            }
+            args.push(datafusion_expr::lit("x"));
+            let (logical_schema, physical_schema) =
+                struct_schemas(physical_fields, logical_fields);
+            let expr = logical2physical(
+                &datafusion_functions::core::get_field().call(args),
+                &logical_schema,
+            );
+            let expected_field = expr.return_field(&logical_schema)?;
+            let batch = RecordBatch::try_new(Arc::clone(&physical_schema), vec![column])?;
+            let adapter = DefaultPhysicalExprAdapterFactory
+                .create(logical_schema, Arc::clone(&physical_schema))?;
+            let rewritten = adapter.rewrite(expr)?;
+            assert_eq!(rewritten.return_field(&physical_schema)?, expected_field);
+            let values = rewritten.evaluate(&batch)?.into_array(1)?;
+            assert_eq!(
+                ScalarValue::try_from_array(&values, 0)?,
+                ScalarValue::Decimal128(Some(100), 10, 2),
+                "nested={nested}"
+            );
         }
         Ok(())
     }
