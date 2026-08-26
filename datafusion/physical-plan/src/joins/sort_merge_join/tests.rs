@@ -4221,6 +4221,85 @@ async fn join_with_group_spanning_batches_rescanned_per_streamed_row() -> Result
     Ok(())
 }
 
+/// A wrapped multi-source freeze that also carries a null buffered index.
+///
+/// `materialize_right_columns` has two independent offsets in play on the
+/// interleave path: `batch_idx - min_batch_idx` addresses the source table,
+/// and `+ source_offset` shifts past the null sentinel that occupies
+/// `interleave` slot 0. Only their combination is interesting, and the two
+/// halves are awkward to get into the same freeze: `freeze_dequeuing_buffered`
+/// freezes before popping consumed batches, so a null-joined streamed row
+/// normally lands in its own single-source freeze.
+///
+/// The one shape that combines them puts the unmatched streamed row *before*
+/// a key group spanning several batches, with two streamed rows matching that
+/// group so the scan wraps:
+///
+///   chunk sequence [0, 1, 2, 0, 1, 2], chunk 0 carrying the null
+///
+/// Streamed key 5 finds no buffered match, so `null_join_streamed_row` appends
+/// a null pair at scan position 0; the two streamed 10s then each re-walk
+/// batches 0..2 (`scanning_reset`), wrapping inside the same freeze.
+#[tokio::test]
+async fn join_wrapped_multi_source_freeze_with_null_buffered_index() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_l", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_r", DataType::Int32, false),
+    ]));
+
+    // Key 5 has no buffered match; the two 10s share one group.
+    let left = build_table_from_batches(vec![RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![5, 10, 10])),
+            Arc::new(Int32Array::from(vec![50, 101, 102])),
+        ],
+    )?]);
+
+    // One row per batch, all key 10: the group spans all three batches.
+    let right_batches: Vec<RecordBatch> = [1000, 2000, 3000]
+        .into_iter()
+        .map(|v| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![10])),
+                    Arc::new(Int32Array::from(vec![v])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("key", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("key", &right.schema())?) as _,
+    )];
+
+    let (_, batches) = join_collect(left, right, on, Left).await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 10  | 101   | 10  | 1000  |
+    | 10  | 101   | 10  | 2000  |
+    | 10  | 101   | 10  | 3000  |
+    | 10  | 102   | 10  | 1000  |
+    | 10  | 102   | 10  | 2000  |
+    | 10  | 102   | 10  | 3000  |
+    | 5   | 50    |     |       |
+    +-----+-------+-----+-------+
+    ");
+
+    Ok(())
+}
+
 /// Returns the column names on the schema
 fn columns(schema: &Schema) -> Vec<String> {
     schema.fields().iter().map(|f| f.name().clone()).collect()
