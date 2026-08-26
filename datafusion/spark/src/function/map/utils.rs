@@ -161,6 +161,9 @@ fn map_deduplicate_keys(
     values_nulls: Option<&NullBuffer>,
     last_value_wins: bool,
 ) -> Result<(ArrayRef, ArrayRef, OffsetBuffer<i32>)> {
+    const MIN_RETAINED_LOOKUP_CAPACITY: usize = 16;
+    const MAX_RETAINED_LOOKUP_CAPACITY_RATIO: usize = 4;
+
     let offsets_len = keys_offsets.len();
     let mut new_offsets = Vec::with_capacity(offsets_len);
 
@@ -178,11 +181,15 @@ fn map_deduplicate_keys(
 
     // Mirror Spark's `ArrayBasedMapBuilder`: the first occurrence of a key
     // fixes its position in the output; under LAST_WIN a later duplicate
-    // overwrites that slot's value. `keys_mask` selects the first-seen keys,
-    // `value_indices` records the source index in `flat_values` to materialize
-    // for each output slot (updated in place on overwrite).
+    // overwrites that slot's value. `keys_mask` selects the first-seen keys.
+    // Keep a matching `values_mask` for the common case where no overwrite
+    // occurs, so Arrow's all-true filter path can share the original value
+    // buffers. Only materialize `value_indices` with `take` after an actual
+    // LAST_WIN overwrite changes the value selection order.
     let mut keys_mask_builder = BooleanBuilder::new();
+    let mut values_mask_builder = BooleanBuilder::new();
     let mut value_indices: Vec<i32> = Vec::new();
+    let mut needs_value_take = false;
     let mut key_to_output_idx: HashMap<ScalarValue, usize> = HashMap::new();
     for (row_idx, (next_keys_offset, next_values_offset)) in keys_offsets
         .iter()
@@ -202,7 +209,15 @@ fn map_deduplicate_keys(
                     "map_deduplicate_keys: keys and values lists in the same row must have equal lengths"
                 );
             }
+            // Reuse normal-sized tables. Only shrink when a prior row left a
+            // table much larger than both the current row and a small floor.
+            let target_capacity = num_keys_entries.max(MIN_RETAINED_LOOKUP_CAPACITY);
             key_to_output_idx.clear();
+            if key_to_output_idx.capacity()
+                > target_capacity.saturating_mul(MAX_RETAINED_LOOKUP_CAPACITY_RATIO)
+            {
+                key_to_output_idx.shrink_to(target_capacity);
+            }
             for cur_entry_idx in 0..num_keys_entries {
                 let key = ScalarValue::try_from_array(
                     &flat_keys,
@@ -213,8 +228,10 @@ fn map_deduplicate_keys(
 
                 if let Some(&output_idx) = key_to_output_idx.get(&key) {
                     if last_value_wins {
+                        needs_value_take = true;
                         value_indices[output_idx] = abs_value_idx;
                         keys_mask_builder.append_value(false);
+                        values_mask_builder.append_value(false);
                         continue;
                     }
                     return exec_err!(
@@ -225,23 +242,30 @@ fn map_deduplicate_keys(
                     );
                 }
                 keys_mask_builder.append_value(true);
+                values_mask_builder.append_value(true);
                 key_to_output_idx.insert(key, value_indices.len());
                 value_indices.push(abs_value_idx);
                 new_last_offset += 1;
             }
         } else {
             // The result entry is NULL — no keys/values emitted. Still pad the
-            // mask so it stays aligned with `flat_keys`.
+            // masks so they stay aligned with their respective flat arrays.
             keys_mask_builder.append_n(num_keys_entries, false);
+            values_mask_builder.append_n(num_values_entries, false);
         }
         new_offsets.push(new_last_offset);
         cur_keys_offset += num_keys_entries;
         cur_values_offset += num_values_entries;
     }
     let keys_mask = keys_mask_builder.finish();
+    let values_mask = values_mask_builder.finish();
     let needed_keys = filter(&flat_keys, &keys_mask)?;
-    let value_indices_array = Int32Array::from(value_indices);
-    let needed_values = take(&flat_values, &value_indices_array, None)?;
+    let needed_values = if needs_value_take {
+        let value_indices_array = Int32Array::from(value_indices);
+        take(&flat_values, &value_indices_array, None)?
+    } else {
+        filter(&flat_values, &values_mask)?
+    };
     let offsets = OffsetBuffer::new(new_offsets.into());
     Ok((needed_keys, needed_values, offsets))
 }
@@ -274,6 +298,37 @@ mod tests {
         let map = result.as_map();
         assert_eq!(map.len(), 2);
         assert_eq!(map.value_offsets(), &[0, 2, 3]);
+    }
+
+    #[test]
+    fn distinct_keys_reuse_value_payload_buffer() {
+        let (keys, values) =
+            int32_utf8_inputs(vec![1, 2, 3], vec![Some("a"), Some("b"), Some("c")]);
+        let offsets = [0i32, 3];
+        let source_values = values.as_any().downcast_ref::<StringArray>().unwrap();
+
+        for last_value_wins in [false, true] {
+            let (_, needed_values, _) = map_deduplicate_keys(
+                &keys,
+                &values,
+                &offsets,
+                &offsets,
+                None,
+                None,
+                last_value_wins,
+            )
+            .unwrap();
+            let needed_values = needed_values
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+
+            assert_eq!(
+                source_values.value_data().as_ptr(),
+                needed_values.value_data().as_ptr(),
+                "distinct keys should not copy values under last_value_wins={last_value_wins}"
+            );
+        }
     }
 
     #[test]
