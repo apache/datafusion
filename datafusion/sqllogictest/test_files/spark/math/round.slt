@@ -308,24 +308,24 @@ SELECT round(arrow_cast(42, 'UInt32'), 2::int);
 query R
 SELECT round(arrow_cast(2.5, 'Decimal32(9, 1)'), 0::int);
 ----
-3
+3.0
 
 query R
 SELECT round(arrow_cast(-2.5, 'Decimal32(9, 1)'), 0::int);
 ----
--3
+-3.0
 
 # round(decimal32, 2)
 query R
 SELECT round(arrow_cast(2.345, 'Decimal32(9, 3)'), 2::int);
 ----
-2.35
+2.350
 
 # round(decimal32) default scale = 0
 query R
 SELECT round(arrow_cast(3.5, 'Decimal32(9, 1)'));
 ----
-4
+4.0
 
 # --- Decimal64 ---
 
@@ -333,24 +333,24 @@ SELECT round(arrow_cast(3.5, 'Decimal32(9, 1)'));
 query R
 SELECT round(arrow_cast(2.5, 'Decimal64(18, 1)'), 0::int);
 ----
-3
+3.0
 
 query R
 SELECT round(arrow_cast(-2.5, 'Decimal64(18, 1)'), 0::int);
 ----
--3
+-3.0
 
 # round(decimal64, 2)
 query R
 SELECT round(arrow_cast(2.345, 'Decimal64(18, 3)'), 2::int);
 ----
-2.35
+2.350
 
 # round(decimal64) default scale = 0
 query R
 SELECT round(arrow_cast(3.5, 'Decimal64(18, 1)'));
 ----
-4
+4.0
 
 # --- Decimal128 ---
 
@@ -358,34 +358,34 @@ SELECT round(arrow_cast(3.5, 'Decimal64(18, 1)'));
 query R
 SELECT round(2.5::decimal(2,1), 0::int);
 ----
-3
+3.0
 
 query R
 SELECT round(3.5::decimal(2,1), 0::int);
 ----
-4
+4.0
 
 query R
 SELECT round(-2.5::decimal(2,1), 0::int);
 ----
--3
+-3.0
 
 # round(decimal) default scale = 0
 query R
 SELECT round(2.5::decimal(2,1));
 ----
-3
+3.0
 
 # round(decimal, 2) — keep 2 decimal places
 query R
 SELECT round(2.345::decimal(10,3), 2::int);
 ----
-2.35
+2.350
 
 query R
 SELECT round(2.355::decimal(10,3), 2::int);
 ----
-2.36
+2.360
 
 # round(decimal, scale larger than input scale) — no change
 query R
@@ -397,19 +397,19 @@ SELECT round(2.5::decimal(2,1), 5::int);
 query R
 SELECT round(123.456::decimal(10,3), 1::int);
 ----
-123.5
+123.500
 
 # round(decimal, negative scale) — round to tens
 query R
 SELECT round(125.0::decimal(10,1), -1::int);
 ----
-130
+130.0
 
 # round(decimal, extreme negative scale) — should return 0, not error
 query R
 SELECT round(2.5::decimal(10,1), -400::int);
 ----
-0
+0.0
 
 # --- Decimal256 ---
 
@@ -417,24 +417,24 @@ SELECT round(2.5::decimal(10,1), -400::int);
 query R
 SELECT round(arrow_cast(2.5, 'Decimal256(38, 1)'), 0::int);
 ----
-3
+3.0
 
 query R
 SELECT round(arrow_cast(-2.5, 'Decimal256(38, 1)'), 0::int);
 ----
--3
+-3.0
 
 # round(decimal256, 2)
 query R
 SELECT round(arrow_cast(2.345, 'Decimal256(38, 3)'), 2::int);
 ----
-2.35
+2.350
 
 # round(decimal256) default scale = 0
 query R
 SELECT round(arrow_cast(3.5, 'Decimal256(38, 1)'));
 ----
-4
+4.0
 
 # -------------------------------------------------------------------
 # NULL handling
@@ -481,10 +481,10 @@ CREATE TABLE test_round (id int, int_val int, float_val double, dec_val decimal(
 query IIRR rowsort
 SELECT id, round(int_val, -1::int), round(float_val), round(dec_val, 2::int) FROM test_round;
 ----
-1 30 3 2.35
-2 40 4 3.56
-3 -30 -3 -2.35
-4 120 1 1.01
+1 30 3 2.350
+2 40 4 3.560
+3 -30 -3 -2.350
+4 120 1 1.010
 5 NULL NULL NULL
 
 statement ok
@@ -566,7 +566,7 @@ SELECT round(2.5::double);
 query R
 SELECT round(2.5::decimal(2,1), 0::int);
 ----
-3
+3.0
 
 # ANSI mode: integer overflow should error
 query error DataFusion error: Execution error: Int64 overflow on round

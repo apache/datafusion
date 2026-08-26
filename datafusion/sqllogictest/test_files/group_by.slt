@@ -5592,7 +5592,7 @@ select a, b, count(*) from t group by a, b order by a, b;
 ----
 1 123.45 2
 1 NULL 1
-2 678.9 3
+2 678.90 3
 2 1011.12 2
 3 1314.15 2
 NULL 123.45 2
