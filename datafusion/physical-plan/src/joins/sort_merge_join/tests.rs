@@ -365,8 +365,16 @@ async fn join_collect_batch_size_equals_two(
 fn join_and_projection_for_pushdown(
     filter: Option<JoinFilter>,
 ) -> Result<(Arc<SortMergeJoinExec>, ProjectionExec)> {
-    let left = build_table(("a1", &vec![1]), ("b1", &vec![2]), ("c1", &vec![3]));
-    let right = build_table(("a2", &vec![4]), ("b2", &vec![2]), ("c2", &vec![5]));
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![4, 5, 5]),
+        ("c1", &vec![7, 8, 9]),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20, 30]),
+        ("b2", &vec![4, 5, 5]),
+        ("c2", &vec![70, 8, 90]),
+    );
     let on = vec![(
         Arc::new(Column::new("b1", 1)) as _,
         Arc::new(Column::new("b2", 1)) as _,
@@ -406,9 +414,9 @@ fn join_and_projection_for_pushdown(
     Ok((join, projection))
 }
 
-#[test]
-fn projection_pushdown_remaps_filter() -> Result<()> {
-    let filter = JoinFilter::new(
+/// `c1 < c2`, referencing the last column of each child.
+fn filter_for_pushdown() -> JoinFilter {
+    JoinFilter::new(
         Arc::new(BinaryExpr::new(
             Arc::new(Column::new("c1", 0)),
             Operator::Lt,
@@ -428,8 +436,13 @@ fn projection_pushdown_remaps_filter() -> Result<()> {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ])),
-    );
-    let (join, projection) = join_and_projection_for_pushdown(Some(filter))?;
+    )
+}
+
+#[test]
+fn projection_pushdown_remaps_filter() -> Result<()> {
+    let (join, projection) =
+        join_and_projection_for_pushdown(Some(filter_for_pushdown()))?;
 
     let swapped = join
         .try_swapping_with_projection(&projection)?
@@ -454,6 +467,41 @@ fn projection_pushdown_remaps_filter() -> Result<()> {
             },
         ]
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn projection_pushdown_remaps_filter_execute() -> Result<()> {
+    let (join, projection) =
+        join_and_projection_for_pushdown(Some(filter_for_pushdown()))?;
+    let expected_schema = projection.schema();
+
+    let swapped = join
+        .try_swapping_with_projection(&projection)?
+        .expect("projection should be pushed below the join");
+    assert!(
+        swapped.downcast_ref::<SortMergeJoinExec>().is_some(),
+        "projection should not be embedded in the join"
+    );
+    assert_eq!(swapped.schema(), expected_schema);
+
+    // The pushed-down children keep only `c*` and `b*`, so the filter must run
+    // against the remapped indices: `c1 < c2` filters out the (8, 8) and (9, 8)
+    // pairs of the `b1 = b2 = 5` group.
+    let batches =
+        common::collect(swapped.execute(0, Arc::new(TaskContext::default()))?).await?;
+
+    // The output order is important as SMJ preserves sortedness
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+
+    | c1 | b1 | c2 | b2 |
+    +----+----+----+----+
+    | 7  | 4  | 70 | 4  |
+    | 8  | 5  | 90 | 5  |
+    | 9  | 5  | 90 | 5  |
+    +----+----+----+----+
+    ");
 
     Ok(())
 }
