@@ -28,14 +28,15 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use super::aggregate_hash_table::OrderedAggregateTableMetrics;
-use super::ordered_final_stream::OrderedFinalAggregateStream;
+use super::aggregate_hash_table::ClusteredAggregateTableMetrics;
+use super::clustered_final_stream::ClusteredFinalAggregateStream;
+use super::order::GroupCompletionMode;
 use super::{AggregateExec, AggregateMode};
+use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
-use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Spill configuration and accumulated runs of one grouped aggregation stream.
 ///
@@ -43,7 +44,7 @@ use crate::{InputOrderMode, SendableRecordBatchStream};
 /// drains all currently buffered groups as intermediate state (see
 /// `take_state_batch` on the aggregate tables), sorts them by the full group
 /// key, and writes them to one spill file. After the original input ends, all
-/// files are merged and replayed through an [`OrderedFinalAggregateStream`],
+/// files are merged and replayed through a [`ClusteredFinalAggregateStream`],
 /// which merges the states and evaluates the final aggregate values.
 pub(super) struct AggregateSpill {
     /// Aggregate configuration used to construct the replay stream.
@@ -92,7 +93,7 @@ pub(super) struct AggregateSpill {
     ///    using the two previously sorted spill files.
     /// 2. Build a final aggregation stream:
     ///     - The input is the SPM stream.
-    ///     - It reuses `OrderedFinalAggregateStream` for processing.
+    ///     - It reuses `ClusteredFinalAggregateStream` for processing.
     ///     - It returns the final aggregation result directly.
     ///
     /// SPM output            Final aggregate output
@@ -126,10 +127,11 @@ impl AggregateSpill {
     /// Creates the spill context of a stream, whose spill requests are described
     /// as `label`.
     ///
-    /// `input_order_mode` is the order of the stream's input: spill files are
-    /// sorted by the already ordered group columns first, followed by the
-    /// remaining ones, so that replay keeps the ordering the stream promised.
-    /// Fully sorted input aggregates in bounded memory and never spills.
+    /// `group_completion_mode` determines which group columns are already
+    /// contiguous. Spill files are sorted by those columns first, followed by
+    /// the remaining ones. Existing output sort options are retained so replay
+    /// preserves any advertised ordering as well as group completion.
+    /// Full group completion aggregates in bounded memory and never spills.
     ///
     /// `spill_schema` is the schema of the intermediate state batches.
     #[expect(clippy::too_many_arguments)]
@@ -139,12 +141,12 @@ impl AggregateSpill {
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
         let mut replay_agg = agg.clone();
-        replay_agg.input_order_mode = InputOrderMode::Sorted;
+        replay_agg.group_completion_mode = GroupCompletionMode::Full;
         let group_schema = match agg.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 agg.group_by().group_schema(spill_schema)?
@@ -164,17 +166,16 @@ impl AggregateSpill {
         };
 
         let num_group_columns = group_schema.fields().len();
-        let ordered_indices: &[usize] = match input_order_mode {
-            InputOrderMode::Linear => &[],
-            InputOrderMode::PartiallySorted(ordered_indices) => ordered_indices,
-            InputOrderMode::Sorted => {
-                return internal_err!("{label}: fully ordered input does not spill");
+        let contiguous_indices: &[usize] = match group_completion_mode {
+            GroupCompletionMode::None => &[],
+            GroupCompletionMode::Partial(contiguous_indices) => contiguous_indices,
+            GroupCompletionMode::Full => {
+                return internal_err!("{label}: fully contiguous groups do not spill");
             }
         };
-        let spill_indices = ordered_indices
-            .iter()
-            .copied()
-            .chain((0..num_group_columns).filter(|idx| !ordered_indices.contains(idx)));
+        let spill_indices = contiguous_indices.iter().copied().chain(
+            (0..num_group_columns).filter(|idx| !contiguous_indices.contains(idx)),
+        );
         let output_ordering = agg.cache.output_ordering();
         let spill_sort_exprs = spill_indices.map(|idx| {
             let output_expr = Column::new(group_schema.field(idx).name(), idx);
@@ -249,11 +250,11 @@ impl AggregateSpill {
     }
 
     /// Merges every sorted run, and does the aggregate evaluation with
-    /// [`OrderedFinalAggregateStream`].
+    /// [`ClusteredFinalAggregateStream`].
     pub(super) fn into_replay_stream(
         self,
         baseline_metrics: &BaselineMetrics,
-        metrics: OrderedAggregateTableMetrics,
+        metrics: ClusteredAggregateTableMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         let Self {
@@ -284,12 +285,12 @@ impl AggregateSpill {
             .with_replay_headroom()
             .with_intermediate_merge_sizing(Some(min_spill_batch_rows))
             .build()?;
-        let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
+        let replay = ClusteredFinalAggregateStream::new_with_input_and_metrics(
             &replay_agg,
             &context,
             partition,
             merged,
-            &InputOrderMode::Sorted,
+            &GroupCompletionMode::Full,
             baseline_metrics.clone(),
             metrics,
             None,

@@ -3422,9 +3422,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_completion_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_completion_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -3440,9 +3440,9 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
-    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+    AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], group_completion_mode=Full
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
+        AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], group_completion_mode=Full
           UnionExec
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]

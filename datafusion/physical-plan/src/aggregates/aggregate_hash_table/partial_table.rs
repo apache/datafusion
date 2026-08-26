@@ -23,7 +23,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::order::GroupCompletion;
 use crate::aggregates::{AggregateExec, evaluate_group_by};
 
 use super::common::{
@@ -78,7 +78,7 @@ impl AggregateHashTable<PartialMarker> {
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let group_values = new_group_values(group_schema, &GroupCompletion::None)?;
         let accumulators = state
             .accumulators
             .iter()
