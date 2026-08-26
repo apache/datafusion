@@ -2222,8 +2222,13 @@ mod tests {
         let reserved_size = stream.reservation.size();
         assert_ne!(reserved_size, 0);
 
-        stream.set_state(SHJStreamState::BothExhausted { final_result: true });
+        // Empty input streams drive the normal exhaustion/finalization path:
+        // PullRight -> RightExhausted -> BothExhausted(false) -> final_result.
         assert!(stream.next().await.is_none());
+        assert!(matches!(
+            stream.state(),
+            SHJStreamState::BothExhausted { final_result: true }
+        ));
         assert_eq!(stream.reservation.size(), reserved_size);
         assert_eq!(stream.metrics.stream_memory_usage.value(), reserved_size);
 

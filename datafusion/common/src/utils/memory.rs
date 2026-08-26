@@ -828,7 +828,7 @@ mod record_batch_tests {
             )
             .unwrap(),
         ) as ArrayRef;
-        let second = Arc::new(first.as_union().slice(0, first.len())) as ArrayRef;
+        let second = Arc::new(first.as_union().slice(1, 2)) as ArrayRef;
         let first_batch =
             RecordBatch::try_from_iter(vec![("union", Arc::clone(&first))]).unwrap();
         let second_batch =
@@ -865,7 +865,7 @@ mod record_batch_tests {
                 .as_any()
                 .downcast_ref::<RunArray<Int32Type>>()
                 .unwrap()
-                .slice(0, first.len()),
+                .slice(1, 2),
         ) as ArrayRef;
         let first_batch =
             RecordBatch::try_from_iter(vec![("run", Arc::clone(&first))]).unwrap();
