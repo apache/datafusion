@@ -184,7 +184,9 @@ pub(crate) struct PushdownChecker<'schema> {
     cast_accesses: Vec<CastColumnAccess>,
     /// Whether to collect [`Self::cast_accesses`].
     collect_cast_accesses: bool,
-    /// Allow field access through a retained Struct cast after schema adaptation.
+    /// Allow `get_field(CAST(struct_column AS Struct(...)), 'field', ...)`
+    /// after schema adaptation, preserving the cast and reading the full source
+    /// Struct. Both source and target must be Struct types.
     /// Planning keeps this disabled so explicit casts retain a residual filter.
     allow_struct_casts: bool,
     /// Whether nested list columns are supported by the predicate semantics.

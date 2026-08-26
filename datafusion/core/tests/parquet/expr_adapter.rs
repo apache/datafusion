@@ -840,69 +840,77 @@ async fn test_explicit_struct_cast_projection_preserves_sibling_errors() -> Resu
 
 #[tokio::test]
 async fn test_all_null_struct_decimal_cast_filter_pushdown() -> Result<()> {
+    use arrow::array::new_null_array;
     use datafusion_physical_plan::{collect, displayable};
 
-    let physical_fields: Fields = vec![Field::new("x", DataType::Utf8, true)].into();
-    let batch = RecordBatch::try_from_iter(vec![
-        ("row_id", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+    for (physical_type, logical_type) in [
+        (DataType::Utf8, DataType::Decimal128(10, -1)),
         (
-            "s",
-            Arc::new(StructArray::new(
-                physical_fields,
-                vec![Arc::new(StringArray::from(vec![None::<&str>, None]))],
-                Some(NullBuffer::new_null(2)),
-            )) as ArrayRef,
+            DataType::new_list(DataType::Utf8, true),
+            DataType::new_list(DataType::Decimal128(10, -1), true),
         ),
-    ])?;
-    let table_schema = Arc::new(Schema::new(vec![
-        Field::new("row_id", DataType::Int32, false),
-        Field::new(
-            "s",
-            DataType::Struct(
-                vec![Field::new("x", DataType::Decimal128(10, -1), true)].into(),
+    ] {
+        let physical_fields: Fields =
+            vec![Field::new("x", physical_type.clone(), true)].into();
+        let batch = RecordBatch::try_from_iter(vec![
+            ("row_id", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+            (
+                "s",
+                Arc::new(StructArray::new(
+                    physical_fields,
+                    vec![new_null_array(&physical_type, 2)],
+                    Some(NullBuffer::new_null(2)),
+                )) as ArrayRef,
             ),
-            true,
-        ),
-    ]));
-    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    write_parquet(batch, Arc::clone(&store), "null_decimal/data.parquet").await;
+        ])?;
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("row_id", DataType::Int32, false),
+            Field::new(
+                "s",
+                DataType::Struct(vec![Field::new("x", logical_type, true)].into()),
+                true,
+            ),
+        ]));
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        write_parquet(batch, Arc::clone(&store), "null_decimal/data.parquet").await;
 
-    for pushdown_filters in [false, true] {
-        let mut config = SessionConfig::new()
-            .with_collect_statistics(false)
-            .with_parquet_pruning(false)
-            .with_parquet_page_index_pruning(false);
-        config.options_mut().execution.parquet.pushdown_filters = pushdown_filters;
-        let ctx = SessionContext::new_with_config(config);
-        register_memory_listing_table(
-            &ctx,
-            Arc::clone(&store),
-            "memory:///null_decimal/",
-            Arc::clone(&table_schema),
-        )
-        .await;
+        for pushdown_filters in [false, true] {
+            let mut config = SessionConfig::new()
+                .with_collect_statistics(false)
+                .with_parquet_pruning(false)
+                .with_parquet_page_index_pruning(false);
+            config.options_mut().execution.parquet.pushdown_filters = pushdown_filters;
+            let ctx = SessionContext::new_with_config(config);
+            register_memory_listing_table(
+                &ctx,
+                Arc::clone(&store),
+                "memory:///null_decimal/",
+                Arc::clone(&table_schema),
+            )
+            .await;
 
-        for (predicate, expected_rows) in [("IS NULL", 2), ("IS NOT NULL", 0)] {
-            let plan = ctx
-                .sql(&format!(
-                    "SELECT row_id FROM t WHERE get_field(s, 'x') {predicate}"
-                ))
-                .await?
-                .create_physical_plan()
-                .await?;
-            if pushdown_filters {
-                let plan_text = displayable(plan.as_ref()).indent(false).to_string();
-                assert!(
-                    !plan_text.contains("FilterExec"),
-                    "the scan must fully handle the filter: {plan_text}"
+            for (predicate, expected_rows) in [("IS NULL", 2), ("IS NOT NULL", 0)] {
+                let plan = ctx
+                    .sql(&format!(
+                        "SELECT row_id FROM t WHERE get_field(s, 'x') {predicate}"
+                    ))
+                    .await?
+                    .create_physical_plan()
+                    .await?;
+                if pushdown_filters {
+                    let plan_text = displayable(plan.as_ref()).indent(false).to_string();
+                    assert!(
+                        !plan_text.contains("FilterExec"),
+                        "the scan must fully handle the filter: {plan_text}"
+                    );
+                }
+                let batches = collect(plan, ctx.task_ctx()).await?;
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    expected_rows,
+                    "physical_type={physical_type:?}, pushdown_filters={pushdown_filters}, predicate={predicate}"
                 );
             }
-            let batches = collect(plan, ctx.task_ctx()).await?;
-            assert_eq!(
-                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
-                expected_rows,
-                "pushdown_filters={pushdown_filters}, predicate={predicate}"
-            );
         }
     }
     Ok(())

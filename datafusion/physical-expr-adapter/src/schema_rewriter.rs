@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, FieldRef, Fields, SchemaRef};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err,
     metadata::FieldMetadata,
-    nested_struct::validate_data_type_compatibility,
+    nested_struct::{requires_nested_struct_cast, validate_data_type_compatibility},
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
@@ -317,6 +317,40 @@ fn resolve_field_path<'a>(
     }
 }
 
+/// Whether a type or any nested value type matches the predicate.
+fn contains_type(data_type: &DataType, predicate: &impl Fn(&DataType) -> bool) -> bool {
+    if predicate(data_type) {
+        return true;
+    }
+    match data_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::RunEndEncoded(_, field) => {
+            contains_type(field.data_type(), predicate)
+        }
+        DataType::Map(entries, _) => {
+            // The entries Struct is a layout wrapper, not a Struct-valued child.
+            let DataType::Struct(fields) = entries.data_type() else {
+                return false;
+            };
+            fields
+                .iter()
+                .any(|field| contains_type(field.data_type(), predicate))
+        }
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| contains_type(field.data_type(), predicate)),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, field)| contains_type(field.data_type(), predicate)),
+        DataType::Dictionary(_, values) => contains_type(values, predicate),
+        _ => false,
+    }
+}
+
 /// Retain only the selected field path in a cast target, preserving its Struct
 /// ancestors' metadata and nullability. This excludes unselected sibling
 /// conversions while keeping the all-null Struct shortcut for decimal casts.
@@ -486,15 +520,32 @@ impl DefaultPhysicalExprAdapterRewriter {
                 FieldPathResolution::NotAStruct => return Ok(None),
             };
 
-        // Decimal conversions can fail during setup even for all-null inputs,
-        // while a Struct cast skips its children when the parent is all null.
+        // Decimal conversions, including those inside containers, can fail
+        // during setup even for all-null inputs, while a Struct cast skips its
+        // children when the parent is all null.
         // Keep the Struct ancestors for that shortcut, but exclude unselected
         // siblings whose conversions may fail. Same-type metadata casts remain
         // safe to narrow to a scalar cast.
+        // A Struct-to-Struct leaf cast keeps its own shortcut and must remain
+        // narrowable by a parent get_field.
+        // Container casts involving Struct values must keep their existing
+        // dispatch: Arrow can unwrap a container into a Struct where cast_column
+        // cannot.
         let source_type = physical_struct_field.data_type();
         let target_type = logical_struct_field.data_type();
+        let is_struct = |data_type: &DataType| matches!(data_type, DataType::Struct(_));
         if source_type != target_type
-            && (source_type.is_decimal() || target_type.is_decimal())
+            && !matches!(
+                (source_type, target_type),
+                (DataType::Struct(_), DataType::Struct(_))
+            )
+            && (contains_type(source_type, &DataType::is_decimal)
+                || contains_type(target_type, &DataType::is_decimal))
+            && (source_type.is_decimal()
+                || target_type.is_decimal()
+                || requires_nested_struct_cast(source_type, target_type)
+                || (!contains_type(source_type, &is_struct)
+                    && !contains_type(target_type, &is_struct)))
         {
             let Some(target_field) = retain_field_path(cast.target_field(), &field_path)
             else {
@@ -1702,6 +1753,119 @@ mod tests {
         (logical, physical)
     }
 
+    fn decimal_cast_leaf_types(data_type: DataType) -> Vec<DataType> {
+        let item = Arc::new(Field::new("item", data_type.clone(), true));
+        vec![
+            data_type.clone(),
+            DataType::List(Arc::clone(&item)),
+            DataType::LargeList(Arc::clone(&item)),
+            DataType::FixedSizeList(Arc::clone(&item), 2),
+            DataType::ListView(Arc::clone(&item)),
+            DataType::LargeListView(item),
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", data_type.clone(), true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            ),
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(data_type.clone())),
+            DataType::new_list(
+                DataType::Struct(
+                    vec![Field::new("value", data_type.clone(), true)].into(),
+                ),
+                true,
+            ),
+            DataType::new_list(DataType::new_list(data_type, true), true),
+        ]
+    }
+
+    #[test]
+    fn test_narrow_struct_cast_preserves_struct_unwrapping() -> Result<()> {
+        use arrow::array::{
+            ArrayRef, Decimal128Array, DictionaryArray, Int8Array, ListArray,
+        };
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int8Type;
+
+        let values = Arc::new(StructArray::new(
+            vec![Field::new("value", DataType::Int32, true)].into(),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+            None,
+        )) as ArrayRef;
+        let dictionary = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0]),
+            values,
+        )?) as ArrayRef;
+        let expected_struct = Arc::new(StructArray::new(
+            vec![Field::new("value", DataType::Decimal128(10, 2), true)].into(),
+            vec![Arc::new(
+                Decimal128Array::from(vec![100]).with_precision_and_scale(10, 2)?,
+            )],
+            None,
+        )) as ArrayRef;
+        let wrap_list = |values: ArrayRef| -> ArrayRef {
+            Arc::new(ListArray::new(
+                Arc::new(Field::new("item", values.data_type().clone(), true)),
+                OffsetBuffer::from_lengths([1]),
+                values,
+                None,
+            ))
+        };
+        let wrap_dictionary = |values: ArrayRef| -> ArrayRef {
+            Arc::new(
+                DictionaryArray::<Int8Type>::try_new(Int8Array::from(vec![0]), values)
+                    .unwrap(),
+            )
+        };
+        for (label, physical, expected) in [
+            (
+                "direct Dictionary",
+                Arc::clone(&dictionary),
+                Arc::clone(&expected_struct),
+            ),
+            (
+                "List of Dictionary",
+                wrap_list(Arc::clone(&dictionary)),
+                wrap_list(Arc::clone(&expected_struct)),
+            ),
+            (
+                "Dictionary of Dictionary",
+                wrap_dictionary(dictionary),
+                wrap_dictionary(expected_struct),
+            ),
+        ] {
+            let (logical_schema, physical_schema) = struct_schemas(
+                vec![Field::new("x", physical.data_type().clone(), true)],
+                vec![Field::new("x", expected.data_type().clone(), true)],
+            );
+            let DataType::Struct(fields) = physical_schema.field(0).data_type() else {
+                unreachable!()
+            };
+            let batch = RecordBatch::try_new(
+                Arc::clone(&physical_schema),
+                vec![Arc::new(StructArray::new(
+                    fields.clone(),
+                    vec![physical],
+                    None,
+                ))],
+            )?;
+            let adapter = DefaultPhysicalExprAdapterFactory
+                .create(Arc::clone(&logical_schema), physical_schema)?;
+            let rewritten = adapter.rewrite(get_field_expr(&logical_schema, "s", "x"))?;
+            let actual = rewritten.evaluate(&batch)?.into_array(1)?;
+            assert_eq!(actual.to_data(), expected.to_data(), "{label}");
+        }
+        Ok(())
+    }
+
     /// `s['x']` where the file stores `x` as `Int32` and the table declares
     /// `Int64` must cast the extracted field, not the whole struct, so that
     /// the column stays visible under the `get_field`.
@@ -1709,29 +1873,37 @@ mod tests {
     /// See <https://github.com/apache/datafusion/issues/24109>.
     #[test]
     fn test_narrow_struct_cast_to_field_access() {
-        let (logical_schema, physical_schema) = struct_schemas(
-            vec![Field::new("x", DataType::Int32, true)],
-            vec![Field::new("x", DataType::Int64, true)],
-        );
+        for (physical_type, logical_type) in [
+            (DataType::Int32, DataType::Int64),
+            (
+                DataType::new_list(DataType::Int32, true),
+                DataType::new_list(DataType::Int64, true),
+            ),
+        ] {
+            let (logical_schema, physical_schema) = struct_schemas(
+                vec![Field::new("x", physical_type.clone(), true)],
+                vec![Field::new("x", logical_type.clone(), true)],
+            );
 
-        let adapter = DefaultPhysicalExprAdapterFactory
-            .create(Arc::clone(&logical_schema), physical_schema)
-            .unwrap();
-        let rewritten = adapter
-            .rewrite(get_field_expr(&logical_schema, "s", "x"))
-            .unwrap();
+            let adapter = DefaultPhysicalExprAdapterFactory
+                .create(Arc::clone(&logical_schema), physical_schema)
+                .unwrap();
+            let rewritten = adapter
+                .rewrite(get_field_expr(&logical_schema, "s", "x"))
+                .unwrap();
 
-        let cast = assert_cast_expr(&rewritten);
-        assert_eq!(cast.cast_type(), &DataType::Int64);
-        let get_field = cast
-            .expr()
-            .downcast_ref::<ScalarFunctionExpr>()
-            .expect("Expected get_field under the cast");
-        assert_eq!(get_field.return_type(), &DataType::Int32);
-        assert!(
-            get_field.args()[0].downcast_ref::<Column>().is_some(),
-            "the struct column must not be hidden behind a cast, got: {rewritten}"
-        );
+            let cast = assert_cast_expr(&rewritten);
+            assert_eq!(cast.cast_type(), &logical_type);
+            let get_field = cast
+                .expr()
+                .downcast_ref::<ScalarFunctionExpr>()
+                .expect("Expected get_field under the cast");
+            assert_eq!(get_field.return_type(), &physical_type);
+            assert!(
+                get_field.args()[0].downcast_ref::<Column>().is_some(),
+                "the struct column must not be hidden behind a cast, got: {rewritten}"
+            );
+        }
     }
 
     /// Selecting one field of an explicit cast must still evaluate sibling
@@ -1875,11 +2047,40 @@ mod tests {
     fn test_narrow_struct_cast_preserves_all_null_decimal_casts() -> Result<()> {
         use arrow::array::new_null_array;
         use arrow::buffer::NullBuffer;
+        use arrow::datatypes::{UnionFields, UnionMode};
 
         for (physical_type, logical_type) in [
             (DataType::Decimal128(38, -38), DataType::Decimal128(38, 38)),
             (DataType::Utf8, DataType::Decimal128(10, -1)),
-        ] {
+            (DataType::Decimal128(38, -39), DataType::Int64),
+        ]
+        .into_iter()
+        .flat_map(|(physical, logical)| {
+            decimal_cast_leaf_types(physical)
+                .into_iter()
+                .zip(decimal_cast_leaf_types(logical))
+        })
+        // A directly decimal target must still retain the ancestor even when
+        // an unrelated Union arm contains a Struct.
+        .chain([(
+            DataType::Union(
+                UnionFields::try_new(
+                    [0, 1],
+                    [
+                        Field::new("string", DataType::Utf8, true),
+                        Field::new(
+                            "struct",
+                            DataType::Struct(
+                                vec![Field::new("z", DataType::Int32, true)].into(),
+                            ),
+                            true,
+                        ),
+                    ],
+                )?,
+                UnionMode::Dense,
+            ),
+            DataType::Decimal128(10, -1),
+        )]) {
             let (logical_schema, physical_schema) = struct_schemas(
                 vec![Field::new("x", physical_type.clone(), true)],
                 vec![Field::new("x", logical_type, true)],
@@ -1918,8 +2119,11 @@ mod tests {
 
     #[test]
     fn test_narrow_struct_cast_keeps_matching_decimal_fields_optimized() -> Result<()> {
-        let decimal_type = DataType::Decimal128(10, -1);
-        for change_metadata in [false, true] {
+        for (decimal_type, change_metadata) in
+            decimal_cast_leaf_types(DataType::Decimal128(10, -1))
+                .into_iter()
+                .flat_map(|data_type| [(data_type.clone(), false), (data_type, true)])
+        {
             let physical_field = Field::new("x", decimal_type.clone(), true);
             let logical_field = if change_metadata {
                 physical_field.clone().with_metadata(HashMap::from([(
@@ -1955,23 +2159,46 @@ mod tests {
         use arrow::array::ArrayRef;
         use datafusion_physical_expr::planner::logical2physical;
 
-        for nested in [false, true] {
+        for (nested, list_leaf) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let (physical_type, logical_type, x, expected) = if list_leaf {
+                (
+                    DataType::new_list(DataType::Int32, true),
+                    DataType::new_list(DataType::Decimal128(10, 2), true),
+                    ScalarValue::new_list(
+                        &[ScalarValue::Int32(Some(1))],
+                        &DataType::Int32,
+                        true,
+                    ) as ArrayRef,
+                    ScalarValue::List(ScalarValue::new_list(
+                        &[ScalarValue::Decimal128(Some(100), 10, 2)],
+                        &DataType::Decimal128(10, 2),
+                        true,
+                    )),
+                )
+            } else {
+                (
+                    DataType::Int32,
+                    DataType::Decimal128(10, 2),
+                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                    ScalarValue::Decimal128(Some(100), 10, 2),
+                )
+            };
             let mut physical_fields = vec![
-                Field::new("x", DataType::Int32, true),
+                Field::new("x", physical_type, true),
                 Field::new("y", DataType::Utf8, true),
             ];
             let mut logical_fields = vec![
-                Field::new("x", DataType::Decimal128(10, 2), true).with_metadata(
-                    HashMap::from([("logical_meta".to_string(), "1".to_string())]),
-                ),
+                Field::new("x", logical_type, true).with_metadata(HashMap::from([(
+                    "logical_meta".to_string(),
+                    "1".to_string(),
+                )])),
                 Field::new("y", DataType::Int32, true),
             ];
             let mut column = Arc::new(StructArray::new(
                 physical_fields.clone().into(),
-                vec![
-                    Arc::new(Int32Array::from(vec![1])),
-                    Arc::new(StringArray::from(vec!["bad"])),
-                ],
+                vec![x, Arc::new(StringArray::from(vec!["bad"]))],
                 None,
             )) as ArrayRef;
             let mut args = vec![datafusion_expr::col("s")];
@@ -2007,8 +2234,8 @@ mod tests {
             let values = rewritten.evaluate(&batch)?.into_array(1)?;
             assert_eq!(
                 ScalarValue::try_from_array(&values, 0)?,
-                ScalarValue::Decimal128(Some(100), 10, 2),
-                "nested={nested}"
+                expected,
+                "nested={nested}, list_leaf={list_leaf}"
             );
         }
         Ok(())
@@ -2021,12 +2248,24 @@ mod tests {
         let (logical_schema, physical_schema) = struct_schemas(
             vec![Field::new(
                 "inner",
-                DataType::Struct(vec![Field::new("x", DataType::Utf8, true)].into()),
+                DataType::Struct(
+                    vec![
+                        Field::new("x", DataType::Utf8, true),
+                        Field::new("y", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
                 true,
             )],
             vec![Field::new(
                 "inner",
-                DataType::Struct(vec![Field::new("x", DataType::Utf8View, true)].into()),
+                DataType::Struct(
+                    vec![
+                        Field::new("x", DataType::Utf8View, true),
+                        Field::new("y", DataType::Decimal128(10, -1), true),
+                    ]
+                    .into(),
+                ),
                 true,
             )],
         );
