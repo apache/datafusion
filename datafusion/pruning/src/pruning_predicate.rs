@@ -443,11 +443,24 @@ impl<'a> PruningPredicateBuilder<'a> {
         self
     }
 
-    /// Cap on the size of `IN (...)` lists eligible for statistics pruning.
-    /// Positive literal string lists larger than [`MAX_IN_LIST_SIZE`] use a
-    /// compact sorted domain; other eligible lists use per-value checks.
-    /// Lists longer than this cap fall back to the unhandled-predicate hook
-    /// (typically "keep the container").
+    /// Cap on the input length of `IN (...)` lists eligible for min/max pruning.
+    ///
+    /// For a nonempty list of `N` values (before deduplication) and cap `C`:
+    ///
+    /// | Condition | Pruning representation |
+    /// | --- | --- |
+    /// | `N <= min(20, C)` | Existing per-value rewrite |
+    /// | `20 < N <= C`, positive, non-null literal strings on a string column | Compact sorted domain |
+    /// | `20 < N <= C`, other lists | Existing per-value rewrite |
+    /// | `N > C` | Unhandled-predicate hook, normally "keep the container" |
+    ///
+    /// Empty lists also use the unhandled-predicate hook. A cap of zero disables
+    /// this `IN` min/max rewrite, not other predicates or literal/containment
+    /// pruning (such as Bloom filters). The default cap is [`MAX_IN_LIST_SIZE`]
+    /// (20), so the compact path requires an explicitly raised cap.
+    ///
+    /// Raising the cap can still build large comparison trees for non-string
+    /// lists, `NOT IN`, or lists containing NULL; their handling is unchanged.
     ///
     /// Query engines typically pass
     /// `datafusion.execution.parquet.max_in_list_size` here.
@@ -1537,11 +1550,11 @@ impl PredicateRewriter {
         self
     }
 
-    /// Set the maximum size of an `IN (...)` list eligible for statistics
-    /// pruning. Large positive literal string lists use a compact sorted
-    /// domain; other eligible lists use per-value checks. Longer lists fall back
-    /// to the unhandled-predicate hook (typically "keep the container"),
-    /// effectively skipping container-level pruning for large IN lists.
+    /// Set the maximum input length of an `IN (...)` list eligible for min/max
+    /// pruning. See [`PruningPredicateBuilder::with_max_in_list_size`] for the
+    /// exact boundaries and representations. Longer lists fall back to the
+    /// unhandled-predicate hook (typically "keep the container"); this skips
+    /// only that `IN` min/max rewrite, not all container-level pruning.
     ///
     /// The default (see [`MAX_IN_LIST_SIZE`]) preserves the
     /// historical behaviour. Callers wiring config through can override via
@@ -1629,9 +1642,9 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
-        // Preserve the existing per-value representation for lists within
-        // the default limit. Use the compact form only when callers raise
-        // the cap; MAX_IN_LIST_SIZE is not a measured performance crossover.
+        // Keep the existing expression shape for lists of at most 20 values.
+        // This lower bound is a scope/compatibility choice, not a measured
+        // performance threshold; compact pruning is opt-in via a raised cap.
         if in_list.list().len() > MAX_IN_LIST_SIZE
             && in_list.list().len() <= max_in_list_size
             && let Some(pruning_expr) =

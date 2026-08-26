@@ -28,6 +28,15 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_plan::ColumnarValue;
 
 /// Tests whether a sorted string domain intersects an inclusive statistics interval.
+///
+/// [`PhysicalExpr::evaluate`] returns one nullable Boolean per min/max interval:
+/// * `true`: the interval intersects the domain, so matching rows may exist.
+/// * `false`: the available bounds prove the interval disjoint from the domain.
+/// * `NULL`: incomplete, invalid, or unusable bounds prevent a safe decision.
+///
+/// A single known bound can still prove disjointness. Otherwise, unknown results
+/// keep the container eligible for reading.
+///
 /// This expression is used only for pruning; the original IN remains the row filter.
 #[derive(Debug, Eq)]
 pub(crate) struct StringInListPruningExpr {
@@ -114,6 +123,8 @@ impl PhysicalExpr for StringInListPruningExpr {
         }
         // Dictionary values can be NULL behind valid keys. Preserve their
         // validity even if the view cast only carries the key nulls.
+        // TODO: Revisit this workaround once the Arrow dependency includes
+        // https://github.com/apache/arrow-rs/pull/10510.
         let min_nulls = min.logical_nulls();
         let max_nulls = max.logical_nulls();
         let min = cast(&min, &DataType::Utf8View)?;
@@ -134,9 +145,12 @@ impl PhysicalExpr for StringInListPruningExpr {
                             return None;
                         }
                         // Rust string ordering and these byte comparisons both use
-                        // unsigned lexicographic UTF-8 order. Statistics providers
-                        // must supply bounds in that order or mark them unavailable;
-                        // Parquet adapters already mask bounds with unusable ordering.
+                        // unsigned lexicographic UTF-8 order, as required by the
+                        // PruningStatistics min/max contract. Parquet adapters mask
+                        // bounds with unusable ordering; PartitionPruningStatistics
+                        // uses actual Arrow partition values. PrunableStatistics
+                        // trusts file providers' bounds: there is no ordering gate
+                        // for arbitrary statistics providers here.
                         let index = self.values.partition_point(|v| v.as_bytes() < min);
                         Some(self.values.get(index).is_some_and(|v| v.as_bytes() <= max))
                     }
