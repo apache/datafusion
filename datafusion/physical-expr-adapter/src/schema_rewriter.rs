@@ -272,8 +272,12 @@ impl PhysicalExprAdapter for DefaultPhysicalExprAdapter {
 struct DefaultPhysicalExprAdapterRewriter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
-    // Retain generated casts so their pointer identity remains reliable even
-    // after a wider cast has been removed from the expression tree.
+    // A fresh map is created for each `rewrite()` call. Tracking relies on
+    // bottom-up `transform` traversal: a generated child cast is recorded before
+    // its parent `get_field` sees the same Arc allocation. Owned Arc clones keep
+    // recorded allocations alive even after removal from the tree, preventing
+    // pointer-address reuse. Keeping provenance here avoids adding markers to
+    // expression types or threading it through rewrite results.
     generated_struct_casts: HashMap<*const (), Arc<dyn PhysicalExpr>>,
 }
 
@@ -313,7 +317,9 @@ fn resolve_field_path<'a>(
     }
 }
 
-/// Retain a field path without changing its ancestors' metadata or nullability.
+/// Retain only the selected field path in a cast target, preserving its Struct
+/// ancestors' metadata and nullability. This excludes unselected sibling
+/// conversions while keeping the all-null Struct shortcut for decimal casts.
 fn retain_field_path(field: &FieldRef, path: &[&str]) -> Option<FieldRef> {
     let Some((name, rest)) = path.split_first() else {
         return Some(Arc::clone(field));
