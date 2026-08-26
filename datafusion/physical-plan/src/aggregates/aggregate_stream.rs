@@ -28,6 +28,7 @@ use crate::aggregates::{
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
@@ -492,15 +493,18 @@ fn aggregate_batch(
 
             // 1.4
             let size_pre = accum.size();
-            let phase = match mode.input_mode() {
-                AggregateInputMode::Raw => AccumulatorPhase::Update,
-                AggregateInputMode::Partial => AccumulatorPhase::Merge,
+            let res = match mode.input_mode() {
+                AggregateInputMode::Raw => aggregate_accumulator_metrics.time(
+                    index,
+                    AccumulatorPhase::Update,
+                    || accum.update_batch(&values),
+                ),
+                AggregateInputMode::Partial => aggregate_accumulator_metrics.time(
+                    index,
+                    AccumulatorPhase::Merge,
+                    || accum.merge_batch(&values),
+                ),
             };
-            let res = aggregate_accumulator_metrics.time(index, phase, || match phase {
-                AccumulatorPhase::Update => accum.update_batch(&values),
-                AccumulatorPhase::Merge => accum.merge_batch(&values),
-                _ => unreachable!("input aggregate phases are update or merge"),
-            });
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);
             res
@@ -528,7 +532,7 @@ fn finalize_aggregation_with_metrics(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
     metrics: &AggregateAccumulatorMetrics,
-) -> Result<Vec<Arc<dyn arrow::array::Array>>> {
+) -> Result<Vec<ArrayRef>> {
     match mode.output_mode() {
         AggregateOutputMode::Final => accumulators
             .iter_mut()
