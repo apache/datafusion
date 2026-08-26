@@ -24,8 +24,8 @@ use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
-    df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
-    should_skip_record, test_configurations, value_normalizer,
+    df_value_validator, read_dir_recursive, run_each_configuration, setup_scratch_dir,
+    should_skip_file, should_skip_record, test_configurations, value_normalizer,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -447,20 +447,31 @@ async fn run_test_file_substrait_round_trip(
     // Parsed once and replayed for every configuration.
     let records = parse_records(&path)?;
     let count = count_records(&records, "DatafusionSubstraitRoundTrip");
+    let configurations = test_configurations(&path)?;
 
-    for test_configuration in test_configurations(&path)? {
-        let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await
+    // Reborrow so each combination's future moves in `Copy` references, keeping
+    // the closure callable per combination.
+    let path = &path;
+    let relative_path = &relative_path;
+    let records = &records;
+    let mp = &mp;
+    let mp_style = &mp_style;
+    let currently_executing_sql_tracker = &currently_executing_sql_tracker;
+
+    // Run once per configMatrix combination.
+    run_each_configuration(configurations, |test_configuration| async move {
+        let Some((test_ctx, pb)) = setup_combination(
+            relative_path,
+            test_configuration.settings(),
+            mp,
+            mp_style,
+            count,
+        )
+        .await?
         else {
             info!("Skipping: {}", path.display());
             return Ok(());
         };
-        setup_scratch_dir(&relative_path)?;
-        // Before the engine is built: it snapshots config to detect drift.
-        test_ctx.apply_config_overrides(test_configuration.settings(), &relative_path)?;
-
-        let pb = mp.add(ProgressBar::new(count));
-        pb.set_style(mp_style.clone());
-        pb.set_message(relative_path.display().to_string());
 
         let mut runner = sqllogictest::Runner::new(|| async {
             Ok(DataFusionSubstraitRoundTrip::new(
@@ -477,14 +488,12 @@ async fn run_test_file_substrait_round_trip(
         runner.with_normalizer(value_normalizer);
         runner.with_validator(validator);
         let result =
-            run_file_in_runner(&path, &records, &mut runner, filters, colored_output)
-                .await;
+            run_file_in_runner(path, records, &mut runner, filters, colored_output).await;
         pb.finish_and_clear();
 
-        test_configuration.attribute_failure(result)?;
-    }
-
-    Ok(())
+        result
+    })
+    .await
 }
 
 #[cfg(not(feature = "substrait"))]
@@ -521,20 +530,31 @@ async fn run_test_file(
     // Parsed once and replayed for every configuration.
     let records = parse_records(&path)?;
     let count = count_records(&records, "Datafusion");
+    let configurations = test_configurations(&path)?;
 
-    for test_configuration in test_configurations(&path)? {
-        let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await
+    // Reborrow so each combination's future moves in `Copy` references, keeping
+    // the closure callable per combination.
+    let path = &path;
+    let relative_path = &relative_path;
+    let records = &records;
+    let mp = &mp;
+    let mp_style = &mp_style;
+    let currently_executing_sql_tracker = &currently_executing_sql_tracker;
+
+    // Run once per configMatrix combination.
+    run_each_configuration(configurations, |test_configuration| async move {
+        let Some((test_ctx, pb)) = setup_combination(
+            relative_path,
+            test_configuration.settings(),
+            mp,
+            mp_style,
+            count,
+        )
+        .await?
         else {
             info!("Skipping: {}", path.display());
             return Ok(());
         };
-        setup_scratch_dir(&relative_path)?;
-        // Before the engine is built: it snapshots config to detect drift.
-        test_ctx.apply_config_overrides(test_configuration.settings(), &relative_path)?;
-
-        let pb = mp.add(ProgressBar::new(count));
-        pb.set_style(mp_style.clone());
-        pb.set_message(relative_path.display().to_string());
 
         // If DataFusion configuration has changed during test file runs, errors will be
         // pushed to this vec.
@@ -555,19 +575,16 @@ async fn run_test_file(
         runner.with_normalizer(value_normalizer);
         runner.with_validator(validator);
         let result =
-            run_file_in_runner(&path, &records, &mut runner, filters, colored_output)
-                .await;
+            run_file_in_runner(path, records, &mut runner, filters, colored_output).await;
         pb.finish_and_clear();
 
-        test_configuration.attribute_failure(result)?;
-
-        // If there was no correctness error, check that the config is unchanged.
         runner.shutdown_async().await;
-        test_configuration
-            .attribute_failure(config_change_result(&config_change_errors))?;
-    }
 
-    Ok(())
+        // A correctness failure takes precedence; otherwise surface any config
+        // the file left modified.
+        result.and_then(|()| config_change_result(&config_change_errors))
+    })
+    .await
 }
 
 async fn run_file_in_runner<D, M>(
@@ -640,6 +657,32 @@ fn count_records(records: &[Record<DFColumnType>], label: &str) -> u64 {
             _ => false,
         })
         .count() as u64
+}
+
+/// Per-combination setup shared by the default and Substrait runners: build the
+/// test context, apply the configMatrix overrides, and create the progress bar.
+/// Returns `Ok(None)` when the file should be skipped (unsupported feature); the
+/// caller logs the skip.
+async fn setup_combination(
+    relative_path: &Path,
+    settings: &[(String, String)],
+    mp: &MultiProgress,
+    mp_style: &ProgressStyle,
+    count: u64,
+) -> Result<Option<(TestContext, ProgressBar)>> {
+    let Some(test_ctx) = TestContext::try_new_for_test_file(relative_path).await else {
+        return Ok(None);
+    };
+    setup_scratch_dir(relative_path)?;
+    // Before the engine is built: it snapshots config to detect drift.
+    test_ctx
+        .apply_config_overrides(settings, relative_path)
+        .await?;
+
+    let pb = mp.add(ProgressBar::new(count));
+    pb.set_style(mp_style.clone());
+    pb.set_message(relative_path.display().to_string());
+    Ok(Some((test_ctx, pb)))
 }
 
 #[cfg(feature = "postgres")]

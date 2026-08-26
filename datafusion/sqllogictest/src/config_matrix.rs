@@ -28,6 +28,7 @@
 
 use std::fmt;
 use std::fs;
+use std::future::Future;
 use std::path::Path;
 
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err};
@@ -40,7 +41,7 @@ const DIRECTIVE_MARKER: &str = "configMatrix:";
 ///
 /// Empty when the file declared no directives, which means "run once,
 /// unmodified".
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TestConfiguration(Vec<(String, String)>);
 
 impl TestConfiguration {
@@ -55,7 +56,7 @@ impl TestConfiguration {
 
     /// Prefix a failure with the configuration that produced it, so a sweep
     /// names the values that broke. No-op when no directives were declared.
-    pub fn attribute_failure<T>(&self, result: Result<T>) -> Result<T> {
+    fn attribute_failure<T>(&self, result: Result<T>) -> Result<T> {
         if self.is_empty() {
             return result;
         }
@@ -85,6 +86,50 @@ pub fn test_configurations(path: &Path) -> Result<Vec<TestConfiguration>> {
         )
     })?;
     parse_configurations(&content, path)
+}
+
+/// Run `run_one` once per configuration, continuing past failures so one broken
+/// combination never hides the others. Each failure is prefixed with the
+/// configuration that produced it (see `TestConfiguration::attribute_failure`).
+///
+/// Returns `Ok(())` if all passed, the lone failure verbatim if exactly one
+/// failed (so a matrix-free file keeps its original error), or an aggregate
+/// naming every failing combination.
+///
+/// `run_one` takes the configuration by value so its future holds no
+/// higher-ranked borrow and stays `Send` for the runner's spawned task.
+pub async fn run_each_configuration<F, Fut>(
+    configurations: Vec<TestConfiguration>,
+    mut run_one: F,
+) -> Result<()>
+where
+    F: FnMut(TestConfiguration) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let mut failures = Vec::new();
+    for configuration in configurations {
+        // Keep a copy to attribute the failure after `run_one` consumes it.
+        let label = configuration.clone();
+        if let Err(err) = label.attribute_failure(run_one(configuration).await) {
+            failures.push(err);
+        }
+    }
+    combine_configuration_failures(failures)
+}
+
+/// Collapse per-configuration failures into a single [`Result`], returned by
+/// [`run_each_configuration`].
+fn combine_configuration_failures(mut failures: Vec<DataFusionError>) -> Result<()> {
+    match failures.len() {
+        0 => Ok(()),
+        1 => Err(failures.pop().unwrap()),
+        n => {
+            let combined = failures.iter().join("\n\n");
+            Err(DataFusionError::External(
+                format!("{n} configMatrix combinations failed:\n\n{combined}").into(),
+            ))
+        }
+    }
 }
 
 /// `path` is used only for error messages.
@@ -162,6 +207,7 @@ fn strip_directive_prefix(line: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::common::exec_err;
     use std::io::Write;
 
     /// Settings of every configuration parsed from `content`.
@@ -408,5 +454,96 @@ mod tests {
             .to_string();
         assert!(msg.starts_with("[configMatrix: k=1]"), "got {msg}");
         assert!(msg.contains("boom"), "got {msg}");
+    }
+
+    #[tokio::test]
+    async fn run_each_configuration_runs_every_combination_past_failures() {
+        use std::sync::{Arc, Mutex};
+
+        // Drives the exact helper both runner paths use: every configuration
+        // must run and be attributed even though an earlier one fails.
+        let configurations = vec![
+            test_configuration(&[("k", "1")]),
+            test_configuration(&[("k", "2")]),
+            test_configuration(&[("k", "3")]),
+        ];
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+
+        let result = run_each_configuration(configurations, |configuration| {
+            let recorder = Arc::clone(&recorder);
+            async move {
+                let value = configuration.settings()[0].1.clone();
+                recorder.lock().unwrap().push(value.clone());
+                // The middle combination fails; the last must still run.
+                if value == "2" {
+                    exec_err!("boom")
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+
+        // All three ran even though the second failed.
+        assert_eq!(*seen.lock().unwrap(), vec!["1", "2", "3"]);
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("[configMatrix: k=2]"), "got {msg}");
+        assert!(msg.contains("boom"), "got {msg}");
+    }
+
+    #[tokio::test]
+    async fn run_each_configuration_is_ok_when_all_pass() {
+        let configurations = vec![
+            test_configuration(&[("k", "1")]),
+            test_configuration(&[("k", "2")]),
+        ];
+        let result = run_each_configuration(configurations, |_| async { Ok(()) }).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn combine_configuration_failures_is_ok_when_empty() {
+        assert!(combine_configuration_failures(vec![]).is_ok());
+    }
+
+    #[test]
+    fn combine_configuration_failures_returns_a_lone_failure_verbatim() {
+        // A file without a matrix expands to one empty configuration, so its
+        // failure must be reported exactly as before (no combination prefix,
+        // no aggregate header).
+        let boom: Result<()> = exec_err!("boom");
+        let failure = test_configuration(&[]).attribute_failure(boom).unwrap_err();
+        let msg = combine_configuration_failures(vec![failure])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(msg, exec_datafusion_err!("boom").to_string());
+    }
+
+    #[test]
+    fn combine_configuration_failures_aggregates_and_attributes_all_failures() {
+        let boom_1: Result<()> = exec_err!("boom-1");
+        let boom_2: Result<()> = exec_err!("boom-2");
+        let failures = vec![
+            test_configuration(&[("k", "1")])
+                .attribute_failure(boom_1)
+                .unwrap_err(),
+            test_configuration(&[("k", "2")])
+                .attribute_failure(boom_2)
+                .unwrap_err(),
+        ];
+
+        let msg = combine_configuration_failures(failures)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            msg.contains("2 configMatrix combinations failed"),
+            "got {msg}"
+        );
+        assert!(msg.contains("[configMatrix: k=1]"), "got {msg}");
+        assert!(msg.contains("boom-1"), "got {msg}");
+        assert!(msg.contains("[configMatrix: k=2]"), "got {msg}");
+        assert!(msg.contains("boom-2"), "got {msg}");
     }
 }
