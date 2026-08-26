@@ -24,7 +24,8 @@ use std::sync::Arc;
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::{
-    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
+    DataFusionError, Result, config_datafusion_err, internal_datafusion_err,
+    internal_err, not_impl_err,
 };
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
@@ -69,7 +70,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
-    ExecutionPlanEncodeCtx,
+    ExecutionPlanEncodeCtx, ExecutionPlanRegistry, ExecutionPlanRegistryExt,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
@@ -1294,7 +1295,13 @@ pub trait PhysicalPlanNodeExt: Sized {
 
                 Ok(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::Extension(
-                        protobuf::PhysicalExtensionNode { node: buf, inputs },
+                        protobuf::PhysicalExtensionNode {
+                            node: buf,
+                            inputs,
+                            // Codec-encoded plans stay anonymous on the wire:
+                            // the codec that wrote them decodes them back.
+                            plan_name: None,
+                        },
                     )),
                 })
             }
@@ -1310,20 +1317,55 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Lookup-order policy, mirroring the one function decode already uses a
+        // layer down (payload -> codec; else registry -> codec fallback): a
+        // plan that named itself on the wire and is registered on this session
+        // decodes itself, no codec involved. Anything else — an unnamed node
+        // from a codec-encoded writer, or a name this session does not know —
+        // takes the codec chain exactly as before.
+        let registry = ctx.task_ctx().session_config().execution_plan_registry();
+        if let Some(plan_name) = extension.plan_name.as_deref()
+            && let Some(registry) = registry.as_ref()
+        {
+            let plan_decoder = ConverterPlanDecoder {
+                ctx,
+                proto_converter,
+            };
+            // The decoder receives the whole node, like every built-in
+            // `try_from_proto`, and decodes its own children through the ctx.
+            // `None` here means no decoder claims the name; a decode *failure*
+            // is returned as-is rather than falling through to the codec.
+            if let Some(decoded) = registry.decode(
+                plan_name,
+                self.node(),
+                &ExecutionPlanDecodeCtx::new(&plan_decoder),
+            ) {
+                return decoded;
+            }
+        }
+
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
             .inputs
             .iter()
             .map(|i| proto_converter.proto_to_execution_plan(i, ctx))
             .collect::<Result<_>>()?;
 
-        let extension_node = ctx.codec().try_decode(
-            extension.node.as_slice(),
-            &inputs,
-            ctx.task_ctx(),
-            proto_converter,
-        )?;
-
-        Ok(extension_node)
+        ctx.codec()
+            .try_decode(
+                extension.node.as_slice(),
+                &inputs,
+                ctx.task_ctx(),
+                proto_converter,
+            )
+            .map_err(|e| match extension.plan_name.as_deref() {
+                // The writer named the plan but this session has no decoder for
+                // it: say so, rather than leaving only the codec's "unsupported
+                // plan" error to explain a missing registration.
+                Some(plan_name) => {
+                    unregistered_extension_plan_err(plan_name, registry.as_deref(), &e)
+                }
+                None => e,
+            })
     }
 
     fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
@@ -2039,6 +2081,36 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
     }
+}
+
+/// Error for a `PhysicalExtensionNode` that names its plan type but finds no
+/// decoder registered for that name and no codec able to decode it either.
+///
+/// Lists what *is* registered, because the usual cause is a session configured
+/// on the writing side but not on the reading one.
+fn unregistered_extension_plan_err(
+    plan_name: &str,
+    registry: Option<&ExecutionPlanRegistry>,
+    codec_error: &DataFusionError,
+) -> DataFusionError {
+    let mut registered: Vec<&str> = registry
+        .map(|registry| registry.names().collect())
+        .unwrap_or_default();
+    registered.sort_unstable();
+    let registered = if registered.is_empty() {
+        "none".to_string()
+    } else {
+        registered.join(", ")
+    };
+    // Not an `Internal` error: the cause is a session that was not configured,
+    // not a bug in DataFusion, and `Internal` would tell the user to file one.
+    config_datafusion_err!(
+        "No decoder is registered for the extension ExecutionPlan '{plan_name}', and the \
+         PhysicalExtensionCodec failed with [{codec_error}]. Register the plan on the \
+         decoding session's SessionConfig with \
+         `ExecutionPlanRegistryExt::register_execution_plan`, or supply a \
+         PhysicalExtensionCodec that handles it. Registered extension plans: {registered}"
+    )
 }
 
 /// Adapter backing [`ExecutionPlanEncodeCtx`] for plans migrated to the
