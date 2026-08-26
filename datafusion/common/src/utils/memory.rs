@@ -816,8 +816,7 @@ mod record_batch_tests {
     fn test_record_batch_memory_counter_deduplicates_union_slice_child_overhead() {
         let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let fields: UnionFields =
-            [(0, Arc::new(Field::new("value", DataType::Int32, false)))]
-                .into_iter()
+            std::iter::once((0, Arc::new(Field::new("value", DataType::Int32, false))))
                 .collect();
         let first = Arc::new(
             UnionArray::try_new(
