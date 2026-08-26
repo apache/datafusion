@@ -54,12 +54,12 @@ use arrow::array::{
     TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::{self, take};
+use arrow::compute::{self, interleave, take};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
 use arrow_ord::ord::{DynComparator, make_comparator};
-use arrow_schema::{DataType, SortOptions, TimeUnit};
+use arrow_schema::{ArrowError, DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -1385,13 +1385,223 @@ pub(crate) fn build_batch_from_indices(
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
+/// Computes prefix-sum offsets for a sequence of build-side batches.
+///
+/// `offsets[k]` is the flat row index at which batch `k` begins in the logical
+/// concatenation of all batches, and `offsets[n]` is the total row count. This
+/// lets a flat build-side index be mapped back to a `(batch, row)` pair without
+/// materializing the concatenation.
+pub(crate) fn build_batch_offsets(
+    batch_row_counts: impl Iterator<Item = usize>,
+) -> Vec<usize> {
+    let mut acc = 0usize;
+    let mut offsets = batch_row_counts
+        .map(|n| {
+            let val = acc;
+            acc += n;
+            val
+        })
+        .collect::<Vec<_>>();
+    // Append the total row count so `offsets[batches.len()]` is the total and
+    // `offsets[k + 1]` is the (exclusive) end of batch `k`, as documented above.
+    offsets.push(acc);
+    offsets
+}
+
+/// Maps a flat build-side row index to a `(batch, row)` pair using `offsets`
+/// (see [`build_batch_offsets`]).
+#[inline]
+pub(crate) fn flat_index_to_batch_row(offsets: &[usize], flat: usize) -> (usize, usize) {
+    // The largest `k` with `offsets[k] <= flat`. `partition_point` returns the
+    // count of leading elements satisfying the predicate, i.e. `k + 1`. Using
+    // `<=` (rather than `<`) naturally skips over empty batches.
+    let batch = offsets.partition_point(|&o| o <= flat) - 1;
+    (batch, flat - offsets[batch])
+}
+
+/// Builds the `(batch, row)` index pairs consumed by [`interleave`] for a set of
+/// (possibly null) flat build-side indices.
+///
+/// Null slots are assigned a valid placeholder `(batch, row)` so that
+/// `interleave` never sees an out-of-bounds index; the value produced for those
+/// slots is overwritten with null afterwards by [`take_build_array`]. The
+/// placeholder is the location of the first non-null index, so it is only used
+/// when at least one index is non-null (callers short-circuit the all-null case).
+fn build_interleave_indices(
+    offsets: &[usize],
+    indices: &UInt64Array,
+) -> Vec<(usize, usize)> {
+    let placeholder = indices
+        .iter()
+        .flatten()
+        .next()
+        .map(|flat| flat_index_to_batch_row(offsets, flat as usize))
+        .unwrap_or((0, 0));
+
+    indices
+        .iter()
+        .map(|opt| match opt {
+            Some(flat) => flat_index_to_batch_row(offsets, flat as usize),
+            None => placeholder,
+        })
+        .collect()
+}
+
+/// Gathers rows from a build-side column physically stored across one or more
+/// batches, using flat indices into the logical concatenation of those batches.
+///
+/// This is the multi-batch analogue of `take(concat(arrays), indices)`, but it
+/// never materializes the concatenation. `pairs` must be `None` when there is a
+/// single build batch (the flat index is then the row index directly and the
+/// `take` kernel is used) and `Some` precomputed [`interleave`] pairs otherwise.
+fn take_build_array(
+    arrays: &[&dyn Array],
+    indices: &UInt64Array,
+    pairs: Option<&[(usize, usize)]>,
+) -> Result<ArrayRef, ArrowError> {
+    let data_type = arrays[0].data_type();
+    // Outer joins can leave every build index null; this also covers an empty
+    // build side. There is nothing to gather, so produce a typed all-null array.
+    if indices.null_count() == indices.len() {
+        return Ok(new_null_array(data_type, indices.len()));
+    }
+    match pairs {
+        // Single build batch: identical to the original `take` path, including
+        // native propagation of null indices to null output rows.
+        None => take(arrays[0], indices, None),
+        Some(pairs) => {
+            let values = interleave(arrays, pairs)?;
+            if indices.null_count() == 0 {
+                Ok(values)
+            } else {
+                // Restore nulls in the placeholder slots used for null indices.
+                let null_mask = compute::is_null(indices)?;
+                compute::nullif(&values, &null_mask)
+            }
+        }
+    }
+}
+
+/// Multi-batch analogue of [`build_batch_from_indices`].
+///
+/// The build side is provided as a slice of batches (sharing one schema) rather
+/// than a single concatenated batch, and `build_indices` are flat indices into
+/// the logical concatenation of those batches. Build-side columns are gathered
+/// with [`interleave`] (or `take`, for a single batch) instead of `take` over a
+/// concatenated batch, avoiding a copy of the entire build side into one
+/// contiguous batch.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn build_batch_from_indices_multi(
+    schema: &Schema,
+    build_batches: &[RecordBatch],
+    probe_batch: &RecordBatch,
+    build_indices: &UInt64Array,
+    probe_indices: &UInt32Array,
+    column_indices: &[ColumnIndex],
+    build_side: JoinSide,
+    join_type: JoinType,
+) -> Result<RecordBatch> {
+    if schema.fields().is_empty() {
+        // For RightAnti and RightSemi joins, after `adjust_indices_by_join_type`
+        // the build_indices were untouched so only probe_indices hold the actual
+        // row count.
+        let row_count = match join_type {
+            JoinType::RightAnti | JoinType::RightSemi => probe_indices.len(),
+            _ => build_indices.len(),
+        };
+        return new_empty_schema_batch(schema, row_count);
+    }
+
+    // Precompute the interleave pairs once, shared across all build-side columns.
+    // Only needed when the build side spans more than one batch.
+    let build_pairs = (build_batches.len() > 1).then(|| {
+        let offsets =
+            build_batch_offsets(build_batches.iter().map(RecordBatch::num_rows));
+        build_interleave_indices(&offsets, build_indices)
+    });
+
+    let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
+
+    for column_index in column_indices {
+        let array = if column_index.side == JoinSide::None {
+            // For mark joins, the mark column is true when the index is not null.
+            Arc::new(compute::is_not_null(probe_indices)?)
+        } else if column_index.side == build_side {
+            let arrays: Vec<&dyn Array> = build_batches
+                .iter()
+                .map(|b| b.column(column_index.index).as_ref())
+                .collect();
+            take_build_array(&arrays, build_indices, build_pairs.as_deref())?
+        } else {
+            let array = probe_batch.column(column_index.index);
+            if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
+                assert_eq!(probe_indices.null_count(), probe_indices.len());
+                new_null_array(array.data_type(), probe_indices.len())
+            } else {
+                take(array.as_ref(), probe_indices, None)?
+            }
+        };
+
+        columns.push(array);
+    }
+    Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+}
+
+/// Multi-batch analogue of [`apply_join_filter_to_indices`].
+///
+/// The build side is provided as several batches rather than one concatenated
+/// batch; the intermediate batch fed to the filter is assembled with
+/// [`build_batch_from_indices_multi`]. The `max_intermediate_size` chunking path
+/// of the single-batch variant is not needed by the hash join and is omitted.
+pub(crate) fn apply_join_filter_to_indices_multi(
+    build_batches: &[RecordBatch],
+    probe_batch: &RecordBatch,
+    build_indices: UInt64Array,
+    probe_indices: UInt32Array,
+    filter: &JoinFilter,
+    build_side: JoinSide,
+    join_type: JoinType,
+) -> Result<(UInt64Array, UInt32Array)> {
+    if build_indices.is_empty() && probe_indices.is_empty() {
+        return Ok((build_indices, probe_indices));
+    };
+
+    let intermediate_batch = build_batch_from_indices_multi(
+        filter.schema(),
+        build_batches,
+        probe_batch,
+        &build_indices,
+        &probe_indices,
+        filter.column_indices(),
+        build_side,
+        join_type,
+    )?;
+
+    let filter_result = filter
+        .expression()
+        .evaluate(&intermediate_batch)?
+        .into_array(intermediate_batch.num_rows())?;
+
+    let mask = as_boolean_array(&filter_result)?;
+
+    let left_filtered = compute::filter(&build_indices, mask)?;
+    let right_filtered = compute::filter(&probe_indices, mask)?;
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
 /// Returns a new [RecordBatch] for a probe batch when no probe row can find a
 /// match: the build-side map is empty, either because the build side has no
 /// rows or because none of its rows has a matchable (non-NULL) join key.
 /// The resulting batch has [Schema] `schema`.
+///
+/// `build_schema` is the schema of the (empty) build side, used only to determine
+/// the data types of the build-side columns that become all-null.
 pub(crate) fn build_batch_empty_build_side(
     schema: &Schema,
-    build_batch: &RecordBatch,
+    build_schema: &Schema,
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
     join_type: JoinType,
@@ -1412,7 +1622,7 @@ pub(crate) fn build_batch_empty_build_side(
         .map(|column_index| match column_index.side {
             // left -> null array
             JoinSide::Left => new_null_array(
-                build_batch.column(column_index.index).data_type(),
+                build_schema.field(column_index.index).data_type(),
                 num_rows,
             ),
             // right -> respective right array
@@ -2255,6 +2465,214 @@ pub(super) fn equal_rows_arr(
     }
 
     Ok((left_filtered.into(), right_filtered.into()))
+}
+
+/// Multi-batch analogue of [`equal_rows_arr`].
+///
+/// Build-side join-key columns are laid out per key column then per build batch
+/// (`left_arrays[key][batch]`), matching the representation stored in
+/// `JoinLeftData`. `indices_left` are flat indices into the logical concatenation
+/// of the build batches; they always come straight from the hash table and so are
+/// never null. Candidate pairs are compared in place — flat indices are mapped
+/// back to `(batch, row)` pairs via [`build_batch_offsets`] /
+/// [`flat_index_to_batch_row`] — so the build-side keys are never gathered into
+/// contiguous arrays.
+pub(super) fn equal_rows_arr_multi(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[Vec<ArrayRef>],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<(UInt64Array, UInt32Array)> {
+    if indices_left.len() != indices_right.len() {
+        return Err(internal_datafusion_err!(
+            "Cannot compare join indices with different lengths: left={}, right={}",
+            indices_left.len(),
+            indices_right.len()
+        ));
+    }
+
+    if left_arrays.len() != right_arrays.len() {
+        return Err(internal_datafusion_err!(
+            "Cannot compare join keys with different column counts: left={}, right={}",
+            left_arrays.len(),
+            right_arrays.len()
+        ));
+    }
+
+    if left_arrays.is_empty() {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    }
+
+    let num_batches = left_arrays[0].len();
+    debug_assert!(left_arrays.iter().all(|c| c.len() == num_batches));
+
+    // No build batches means the hash table was empty, so there can be no
+    // candidate pairs to filter.
+    if num_batches == 0 {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    }
+
+    // A single build batch means the flat indices are plain row indices; defer
+    // to the single-batch implementation (and its fast path) directly.
+    if num_batches == 1 {
+        let left_cols = left_arrays
+            .iter()
+            .map(|batches| Arc::clone(&batches[0]))
+            .collect::<Vec<_>>();
+        return equal_rows_arr(
+            indices_left,
+            indices_right,
+            &left_cols,
+            right_arrays,
+            null_equality,
+        );
+    }
+
+    let offsets = build_batch_offsets(left_arrays[0].iter().map(|a| a.len()));
+
+    // Fast path: single-column keys of a specialized type run the same
+    // monomorphized equality loop as [`equal_rows_arr`], adapted to per-batch
+    // build arrays.
+    let single_col_fast_path = if left_arrays.len() == 1 {
+        equal_rows_single_col_multi(
+            indices_left,
+            indices_right,
+            &offsets,
+            &left_arrays[0],
+            right_arrays[0].as_ref(),
+            null_equality,
+        )
+    } else {
+        None
+    };
+    if let Some(res) = single_col_fast_path {
+        return Ok(res);
+    }
+
+    // General path: the multi-batch counterpart of the [`JoinKeyComparator`]
+    // path in [`equal_rows_arr`], with one comparator per build batch. The
+    // comparators are built lazily because a limit-bounded probe chunk may
+    // reference only a few of the batches.
+    let sort_options = vec![SortOptions::default(); left_arrays.len()];
+    let mut comparators: Vec<Option<JoinKeyComparator>> = Vec::new();
+    comparators.resize_with(num_batches, || None);
+
+    let mut left_filtered = Vec::with_capacity(indices_left.len());
+    let mut right_filtered = Vec::with_capacity(indices_right.len());
+
+    for (left, right) in indices_left.values().iter().zip(indices_right.values()) {
+        let left_idx = usize::try_from(*left).map_err(|_| {
+            internal_datafusion_err!("Join index {left} can not be represented as usize")
+        })?;
+        let (batch, row) = flat_index_to_batch_row(&offsets, left_idx);
+        let right_idx = *right as usize;
+
+        if comparators[batch].is_none() {
+            let batch_cols = left_arrays
+                .iter()
+                .map(|batches| Arc::clone(&batches[batch]))
+                .collect::<Vec<_>>();
+            comparators[batch] = Some(JoinKeyComparator::new(
+                &batch_cols,
+                right_arrays,
+                &sort_options,
+                null_equality,
+            )?);
+        }
+        let comparator = comparators[batch]
+            .as_ref()
+            .expect("comparator initialized above");
+
+        if comparator.is_equal(row, right_idx) {
+            left_filtered.push(*left);
+            right_filtered.push(*right);
+        }
+    }
+
+    Ok((left_filtered.into(), right_filtered.into()))
+}
+
+/// Multi-batch analogue of [`equal_rows_single_col`]: the build-side key column
+/// is stored as one array per build batch and addressed by flat indices, mapped
+/// to `(batch, row)` pairs via `offsets` (see [`build_batch_offsets`]).
+///
+/// Type dispatch and downcasts happen once per call; the per-pair work is the
+/// same monomorphized comparison as the single-batch fast path plus a binary
+/// search over `offsets`. Returns `None` for types it does not specialize so
+/// the caller falls back to the general per-batch [`JoinKeyComparator`] path.
+fn equal_rows_single_col_multi(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    offsets: &[usize],
+    left_batches: &[ArrayRef],
+    right: &dyn Array,
+    null_equality: NullEquality,
+) -> Option<(UInt64Array, UInt32Array)> {
+    let null_equals_null = matches!(null_equality, NullEquality::NullEqualsNull);
+
+    macro_rules! eq_loop {
+        ($T:ty) => {{
+            let l = left_batches
+                .iter()
+                .map(|a| a.as_any().downcast_ref::<$T>())
+                .collect::<Option<Vec<_>>>()?;
+            let r = right.as_any().downcast_ref::<$T>()?;
+
+            let mut left_filtered = Vec::with_capacity(indices_left.len());
+            let mut right_filtered = Vec::with_capacity(indices_right.len());
+
+            for (left_idx, right_idx) in
+                indices_left.values().iter().zip(indices_right.values())
+            {
+                let (batch, row) = flat_index_to_batch_row(offsets, *left_idx as usize);
+                let l_arr = l[batch];
+                let j = *right_idx as usize;
+
+                let is_equal = match (l_arr.is_null(row), r.is_null(j)) {
+                    (false, false) => l_arr.value(row) == r.value(j),
+                    (true, true) => null_equals_null,
+                    _ => false,
+                };
+
+                if is_equal {
+                    left_filtered.push(*left_idx);
+                    right_filtered.push(*right_idx);
+                }
+            }
+
+            return Some((left_filtered.into(), right_filtered.into()));
+        }};
+    }
+
+    match left_batches.first()?.data_type() {
+        DataType::Boolean => eq_loop!(BooleanArray),
+        DataType::Int8 => eq_loop!(Int8Array),
+        DataType::Int16 => eq_loop!(Int16Array),
+        DataType::Int32 => eq_loop!(Int32Array),
+        DataType::Int64 => eq_loop!(Int64Array),
+        DataType::UInt8 => eq_loop!(UInt8Array),
+        DataType::UInt16 => eq_loop!(UInt16Array),
+        DataType::UInt32 => eq_loop!(UInt32Array),
+        DataType::UInt64 => eq_loop!(UInt64Array),
+        DataType::Decimal128(..) => eq_loop!(Decimal128Array),
+        DataType::Binary => eq_loop!(BinaryArray),
+        DataType::LargeBinary => eq_loop!(LargeBinaryArray),
+        DataType::BinaryView => eq_loop!(BinaryViewArray),
+        DataType::FixedSizeBinary(_) => eq_loop!(FixedSizeBinaryArray),
+        DataType::Utf8 => eq_loop!(StringArray),
+        DataType::LargeUtf8 => eq_loop!(LargeStringArray),
+        DataType::Utf8View => eq_loop!(StringViewArray),
+        DataType::Date32 => eq_loop!(Date32Array),
+        DataType::Date64 => eq_loop!(Date64Array),
+        DataType::Timestamp(time_unit, _) => match time_unit {
+            TimeUnit::Second => eq_loop!(TimestampSecondArray),
+            TimeUnit::Millisecond => eq_loop!(TimestampMillisecondArray),
+            TimeUnit::Microsecond => eq_loop!(TimestampMicrosecondArray),
+            TimeUnit::Nanosecond => eq_loop!(TimestampNanosecondArray),
+        },
+        _ => None,
+    }
 }
 
 /// Specialized single-column equi-join key filtering.
@@ -4478,7 +4896,7 @@ mod tests {
 
         let result = build_batch_empty_build_side(
             &empty_schema,
-            &build_batch,
+            build_batch.schema_ref(),
             &probe_batch,
             &[], // no column indices with empty projection
             JoinType::Right,
@@ -4895,6 +5313,106 @@ mod tests {
             err.to_string()
                 .contains("Cannot compare join keys with different column counts")
         );
+    }
+
+    #[test]
+    fn test_equal_rows_arr_multi_matches_single_batch_result() {
+        // The same keys and candidate pairs as
+        // `test_equal_rows_arr_filters_candidate_pairs`, but with the build side
+        // split across three batches (one of them empty) and addressed by flat
+        // indices. Multi-column keys exercise the general per-batch comparator
+        // path.
+        let left_a: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Arc::new(Int32Array::from(vec![2, 3])),
+        ];
+        let left_b: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["a", "b"])),
+            Arc::new(StringArray::from(Vec::<&str>::new())),
+            Arc::new(StringArray::from(vec!["c", "d"])),
+        ];
+        let right_a: ArrayRef = Arc::new(Int32Array::from(vec![2, 2, 3, 4]));
+        let right_b: ArrayRef = Arc::new(StringArray::from(vec!["b", "d", "d", "a"]));
+
+        let left_indices = UInt64Array::from(vec![0, 1, 2, 3]);
+        let right_indices = UInt32Array::from(vec![0, 0, 1, 2]);
+
+        let (left_filtered, right_filtered) = equal_rows_arr_multi(
+            &left_indices,
+            &right_indices,
+            &[left_a, left_b],
+            &[right_a, right_b],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+
+        assert_eq!(left_filtered, UInt64Array::from(vec![1, 3]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0, 2]));
+    }
+
+    #[test]
+    fn test_equal_rows_arr_multi_single_col_fast_path() {
+        // Single-column string keys split across two build batches exercise the
+        // multi-batch specialized fast path, including the flat-index mapping
+        // and null handling under both null-equality modes.
+        let left_batches: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec![Some("shared_key"), None])),
+            Arc::new(StringArray::from(vec![Some("shared_key"), Some("other")])),
+        ];
+        let right: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("shared_key"),
+            None,
+            Some("mismatch"),
+            None,
+        ]));
+        let left_indices = UInt64Array::from(vec![0, 1, 2, 3]);
+        let right_indices = UInt32Array::from(vec![0, 1, 2, 3]);
+
+        // NullEqualsNothing: only the (0, 0) value pair matches; both-null drops.
+        let (left_filtered, right_filtered) = equal_rows_arr_multi(
+            &left_indices,
+            &right_indices,
+            std::slice::from_ref(&left_batches),
+            &[Arc::clone(&right)],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0]));
+
+        // NullEqualsNull: the both-null (1, 1) pair now also matches.
+        let (left_filtered, right_filtered) = equal_rows_arr_multi(
+            &left_indices,
+            &right_indices,
+            &[left_batches],
+            &[right],
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0, 1]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0, 1]));
+    }
+
+    #[test]
+    fn test_equal_rows_arr_multi_single_float_col_uses_general_path() {
+        // Floats are not specialized: the multi-batch fast path returns `None`
+        // and the per-batch comparators handle them.
+        let left_batches: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![1.0])),
+            Arc::new(Float64Array::from(vec![2.0])),
+        ];
+        let right: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 3.0]));
+        let (left_filtered, right_filtered) = equal_rows_arr_multi(
+            &UInt64Array::from(vec![0, 1]),
+            &UInt32Array::from(vec![0, 1]),
+            &[left_batches],
+            &[right],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0]));
     }
 
     #[test]
