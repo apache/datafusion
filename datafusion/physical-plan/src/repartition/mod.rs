@@ -59,7 +59,7 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, SplitPoint, assert_or_internal_err,
-    internal_datafusion_err, internal_err, validate_range_split_points,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -658,16 +658,14 @@ pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_
 #[derive(Debug, Clone)]
 pub struct RangeExpr {
     on_columns: Vec<PhysicalExprRef>,
-    split_points: Vec<SplitPoint>,
-    sort_options: Vec<SortOptions>,
     router: RangeRouter,
 }
 
 impl PartialEq for RangeExpr {
     fn eq(&self, other: &Self) -> bool {
         self.on_columns == other.on_columns
-            && self.split_points == other.split_points
-            && self.sort_options == other.sort_options
+            && self.router.split_points() == other.router.split_points()
+            && self.router.sort_options() == other.router.sort_options()
     }
 }
 
@@ -676,8 +674,8 @@ impl Eq for RangeExpr {}
 impl Hash for RangeExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.on_columns.hash(state);
-        self.split_points.hash(state);
-        self.sort_options.hash(state);
+        self.router.split_points().hash(state);
+        self.router.sort_options().hash(state);
     }
 }
 
@@ -688,43 +686,26 @@ impl RangeExpr {
         on_columns: Vec<PhysicalExprRef>,
         range_partitioning: &RangePartitioning,
     ) -> Result<Self> {
-        let sort_options = range_partitioning
+        let sort_options: Vec<SortOptions> = range_partitioning
             .ordering()
             .iter()
             .map(|expr| expr.options)
             .collect();
-        Self::try_new_parts(
-            on_columns,
-            range_partitioning.split_points().to_vec(),
-            sort_options,
-        )
+        Self::try_new_parts(on_columns, range_partitioning.split_points(), &sort_options)
     }
 
     fn try_new_parts(
         on_columns: Vec<PhysicalExprRef>,
-        split_points: Vec<SplitPoint>,
-        sort_options: Vec<SortOptions>,
+        split_points: &[SplitPoint],
+        sort_options: &[SortOptions],
     ) -> Result<Self> {
         assert_or_internal_err!(!on_columns.is_empty(), "RangeExpr requires a key");
         assert_or_internal_err!(
             on_columns.len() == sort_options.len(),
             "RangeExpr key count must match sort options"
         );
-        validate_range_split_points(&split_points, &sort_options)?;
-        let data_types: Vec<DataType> = if !split_points.is_empty() {
-            (0..on_columns.len())
-                .map(|col_idx| split_points[0].values()[col_idx].data_type())
-                .collect()
-        } else {
-            vec![]
-        };
-        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
-        Ok(Self {
-            on_columns,
-            split_points,
-            sort_options,
-            router,
-        })
+        let router = RangeRouter::try_new(sort_options, split_points)?;
+        Ok(Self { on_columns, router })
     }
 
     /// Get the columns used to compute Range partition IDs.
@@ -734,12 +715,12 @@ impl RangeExpr {
 
     /// Returns the Range split points used for routing.
     pub fn split_points(&self) -> &[SplitPoint] {
-        &self.split_points
+        self.router.split_points()
     }
 
     /// Returns the per-key sort options used for routing.
     pub fn sort_options(&self) -> &[SortOptions] {
-        &self.sort_options
+        self.router.sort_options()
     }
 }
 
@@ -766,8 +747,8 @@ impl PhysicalExpr for RangeExpr {
         );
         Ok(Arc::new(Self::try_new_parts(
             children,
-            self.split_points.clone(),
-            self.sort_options.clone(),
+            self.router.split_points(),
+            self.router.sort_options(),
         )?))
     }
 
@@ -780,7 +761,7 @@ impl PhysicalExpr for RangeExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        if self.split_points.is_empty() {
+        if self.router.split_points().is_empty() {
             return Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(0))));
         }
 
@@ -807,12 +788,13 @@ impl PhysicalExpr for RangeExpr {
         let sort_exprs = self
             .on_columns
             .iter()
-            .zip(&self.sort_options)
+            .zip(self.router.sort_options())
             .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options))
             .collect::<Vec<_>>();
         let sort_expr = sort_exprs_try_to_proto(&sort_exprs, ctx)?;
         let split_point = self
-            .split_points
+            .router
+            .split_points()
             .iter()
             .map(|split_point| {
                 let value = split_point
@@ -849,10 +831,11 @@ impl RangeExpr {
             return internal_err!("PhysicalExprNode is not a RangeExpr");
         };
         let sort_exprs = sort_exprs_try_from_proto(&range_expr.sort_expr, ctx)?;
-        let (on_columns, sort_options) = sort_exprs
-            .into_iter()
-            .map(|sort_expr| (sort_expr.expr, sort_expr.options))
-            .unzip();
+        let (on_columns, sort_options): (Vec<PhysicalExprRef>, Vec<SortOptions>) =
+            sort_exprs
+                .into_iter()
+                .map(|sort_expr| (sort_expr.expr, sort_expr.options))
+                .unzip();
         let split_points = range_expr
             .split_point
             .iter()
@@ -867,8 +850,8 @@ impl RangeExpr {
             .collect::<Result<Vec<_>>>()?;
         Ok(Arc::new(Self::try_new_parts(
             on_columns,
-            split_points,
-            sort_options,
+            &split_points,
+            &sort_options,
         )?))
     }
 }
@@ -1006,6 +989,19 @@ impl BatchPartitioner {
 
     /// Create a new [`BatchPartitioner`] for range-based repartitioning.
     ///
+    /// # Panics
+    /// Panics if the range partitioning is invalid or cannot construct a range router.
+    /// Prefer [`Self::try_new_range_partitioner`] for fallible construction.
+    pub fn new_range_partitioner(
+        range_partitioning: &RangePartitioning,
+        timer: metrics::Time,
+    ) -> Self {
+        Self::try_new_range_partitioner(range_partitioning, timer)
+            .expect("valid range partitioning")
+    }
+
+    /// Create a new [`BatchPartitioner`] for range-based repartitioning.
+    ///
     /// # Parameters
     /// - `range_partitioning`: `RangePartitioning` struct used for ordering, split points, and number of partitions
     /// - `timer`: Metric used to record time spent during repartitioning.
@@ -1014,17 +1010,10 @@ impl BatchPartitioner {
         timer: metrics::Time,
     ) -> Result<Self> {
         let ordering = range_partitioning.ordering().clone();
-        let split_points = range_partitioning.split_points();
         let num_partitions = range_partitioning.partition_count();
         let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
-        let data_types: Vec<DataType> = if !split_points.is_empty() {
-            (0..ordering.len())
-                .map(|col_idx| split_points[0].values()[col_idx].data_type())
-                .collect()
-        } else {
-            vec![]
-        };
-        let router = RangeRouter::try_new(&data_types, &sort_options, split_points)?;
+        let router =
+            RangeRouter::try_new(&sort_options, range_partitioning.split_points())?;
 
         Ok(Self {
             state: BatchPartitionerState::Range {

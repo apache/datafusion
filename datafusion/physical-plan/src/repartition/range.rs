@@ -24,12 +24,16 @@ use arrow::array::*;
 use arrow::compute::SortOptions;
 use arrow::datatypes::*;
 use arrow::row::{OwnedRow, RowConverter, SortField};
-use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, not_impl_err, validate_range_split_points,
+};
 use datafusion_physical_expr::SplitPoint;
 
-/// An router for assigning rows to range partitions.
+/// A router for assigning rows to range partitions.
 #[derive(Debug, Clone)]
 pub(crate) struct RangeRouter {
+    split_points: Vec<SplitPoint>,
+    sort_options: Vec<SortOptions>,
     inner: RangeRouterInner,
 }
 
@@ -42,12 +46,21 @@ enum RangeRouterInner {
 }
 
 impl RangeRouter {
-    /// Constructs the best router for the given key types, split points, and sort options.
+    /// Constructs the best router for the given sort options and split points.
     pub(crate) fn try_new(
-        data_types: &[DataType],
         sort_options: &[SortOptions],
         split_points: &[SplitPoint],
     ) -> Result<Self> {
+        validate_range_split_points(split_points, sort_options)?;
+
+        let data_types: Vec<DataType> = if !split_points.is_empty() {
+            (0..sort_options.len())
+                .map(|col_idx| split_points[0].values()[col_idx].data_type())
+                .collect()
+        } else {
+            vec![]
+        };
+
         // Try single-column primitive fast path
         if data_types.len() == 1
             && !sort_options.is_empty()
@@ -55,23 +68,59 @@ impl RangeRouter {
                 PrimitiveRangeRouter::try_new(split_points, sort_options[0])
         {
             return Ok(Self {
+                split_points: split_points.to_vec(),
+                sort_options: sort_options.to_vec(),
                 inner: RangeRouterInner::Primitive(primitive_router),
             });
         }
 
         // Try RowConverter path
         let row_router =
-            RowConverterRangeRouter::try_new(data_types, sort_options, split_points)?;
+            RowConverterRangeRouter::try_new(&data_types, sort_options, split_points)?;
         Ok(Self {
+            split_points: split_points.to_vec(),
+            sort_options: sort_options.to_vec(),
             inner: RangeRouterInner::Row(row_router),
         })
     }
 
+    /// Split points configured in this router.
+    pub(crate) fn split_points(&self) -> &[SplitPoint] {
+        &self.split_points
+    }
+
+    /// Sort options configured in this router.
+    pub(crate) fn sort_options(&self) -> &[SortOptions] {
+        &self.sort_options
+    }
+
     /// Number of split points configured in this router.
     pub(crate) fn num_split_points(&self) -> usize {
+        self.split_points.len()
+    }
+
+    /// Generic routing entry point that calls `emit(row_idx, partition)` for every row.
+    pub(crate) fn route_with<E>(&self, arrays: &[ArrayRef], mut emit: E) -> Result<()>
+    where
+        E: FnMut(usize, usize),
+    {
+        if self.split_points.is_empty() {
+            let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
+            for row_idx in 0..num_rows {
+                emit(row_idx, 0);
+            }
+            return Ok(());
+        }
+
         match &self.inner {
-            RangeRouterInner::Primitive(r) => r.num_split_points(),
-            RangeRouterInner::Row(r) => r.num_split_points(),
+            RangeRouterInner::Primitive(r) => {
+                if let Some(first_col) = arrays.first() {
+                    r.route_with(first_col.as_ref(), emit)
+                } else {
+                    Ok(())
+                }
+            }
+            RangeRouterInner::Row(r) => r.route_with(arrays, emit),
         }
     }
 
@@ -81,16 +130,9 @@ impl RangeRouter {
         arrays: &[ArrayRef],
         indices: &mut [Vec<u32>],
     ) -> Result<()> {
-        match &self.inner {
-            RangeRouterInner::Primitive(r) => {
-                if let Some(first_col) = arrays.first() {
-                    r.route_indices(first_col.as_ref(), indices)
-                } else {
-                    Ok(())
-                }
-            }
-            RangeRouterInner::Row(r) => r.route_indices(arrays, indices),
-        }
+        self.route_with(arrays, |row_idx, partition| {
+            indices[partition].push(row_idx as u32);
+        })
     }
 
     /// Appends output partition IDs to `partition_ids`.
@@ -99,16 +141,13 @@ impl RangeRouter {
         arrays: &[ArrayRef],
         partition_ids: &mut Vec<u64>,
     ) -> Result<()> {
-        match &self.inner {
-            RangeRouterInner::Primitive(r) => {
-                if let Some(first_col) = arrays.first() {
-                    r.route_partition_ids(first_col.as_ref(), partition_ids)
-                } else {
-                    Ok(())
-                }
-            }
-            RangeRouterInner::Row(r) => r.route_partition_ids(arrays, partition_ids),
-        }
+        let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
+        partition_ids
+            .try_reserve(num_rows)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        self.route_with(arrays, |_row_idx, partition| {
+            partition_ids.push(partition as u64);
+        })
     }
 }
 
@@ -177,22 +216,17 @@ macro_rules! define_primitive_router {
                 }
             }
 
-            fn num_split_points(&self) -> usize {
-                match self {
-                    $( Self::$variant(r) => r.num_split_points(), )*
-                    Self::Float32(r) => r.num_split_points(),
-                    Self::Float64(r) => r.num_split_points(),
-                }
-            }
-
-            fn route_indices(&self, array: &dyn Array, indices: &mut [Vec<u32>]) -> Result<()> {
+            fn route_with<E>(&self, array: &dyn Array, emit: E) -> Result<()>
+            where
+                E: FnMut(usize, usize),
+            {
                 match self {
                     $(
                         Self::$variant(r) => {
                             let arr = array.as_any().downcast_ref::<$array>().ok_or_else(|| {
                                 DataFusionError::Internal(format!("Expected {}", stringify!($array)))
                             })?;
-                            r.route_indices(arr, indices);
+                            r.route_with(arr, emit);
                             Ok(())
                         }
                     )*
@@ -200,42 +234,14 @@ macro_rules! define_primitive_router {
                         let arr = array.as_any().downcast_ref::<Float32Array>().ok_or_else(|| {
                             DataFusionError::Internal("Expected Float32Array".to_string())
                         })?;
-                        r.route_indices(arr, indices);
+                        r.route_with(arr, emit);
                         Ok(())
                     }
                     Self::Float64(r) => {
                         let arr = array.as_any().downcast_ref::<Float64Array>().ok_or_else(|| {
                             DataFusionError::Internal("Expected Float64Array".to_string())
                         })?;
-                        r.route_indices(arr, indices);
-                        Ok(())
-                    }
-                }
-            }
-
-            fn route_partition_ids(&self, array: &dyn Array, partition_ids: &mut Vec<u64>) -> Result<()> {
-                match self {
-                    $(
-                        Self::$variant(r) => {
-                            let arr = array.as_any().downcast_ref::<$array>().ok_or_else(|| {
-                                DataFusionError::Internal(format!("Expected {}", stringify!($array)))
-                            })?;
-                            r.route_partition_ids(arr, partition_ids);
-                            Ok(())
-                        }
-                    )*
-                    Self::Float32(r) => {
-                        let arr = array.as_any().downcast_ref::<Float32Array>().ok_or_else(|| {
-                            DataFusionError::Internal("Expected Float32Array".to_string())
-                        })?;
-                        r.route_partition_ids(arr, partition_ids);
-                        Ok(())
-                    }
-                    Self::Float64(r) => {
-                        let arr = array.as_any().downcast_ref::<Float64Array>().ok_or_else(|| {
-                            DataFusionError::Internal("Expected Float64Array".to_string())
-                        })?;
-                        r.route_partition_ids(arr, partition_ids);
+                        r.route_with(arr, emit);
                         Ok(())
                     }
                 }
@@ -315,14 +321,10 @@ impl<T: ArrowNativeTypeOp + Ord + Copy + Send + Sync + 'static> PrimitiveValuesR
         }
     }
 
-    fn num_split_points(&self) -> usize {
-        self.split_points.len()
-    }
-
-    fn route_indices<A: ArrowPrimitiveType<Native = T>>(
+    fn route_with<A: ArrowPrimitiveType<Native = T>, E: FnMut(usize, usize)>(
         &self,
         array: &PrimitiveArray<A>,
-        indices: &mut [Vec<u32>],
+        mut emit: E,
     ) {
         let split_points = &self.split_points;
         let descending = self.sort_options.descending;
@@ -333,19 +335,19 @@ impl<T: ArrowNativeTypeOp + Ord + Copy + Send + Sync + 'static> PrimitiveValuesR
             if !descending {
                 for (idx, &val) in values.iter().enumerate() {
                     let p = split_points.partition_point(|&sp| sp <= val);
-                    indices[p].push(idx as u32);
+                    emit(idx, p);
                 }
             } else {
                 for (idx, &val) in values.iter().enumerate() {
                     let p = split_points.partition_point(|&sp| sp >= val);
-                    indices[p].push(idx as u32);
+                    emit(idx, p);
                 }
             }
         } else {
             let null_partition = if nulls_first { 0 } else { split_points.len() };
             for idx in 0..array.len() {
                 if array.is_null(idx) {
-                    indices[null_partition].push(idx as u32);
+                    emit(idx, null_partition);
                 } else {
                     let val = array.value(idx);
                     let p = if !descending {
@@ -353,52 +355,9 @@ impl<T: ArrowNativeTypeOp + Ord + Copy + Send + Sync + 'static> PrimitiveValuesR
                     } else {
                         split_points.partition_point(|&sp| sp >= val)
                     };
-                    indices[p].push(idx as u32);
+                    emit(idx, p);
                 }
             }
-        }
-    }
-
-    fn route_partition_ids<A: ArrowPrimitiveType<Native = T>>(
-        &self,
-        array: &PrimitiveArray<A>,
-        partition_ids: &mut Vec<u64>,
-    ) {
-        let split_points = &self.split_points;
-        let descending = self.sort_options.descending;
-        let nulls_first = self.sort_options.nulls_first;
-
-        if array.null_count() == 0 {
-            let values = array.values().as_ref();
-            if !descending {
-                partition_ids.extend(
-                    values
-                        .iter()
-                        .map(|&val| split_points.partition_point(|&sp| sp <= val) as u64),
-                );
-            } else {
-                partition_ids.extend(
-                    values
-                        .iter()
-                        .map(|&val| split_points.partition_point(|&sp| sp >= val) as u64),
-                );
-            }
-        } else {
-            let null_partition =
-                (if nulls_first { 0 } else { split_points.len() }) as u64;
-            partition_ids.extend((0..array.len()).map(|idx| {
-                if array.is_null(idx) {
-                    null_partition
-                } else {
-                    let val = array.value(idx);
-                    let p = if !descending {
-                        split_points.partition_point(|&sp| sp <= val)
-                    } else {
-                        split_points.partition_point(|&sp| sp >= val)
-                    };
-                    p as u64
-                }
-            }));
         }
     }
 }
@@ -417,16 +376,12 @@ impl<T: Copy + Send + Sync + 'static> FloatValuesRouter<T> {
             sort_options,
         }
     }
-
-    fn num_split_points(&self) -> usize {
-        self.split_points.len()
-    }
 }
 
 macro_rules! impl_float_values_router {
     ($t:ty, $arr:ty) => {
         impl FloatValuesRouter<$t> {
-            fn route_indices(&self, array: &$arr, indices: &mut [Vec<u32>]) {
+            fn route_with<E: FnMut(usize, usize)>(&self, array: &$arr, mut emit: E) {
                 let split_points = &self.split_points;
                 let descending = self.sort_options.descending;
                 let nulls_first = self.sort_options.nulls_first;
@@ -438,21 +393,21 @@ macro_rules! impl_float_values_router {
                             let p = split_points.partition_point(|&sp| {
                                 sp.total_cmp(&val) != Ordering::Greater
                             });
-                            indices[p].push(idx as u32);
+                            emit(idx, p);
                         }
                     } else {
                         for (idx, &val) in values.iter().enumerate() {
                             let p = split_points.partition_point(|&sp| {
                                 sp.total_cmp(&val) != Ordering::Less
                             });
-                            indices[p].push(idx as u32);
+                            emit(idx, p);
                         }
                     }
                 } else {
                     let null_partition = if nulls_first { 0 } else { split_points.len() };
                     for idx in 0..array.len() {
                         if array.is_null(idx) {
-                            indices[null_partition].push(idx as u32);
+                            emit(idx, null_partition);
                         } else {
                             let val = array.value(idx);
                             let p = if !descending {
@@ -464,52 +419,9 @@ macro_rules! impl_float_values_router {
                                     sp.total_cmp(&val) != Ordering::Less
                                 })
                             };
-                            indices[p].push(idx as u32);
+                            emit(idx, p);
                         }
                     }
-                }
-            }
-
-            fn route_partition_ids(&self, array: &$arr, partition_ids: &mut Vec<u64>) {
-                let split_points = &self.split_points;
-                let descending = self.sort_options.descending;
-                let nulls_first = self.sort_options.nulls_first;
-
-                if array.null_count() == 0 {
-                    let values = array.values().as_ref();
-                    if !descending {
-                        partition_ids.extend(values.iter().map(|&val| {
-                            split_points.partition_point(|&sp| {
-                                sp.total_cmp(&val) != Ordering::Greater
-                            }) as u64
-                        }));
-                    } else {
-                        partition_ids.extend(values.iter().map(|&val| {
-                            split_points.partition_point(|&sp| {
-                                sp.total_cmp(&val) != Ordering::Less
-                            }) as u64
-                        }));
-                    }
-                } else {
-                    let null_partition =
-                        (if nulls_first { 0 } else { split_points.len() }) as u64;
-                    partition_ids.extend((0..array.len()).map(|idx| {
-                        if array.is_null(idx) {
-                            null_partition
-                        } else {
-                            let val = array.value(idx);
-                            let p = if !descending {
-                                split_points.partition_point(|&sp| {
-                                    sp.total_cmp(&val) != Ordering::Greater
-                                })
-                            } else {
-                                split_points.partition_point(|&sp| {
-                                    sp.total_cmp(&val) != Ordering::Less
-                                })
-                            };
-                            p as u64
-                        }
-                    }));
                 }
             }
         }
@@ -572,34 +484,18 @@ impl RowConverterRangeRouter {
         })
     }
 
-    fn num_split_points(&self) -> usize {
-        self.split_point_rows.len()
-    }
-
-    fn route_indices(&self, arrays: &[ArrayRef], indices: &mut [Vec<u32>]) -> Result<()> {
+    fn route_with<E: FnMut(usize, usize)>(
+        &self,
+        arrays: &[ArrayRef],
+        mut emit: E,
+    ) -> Result<()> {
         let rows = self.converter.convert_columns(arrays)?;
         let sp_rows = &self.split_point_rows;
 
         for (row_idx, row) in rows.iter().enumerate() {
             let partition = sp_rows.partition_point(|sp| sp.as_ref() <= row.as_ref());
-            indices[partition].push(row_idx as u32);
+            emit(row_idx, partition);
         }
-        Ok(())
-    }
-
-    fn route_partition_ids(
-        &self,
-        arrays: &[ArrayRef],
-        partition_ids: &mut Vec<u64>,
-    ) -> Result<()> {
-        let rows = self.converter.convert_columns(arrays)?;
-        let sp_rows = &self.split_point_rows;
-
-        partition_ids.extend(
-            rows.iter().map(|row| {
-                sp_rows.partition_point(|sp| sp.as_ref() <= row.as_ref()) as u64
-            }),
-        );
         Ok(())
     }
 }
@@ -646,9 +542,8 @@ mod tests {
             descending: false,
             nulls_first: true,
         }];
-        let data_types = vec![DataType::Int64];
 
-        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
         assert!(matches!(router.inner, RangeRouterInner::Primitive(_)));
 
         let input = Arc::new(Int64Array::from(vec![
@@ -681,9 +576,8 @@ mod tests {
             descending: true,
             nulls_first: false,
         }];
-        let data_types = vec![DataType::Int64];
 
-        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
         assert!(matches!(router.inner, RangeRouterInner::Primitive(_)));
 
         let input = Arc::new(Int64Array::from(vec![
@@ -715,9 +609,8 @@ mod tests {
             descending: false,
             nulls_first: false,
         }];
-        let data_types = vec![DataType::Float64];
 
-        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
         assert!(matches!(router.inner, RangeRouterInner::Primitive(_)));
 
         let input = Arc::new(Float64Array::from(vec![
@@ -748,9 +641,8 @@ mod tests {
             descending: false,
             nulls_first: true,
         }];
-        let data_types = vec![DataType::Utf8];
 
-        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
         assert!(matches!(router.inner, RangeRouterInner::Row(_)));
 
         let input = Arc::new(StringArray::from(vec![
@@ -798,9 +690,8 @@ mod tests {
                 nulls_first: false,
             },
         ];
-        let data_types = vec![DataType::Int64, DataType::Utf8];
 
-        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
         assert!(matches!(router.inner, RangeRouterInner::Row(_)));
 
         let col1 = Arc::new(Int64Array::from(vec![1, 1, 1, 1, 2, 2, 3])) as ArrayRef;
@@ -819,9 +710,8 @@ mod tests {
     fn test_router_empty_split_points() -> Result<()> {
         let split_points = vec![];
         let sort_options = vec![SortOptions::default()];
-        let data_types = vec![DataType::Int64];
 
-        let router = RangeRouter::try_new(&data_types, &sort_options, &split_points)?;
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
         assert_eq!(router.num_split_points(), 0);
 
         let input = Arc::new(Int64Array::from(vec![10, 20, 30])) as ArrayRef;
