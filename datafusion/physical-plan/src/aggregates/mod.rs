@@ -4011,21 +4011,32 @@ mod tests {
                 Arc::clone(&input_schema),
             )?);
 
-            let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
+            let stream = partial_aggregate.execute_typed(0, &task_ctx);
 
             // ensure that we really got the version we wanted
-            match version {
+            let stream = match version {
                 0 => {
-                    assert!(matches!(stream, StreamType::AggregateStream(_)));
+                    // the ungrouped stream charges its accumulators' construction-time
+                    // state up front, so admission fails before any input is read
+                    let err = stream.err().unwrap();
+                    assert!(
+                        matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+                        "Wrong error type: {err}",
+                    );
+                    continue;
                 }
                 1 => {
+                    let stream = stream?;
                     assert!(matches!(stream, StreamType::GroupedHash(_)));
+                    stream
                 }
                 2 => {
+                    let stream = stream?;
                     assert!(matches!(stream, StreamType::SingleHash(_)));
+                    stream
                 }
                 _ => panic!("Unknown version: {version}"),
-            }
+            };
 
             let stream: SendableRecordBatchStream = stream.into();
             let err = collect(stream).await.unwrap_err();
