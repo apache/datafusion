@@ -240,10 +240,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context(
-            statement,
-            &mut PlannerContext::new(),
-        )
+        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
     }
 
     /// Generate a logical plan from an SQL statement
@@ -252,7 +249,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         statement: Statement,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let plan = self.sql_statement_to_plan_with_context_impl(statement, planner_context)?;
+        let plan =
+            self.sql_statement_to_plan_with_context_impl(statement, planner_context)?;
         check_plan(&plan)?;
         Ok(plan)
     }
@@ -3191,10 +3189,9 @@ FROM (
     }
 }
 
-
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_common::plan_err;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     plan.apply(|node| {
         for field in node.schema().fields() {
             if field.name().starts_with("__common_expr") {
@@ -3208,4 +3205,3 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
     })
     .map(|_| ())
 }
-
