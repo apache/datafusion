@@ -18,10 +18,11 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Int32Array, Int64Array, LargeListArray, ListArray,
-    RecordBatch, StringArray, StructArray, record_batch,
+    Array, ArrayRef, BooleanArray, FixedSizeListArray, Int32Array, Int64Array,
+    LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
+    record_batch,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::concat_batches;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
@@ -60,13 +61,19 @@ async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &s
 enum NestedListKind {
     List,
     LargeList,
+    FixedSizeList,
 }
+
+const FIXED_SIZE_LIST_LEN: usize = 2;
 
 impl NestedListKind {
     fn field_data_type(self, item_field: Arc<Field>) -> DataType {
         match self {
             Self::List => DataType::List(item_field),
             Self::LargeList => DataType::LargeList(item_field),
+            Self::FixedSizeList => {
+                DataType::FixedSizeList(item_field, FIXED_SIZE_LIST_LEN as i32)
+            }
         }
     }
 
@@ -89,6 +96,19 @@ impl NestedListKind {
                 values,
                 None,
             )),
+            Self::FixedSizeList => {
+                assert_eq!(
+                    lengths.as_slice(),
+                    &[FIXED_SIZE_LIST_LEN],
+                    "FixedSizeList fixtures must contain exactly {FIXED_SIZE_LIST_LEN} elements per row"
+                );
+                Arc::new(FixedSizeListArray::new(
+                    item_field,
+                    FIXED_SIZE_LIST_LEN as i32,
+                    values,
+                    None,
+                ))
+            }
         }
     }
 
@@ -96,6 +116,7 @@ impl NestedListKind {
         match self {
             Self::List => "list",
             Self::LargeList => "large_list",
+            Self::FixedSizeList => "fixed_size_list",
         }
     }
 }
@@ -277,7 +298,8 @@ fn nested_list_table_schema(
 }
 
 // Helper to extract message values from a nested list column.
-// Returns the values at indices 0 and 1 from either a ListArray or LargeListArray.
+// Returns the values at indices 0 and 1 from either a ListArray, LargeListArray,
+// or FixedSizeListArray.
 fn extract_nested_list_values(
     kind: NestedListKind,
     column: &ArrayRef,
@@ -297,7 +319,50 @@ fn extract_nested_list_values(
                 .expect("messages should be a LargeListArray");
             (list.value(0), list.value(1))
         }
+        NestedListKind::FixedSizeList => {
+            let list = column
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .expect("messages should be a FixedSizeListArray");
+            (list.value(0), list.value(1))
+        }
     }
+}
+
+fn evolved_messages(kind: NestedListKind) -> Vec<NestedMessageRow<'static>> {
+    let mut messages = vec![NestedMessageRow {
+        id: 30,
+        name: "gamma",
+        chain: Some("eth"),
+        ignored: Some(99),
+    }];
+    if matches!(kind, NestedListKind::FixedSizeList) {
+        messages.push(NestedMessageRow {
+            id: 40,
+            name: "delta",
+            chain: Some("doge"),
+            ignored: Some(100),
+        });
+    }
+    messages
+}
+
+fn error_messages(kind: NestedListKind) -> Vec<NestedMessageRow<'static>> {
+    let mut messages = vec![NestedMessageRow {
+        id: 10,
+        name: "alpha",
+        chain: Some("eth"),
+        ignored: None,
+    }];
+    if matches!(kind, NestedListKind::FixedSizeList) {
+        messages.push(NestedMessageRow {
+            id: 20,
+            name: "beta",
+            chain: Some("doge"),
+            ignored: None,
+        });
+    }
+    messages
 }
 
 // Helper to set up a nested list test fixture.
@@ -352,15 +417,11 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
     );
 
     // new.parquet shape: messages item struct adds nullable `chain` and extra `ignored`.
+    let new_messages = evolved_messages(kind);
     let new_batch = nested_messages_batch(
         kind,
         2,
-        &[NestedMessageRow {
-            id: 30,
-            name: "gamma",
-            chain: Some("eth"),
-            ignored: Some(99),
-        }],
+        &new_messages,
         &message_fields(DataType::Utf8, true, true, true),
     );
 
@@ -429,7 +490,12 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    assert_eq!(new_chain.iter().collect::<Vec<_>>(), vec![Some("eth")]);
+    let expected_new_chain = if matches!(kind, NestedListKind::FixedSizeList) {
+        vec![Some("eth"), Some("doge")]
+    } else {
+        vec![Some("eth")]
+    };
+    assert_eq!(new_chain.iter().collect::<Vec<_>>(), expected_new_chain);
 
     let projected = ctx
         .sql(
@@ -863,12 +929,182 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
     Ok(())
 }
 
-/// Macro to generate paired test functions for List and LargeList variants.
-/// Expands to two `#[tokio::test]` functions with the specified names.
-macro_rules! test_struct_schema_evolution_pair {
+fn map_value_struct_evolution_batch() -> Result<RecordBatch> {
+    let physical_value_fields: Fields = vec![
+        Arc::new(Field::new("amount", DataType::Int32, false)),
+        Arc::new(Field::new("ignored", DataType::Utf8, true)),
+    ]
+    .into();
+    let values = StructArray::new(
+        physical_value_fields.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["x"])) as ArrayRef,
+        ],
+        None,
+    );
+    let entry_fields: Fields = vec![
+        Arc::new(Field::new("keys", DataType::Utf8, false)),
+        Arc::new(Field::new(
+            "values",
+            DataType::Struct(physical_value_fields),
+            true,
+        )),
+    ]
+    .into();
+    let entries = StructArray::new(
+        entry_fields.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["a"])) as ArrayRef,
+            Arc::new(values) as ArrayRef,
+        ],
+        None,
+    );
+    let map = MapArray::new(
+        Arc::new(Field::new("entries", DataType::Struct(entry_fields), false)),
+        OffsetBuffer::new(vec![0, 1, 1].into()),
+        entries,
+        Some(NullBuffer::from(vec![true, false])),
+        false,
+    );
+    Ok(RecordBatch::try_from_iter(vec![
+        ("row_id", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+        ("attributes", Arc::new(map) as ArrayRef),
+    ])?)
+}
+
+fn map_value_struct_table_schema(currency_nullable: bool) -> SchemaRef {
+    let target_value_fields: Fields = vec![
+        Arc::new(Field::new("amount", DataType::Int64, false)),
+        Arc::new(Field::new("currency", DataType::Utf8, currency_nullable)),
+    ]
+    .into();
+    let target_entries = Field::new(
+        "entries",
+        DataType::Struct(
+            vec![
+                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(Field::new(
+                    "value",
+                    DataType::Struct(target_value_fields),
+                    true,
+                )),
+            ]
+            .into(),
+        ),
+        false,
+    );
+    Arc::new(Schema::new(vec![
+        Field::new("row_id", DataType::Int32, false),
+        Field::new(
+            "attributes",
+            DataType::Map(Arc::new(target_entries), false),
+            true,
+        ),
+    ]))
+}
+
+fn map_value_struct_nullable_schema() -> SchemaRef {
+    map_value_struct_table_schema(true)
+}
+
+fn map_value_struct_non_nullable_schema() -> SchemaRef {
+    map_value_struct_table_schema(false)
+}
+
+async fn setup_map_value_struct_table(
+    table_path: &str,
+    table_schema: SchemaRef,
+) -> Result<SessionContext> {
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let file_path = format!("{table_path}/data.parquet");
+    write_parquet(
+        map_value_struct_evolution_batch()?,
+        Arc::clone(&store),
+        &file_path,
+    )
+    .await;
+
+    let ctx = test_context();
+    let table_url = format!("memory:///{table_path}/");
+    register_memory_listing_table(&ctx, store, &table_url, table_schema).await;
+    Ok(ctx)
+}
+
+#[tokio::test]
+async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
+    let ctx =
+        setup_map_value_struct_table("map_evolution", map_value_struct_nullable_schema())
+            .await?;
+
+    let batches = ctx
+        .sql("SELECT * FROM t ORDER BY row_id")
+        .await?
+        .collect()
+        .await?;
+    let map = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .expect("attributes should be a MapArray");
+    assert!(map.is_valid(0));
+    assert!(map.is_null(1));
+    let (key_field, value_field) = map.entries_fields();
+    assert_eq!(key_field.name(), "key");
+    assert_eq!(value_field.name(), "value");
+    let keys = map
+        .keys()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("map keys should be a StringArray");
+    assert_eq!(keys.value(0), "a");
+    let values = map
+        .values()
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("map values should be a StructArray");
+    let amounts = values
+        .column_by_name("amount")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(amounts.values(), &[10]);
+    assert_eq!(values.column_by_name("currency").unwrap().null_count(), 1);
+    assert!(values.column_by_name("ignored").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_map_value_struct_incompatible_schema_evolution_rejected() -> Result<()> {
+    let ctx = setup_map_value_struct_table(
+        "map_evolution_rejected",
+        map_value_struct_non_nullable_schema(),
+    )
+    .await?;
+
+    let error = ctx
+        .sql("SELECT * FROM t ORDER BY row_id")
+        .await?
+        .collect()
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("target field 'currency' is non-nullable"),
+        "unexpected error: {error}"
+    );
+
+    Ok(())
+}
+
+/// Macro to generate schema evolution tests for list-like variants.
+macro_rules! test_struct_schema_evolution_variants {
     (
         list: $list_test:ident,
         large_list: $large_list_test:ident,
+        fixed_size_list: $fixed_size_list_test:ident,
         fn: $assertion_fn:path $(, args: $($arg:expr),+)?
     ) => {
         #[tokio::test]
@@ -880,10 +1116,16 @@ macro_rules! test_struct_schema_evolution_pair {
         async fn $large_list_test() {
             $assertion_fn(NestedListKind::LargeList $(, $($arg),+)?).await;
         }
+
+        #[tokio::test]
+        async fn $fixed_size_list_test() {
+            $assertion_fn(NestedListKind::FixedSizeList $(, $($arg),+)?).await;
+        }
     };
     (
         list: $list_test:ident,
         large_list: $large_list_test:ident,
+        fixed_size_list: $fixed_size_list_test:ident,
         fn_result: $assertion_fn:path
     ) => {
         #[tokio::test]
@@ -895,31 +1137,34 @@ macro_rules! test_struct_schema_evolution_pair {
         async fn $large_list_test() -> Result<()> {
             $assertion_fn(NestedListKind::LargeList).await
         }
+
+        #[tokio::test]
+        async fn $fixed_size_list_test() -> Result<()> {
+            $assertion_fn(NestedListKind::FixedSizeList).await
+        }
     };
 }
 
-test_struct_schema_evolution_pair!(
+test_struct_schema_evolution_variants!(
     list: test_list_struct_schema_evolution_end_to_end,
     large_list: test_large_list_struct_schema_evolution_end_to_end,
+    fixed_size_list: test_fixed_size_list_struct_schema_evolution_end_to_end,
     fn_result: assert_nested_list_struct_schema_evolution
 );
 
 async fn assert_nested_list_struct_schema_evolution_errors(
     kind: NestedListKind,
+    source_includes_chain: bool,
     chain_type: DataType,
     chain_nullable: bool,
     expected_error: &str,
 ) {
+    let messages = error_messages(kind);
     let batch = nested_messages_batch(
         kind,
         1,
-        &[NestedMessageRow {
-            id: 10,
-            name: "alpha",
-            chain: Some("eth"),
-            ignored: None,
-        }],
-        &message_fields(DataType::Utf8, true, true, false),
+        &messages,
+        &message_fields(DataType::Utf8, true, source_includes_chain, false),
     );
 
     let table_schema =
@@ -949,6 +1194,7 @@ async fn assert_nested_list_struct_schema_evolution_errors(
 async fn assert_non_nullable_missing_chain_field_fails(kind: NestedListKind) {
     assert_nested_list_struct_schema_evolution_errors(
         kind,
+        false,
         DataType::Utf8,
         false,
         "non-nullable",
@@ -959,6 +1205,7 @@ async fn assert_non_nullable_missing_chain_field_fails(kind: NestedListKind) {
 async fn assert_incompatible_chain_field_fails(kind: NestedListKind) {
     assert_nested_list_struct_schema_evolution_errors(
         kind,
+        true,
         incompatible_chain_type(),
         true,
         "Cannot cast struct field 'chain'",
@@ -970,15 +1217,17 @@ fn incompatible_chain_type() -> DataType {
     DataType::Struct(vec![Arc::new(Field::new("value", DataType::Utf8, true))].into())
 }
 
-test_struct_schema_evolution_pair!(
+test_struct_schema_evolution_variants!(
     list: test_list_struct_schema_evolution_non_nullable_missing_field_fails,
     large_list: test_large_list_struct_schema_evolution_non_nullable_missing_field_fails,
+    fixed_size_list: test_fixed_size_list_struct_schema_evolution_non_nullable_missing_field_fails,
     fn: assert_non_nullable_missing_chain_field_fails
 );
 
-test_struct_schema_evolution_pair!(
+test_struct_schema_evolution_variants!(
     list: test_list_struct_schema_evolution_incompatible_field_fails,
     large_list: test_large_list_struct_schema_evolution_incompatible_field_fails,
+    fixed_size_list: test_fixed_size_list_struct_schema_evolution_incompatible_field_fails,
     fn: assert_incompatible_chain_field_fails
 );
 

@@ -30,9 +30,11 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
-    Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, internal_err,
+    Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    internal_err,
 };
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
@@ -98,10 +100,14 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Evaluate the window function against the batch. This function facilitates
     /// stateful, bounded-memory implementations.
+    ///
+    /// `eval_ctx` carries stream-level (cross-partition) information; see
+    /// [`WindowEvalContext`].
     fn evaluate_stateful(
         &self,
         _partition_batches: &PartitionBatches,
         _window_agg_state: &mut PartitionWindowAggStates,
+        _eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
         internal_err!("evaluate_stateful is not implemented for {}", self.name())
     }
@@ -225,9 +231,18 @@ pub trait AggregateWindowExpr: WindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
+        eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
         let field = self.field()?;
         let out_type = field.data_type();
+        // Every partition consults the same most recent input row, so its
+        // ORDER BY values can be evaluated once, outside the per-partition
+        // loop.
+        let most_recent_row_order_bys = eval_ctx
+            .most_recent_row
+            .map(|batch| self.order_by_columns(batch))
+            .transpose()?
+            .map(get_orderby_values);
         for (partition_row, partition_batch_state) in partition_batches.iter() {
             if !window_agg_state.contains_key(partition_row) {
                 let accumulator = self.get_accumulator()?;
@@ -236,19 +251,24 @@ pub trait AggregateWindowExpr: WindowExpr {
                     WindowState {
                         state: WindowAggState::new(out_type)?,
                         window_fn: WindowFn::Aggregate(accumulator),
+                        published: false,
                     },
                 );
             };
             let window_state = window_agg_state
                 .get_mut(partition_row)
                 .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
-            let accumulator = match &mut window_state.window_fn {
-                WindowFn::Aggregate(accumulator) => accumulator,
-                _ => unreachable!(),
+            let WindowFn::Aggregate(accumulator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
-            let most_recent_row = partition_batch_state.most_recent_row.as_ref();
+
+            // Skip partitions that cannot produce anything new until they
+            // either receive rows or reach their end.
+            if state.is_up_to_date_with(partition_batch_state) {
+                continue;
+            }
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
@@ -258,7 +278,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             let out_col = self.get_result_column(
                 accumulator,
                 record_batch,
-                most_recent_row,
+                most_recent_row_order_bys.as_deref(),
                 // Start search from the last range
                 &mut state.window_frame_range,
                 window_frame_ctx,
@@ -276,7 +296,8 @@ pub trait AggregateWindowExpr: WindowExpr {
     /// # Arguments
     /// * `accumulator`: The accumulator to use for the calculation.
     /// * `record_batch`: batch belonging to the current partition (see [`PartitionBatchState`]).
-    /// * `most_recent_row`: the batch that contains the most recent row, if available (see [`PartitionBatchState`]).
+    /// * `most_recent_row_order_bys`: ORDER BY values of the most recent input
+    ///   row, if available (see [`WindowExpr::evaluate_stateful`]).
     /// * `last_range`: The last range of rows that were processed (see [`WindowAggState`]).
     /// * `window_frame_ctx`: Details about the window frame (see [`WindowFrameContext`]).
     /// * `idx`: The index of the current row in the record batch.
@@ -286,7 +307,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         &self,
         accumulator: &mut Box<dyn Accumulator>,
         record_batch: &RecordBatch,
-        most_recent_row: Option<&RecordBatch>,
+        most_recent_row_order_bys: Option<&[ArrayRef]>,
         last_range: &mut Range<usize>,
         window_frame_ctx: &mut WindowFrameContext,
         mut idx: usize,
@@ -326,10 +347,6 @@ pub trait AggregateWindowExpr: WindowExpr {
             return value.to_array_of_size(record_batch.num_rows());
         }
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
-        let most_recent_row_order_bys = most_recent_row
-            .map(|batch| self.order_by_columns(batch))
-            .transpose()?
-            .map(get_orderby_values);
 
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
@@ -346,7 +363,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 && !is_end_bound_safe(
                     window_frame_ctx,
                     &order_bys,
-                    most_recent_row_order_bys.as_deref(),
+                    most_recent_row_order_bys,
                     self.order_by(),
                     idx,
                 )?
@@ -592,9 +609,16 @@ pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<Array
     order_by_columns.into_iter().map(|s| s.values).collect()
 }
 
+/// State for incrementally evaluating a window function
+/// within a partition, created by [`WindowExpr::create_window_fn`].
 #[derive(Debug)]
 pub enum WindowFn {
+    /// A "normal" window function, such as `lead` or `lag`, evaluated via a
+    /// [`PartitionEvaluator`]. Despite the name, it is used for all window
+    /// functions that are not aggregate functions.
     Builtin(Box<dyn PartitionEvaluator>),
+    /// An aggregate function used as a window function, such as `avg` or
+    /// `sum`, which is evaluated via an [`Accumulator`].
     Aggregate(Box<dyn Accumulator>),
 }
 
@@ -604,25 +628,150 @@ pub enum WindowFn {
 /// PartitionKey would consist of unique `[a,b]` pairs
 pub type PartitionKey = Vec<ScalarValue>;
 
+/// Stream-level context passed to [`WindowExpr::evaluate_stateful`].
+///
+/// This carries information that spans all partitions of the input, as
+/// opposed to the per-partition state in [`PartitionBatches`] and
+/// [`PartitionWindowAggStates`]. It is `non_exhaustive` so that fields can
+/// be added without breaking implementors; construct it with
+/// [`Default::default`] and the `with_*` builder methods.
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
+pub struct WindowEvalContext<'a> {
+    /// A single-row batch containing the most recent input row, whichever
+    /// partition that row belongs to. It is `Some` only when the input is
+    /// ordered by the first ORDER BY column across partitions (`Linear`
+    /// mode), in which case no future input row -- in any partition -- can
+    /// precede it in that column; implementations can use this bound to
+    /// decide whether pending window frames can be finalized before their
+    /// partition receives more data.
+    pub most_recent_row: Option<&'a RecordBatch>,
+}
+
+impl<'a> WindowEvalContext<'a> {
+    /// Sets the most recent input row (see [`Self::most_recent_row`]).
+    pub fn with_most_recent_row(mut self, batch: Option<&'a RecordBatch>) -> Self {
+        self.most_recent_row = batch;
+        self
+    }
+}
+
 #[derive(Debug)]
 pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
+    /// True once [`Self::aggregate_state`] has been called on this entry.
+    /// Guards against a second destructive [`Accumulator::state`] read: the
+    /// method itself errors on second call, and the observer loop in
+    /// `BoundedWindowAggStream::publish_finalized_states` uses this as an
+    /// early-skip so it doesn't attempt one. Independent of `state.is_end`,
+    /// which is a group-closed signal that the pruning path also reads.
+    pub published: bool,
 }
-pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
+
+impl WindowState {
+    /// [`Accumulator::state`] if this window function is an aggregate, `None`
+    /// otherwise (built-in functions like `row_number`, `rank`, `lead`/`lag`
+    /// have no serializable accumulator state).
+    ///
+    /// [`Accumulator::state`] takes `&mut self` and its trait doc calls out
+    /// that "this function should not be called twice, otherwise it will
+    /// result in potentially non-deterministic behavior." Several built-in
+    /// impls (`median`, `percentile_cont`, `string_agg`,
+    /// `min_max_bytes`/`min_max_struct`) `std::mem::take` their internal
+    /// buffers on call — a second call returns *empty* state, not the same
+    /// state, so a downstream prefix-merge would silently lose every value
+    /// the accumulator had ingested.
+    ///
+    /// Enforced at this layer: on first call we set [`Self::published`] and
+    /// return the state; any later call errors rather than performing a
+    /// destructive re-read.
+    pub fn aggregate_state(&mut self) -> Result<Option<Vec<ScalarValue>>> {
+        if self.published {
+            return exec_err!(
+                "WindowState::aggregate_state called more than once; \
+                 Accumulator::state is a destructive read for several \
+                 built-in aggregates and a second call would silently lose data"
+            );
+        }
+        let state = match &mut self.window_fn {
+            WindowFn::Aggregate(accumulator) => Some(accumulator.state()?),
+            WindowFn::Builtin(_) => None,
+        };
+        self.published = true;
+        Ok(state)
+    }
+}
+
+pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState, RandomState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
-pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
+pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState, RandomState>;
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use crate::window::window_expr::is_row_ahead;
+    use crate::window::window_expr::{WindowFn, WindowState, is_row_ahead};
 
     use arrow::array::{ArrayRef, Float64Array};
     use arrow::compute::SortOptions;
-    use datafusion_common::Result;
+    use arrow::datatypes::DataType;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{Accumulator, window_state::WindowAggState};
+
+    /// Minimal [`Accumulator`] whose `state()` records how many times it was
+    /// called by returning the count as its single state element. Any second
+    /// call would surface (were it allowed to happen) as `[UInt64(2)]`
+    /// instead of `[UInt64(1)]`.
+    #[derive(Debug)]
+    struct CallCountingAccumulator {
+        calls: usize,
+    }
+
+    impl Accumulator for CallCountingAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Null)
+        }
+        fn size(&self) -> usize {
+            size_of::<Self>()
+        }
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            self.calls += 1;
+            Ok(vec![ScalarValue::UInt64(Some(self.calls as u64))])
+        }
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn aggregate_state_errors_on_second_call() -> Result<()> {
+        // `Accumulator::state()` is a destructive read for several built-in
+        // aggregates (median, percentile_cont, string_agg, min_max_bytes/
+        // min_max_struct all `mem::take` their internal buffers). Its trait
+        // doc says "should not be called twice"; `WindowState::aggregate_state`
+        // enforces that at this layer by returning an error rather than
+        // performing the second read.
+        let acc: Box<dyn Accumulator> = Box::new(CallCountingAccumulator { calls: 0 });
+        let mut ws = WindowState {
+            state: WindowAggState::new(&DataType::UInt64)?,
+            window_fn: WindowFn::Aggregate(acc),
+            published: false,
+        };
+        let first = ws.aggregate_state()?;
+        assert_eq!(first, Some(vec![ScalarValue::UInt64(Some(1))]));
+        assert!(ws.published, "published must flip on successful publish");
+        let err = ws.aggregate_state().unwrap_err().to_string();
+        assert!(
+            err.contains("called more than once"),
+            "expected second-call error, got: {err}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_is_row_ahead() -> Result<()> {

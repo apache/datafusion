@@ -41,6 +41,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
+    ensure_unique_field_names,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -158,7 +159,6 @@ impl CsvFormat {
                         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                         .boxed(),
                 )
-                .await
                 .map_err(DataFusionError::from)
                 .left_stream(),
             Err(e) => {
@@ -170,7 +170,7 @@ impl CsvFormat {
 
     /// Convert a stream of bytes into a stream of [`Bytes`] containing newline
     /// delimited CSV records, while accounting for `\` and `"`.
-    pub async fn read_to_delimited_chunks_from_stream<'a>(
+    pub fn read_to_delimited_chunks_from_stream<'a>(
         &self,
         stream: BoxStream<'a, Result<Bytes>>,
     ) -> BoxStream<'a, Result<Bytes>> {
@@ -398,12 +398,24 @@ impl FileFormat for CsvFormat {
                     )
                 })?;
             records_to_read -= records_read;
-            schemas.push(schema);
+            schemas.push((&object.location, schema));
             if records_to_read == 0 {
                 break;
             }
         }
 
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing CSV file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
+
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
     }
@@ -825,6 +837,153 @@ impl DataSink for CsvSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        exec: &DataSinkExec,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
+        let sink = protobuf::CsvSink::try_from(self)?;
+        let node = protobuf::CsvSinkExecNode {
+            input: Some(Box::new(input)),
+            sink: Some(sink),
+            sink_schema: Some(exec.schema().as_ref().try_into()?),
+            sort_order,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(node))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&CsvSink> for datafusion_proto_models::protobuf::CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &CsvSink) -> Result<Self> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+            writer_options: Some(value.writer_options().try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&datafusion_proto_models::protobuf::CsvSink> for CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &datafusion_proto_models::protobuf::CsvSink) -> Result<Self> {
+        let config =
+            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "CsvSink is missing required field 'config'"
+                )
+            })?)?;
+        let writer_options = value
+            .writer_options
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "CsvSink is missing required field 'writer_options'"
+                )
+            })?
+            .try_into()?;
+
+        Ok(Self::new(config, writer_options))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CsvSink {
+    /// Reconstructs a [`DataSinkExec`] containing a `CsvSink` from protobuf.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let sink_node = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::CsvSink,
+            "CsvSink",
+        );
+        let input = ctx.decode_required_child(
+            sink_node.input.as_deref(),
+            "CsvSinkExecNode",
+            "input",
+        )?;
+        let proto_sink = sink_node.sink.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "CsvSinkExecNode is missing required field 'sink'"
+            )
+        })?;
+        let data_sink = CsvSink::try_from(proto_sink)?;
+        let sort_order = DataSinkExec::decode_sort_order(
+            sink_node.sort_order.as_ref(),
+            ctx,
+            input.schema().as_ref(),
+        )?;
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            sort_order,
+        )))
+    }
+}
+
+/// Encode a [`CsvFormatFactory`]'s options as their protobuf form.
+///
+/// The reverse direction is `From<&protobuf::CsvOptions> for CsvOptions` in
+/// `datafusion-proto-models`: `CsvOptions` is a `datafusion-common` type, so
+/// that half cannot live here.
+#[cfg(feature = "proto")]
+impl From<&CsvFormatFactory> for datafusion_proto_models::protobuf::CsvOptions {
+    fn from(factory: &CsvFormatFactory) -> Self {
+        if let Some(options) = &factory.options {
+            datafusion_proto_models::protobuf::CsvOptions {
+                has_header: options.has_header.map_or(vec![], |v| vec![v as u8]),
+                delimiter: vec![options.delimiter],
+                quote: vec![options.quote],
+                terminator: options.terminator.map_or(vec![], |v| vec![v]),
+                escape: options.escape.map_or(vec![], |v| vec![v]),
+                double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
+                compression: options.compression as i32,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
+                date_format: options.date_format.clone().unwrap_or_default(),
+                datetime_format: options.datetime_format.clone().unwrap_or_default(),
+                timestamp_format: options.timestamp_format.clone().unwrap_or_default(),
+                timestamp_tz_format: options
+                    .timestamp_tz_format
+                    .clone()
+                    .unwrap_or_default(),
+                time_format: options.time_format.clone().unwrap_or_default(),
+                null_value: options.null_value.clone().unwrap_or_default(),
+                null_regex: options.null_regex.clone().unwrap_or_default(),
+                comment: options.comment.map_or(vec![], |v| vec![v]),
+                newlines_in_values: options
+                    .newlines_in_values
+                    .map_or(vec![], |v| vec![v as u8]),
+                truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
+                compression_level: options.compression_level,
+                quote_style: options.quote_style as i32,
+                ignore_leading_whitespace: options
+                    .ignore_leading_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+                ignore_trailing_whitespace: options
+                    .ignore_trailing_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+            }
+        } else {
+            datafusion_proto_models::protobuf::CsvOptions::default()
+        }
     }
 }
 

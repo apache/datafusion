@@ -51,6 +51,7 @@ datafusion-macros = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
+hashbrown = { workspace = true }
 log = { workspace = true }
 num-traits = { workspace = true }
 
@@ -92,7 +93,19 @@ name = "median"
 harness = false
 
 [[bench]]
+name = "nth_value"
+harness = false
+
+[[bench]]
 name = "percentile_cont"
+harness = false
+
+[[bench]]
+name = "sliding_max"
+harness = false
+
+[[bench]]
+name = "variance"
 harness = false
 
 [features]

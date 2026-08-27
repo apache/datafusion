@@ -241,14 +241,14 @@ impl TableProvider for ParquetMetadataTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -283,16 +283,16 @@ fn convert_parquet_statistics(
             val.max_opt().map(|v| v.to_string()),
         ),
         (Statistics::ByteArray(val), ConvertedType::UTF8) => (
-            byte_array_to_string(val.min_opt()),
-            byte_array_to_string(val.max_opt()),
+            val.min_opt().map(byte_array_to_string),
+            val.max_opt().map(byte_array_to_string),
         ),
         (Statistics::ByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
             val.max_opt().map(|v| v.to_string()),
         ),
         (Statistics::FixedLenByteArray(val), ConvertedType::UTF8) => (
-            fixed_len_byte_array_to_string(val.min_opt()),
-            fixed_len_byte_array_to_string(val.max_opt()),
+            val.min_opt().map(fixed_len_byte_array_to_string),
+            val.max_opt().map(fixed_len_byte_array_to_string),
         ),
         (Statistics::FixedLenByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
@@ -302,21 +302,17 @@ fn convert_parquet_statistics(
 }
 
 /// Convert to a string if it has utf8 encoding, otherwise print bytes directly
-fn byte_array_to_string(val: Option<&ByteArray>) -> Option<String> {
-    val.map(|v| {
-        v.as_utf8()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_e| v.to_string())
-    })
+fn byte_array_to_string(val: &ByteArray) -> String {
+    val.as_utf8()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_e| val.to_string())
 }
 
 /// Convert to a string if it has utf8 encoding, otherwise print bytes directly
-fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<String> {
-    val.map(|v| {
-        v.as_utf8()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_e| v.to_string())
-    })
+fn fixed_len_byte_array_to_string(val: &FixedLenByteArray) -> String {
+    val.as_utf8()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_e| val.to_string())
 }
 
 #[derive(Debug)]
@@ -487,14 +483,14 @@ impl TableProvider for MetadataCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -604,14 +600,14 @@ impl TableProvider for StatisticsCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -753,14 +749,14 @@ impl TableProvider for ListFilesCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }

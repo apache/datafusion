@@ -33,13 +33,13 @@ use self::dependency::{
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
+use crate::expressions::{Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -194,25 +194,56 @@ impl OrderingEquivalenceCache {
     }
 }
 
+/// Counts how often [`EquivalenceProperties::project_reusing`] reused a cached
+/// equivalence group instead of reprojecting it.
+///
+/// Thread local rather than a global counter: the test binary runs tests in
+/// parallel, and a shared count would let one test observe another's hits.
+#[cfg(test)]
+mod eq_group_reuse_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static HITS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record_hit() {
+        HITS.with(|h| h.set(h.get() + 1));
+    }
+
+    /// Runs `f` and reports how many reuses happened while it did.
+    pub(super) fn count<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let before = HITS.with(Cell::get);
+        let value = f();
+        (value, HITS.with(Cell::get) - before)
+    }
+}
+
 impl EquivalenceProperties {
-    /// Helper used by the ordering equivalence rule when considering whether a
-    /// cast-bearing expression can replace an existing sort key without
-    /// invalidating the ordering.
+    /// Helper used by the ordering equivalence rule when considering whether
+    /// an expression can replace an existing sort key without invalidating
+    /// the ordering.
     ///
-    /// The substitution is only allowed when the cast wraps the very same child
-    /// expression that the original sort used and the casted type is a
-    /// widening/order-preserving conversion. Without those restrictions, a
-    /// narrowing cast could collapse distinct values and violate the existing
+    /// The substitution is only allowed when, treating the sort key as the
+    /// only ordered input, the expression reports the same ordering *and*
+    /// that it is a one-to-one, order-preserving function of it (see
+    /// [`ExprProperties::strictly_order_preserving`]). For example, a
+    /// widening `CAST` of the sort key qualifies, while a narrowing one does
+    /// not, as it could collapse distinct values and violate the existing
     /// sort order.
-    fn substitute_cast_ordering(
+    fn substitute_order_preserving_ordering(
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
-        expr_type: &DataType,
+        schema: &SchemaRef,
     ) -> Option<PhysicalSortExpr> {
-        let cast_expr = r_expr.downcast_ref::<CastExpr>()?;
-
-        (cast_expr.expr().eq(&sort_expr.expr)
-            && CastExpr::check_bigger_cast(cast_expr.cast_type(), expr_type))
+        if r_expr.eq(&sort_expr.expr) {
+            // No point in substituting an expression with itself.
+            return None;
+        }
+        let dependencies = Dependencies::new(std::iter::once(sort_expr.clone()));
+        let properties = get_expr_properties(&r_expr, &dependencies, schema).ok()?;
+        (properties.strictly_order_preserving
+            && properties.sort_properties == SortProperties::Ordered(sort_expr.options))
         .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
     }
 
@@ -482,6 +513,7 @@ impl EquivalenceProperties {
                         sort_properties: SortProperties::Ordered(next.options),
                         range: Interval::make_unbounded(&data_type)?,
                         preserves_lex_ordering: true,
+                        strictly_order_preserving: true,
                     });
                 }
                 // Check if the expression is monotonic in all arguments:
@@ -626,22 +658,53 @@ impl EquivalenceProperties {
             if !satisfy {
                 return Ok(false);
             }
-            // Treat satisfied keys as constants in subsequent iterations. We
-            // can do this because the "next" key only matters in a lexicographical
-            // ordering when the keys to its left have the same values.
-            //
-            // Note that these expressions are not properly "constants". This is just
-            // an implementation strategy confined to this function.
-            //
-            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
-            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
-            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
-            // we add column `a` as constant to the algorithm state. This enables us
-            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            let const_expr = ConstExpr::from(element.expr);
-            eq_properties.add_constants(std::iter::once(const_expr))?;
+            // Treat satisfied keys (and the sub-expressions they pin down) as
+            // constants in subsequent iterations. See
+            // [`Self::add_satisfied_key_constants`] for the rationale.
+            eq_properties.add_satisfied_key_constants(element.expr)?;
         }
         Ok(true)
+    }
+
+    /// Registers a satisfied sort key as a constant for subsequent iterations
+    /// of the ordering satisfaction checks. We can do this because the "next"
+    /// key only matters in a lexicographical ordering when the keys to its
+    /// left have the same values (i.e. within a single tie group). Note that
+    /// these expressions are not properly "constants"; this is just an
+    /// implementation strategy confined to the satisfaction checks.
+    ///
+    /// For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
+    /// and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
+    /// Once we deduce that `[a ASC]` is satisfied, we add column `a` as a
+    /// constant to the algorithm state. This enables us to deduce that
+    /// `(b + c) ASC` is satisfied, given `a` is constant.
+    ///
+    /// In addition to the key itself, this also registers any sub-expressions
+    /// whose values the key pins down: if an expression is strictly
+    /// order-preserving, equal outputs imply equal values of its ordered
+    /// children, so within a tie group of the key those children are constant
+    /// as well. For example, if data is sorted by `[a, b]`, the requirement
+    /// `[CAST(a AS BIGINT) ASC, b ASC]` is satisfied: `a` is constant within
+    /// each group of equal `CAST(a AS BIGINT)` values, and hence `b` is
+    /// sorted within each such group.
+    fn add_satisfied_key_constants(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
+        let mut stack = vec![expr];
+        while let Some(expr) = stack.pop() {
+            let properties = self.get_expr_properties(Arc::clone(&expr));
+            if properties.strictly_order_preserving {
+                for child in expr.children() {
+                    let child_properties = self.get_expr_properties(Arc::clone(child));
+                    if matches!(
+                        child_properties.sort_properties,
+                        SortProperties::Ordered(_)
+                    ) {
+                        stack.push(Arc::clone(child));
+                    }
+                }
+            }
+            self.add_constants(std::iter::once(ConstExpr::from(expr)))?;
+        }
+        Ok(())
     }
 
     /// Returns the number of consecutive sort expressions (starting from the
@@ -676,20 +739,10 @@ impl EquivalenceProperties {
                 // many we've satisfied so far:
                 return Ok(idx);
             }
-            // Treat satisfied keys as constants in subsequent iterations. We
-            // can do this because the "next" key only matters in a lexicographical
-            // ordering when the keys to its left have the same values.
-            //
-            // Note that these expressions are not properly "constants". This is just
-            // an implementation strategy confined to this function.
-            //
-            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
-            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
-            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
-            // we add column `a` as constant to the algorithm state. This enables us
-            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
-            let const_expr = ConstExpr::from(Arc::clone(&element.expr));
-            eq_properties.add_constants(std::iter::once(const_expr))?
+            // Treat satisfied keys (and the sub-expressions they pin down) as
+            // constants in subsequent iterations. See
+            // [`Self::add_satisfied_key_constants`] for the rationale.
+            eq_properties.add_satisfied_key_constants(Arc::clone(&element.expr))?;
         }
         // All sort expressions are satisfied, return full length:
         Ok(full_length)
@@ -840,7 +893,9 @@ impl EquivalenceProperties {
     ///
     /// TODO: Handle all scenarios that allow substitution; e.g. when `x` is
     ///       sorted, `atan(x + 1000)` should also be substituted. For now, we
-    ///       only consider single-column `CAST` expressions.
+    ///       consider widening `CAST` expressions and single-child expressions
+    ///       that declare themselves one-to-one order-preserving via
+    ///       [`ExprProperties::strictly_order_preserving`].
     fn substitute_oeq_class(
         schema: &SchemaRef,
         mapping: &ProjectionMapping,
@@ -852,21 +907,17 @@ impl EquivalenceProperties {
             order
                 .into_iter()
                 .map(|sort_expr| {
-                    // The sort expression comes from this schema, so the
-                    // following call to `unwrap` is safe.
-                    let expr_type = sort_expr.expr.data_type(schema).unwrap();
                     let original_sort_expr = sort_expr.clone();
-                    // TODO: Add one-to-one analysis for ScalarFunctions.
                     mapping
                         .iter()
                         .map(|(source, _target)| source)
                         .filter(|source| expr_refers(source, &original_sort_expr.expr))
                         .cloned()
                         .filter_map(|r_expr| {
-                            Self::substitute_cast_ordering(
+                            Self::substitute_order_preserving_ordering(
                                 r_expr,
                                 &original_sort_expr,
-                                &expr_type,
+                                schema,
                             )
                         })
                         .chain(std::iter::once(sort_expr))
@@ -1131,7 +1182,7 @@ impl EquivalenceProperties {
         let indices = mapping
             .iter()
             .flat_map(|(_, targets)| {
-                targets.iter().flat_map(|(target, _)| {
+                targets.iter().filter_map(|(target, _)| {
                     target.downcast_ref::<Column>().map(|c| c.index())
                 })
             })
@@ -1139,10 +1190,71 @@ impl EquivalenceProperties {
         self.constraints.project(&indices)
     }
 
-    /// Projects the equivalences within according to `mapping` and
-    /// `output_schema`.
+    /// Projects these equivalence properties onto `output_schema` according to
+    /// `mapping`, returning the properties that still hold for the projected
+    /// output.
+    ///
+    /// `mapping` maps each source expression (evaluated against the current
+    /// schema) to the output column(s) it produces. This is more than a
+    /// column-index remap: the orderings, the equivalence group and the
+    /// constraints are all carried through `mapping`, keeping only what the
+    /// projected schema can still express.
+    ///
+    /// - Orderings: an existing ordering is carried to a target only when the
+    ///   mapping expression is order-preserving for it, as determined from the
+    ///   expression's [`SortProperties`]. For example, an ordering on `c` is
+    ///   preserved through `c + 1` but dropped through `abs(c)`. Orderings
+    ///   implied by the mapping are also derived, e.g. an ordering on `a + b`
+    ///   yields one on the projected `a_new + b_new`.
+    /// - Equivalence group: each class is re-expressed on the output columns.
+    /// - Constraints: projected onto the surviving column indices.
+    ///
+    /// Expressions and orderings not representable in `output_schema` are
+    /// dropped.
     pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
         let eq_group = self.eq_group.project(mapping);
+        // Built here, so it satisfies the precondition by construction; going
+        // through the checked entry point would reproject it under
+        // `debug_assertions` for nothing.
+        self.project_with_eq_group_unchecked(mapping, output_schema, eq_group)
+    }
+
+    /// Projects `self`, reusing `cached`'s already-projected equivalence group
+    /// when `self`'s group is unchanged from `previous`'s.
+    ///
+    /// [`EquivalenceGroup::project`] is a pure function of the group and the
+    /// mapping, so when the group is unchanged the previous result can be handed
+    /// back rather than recomputed. Orderings are still derived here: they are
+    /// precisely what changes when a sort is introduced below this node.
+    ///
+    /// Falls back to a full projection when the groups differ, so there is no
+    /// precondition to violate. The caller does still have to pass a `cached`
+    /// that came from projecting `previous` through this same `mapping`; that
+    /// part cannot be checked here, and in practice it holds because the caller
+    /// carries its projection over untouched.
+    pub fn project_reusing(
+        &self,
+        mapping: &ProjectionMapping,
+        output_schema: SchemaRef,
+        previous: &EquivalenceProperties,
+        cached: &EquivalenceProperties,
+    ) -> Self {
+        let eq_group = if self.eq_group.has_same_classes(&previous.eq_group) {
+            #[cfg(test)]
+            eq_group_reuse_probe::record_hit();
+            cached.eq_group.clone()
+        } else {
+            self.eq_group.project(mapping)
+        };
+        self.project_with_eq_group_unchecked(mapping, output_schema, eq_group)
+    }
+
+    fn project_with_eq_group_unchecked(
+        &self,
+        mapping: &ProjectionMapping,
+        output_schema: SchemaRef,
+        eq_group: EquivalenceGroup,
+    ) -> Self {
         let orderings =
             self.projected_orderings(mapping, self.oeq_cache.normal_cls.clone());
         let normal_orderings = orderings
@@ -1407,7 +1519,10 @@ fn update_properties(
     } else if node.expr.is::<Column>() {
         // We have a Column, which is the other possible leaf node type:
         node.data.range =
-            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?
+            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?;
+        // A column is the identity mapping of itself, which is trivially
+        // strict:
+        node.data.strictly_order_preserving = true;
     }
     // Now, check what we know about orderings:
     let normal_expr = eq_properties
@@ -1469,23 +1584,36 @@ fn get_expr_properties(
     schema: &SchemaRef,
 ) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
-        // If exact match is found, return its ordering.
+        // If exact match is found, return its ordering. This is a base case
+        // of the recursion: the expression is treated as an atomic ordered
+        // input from here on, so `strictly_order_preserving` states only that
+        // it is a one-to-one mapping *of itself* (the identity), which holds
+        // for any expression. It makes no claim about the expression being
+        // one-to-one in its own inputs (e.g. `floor(x)` as a sort key), and
+        // it does not need to: parent expressions are substituted for this
+        // sort key, so their strictness only has to be relative to it.
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
+            strictly_order_preserving: true,
         })
     } else if expr.downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
+            // A base case of the recursion: a column is the identity mapping
+            // of itself, which is trivially one-to-one.
+            strictly_order_preserving: true,
         })
     } else if let Some(literal) = expr.downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: literal.value().into(),
             preserves_lex_ordering: true,
+            // Vacuously true: a literal has no ordered inputs.
+            strictly_order_preserving: true,
         })
     } else {
         // Find orderings of its children
@@ -1496,5 +1624,129 @@ fn get_expr_properties(
             .collect::<Result<Vec<_>>>()?;
         // Calculate expression ordering using ordering of its children.
         expr.get_properties(&child_states)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::equivalence::tests::create_test_params;
+    use crate::expressions::col;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    /// Renames `a`, `b`, `c` and `d` so the projection is non-trivial while
+    /// still carrying every ordering and the `a = c` class across.
+    fn renaming_mapping(
+        schema: &SchemaRef,
+        output_schema: &SchemaRef,
+    ) -> Result<ProjectionMapping> {
+        [
+            ("a", "a1", 0),
+            ("b", "b1", 1),
+            ("c", "c1", 2),
+            ("d", "d1", 3),
+        ]
+        .into_iter()
+        .map(|(source, target, index)| {
+            Ok((
+                col(source, schema)?,
+                vec![(col(target, output_schema)?, index)].into(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|entries| entries.into_iter().collect())
+    }
+
+    fn renamed_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("b1", DataType::Int32, true),
+            Field::new("c1", DataType::Int32, true),
+            Field::new("d1", DataType::Int32, true),
+        ]))
+    }
+
+    #[test]
+    fn test_project_reusing_matches_project() -> Result<()> {
+        let (schema, eq_properties) = create_test_params()?;
+        let output_schema = renamed_schema();
+        let mapping = renaming_mapping(&schema, &output_schema)?;
+
+        let baseline = eq_properties.project(&mapping, Arc::clone(&output_schema));
+
+        // Reusing the projection of an identical group must reproduce it exactly.
+        let (reused, hits) = eq_group_reuse_probe::count(|| {
+            eq_properties.project_reusing(
+                &mapping,
+                Arc::clone(&output_schema),
+                &eq_properties,
+                &baseline,
+            )
+        });
+        assert_eq!(
+            hits, 1,
+            "the reuse path was not taken, so this compares nothing"
+        );
+
+        // Guard against a vacuous comparison.
+        assert!(
+            !baseline.eq_group().is_empty(),
+            "the projection dropped the equivalence class, nothing is being tested"
+        );
+        assert!(
+            !baseline.oeq_class().is_empty(),
+            "the projection dropped every ordering, nothing is being tested"
+        );
+
+        assert!(
+            baseline.eq_group().has_same_classes(reused.eq_group()),
+            "equivalence group"
+        );
+        assert_eq!(baseline.oeq_class(), reused.oeq_class(), "orderings");
+        assert_eq!(baseline.constraints(), reused.constraints(), "constraints");
+        assert_eq!(baseline.schema(), reused.schema(), "schema");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_reusing_falls_back_when_the_group_moved() -> Result<()> {
+        // A `previous` whose group differs must not have its projection carried
+        // over. There is no precondition to violate here: the fallback is what
+        // keeps a mismatched pair from producing properties that disagree with
+        // the projection.
+        let (schema, eq_properties) = create_test_params()?;
+        let output_schema = renamed_schema();
+        let mapping = renaming_mapping(&schema, &output_schema)?;
+
+        let baseline = eq_properties.project(&mapping, Arc::clone(&output_schema));
+        let unrelated = EquivalenceProperties::new(Arc::clone(&schema));
+        assert!(
+            !eq_properties
+                .eq_group()
+                .has_same_classes(unrelated.eq_group()),
+            "the two groups were meant to differ"
+        );
+
+        let (recomputed, hits) = eq_group_reuse_probe::count(|| {
+            eq_properties.project_reusing(
+                &mapping,
+                Arc::clone(&output_schema),
+                &unrelated,
+                &baseline,
+            )
+        });
+        assert_eq!(hits, 0, "a mismatched group was carried over anyway");
+
+        // Falling back must land on exactly what `project` would have produced.
+        assert!(
+            baseline.eq_group().has_same_classes(recomputed.eq_group()),
+            "equivalence group"
+        );
+        assert_eq!(baseline.oeq_class(), recomputed.oeq_class(), "orderings");
+
+        Ok(())
     }
 }

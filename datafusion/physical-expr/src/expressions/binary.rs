@@ -18,7 +18,10 @@
 mod kernels;
 
 use crate::PhysicalExpr;
+use crate::expressions::SqlSimilarToPattern;
+use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use std::cmp::Ordering;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -33,7 +36,7 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
-use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 #[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
 #[expect(deprecated)]
@@ -118,6 +121,68 @@ impl BinaryExpr {
     pub fn op(&self) -> &Operator {
         &self.op
     }
+
+    /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
+    /// ascending `UInt8` columns can wrap back to small values), so the
+    /// derived ordering is kept only when overflow is impossible. `time ±
+    /// interval` wraps around the 24-hour clock even in checked mode, so it
+    /// never preserves ordering.
+    fn arithmetic_sort_properties(
+        &self,
+        sort_properties: SortProperties,
+        l_range: &Interval,
+        r_range: &Interval,
+        range: &Interval,
+    ) -> SortProperties {
+        if sort_properties == SortProperties::Singleton {
+            return sort_properties;
+        }
+        let wraps_in_domain = match self.op {
+            Operator::Plus => {
+                is_time_plus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            Operator::Minus => {
+                is_time_minus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            _ => false,
+        };
+        let cannot_overflow = !range.is_unbounded()
+            && !unsigned_subtraction_may_underflow(self.op, l_range, r_range, range);
+        if !wraps_in_domain && (self.fail_on_overflow || cannot_overflow) {
+            sort_properties
+        } else {
+            SortProperties::Unordered
+        }
+    }
+}
+
+/// Returns `true` unless `l_range - r_range` provably stays within an unsigned
+/// domain.
+///
+/// [`Interval`] standardizes an underflowed (i.e. `null`) lower bound of an
+/// unsigned type back to zero, so an apparently bounded result range is not
+/// enough to rule out wrapping here -- e.g. `[0, 10] - [0, 10]` over `UInt32`
+/// yields `[0, 10]` even though `0 - 10` wraps to `u32::MAX`. Compare the
+/// endpoints that produce the smallest difference instead.
+fn unsigned_subtraction_may_underflow(
+    op: Operator,
+    l_range: &Interval,
+    r_range: &Interval,
+    range: &Interval,
+) -> bool {
+    if op != Operator::Minus || !range.data_type().is_unsigned_integer() {
+        return false;
+    }
+    let (smallest_lhs, largest_rhs) = (l_range.lower(), r_range.upper());
+    if smallest_lhs.is_null() || largest_rhs.is_null() {
+        return true;
+    }
+    // Operands of differing types compare as incomparable, in which case we
+    // conservatively assume an underflow is possible.
+    !matches!(
+        smallest_lhs.partial_cmp(largest_rhs),
+        Some(Ordering::Greater | Ordering::Equal)
+    )
 }
 
 impl std::fmt::Display for BinaryExpr {
@@ -465,7 +530,13 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        Ok(self.left.nullable(input_schema)? || self.right.nullable(input_schema)?)
+        match self.op {
+            Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => Ok(false),
+            _ => {
+                Ok(self.left.nullable(input_schema)?
+                    || self.right.nullable(input_schema)?)
+            }
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -482,41 +553,50 @@ impl PhysicalExpr for BinaryExpr {
                 let rhs = self.right.evaluate(batch)?;
                 return Ok(rhs);
             }
-            ShortCircuitStrategy::PreSelection(selection) => {
-                // The function `evaluate_selection` was not called for filtering and calculation,
-                // as it takes into account cases where the selection contains null values.
-                let batch = filter_record_batch(batch, selection)?;
-                let right_ret = self.right.evaluate(&batch)?;
+            ShortCircuitStrategy::PreSelection { mask, fill_value } => {
+                // `mask` selects the rows whose result depends on the RHS; the
+                // unselected rows are all `fill_value` (see `ShortCircuitStrategy`).
+                //
+                // Use `filter_record_batch` directly because `evaluate_selection`
+                // scatters the RHS back to the original batch length.
+                let selection_batch = filter_record_batch(batch, &mask)?;
+                let right_ret = self.right.evaluate(&selection_batch)?;
 
                 match &right_ret {
                     ColumnarValue::Array(array) => {
-                        // When the array on the right is all true or all false, skip the scatter process
                         let boolean_array = array.as_boolean();
-                        if boolean_array.null_count() == 0 && !boolean_array.has_false() {
-                            return Ok(lhs);
-                        } else if boolean_array.null_count() == 0
-                            && !boolean_array.has_true()
-                        {
-                            // If the right-hand array is returned at this point,the lengths will be inconsistent;
-                            // returning a scalar can avoid this issue
-                            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
-                                Some(false),
-                            )));
+                        // If the RHS is uniform on the selected rows, the whole
+                        // expression collapses and no scatter is needed.
+                        if boolean_array.null_count() == 0 {
+                            let rhs_value = if !boolean_array.has_false() {
+                                Some(true)
+                            } else if !boolean_array.has_true() {
+                                Some(false)
+                            } else {
+                                None
+                            };
+                            if let Some(rhs_value) = rhs_value {
+                                return Ok(uniform_pre_selection_result(
+                                    rhs_value, fill_value, lhs,
+                                ));
+                            }
                         }
 
-                        return pre_selection_scatter(selection, Some(boolean_array));
+                        return pre_selection_scatter(
+                            &mask,
+                            Some(boolean_array),
+                            fill_value,
+                        );
                     }
                     ColumnarValue::Scalar(scalar) => {
                         if let ScalarValue::Boolean(v) = scalar {
-                            // When the scalar is true or false, skip the scatter process
+                            // A scalar RHS applies uniformly to all selected rows.
                             if let Some(v) = v {
-                                if *v {
-                                    return Ok(lhs);
-                                } else {
-                                    return Ok(right_ret);
-                                }
+                                return Ok(uniform_pre_selection_result(
+                                    *v, fill_value, lhs,
+                                ));
                             } else {
-                                return pre_selection_scatter(selection, None);
+                                return pre_selection_scatter(&mask, None, fill_value);
                             }
                         } else {
                             return internal_err!(
@@ -751,45 +831,69 @@ impl PhysicalExpr for BinaryExpr {
         let (l_order, l_range) = (children[0].sort_properties, &children[0].range);
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
-            Operator::Plus => Ok(ExprProperties {
-                sort_properties: l_order.add(&r_order),
-                range: l_range.add(r_range)?,
-                preserves_lex_ordering: false,
-            }),
-            Operator::Minus => Ok(ExprProperties {
-                sort_properties: l_order.sub(&r_order),
-                range: l_range.sub(r_range)?,
-                preserves_lex_ordering: false,
-            }),
+            Operator::Plus => {
+                let range = l_range.add(r_range)?;
+                Ok(ExprProperties {
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.add(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
+                    range,
+                    preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
+                })
+            }
+            Operator::Minus => {
+                let range = l_range.sub(r_range)?;
+                Ok(ExprProperties {
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.sub(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
+                    range,
+                    preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
+                })
+            }
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::GtEq => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt_eq(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Lt => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::LtEq => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt_eq(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::And => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.and(&r_order),
                 range: l_range.and(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Or => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.or(&r_order),
                 range: l_range.or(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
@@ -1038,16 +1142,28 @@ impl BinaryExpr {
     }
 }
 
-enum ShortCircuitStrategy<'a> {
+enum ShortCircuitStrategy {
     None,
     ReturnLeft,
     ReturnRight,
-    PreSelection(&'a BooleanArray),
+    /// Evaluate the right-hand side only on the rows selected by `mask`, then
+    /// scatter the results back, filling the unselected rows with `fill_value`.
+    ///
+    /// - For `AND`, `mask` selects the rows where the LHS is `true` and
+    ///   `fill_value` is `false` (rows where the LHS is `false` are `false`).
+    /// - For `OR`, `mask` selects the rows where the LHS is `false` and
+    ///   `fill_value` is `true` (rows where the LHS is `true` are `true`).
+    PreSelection {
+        mask: BooleanArray,
+        fill_value: bool,
+    },
 }
 
 /// Based on the results calculated from the left side of the short-circuit operation,
-/// if the proportion of `true` is less than 0.2 and the current operation is an `and`,
-/// the `RecordBatch` will be filtered in advance.
+/// pre-selection filters the `RecordBatch` before evaluating the right-hand side when
+/// the side that cannot short-circuit the operator is rare:
+/// - for `AND`, when the proportion of `true` is less than or equal to 0.2
+/// - for `OR`, when the proportion of `false` is less than or equal to 0.2
 const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
@@ -1056,12 +1172,12 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
 ///    - if LHS is all true  => short-circuit → return RHS
-///    - if LHS is mixed and true_count/sum_count <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
+///    - if LHS is mixed and true_count / len <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
+///    - if LHS is mixed and false_count / len <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
 /// # Arguments
-/// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
 /// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
 /// * `op` - The logical operator (`AND` or `OR`)
 ///
@@ -1069,11 +1185,8 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
 /// 2. Handles both scalar values and array values
 /// 3. For arrays, uses optimized bit counting techniques for boolean arrays
-fn check_short_circuit<'a>(
-    lhs: &'a ColumnarValue,
-    op: &Operator,
-) -> ShortCircuitStrategy<'a> {
-    // Quick reject for non-logical operators,and quick judgment when op is and
+fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
+    // Only logical operators can use this path.
     let is_and = match op {
         Operator::And => true,
         Operator::Or => false,
@@ -1101,35 +1214,41 @@ fn check_short_circuit<'a>(
 
                 let true_count = bool_array.values().count_set_bits();
                 if is_and {
-                    // For AND, prioritize checking for all-false (short circuit case)
-                    // Uses optimized false_count() method provided by Arrow
-
-                    // Short circuit if all values are false
                     if true_count == 0 {
                         return ShortCircuitStrategy::ReturnLeft;
                     }
 
-                    // If no false values, then all must be true
                     if true_count == len {
                         return ShortCircuitStrategy::ReturnRight;
                     }
 
-                    // determine if we can pre-selection
                     if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
-                        return ShortCircuitStrategy::PreSelection(bool_array);
+                        // Select rows where the LHS is true; rows where the LHS
+                        // is false are false regardless of the RHS.
+                        return ShortCircuitStrategy::PreSelection {
+                            mask: bool_array.clone(),
+                            fill_value: false,
+                        };
                     }
                 } else {
-                    // For OR, prioritize checking for all-true (short circuit case)
-                    // Uses optimized true_count() method provided by Arrow
-
-                    // Short circuit if all values are true
                     if true_count == len {
                         return ShortCircuitStrategy::ReturnLeft;
                     }
 
-                    // If no true values, then all must be false
                     if true_count == 0 {
                         return ShortCircuitStrategy::ReturnRight;
+                    }
+
+                    let false_count = len - true_count;
+                    if false_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
+                        // Select rows where the LHS is false; rows where the LHS
+                        // is true are true regardless of the RHS. The LHS has no
+                        // nulls here, so negating its bits is infallible.
+                        let mask = BooleanArray::new(!bool_array.values(), None);
+                        return ShortCircuitStrategy::PreSelection {
+                            mask,
+                            fill_value: true,
+                        };
                     }
                 }
             }
@@ -1153,62 +1272,54 @@ fn check_short_circuit<'a>(
     ShortCircuitStrategy::None
 }
 
-/// Creates a new boolean array based on the evaluation of the right expression,
-/// but only for positions where the left_result is true.
+/// Collapses a pre-selected expression whose RHS is uniformly `rhs_value` across
+/// every selected row, avoiding a scatter:
+/// - when it equals `fill_value`, every row is `fill_value` (a scalar);
+/// - otherwise the selected rows already equal the RHS, which matches the LHS
+///   there, and the unselected rows are the LHS value too, so the result is `lhs`.
+fn uniform_pre_selection_result(
+    rhs_value: bool,
+    fill_value: bool,
+    lhs: ColumnarValue,
+) -> ColumnarValue {
+    if rhs_value == fill_value {
+        ColumnarValue::Scalar(ScalarValue::Boolean(Some(fill_value)))
+    } else {
+        lhs
+    }
+}
+
+/// Creates a boolean array by scattering compact RHS results into the positions
+/// selected by `mask`.
 ///
-/// This function is used for short-circuit evaluation optimization of logical AND operations:
-/// - When left_result has few true values, we only evaluate the right expression for those positions
-/// - Values are copied from right_array where left_result is true
-/// - All other positions are filled with false values
+/// This function is used for short-circuit evaluation optimization of logical AND/OR operations:
+/// - Only selected rows are evaluated on the RHS
+/// - Values are copied from `right_result` where `mask` is true
+/// - All other positions are filled with `fill_value` (`false` for AND, `true` for OR)
 ///
 /// # Parameters
-/// - `left_result` Boolean array with selection mask (typically from left side of AND)
+/// - `mask` Boolean array with the rows whose result depends on the RHS
 /// - `right_result` Result of evaluating right side of expression (only for selected positions)
+/// - `fill_value` The value for the unselected positions (`false` for AND, `true` for OR)
 ///
 /// # Returns
-/// A combined ColumnarValue with values from right_result where left_result is true
-///
-/// # Example
-///  Initial Data: { 1, 2, 3, 4, 5 }
-///  Left Evaluation
-///     (Condition: Equal to 2 or 3)
-///          ↓
-///  Filtered Data: {2, 3}
-///    Left Bitmap: { 0, 1, 1, 0, 0 }
-///          ↓
-///   Right Evaluation
-///     (Condition: Even numbers)
-///          ↓
-///  Right Data: { 2 }
-///    Right Bitmap: { 1, 0 }
-///          ↓
-///   Combine Results
-///  Final Bitmap: { 0, 1, 0, 0, 0 }
-///
-/// # Note
-/// Perhaps it would be better to modify `left_result` directly without creating a copy?
-/// In practice, `left_result` should have only one owner, so making changes should be safe.
-/// However, this is difficult to achieve under the immutable constraints of [`Arc`] and [`BooleanArray`].
+/// A combined `ColumnarValue` with the same length as `mask`.
 fn pre_selection_scatter(
-    left_result: &BooleanArray,
+    mask: &BooleanArray,
     right_result: Option<&BooleanArray>,
+    fill_value: bool,
 ) -> Result<ColumnarValue> {
-    let result_len = left_result.len();
+    let result_len = mask.len();
 
     let mut result_array_builder = BooleanArray::builder(result_len);
 
-    // keep track of current position we have in right boolean array
     let mut right_array_pos = 0;
-
-    // keep track of how much is filled
     let mut last_end = 0;
-    // reduce if condition in for_each
     match right_result {
         Some(right_result) => {
-            SlicesIterator::new(left_result).for_each(|(start, end)| {
-                // the gap needs to be filled with false
+            SlicesIterator::new(mask).for_each(|(start, end)| {
                 if start > last_end {
-                    result_array_builder.append_n(start - last_end, false);
+                    result_array_builder.append_n(start - last_end, fill_value);
                 }
 
                 // copy values from right array for this slice
@@ -1222,13 +1333,11 @@ fn pre_selection_scatter(
                 last_end = end;
             });
         }
-        None => SlicesIterator::new(left_result).for_each(|(start, end)| {
-            // the gap needs to be filled with false
+        None => SlicesIterator::new(mask).for_each(|(start, end)| {
             if start > last_end {
-                result_array_builder.append_n(start - last_end, false);
+                result_array_builder.append_n(start - last_end, fill_value);
             }
 
-            // append nulls for this slice derictly
             let len = end - start;
             result_array_builder.append_nulls(len);
 
@@ -1236,9 +1345,9 @@ fn pre_selection_scatter(
         }),
     }
 
-    // Fill any remaining positions with false
+    // Fill any remaining positions with `fill_value`
     if last_end < result_len {
-        result_array_builder.append_n(result_len - last_end, false);
+        result_array_builder.append_n(result_len - last_end, fill_value);
     }
     let boolean_result = result_array_builder.finish();
 
@@ -1270,7 +1379,19 @@ pub fn similar_to(
         (true, false) => Operator::RegexNotMatch,
         (true, true) => Operator::RegexNotIMatch,
     };
-    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+
+    let translated_pattern = match pattern.downcast_ref::<crate::expressions::Literal>() {
+        Some(literal) => Arc::new(crate::expressions::Literal::new(translate_scalar(
+            literal.value(),
+        )?)) as Arc<dyn PhysicalExpr>,
+        None => Arc::new(SqlSimilarToPattern::new(pattern)) as Arc<dyn PhysicalExpr>,
+    };
+
+    Ok(Arc::new(BinaryExpr::new(
+        expr,
+        binary_op,
+        translated_pattern,
+    )))
 }
 
 #[cfg(test)]
@@ -1284,7 +1405,176 @@ mod tests {
 
     use crate::planner::logical2physical;
     use arrow::array::BooleanArray;
+    use arrow::compute::SortOptions;
     use datafusion_expr::col as logical_col;
+
+    #[test]
+    fn test_arithmetic_ordering_overflow() -> Result<()> {
+        let asc = SortProperties::Ordered(Default::default());
+        let ordered = |range: Interval| ExprProperties {
+            sort_properties: asc,
+            range,
+            preserves_lex_ordering: false,
+            strictly_order_preserving: false,
+        };
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let a_plus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Plus, col("b", &schema)?);
+        let unbounded = [
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+        ];
+        let bounded = [
+            ordered(Interval::make(Some(0), Some(10))?),
+            ordered(Interval::make(Some(0), Some(10))?),
+        ];
+
+        // Unknown ranges: the sum may overflow and wrap, so it is unordered.
+        assert_eq!(
+            a_plus_b.get_properties(&unbounded)?.sort_properties,
+            SortProperties::Unordered
+        );
+        // Bounded ranges that cannot overflow keep the ordering, as does
+        // checked arithmetic, which errors instead of wrapping.
+        assert_eq!(a_plus_b.get_properties(&bounded)?.sort_properties, asc);
+        let checked = a_plus_b.with_fail_on_overflow(true);
+        assert_eq!(checked.get_properties(&unbounded)?.sort_properties, asc);
+
+        // `time + interval` wraps around the 24-hour clock even in checked
+        // mode, so it never preserves ordering.
+        let time = DataType::Time64(TimeUnit::Nanosecond);
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let schema = Schema::new(vec![
+            Field::new("t", time.clone(), false),
+            Field::new("i", interval.clone(), false),
+        ]);
+        let time_plus_interval =
+            BinaryExpr::new(col("t", &schema)?, Operator::Plus, col("i", &schema)?)
+                .with_fail_on_overflow(true);
+        let time_props = [
+            ordered(Interval::make_unbounded(&time)?),
+            ordered(Interval::make_unbounded(&interval)?),
+        ];
+        assert_eq!(
+            time_plus_interval
+                .get_properties(&time_props)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+
+        Ok(())
+    }
+
+    /// `a - b` only derives an ordering when `a` and `b` are ordered in
+    /// opposite directions, so every case below pairs an ascending left-hand
+    /// side with a descending right-hand side.
+    #[test]
+    fn test_subtraction_ordering_overflow() -> Result<()> {
+        let asc = SortProperties::Ordered(SortOptions {
+            descending: false,
+            nulls_first: true,
+        });
+        let desc = SortProperties::Ordered(SortOptions {
+            descending: true,
+            nulls_first: true,
+        });
+        let props = |sort_properties, range| ExprProperties {
+            sort_properties,
+            range,
+            preserves_lex_ordering: false,
+            strictly_order_preserving: false,
+        };
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let a_minus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Minus, col("b", &schema)?);
+
+        // Signed minimum: the difference can underflow past `i32::MIN` and
+        // wrap around to large positive values.
+        let signed_underflow = [
+            props(asc, Interval::make(Some(i32::MIN), Some(0))?),
+            props(desc, Interval::make(Some(0), Some(i32::MAX))?),
+        ];
+        assert_eq!(
+            a_minus_b.get_properties(&signed_underflow)?.sort_properties,
+            SortProperties::Unordered
+        );
+        // The very same ranges keep the ordering under checked arithmetic,
+        // which errors instead of wrapping.
+        let checked = a_minus_b.clone().with_fail_on_overflow(true);
+        assert_eq!(
+            checked.get_properties(&signed_underflow)?.sort_properties,
+            asc
+        );
+        // Ranges whose difference stays inside `Int32` are safe.
+        let signed_safe = [
+            props(asc, Interval::make(Some(0), Some(10))?),
+            props(desc, Interval::make(Some(0), Some(10))?),
+        ];
+        assert_eq!(a_minus_b.get_properties(&signed_safe)?.sort_properties, asc);
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+        ]);
+        let a_minus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Minus, col("b", &schema)?);
+
+        // Unsigned underflow: the ranges overlap, so `0 - 1` wraps to
+        // `u32::MAX` even though both operands are bounded.
+        let unsigned_underflow = [
+            props(asc, Interval::make(Some(0_u32), Some(10_u32))?),
+            props(desc, Interval::make(Some(0_u32), Some(10_u32))?),
+        ];
+        assert_eq!(
+            a_minus_b
+                .get_properties(&unsigned_underflow)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+        // A left-hand range that always dominates the right-hand one cannot
+        // underflow.
+        let unsigned_safe = [
+            props(asc, Interval::make(Some(10_u32), Some(20_u32))?),
+            props(desc, Interval::make(Some(0_u32), Some(5_u32))?),
+        ];
+        assert_eq!(
+            a_minus_b.get_properties(&unsigned_safe)?.sort_properties,
+            asc
+        );
+
+        // `time - interval` wraps around the 24-hour clock even in checked
+        // mode, so it never preserves ordering.
+        let time = DataType::Time64(TimeUnit::Nanosecond);
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let schema = Schema::new(vec![
+            Field::new("t", time.clone(), false),
+            Field::new("i", interval.clone(), false),
+        ]);
+        let time_minus_interval =
+            BinaryExpr::new(col("t", &schema)?, Operator::Minus, col("i", &schema)?)
+                .with_fail_on_overflow(true);
+        let time_props = [
+            props(asc, Interval::make_unbounded(&time)?),
+            props(desc, Interval::make_unbounded(&interval)?),
+        ];
+        assert_eq!(
+            time_minus_interval
+                .get_properties(&time_props)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+
+        Ok(())
+    }
+
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,
@@ -3332,6 +3622,78 @@ mod tests {
     }
 
     #[test]
+    fn regex_scalar_with_dictionary_nulls() -> Result<()> {
+        let dictionary_values = Arc::new(StringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("ABC"),
+            Some("def"),
+        ]));
+        let keys = UInt32Array::from(vec![Some(0), None, Some(1), Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(keys, dictionary_values)?) as ArrayRef;
+        let utf8 = cast(&dictionary, &DataType::Utf8)?;
+        let pattern = ScalarValue::Utf8(Some("^abc$".to_string()));
+        let dictionary_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            dictionary.data_type().clone(),
+            true,
+        )]));
+        let utf8_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+        let evaluate =
+            |schema: &SchemaRef, array: &ArrayRef, op: Operator| -> Result<ArrayRef> {
+                let expr = binary(col("a", schema)?, op, lit(pattern.clone()), schema)?;
+                let batch =
+                    RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(array)])?;
+                Ok(expr
+                    .evaluate(&batch)?
+                    .into_array(batch.num_rows())
+                    .expect("Failed to convert to array"))
+            };
+
+        for (op, expected) in [
+            (
+                Operator::RegexMatch,
+                BooleanArray::from(vec![
+                    Some(true),
+                    None,
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            ),
+            (
+                Operator::RegexIMatch,
+                BooleanArray::from(vec![Some(true), None, None, Some(true), Some(false)]),
+            ),
+            (
+                Operator::RegexNotMatch,
+                BooleanArray::from(vec![Some(false), None, None, Some(true), Some(true)]),
+            ),
+            (
+                Operator::RegexNotIMatch,
+                BooleanArray::from(vec![
+                    Some(false),
+                    None,
+                    None,
+                    Some(false),
+                    Some(true),
+                ]),
+            ),
+        ] {
+            let dictionary_result = evaluate(&dictionary_schema, &dictionary, op)?;
+            let utf8_result = evaluate(&utf8_schema, &utf8, op)?;
+
+            assert_eq!(dictionary_result.as_ref(), &expected);
+            assert_eq!(&dictionary_result, &utf8_result);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn regex_mismatched_array_types_error() -> Result<()> {
         // The analyzer coerces both operands of a regex operator to a common
         // string type, but an expression that bypasses it (e.g. constructed
@@ -3835,6 +4197,27 @@ mod tests {
         .iter()
         .collect();
         apply_logic_op(&schema, &a, &b, Operator::IsDistinctFrom, expected).unwrap();
+    }
+
+    #[test]
+    fn distinct_from_op_nullability() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("nullable", DataType::Boolean, true),
+            Field::new("non_nullable", DataType::Boolean, false),
+        ]);
+        let cases = [
+            (Operator::IsDistinctFrom, "nullable", false),
+            (Operator::IsNotDistinctFrom, "nullable", false),
+            (Operator::Eq, "nullable", true),
+            (Operator::Eq, "non_nullable", false),
+        ];
+
+        for (op, column, expected) in cases {
+            let expr = BinaryExpr::new(col(column, &schema)?, op, lit(true));
+            assert_eq!(expr.nullable(&schema)?, expected, "{op} with {column}");
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -4985,25 +5368,17 @@ mod tests {
         Ok(())
     }
 
-    /// Test helper for SIMILAR TO binary operation
     fn apply_similar_to(
         schema: &SchemaRef,
         va: Vec<&str>,
-        vb: Vec<&str>,
+        pattern: &str,
         negated: bool,
         case_insensitive: bool,
         expected: &BooleanArray,
     ) -> Result<()> {
         let a = StringArray::from(va);
-        let b = StringArray::from(vb);
-        let op = similar_to(
-            negated,
-            case_insensitive,
-            col("a", schema)?,
-            col("b", schema)?,
-        )?;
-        let batch =
-            RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
+        let op = similar_to(negated, case_insensitive, col("a", schema)?, lit(pattern))?;
+        let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a)])?;
         let result = op
             .evaluate(&batch)?
             .into_array(batch.num_rows())
@@ -5015,32 +5390,237 @@ mod tests {
 
     #[test]
     fn test_similar_to() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
 
+        // `%` matches any sequence; case-sensitive
         let expected = [Some(true), Some(false)].iter().collect();
-        // case-sensitive
         apply_similar_to(
             &schema,
             vec!["hello world", "Hello World"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             false,
             &expected,
         )
         .unwrap();
-        // case-insensitive
+
+        // `%` matches any sequence; case-insensitive
+        let expected = [Some(true), Some(false)].iter().collect();
         apply_similar_to(
             &schema,
             vec!["hello world", "bye"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             true,
             &expected,
         )
         .unwrap();
+
+        // `_` matches exactly one character
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["x", "xy", ""], "_", false, false, &expected)
+            .unwrap();
+
+        // Match must cover the entire string (no implicit substring match)
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "a"], "a", false, false, &expected)
+            .unwrap();
+
+        // `%` matches zero or more, so the empty string matches.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "anything"], "%", false, false, &expected)
+            .unwrap();
+
+        // `_` requires exactly one character, so the empty string does not
+        // match.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "x"], "_", false, false, &expected).unwrap();
+
+        // `%` at the start of the pattern is still anchored: the string
+        // must end where the trailing literal begins.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "abd"], "%c", false, false, &expected)
+            .unwrap();
+
+        // `%` and `_` together: `%` matches zero or more (including the
+        // empty string), `_` matches exactly one character.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "abc"], "a%", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["axb", "abc"], "a_b", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: regex metacharacters that are NOT SIMILAR TO metacharacters
+    // (`. ^ $ \`) must be treated as SQL literals. Without escaping, `a.`
+    // would match any `a` followed by any character (`ab`, `a1`, ...).
+    #[test]
+    fn test_similar_to_sql_literal_metachars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `.` is a literal, not the regex "any character" operator.
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["a.", "ab", "a"],
+            "a.",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `^` and `$` are literals and only match the literal `^` and `$`.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["^x$", "x"], r"^x$", false, false, &expected)
+            .unwrap();
+
+        // `\` is a literal backslash (we don't support the ESCAPE clause).
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec![r"a\b", "ab"], r"a\b", false, false, &expected)
+            .unwrap();
+    }
+
+    // SIMILAR TO borrows POSIX metacharacters from regular expressions:
+    // `| * + ? ( ) { } [ ]`. The translator passes them through to the
+    // underlying regex engine.
+    #[test]
+    fn test_similar_to_posix_metachars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `|` alternation.
+        let expected = [Some(true), Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c", "b"], "a|b", false, false, &expected)
+            .unwrap();
+
+        // `*` zero or more.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa", "ab"], "a*", false, false, &expected)
+            .unwrap();
+
+        // `+` one or more.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa"], "a+", false, false, &expected).unwrap();
+
+        // `?` zero or one.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "a", "aa"], "a?", false, false, &expected)
+            .unwrap();
+
+        // `()` grouping.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["ab", "abc", "ac"],
+            "(ab)c?",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `{m}` exact count.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["aaa", "aa"], "a{3}", false, false, &expected)
+            .unwrap();
+
+        // `[...]` character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c"], "[ab]", false, false, &expected)
+            .unwrap();
+
+        // `[^...]` negated character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["c", "a"], "[^ab]", false, false, &expected)
+            .unwrap();
+
+        // `[a-z]` range inside a character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["m", "1"], "[a-z]", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: `%` and `_` must match newlines, matching SQL semantics
+    // where these wildcards match "any character".
+    #[test]
+    fn test_similar_to_wildcards_match_newlines() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `%` crosses a newline. (`%` also matches zero characters, so `ab`
+        // matches `a%b` as well.)
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a%b", false, false, &expected)
+            .unwrap();
+
+        // `_` matches a single newline. (`_` requires exactly one character,
+        // so `ab` does not match `a_b`.)
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a_b", false, false, &expected)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_similar_to_non_literal_pattern_errors() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        // Non-string literal patterns still error.
+        let err = similar_to(false, false, col("a", &schema).unwrap(), lit(1i32))
+            .expect_err("non-string literal pattern should error");
+        assert!(
+            err.to_string()
+                .contains("SIMILAR TO pattern must be a string type, got Int32(1)"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_similar_to_dynamic_pattern() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new("pattern", DataType::Utf8, false),
+        ]));
+        let text = StringArray::from(vec!["abc", "ab", "x"]);
+        let pattern = StringArray::from(vec!["a%", "a.", "_"]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(text), Arc::new(pattern)],
+        )
+        .unwrap();
+
+        let op = similar_to(
+            false,
+            false,
+            col("text", &schema).unwrap(),
+            col("pattern", &schema).unwrap(),
+        )
+        .unwrap();
+        let result = op.evaluate(&batch).unwrap();
+        let result_array = result.into_array(batch.num_rows()).unwrap();
+        let result = as_boolean_array(&result_array).unwrap();
+        assert!(result.value(0)); // "abc" ~ ^(?:a(?s:.*))$
+        assert!(!result.value(1)); // "ab"  ~ ^(?:a\.)$
+        assert!(result.value(2)); // "x"   ~ ^(?:(?s:.))$
+    }
+
+    #[test]
+    fn test_similar_to_null_pattern() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let a = StringArray::from(vec!["hello"]);
+        let op = similar_to(
+            false,
+            false,
+            col("a", &schema).unwrap(),
+            lit(ScalarValue::Utf8(None)),
+        )
+        .unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a)]).unwrap();
+        let result = op
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
+        let expected: BooleanArray = std::iter::once(&None).collect();
+        assert_eq!(result.as_ref(), &expected);
     }
 
     pub fn binary_expr(
@@ -5400,14 +5980,17 @@ mod tests {
         let ColumnarValue::Array(array) = &left_value else {
             panic!("Expected ColumnarValue::Array");
         };
-        let ShortCircuitStrategy::PreSelection(value) =
+        let ShortCircuitStrategy::PreSelection { mask, fill_value } =
             check_short_circuit(&left_value, &Operator::And)
         else {
             panic!("Expected ShortCircuitStrategy::PreSelection");
         };
+        // For AND, the mask selects the rows where the LHS is true and the
+        // unselected rows are filled with `false`.
+        assert!(!fill_value);
         let expected_boolean_arr: Vec<_> =
             as_boolean_array(array).unwrap().iter().collect();
-        let boolean_arr: Vec<_> = value.iter().collect();
+        let boolean_arr: Vec<_> = mask.iter().collect();
         assert_eq!(expected_boolean_arr, boolean_arr);
 
         // op: OR left: all true
@@ -5418,9 +6001,32 @@ mod tests {
             ShortCircuitStrategy::ReturnLeft
         ));
 
-        // op: OR left: not all true
+        // 20% false: OR can pre-select the false rows.
         let left_expr: Arc<dyn PhysicalExpr> =
             logical2physical(&logical_col("a").gt(expr_lit(2)), &schema);
+        let left_value = left_expr.evaluate(&batch).unwrap();
+        let ColumnarValue::Array(array) = &left_value else {
+            panic!("Expected ColumnarValue::Array");
+        };
+        let ShortCircuitStrategy::PreSelection { mask, fill_value } =
+            check_short_circuit(&left_value, &Operator::Or)
+        else {
+            panic!("Expected ShortCircuitStrategy::PreSelection");
+        };
+        // For OR, the mask selects the rows where the LHS is false (the negation
+        // of the LHS) and the unselected rows are filled with `true`.
+        assert!(fill_value);
+        let negated_lhs: Vec<_> = as_boolean_array(array)
+            .unwrap()
+            .iter()
+            .map(|v| v.map(|b| !b))
+            .collect();
+        let boolean_arr: Vec<_> = mask.iter().collect();
+        assert_eq!(negated_lhs, boolean_arr);
+
+        // 60% false: OR falls back to normal evaluation.
+        let left_expr: Arc<dyn PhysicalExpr> =
+            logical2physical(&logical_col("a").gt(expr_lit(4)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::Or),
@@ -5525,15 +6131,10 @@ mod tests {
         ));
     }
 
-    /// Test for [pre_selection_scatter]
-    /// Since [check_short_circuit] ensures that the left side does not contain null and is neither all_true nor all_false, as well as not being empty,
-    /// the following tests have been designed:
-    /// 1. Test sparse left with interleaved true/false
-    /// 2. Test multiple consecutive true blocks
-    /// 3. Test multiple consecutive true blocks
-    /// 4. Test single true at first position
-    /// 5. Test single true at last position
-    /// 6. Test nulls in right array
+    /// Test for [pre_selection_scatter].
+    ///
+    /// `check_short_circuit` only calls this helper with a non-empty,
+    /// non-null mask that is neither all true nor all false.
     #[test]
     fn test_pre_selection_scatter() {
         fn create_bool_array(bools: Vec<bool>) -> BooleanArray {
@@ -5546,7 +6147,7 @@ mod tests {
             let left = create_bool_array(vec![true, false, true, false, true]);
             let right = create_bool_array(vec![false, true, false]);
 
-            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right), false).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, true, false, false]);
@@ -5560,7 +6161,7 @@ mod tests {
                 create_bool_array(vec![false, true, true, false, true, true, true]);
             let right = create_bool_array(vec![true, false, false, true, false]);
 
-            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right), false).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected =
@@ -5574,7 +6175,7 @@ mod tests {
             let left = create_bool_array(vec![true, false, false]);
             let right = create_bool_array(vec![false]);
 
-            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right), false).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, false]);
@@ -5587,7 +6188,7 @@ mod tests {
             let left = create_bool_array(vec![false, false, true]);
             let right = create_bool_array(vec![false]);
 
-            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right), false).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = create_bool_array(vec![false, false, false]);
@@ -5600,13 +6201,45 @@ mod tests {
             let left = create_bool_array(vec![false, true, false, true]);
             let right = BooleanArray::from(vec![None, Some(false)]);
 
-            let result = pre_selection_scatter(&left, Some(&right)).unwrap();
+            let result = pre_selection_scatter(&left, Some(&right), false).unwrap();
             let result_arr = result.into_array(left.len()).unwrap();
 
             let expected = BooleanArray::from(vec![
                 Some(false),
                 None, // null from right
                 Some(false),
+                Some(false),
+            ]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // OR semantics: selected rows take the RHS, unselected rows become true.
+        {
+            // Selection (LHS false rows): [T, F, T, F, T]
+            // Right (RHS on those rows): [F, T, F]
+            let left = create_bool_array(vec![true, false, true, false, true]);
+            let right = create_bool_array(vec![false, true, false]);
+
+            let result = pre_selection_scatter(&left, Some(&right), true).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            // selected rows take the RHS value; unselected rows are `true`
+            let expected = create_bool_array(vec![false, true, true, true, false]);
+            assert_eq!(&expected, result_arr.as_boolean());
+        }
+        // OR semantics with nulls in the right array.
+        {
+            // Selection (LHS false rows): [F, T, F, T]
+            // Right: [None, Some(false)]
+            let left = create_bool_array(vec![false, true, false, true]);
+            let right = BooleanArray::from(vec![None, Some(false)]);
+
+            let result = pre_selection_scatter(&left, Some(&right), true).unwrap();
+            let result_arr = result.into_array(left.len()).unwrap();
+
+            let expected = BooleanArray::from(vec![
+                Some(true), // unselected => true
+                None,       // null from right
+                Some(true), // unselected => true
                 Some(false),
             ]);
             assert_eq!(&expected, result_arr.as_boolean());
@@ -5635,6 +6268,89 @@ mod tests {
             expected, actual,
             "AND with TRUE must equal LHS even with PreSelection"
         );
+    }
+
+    #[test]
+    fn test_or_false_preselection_returns_lhs() {
+        // `c OR false` over a mostly-true `c` triggers OR pre-selection; the
+        // result must equal `c`.
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c", DataType::Boolean, false)]));
+        let c_array =
+            Arc::new(BooleanArray::from(vec![true, false, true, true, true])) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&c_array)])
+            .unwrap();
+
+        let expr = logical2physical(&logical_col("c").or(expr_lit(false)), &schema);
+
+        let result = expr.evaluate(&batch).unwrap();
+        let ColumnarValue::Array(result_arr) = result else {
+            panic!("Expected ColumnarValue::Array");
+        };
+
+        let expected: Vec<_> = c_array.as_boolean().iter().collect();
+        let actual: Vec<_> = result_arr.as_boolean().iter().collect();
+        assert_eq!(
+            expected, actual,
+            "OR with FALSE must equal LHS even with PreSelection"
+        );
+    }
+
+    #[test]
+    fn test_or_preselection_matches_kleene() {
+        // The OR pre-selection path must match full-batch Kleene OR.
+        use arrow::compute::kernels::boolean::or_kleene;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c", DataType::Boolean, true),
+            Field::new("d", DataType::Boolean, true),
+        ]));
+
+        // `c` is mostly true (2/10 false => 20% <= threshold) so OR pre-selects.
+        let c = BooleanArray::from(vec![
+            true, true, false, true, true, true, true, false, true, true,
+        ]);
+
+        let d_cases = vec![
+            // Mixed RHS with nulls exercises scatter and null copy.
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(true),
+                None,
+            ]),
+            // RHS true on selected rows exercises the uniform-fill path.
+            BooleanArray::from(vec![Some(true); 10]),
+            // RHS false on selected rows exercises the return-LHS path.
+            BooleanArray::from(vec![Some(false); 10]),
+        ];
+
+        for d in d_cases {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(c.clone()) as ArrayRef,
+                    Arc::new(d.clone()) as ArrayRef,
+                ],
+            )
+            .unwrap();
+
+            let expr = logical2physical(&logical_col("c").or(logical_col("d")), &schema);
+            let result = expr.evaluate(&batch).unwrap().into_array(c.len()).unwrap();
+
+            let expected = or_kleene(&c, &d).unwrap();
+            assert_eq!(
+                expected,
+                *result.as_boolean(),
+                "OR pre-selection must match Kleene OR for d = {d:?}"
+            );
+        }
     }
 
     #[test]

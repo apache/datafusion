@@ -20,6 +20,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, HashAggregateAccumulator, SingleMarker};
 
@@ -35,12 +36,14 @@ impl AggregateHashTable<SingleMarker> {
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
+        state_schema: SchemaRef,
         batch_size: usize,
     ) -> Result<Self> {
         Self::new_with_filters(
             agg,
             partition,
             output_schema,
+            state_schema,
             batch_size,
             agg.filter_expr.iter().cloned().collect(),
         )
@@ -55,7 +58,10 @@ impl AggregateHashTable<SingleMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::evaluate_to_columns)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::evaluate_to_columns,
+            AccumulatorPhase::Evaluate,
+        )
     }
 
     /// Single aggregation consumes raw input rows and updates the table's
@@ -64,7 +70,11 @@ impl AggregateHashTable<SingleMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(batch, HashAggregateAccumulator::update_batch)
+        self.aggregate_batch_inner(
+            batch,
+            HashAggregateAccumulator::update_batch,
+            AccumulatorPhase::Update,
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {

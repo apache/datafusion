@@ -663,6 +663,177 @@ impl Display for ConfigNonZeroUsize {
     }
 }
 
+/// A `usize` configuration value that rejects 0 and 1 when set from strings.
+///
+/// Use this for options whose consumer divides the value in half to size an
+/// internal buffer (e.g. a bounded channel capacity): values below 2 would
+/// round down to a zero-capacity buffer and panic. Invalid values return a
+/// configuration error through [`ConfigField`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigMinTwoUsize(usize);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use [`ConfigMinTwoUsize::try_new`].
+const fn min_two_usize_default(value: usize) -> ConfigMinTwoUsize {
+    if value >= 2 {
+        ConfigMinTwoUsize(value)
+    } else {
+        panic!("value must be at least 2")
+    }
+}
+
+impl ConfigMinTwoUsize {
+    /// Creates a [`ConfigMinTwoUsize`], returning a configuration error if
+    /// `value` is less than 2.
+    pub fn try_new(value: usize) -> Result<Self> {
+        if value >= 2 {
+            Ok(Self(value))
+        } else {
+            _config_err!("value must be at least 2")
+        }
+    }
+
+    /// Returns the wrapped `usize`.
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl From<ConfigMinTwoUsize> for usize {
+    fn from(value: ConfigMinTwoUsize) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigMinTwoUsize {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_new(default_config_transform(s)?)
+    }
+}
+
+impl ConfigField for ConfigMinTwoUsize {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field max_buffered_batches_per_output_file is a scalar ConfigMinTwoUsize and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigMinTwoUsize::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field max_buffered_batches_per_output_file is a scalar ConfigMinTwoUsize and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigMinTwoUsize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
+/// Used for [`OptimizerOptions::default_filter_selectivity`] to represent
+/// an integer percentage value, when valid values are 0 to 100 inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfigFilterSelectivity(u8);
+
+/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
+/// use `?`. All external construction should use
+/// [`ConfigFilterSelectivity::try_new`].
+const fn filter_selectivity_default(value: u8) -> ConfigFilterSelectivity {
+    if value <= 100 {
+        ConfigFilterSelectivity(value)
+    } else {
+        panic!("value must be between 0 and 100")
+    }
+}
+
+impl ConfigFilterSelectivity {
+    fn try_from_i64(value: i64) -> Result<Self> {
+        if (0..=100).contains(&value) {
+            Ok(Self(value as u8))
+        } else {
+            _config_err!("value must be between 0 and 100, got {value}")
+        }
+    }
+
+    /// Creates a [`ConfigFilterSelectivity`], returning a configuration error
+    /// if `value` is greater than 100.
+    pub fn try_new(value: u8) -> Result<Self> {
+        Self::try_from_i64(i64::from(value))
+    }
+
+    /// Returns the wrapped `u8`.
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<ConfigFilterSelectivity> for u8 {
+    fn from(value: ConfigFilterSelectivity) -> Self {
+        value.get()
+    }
+}
+
+impl FromStr for ConfigFilterSelectivity {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from_i64(default_config_transform::<i64>(s)?)
+    }
+}
+
+impl ConfigField for ConfigFilterSelectivity {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = ConfigFilterSelectivity::from_str(value)?;
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field default_filter_selectivity is a scalar ConfigFilterSelectivity and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
+impl Display for ConfigFilterSelectivity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get())
+    }
+}
+
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -878,8 +1049,16 @@ config_namespace! {
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
-        /// memory consumption
-        pub max_buffered_batches_per_output_file: usize, default = 2
+        /// memory consumption.
+        ///
+        /// This budget is split evenly between two independent points in the
+        /// write pipeline (see the demuxer diagram in #7791): how many files
+        /// can be in flight from the demuxer to a writer task, and how many
+        /// RecordBatches are buffered for a single file's writer. Must be at
+        /// least 2 so each half gets at least 1 unit of buffering - 0 or 1
+        /// would leave one side with a zero-capacity channel and panic at
+        /// write time.
+        pub max_buffered_batches_per_output_file: ConfigMinTwoUsize, default = min_two_usize_default(2)
 
         /// Should sub directories be ignored when scanning directories for data
         /// files. Defaults to true (ignores subdirectories), consistent with
@@ -1188,6 +1367,19 @@ config_namespace! {
         /// but may increase IO and CPU usage. None means use the default
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
+
+        /// Maximum number of input values in an `IN (...)` list eligible for
+        /// min/max pruning. Lists above this cap, or a cap of 0, skip this
+        /// rewrite; other predicates and Bloom-filter pruning remain available.
+        ///
+        /// Within the cap, nonempty lists of at most 20 values use the existing
+        /// per-value rewrite. Larger positive, non-null literal string lists
+        /// on a string column use a compact sorted domain. Other lists retain
+        /// the existing per-value rewrite, so raising the cap can make those
+        /// predicates expensive to build and evaluate.
+        ///
+        /// Defaults to 20.
+        pub max_in_list_size: usize, default = 20
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -1576,11 +1768,10 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
-        /// When set to true, the physical plan optimizer uses the pluggable
-        /// `StatisticsRegistry` for statistics propagation across operators.
-        /// This enables more accurate cardinality estimates compared to each
-        /// operator's built-in `partition_statistics`.
-        pub use_statistics_registry: bool, default = false
+        /// (Deprecated) Ignored: the physical plan optimizer always consults the
+        /// session's pluggable `StatisticsRegistry` (register providers on the
+        /// `SessionState`; with none it is a no-op).
+        pub use_statistics_registry: bool, warn = "`use_statistics_registry` is deprecated and ignored; the StatisticsRegistry is always consulted, register providers on the SessionState", default = false
 
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
@@ -1593,7 +1784,7 @@ config_namespace! {
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
-        pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
+        pub hash_join_single_partition_threshold: usize, default = 4 * 1024 * 1024
 
         /// The maximum estimated size in rows for one input side of a HashJoin
         /// will be collected into a single partition
@@ -1632,7 +1823,7 @@ config_namespace! {
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
-        pub default_filter_selectivity: u8, default = 20
+        pub default_filter_selectivity: ConfigFilterSelectivity, default = filter_selectivity_default(20)
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
@@ -1729,6 +1920,65 @@ impl ExecutionOptions {
     }
 }
 
+/// Format used to display `Duration` values in query output. Mirrors
+/// [`arrow::util::display::DurationFormat`].
+///
+/// See [`FormatOptions::duration_format`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigDurationFormat {
+    /// Format durations in a human readable form, e.g. `1h2m3s450ms`.
+    #[default]
+    Pretty,
+    /// Format durations as an ISO 8601 duration string, e.g. `PT1H2M3.45S`.
+    Iso8601,
+}
+
+impl FromStr for ConfigDurationFormat {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "pretty" => Ok(Self::Pretty),
+            "iso8601" => Ok(Self::Iso8601),
+            _ => _config_err!(
+                "Invalid duration format: {s}. Valid values are pretty or iso8601"
+            ),
+        }
+    }
+}
+
+impl ConfigField for ConfigDurationFormat {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ConfigDurationFormat::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for ConfigDurationFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Pretty => "pretty",
+            Self::Iso8601 => "iso8601",
+        };
+        write!(f, "{str}")
+    }
+}
+
+impl From<ConfigDurationFormat> for arrow::util::display::DurationFormat {
+    fn from(value: ConfigDurationFormat) -> Self {
+        match value {
+            ConfigDurationFormat::Pretty => arrow::util::display::DurationFormat::Pretty,
+            ConfigDurationFormat::Iso8601 => {
+                arrow::util::display::DurationFormat::ISO8601
+            }
+        }
+    }
+}
+
 config_namespace! {
     /// Options controlling the format of output when printing record batches
     /// Copies [`arrow::util::display::FormatOptions`]
@@ -1749,7 +1999,7 @@ config_namespace! {
         /// Time format for time arrays
         pub time_format: Option<String>, default = Some("%H:%M:%S%.f".to_string())
         /// Duration format. Can be either `"pretty"` or `"ISO8601"`
-        pub duration_format: String, transform = str::to_lowercase, default = "pretty".into()
+        pub duration_format: ConfigDurationFormat, default = ConfigDurationFormat::Pretty
         /// Show types in visual representation batches
         pub types_info: bool, default = false
     }
@@ -1758,17 +2008,6 @@ config_namespace! {
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
-        let duration_format = match options.duration_format.as_str() {
-            "pretty" => arrow::util::display::DurationFormat::Pretty,
-            "iso8601" => arrow::util::display::DurationFormat::ISO8601,
-            _ => {
-                return _config_err!(
-                    "Invalid duration format: {}. Valid values are pretty or iso8601",
-                    options.duration_format
-                );
-            }
-        };
-
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -1777,7 +2016,7 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
             .with_timestamp_format(options.timestamp_format.as_deref())
             .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
             .with_time_format(options.time_format.as_deref())
-            .with_duration_format(duration_format)
+            .with_duration_format(options.duration_format.into())
             .with_types_info(options.types_info))
     }
 }

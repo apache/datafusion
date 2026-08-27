@@ -18,7 +18,9 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
+};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -27,12 +29,13 @@ use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SortOrderPushdownResult,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions, SortOrderPushdownResult, validate_child_count,
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, Statistics, internal_err, plan_err};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -159,26 +162,49 @@ impl ExecutionPlan for BufferExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        if children.len() != 1 {
-            return plan_err!("BufferExec can only have one child");
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                Ok(Arc::new(Self::new(children.swap_remove(0), self.capacity)))
+            }
         }
-        Ok(Arc::new(Self::new(children.swap_remove(0), self.capacity)))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -263,9 +289,10 @@ impl ExecutionPlan for BufferExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(
-                Arc::new(self.clone()).with_new_children(vec![new_input])?,
-            )),
+            Some(new_input) => Ok(Some(replace_children_if_necessary(
+                Arc::new(self.clone()),
+                vec![new_input],
+            )?)),
             None => Ok(None),
         }
     }
@@ -305,13 +332,24 @@ impl ExecutionPlan for BufferExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `BufferExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Derived from the input's properties at construction time.
+            properties: _,
+            capacity,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Buffer(Box::new(
                     protobuf::BufferExecNode {
                         input: Some(Box::new(input)),
-                        capacity: self.capacity() as u64,
+                        capacity: *capacity as u64,
                     },
                 )),
             ),
@@ -330,15 +368,19 @@ impl BufferExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let buffer = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Buffer,
             "BufferExec",
         );
-        let input =
-            ctx.decode_required_child(buffer.input.as_deref(), "BufferExec", "input")?;
-        Ok(Arc::new(BufferExec::new(input, buffer.capacity as usize)))
+        // Destructure exhaustively so that a new field on `BufferExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::BufferExecNode { input, capacity } = &**buffer;
+        let input = ctx.decode_required_child(input.as_deref(), "BufferExec", "input")?;
+        let capacity = usize_from_wire(*capacity, "BufferExec", "capacity")?;
+        Ok(Arc::new(BufferExec::new(input, capacity)))
     }
 }
 
@@ -623,9 +665,7 @@ mod tests {
         // A panic while polling the input must surface as a stream error, not a
         // silent end-of-stream that drops the rest of the partition's output.
         let input = futures::stream::iter([1, 2, 3, 4]).map(|v| {
-            if v == 3 {
-                panic!("boom on 3");
-            }
+            assert!(v != 3, "boom on 3");
             Ok(v)
         });
         let (_, res) = memory_pool_and_reservation();

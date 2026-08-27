@@ -615,11 +615,6 @@ impl GroupsAccumulator for HllGroupsAccumulator {
 
         Ok(vec![Arc::new(builder.finish())])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.groups.capacity() * size_of::<GroupHll>()
             + self.allocated_bytes

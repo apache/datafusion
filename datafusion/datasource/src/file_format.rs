@@ -19,7 +19,7 @@
 //! See write.rs for write related helper methods
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -28,9 +28,11 @@ use crate::file_compression_type::FileCompressionType;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_sink_config::FileSinkConfig;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{GetExt, Result, Statistics, internal_err, not_impl_err};
+use datafusion_common::{
+    GetExt, Result, SchemaError, Statistics, internal_err, not_impl_err, schema_err,
+};
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
@@ -41,6 +43,27 @@ use object_store::{ObjectMeta, ObjectStore};
 
 /// Default max records to scan to infer the schema
 pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
+
+/// Rejects an inferred schema that names the same field more than once.
+///
+/// [`Schema::try_merge`] coalesces fields by name, so callers validate each
+/// inferred file schema before merging. `seen` is cleared before use so callers
+/// can reuse its allocation across schemas.
+pub fn ensure_unique_field_names<'a>(
+    schema: &'a Schema,
+    seen: &mut HashSet<&'a str>,
+) -> Result<()> {
+    seen.clear();
+    seen.reserve(schema.fields().len());
+    for field in schema.fields() {
+        if !seen.insert(field.name()) {
+            return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                name: field.name().clone(),
+            });
+        }
+    }
+    Ok(())
+}
 
 /// Metadata fetched from a file, including statistics and ordering.
 ///

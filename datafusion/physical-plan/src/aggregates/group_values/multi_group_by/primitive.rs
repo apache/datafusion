@@ -19,12 +19,12 @@ use crate::aggregates::group_values::HashValue;
 use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
-use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::ArrowNativeTypeOp;
+use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, BooleanBufferBuilder, PrimitiveArray,
     cast::AsArray,
 };
+use arrow::array::{ArrowNativeTypeOp, NullBufferBuilder};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use arrow::util::bit_util::apply_bitwise_binary_op;
@@ -46,7 +46,7 @@ use std::sync::Arc;
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
     data_type: DataType,
     group_values: Vec<T::Native>,
-    nulls: MaybeNullBufferBuilder,
+    nulls: NullBufferBuilder,
 }
 
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
@@ -59,7 +59,7 @@ where
         Self {
             data_type,
             group_values: vec![],
-            nulls: MaybeNullBufferBuilder::new(),
+            nulls: NullBufferBuilder::empty(),
         }
     }
 
@@ -170,10 +170,10 @@ where
         // Perf: skip null check if input can't have nulls
         if NULLABLE {
             if array.is_null(row) {
-                self.nulls.append(true);
+                self.nulls.append_null();
                 self.group_values.push(T::default_value());
             } else {
-                self.nulls.append(false);
+                self.nulls.append_non_null();
                 self.group_values
                     .push(array.as_primitive::<T>().value(row).canonicalize());
             }
@@ -221,24 +221,24 @@ where
             (true, Nulls::Some) => {
                 for &row in rows {
                     if array.is_null(row) {
-                        self.nulls.append(true);
+                        self.nulls.append_null();
                         self.group_values.push(T::default_value());
                     } else {
-                        self.nulls.append(false);
+                        self.nulls.append_non_null();
                         self.group_values.push(arr.value(row).canonicalize());
                     }
                 }
             }
 
             (true, Nulls::None) => {
-                self.nulls.append_n(rows.len(), false);
+                self.nulls.append_n_non_nulls(rows.len());
                 for &row in rows {
                     self.group_values.push(arr.value(row).canonicalize());
                 }
             }
 
             (true, Nulls::All) => {
-                self.nulls.append_n(rows.len(), true);
+                self.nulls.append_n_nulls(rows.len());
                 self.group_values
                     .extend(iter::repeat_n(T::default_value(), rows.len()));
             }

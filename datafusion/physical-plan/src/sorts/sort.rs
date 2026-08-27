@@ -28,6 +28,7 @@ use parking_lot::RwLock;
 use crate::common::spawn_buffered;
 use crate::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
+    replace_children_if_necessary,
 };
 use crate::expressions::PhysicalSortExpr;
 use crate::filter::FilterExec;
@@ -51,15 +52,16 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution,
+    EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -406,7 +408,7 @@ impl ExternalSorter {
 
     /// Appending globally sorted batches to the in-progress spill file, and clears
     /// the `globally_sorted_batches` (also its memory reservation) afterwards.
-    async fn consume_and_spill_append(
+    fn consume_and_spill_append(
         &mut self,
         globally_sorted_batches: &mut Vec<RecordBatch>,
     ) -> Result<()> {
@@ -445,7 +447,7 @@ impl ExternalSorter {
     }
 
     /// Finishes the in-progress spill file and moves it to the finished spill files.
-    async fn spill_finish(&mut self) -> Result<()> {
+    fn spill_finish(&mut self) -> Result<()> {
         let (mut in_progress_file, max_record_batch_memory) =
             self.in_progress_spill_file.take().ok_or_else(|| {
                 internal_datafusion_err!("Should be called after `spill_append`")
@@ -495,15 +497,13 @@ impl ExternalSorter {
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
             let sorted_size = get_reserved_bytes_for_record_batch(&batch)?;
-            if self.reservation.try_grow(sorted_size).is_err() {
-                // Although the reservation is not enough, the batch is
-                // already in memory, so it's okay to combine it with previously
-                // sorted batches, and spill together.
-                globally_sorted_batches.push(batch);
-                self.consume_and_spill_append(&mut globally_sorted_batches)
-                    .await?; // reservation is freed in spill()
-            } else {
-                globally_sorted_batches.push(batch);
+            let reservation_failed = self.reservation.try_grow(sorted_size).is_err();
+            // Even if the reservation is not enough, the batch is already in
+            // memory, so it's okay to combine it with previously sorted
+            // batches, and spill together.
+            globally_sorted_batches.push(batch);
+            if reservation_failed {
+                self.consume_and_spill_append(&mut globally_sorted_batches)?; // reservation is freed in spill()
             }
         }
 
@@ -511,9 +511,8 @@ impl ExternalSorter {
         // upcoming `self.reserve_memory_for_merge()` may fail due to insufficient memory.
         drop(sorted_stream);
 
-        self.consume_and_spill_append(&mut globally_sorted_batches)
-            .await?;
-        self.spill_finish().await?;
+        self.consume_and_spill_append(&mut globally_sorted_batches)?;
+        self.spill_finish()?;
 
         // Sanity check after spilling
         let buffers_cleared_property =
@@ -1099,6 +1098,10 @@ impl SortExec {
     }
 
     /// Returns the dynamic filter expression for this sort (TopK), if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
         self.filter.as_ref().map(|f| f.read().expr())
     }
@@ -1110,7 +1113,24 @@ impl SortExec {
     ///
     /// Validates that the filter's children reference valid columns in
     /// the sort's input schema.
+    #[deprecated(
+        since = "56.0.0",
+        note = "unused by DataFusion; `SortExec` restores its dynamic filter in `SortExec::try_from_proto`, which sets the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn with_dynamic_filter_expr(
+        self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        self.set_dynamic_filter(filter)
+    }
+
+    /// Replace the dynamic filter expression for this sort, resetting any
+    /// internal state which depends on the previous one and validating that the
+    /// filter's children reference valid columns in the sort's input schema.
+    ///
+    /// Only used to restore the filter when decoding a serialized plan: every
+    /// other code path creates the filter in [`SortExec::with_fetch`].
+    fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -1276,20 +1296,45 @@ impl ExecutionPlan for SortExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let dynamic_filter = self
+            .filter
+            .as_ref()
+            .map(|filter| filter.read().expr() as Arc<dyn PhysicalExpr>);
+        crate::apply_expression_roots(
+            self.expr
+                .iter()
+                .map(|sort_expr| &sort_expr.expr)
+                .chain(dynamic_filter.iter()),
+            f,
+        )
+    }
+
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.filter
+            .iter()
+            .map(|filter| filter.read().expr() as Arc<dyn PhysicalExpr>)
+            .collect()
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut new_sort = self.cloned();
         assert_eq!(children.len(), 1, "SortExec should have exactly one child");
         new_sort.input = Arc::clone(&children[0]);
 
-        if !has_same_children_properties(self.as_ref(), &children)? {
-            // Recompute the properties based on the new input since they may have changed
+        if options.children_properties == ChildrenPropertiesMode::Recompute {
+            // Recompute the properties based on the new input since they may have changed.
             let (cache, sort_prefix) = Self::compute_properties(
                 &new_sort.input,
                 new_sort.expr.clone(),
@@ -1305,12 +1350,28 @@ impl ExecutionPlan for SortExec {
         Ok(Arc::new(new_sort))
     }
 
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        match has_same_children_properties(self.as_ref(), &children)? {
+            true => self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+            ),
+            false => self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            ),
+        }
+    }
+
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
-        let new_sort = self.with_new_children(children)?;
+        let new_sort = replace_children_if_necessary(self, children)?;
         let mut new_sort = new_sort
             .downcast_ref::<SortExec>()
-            .expect("cloned 1 lines above this line, we know the type")
+            .expect("rebuilt SortExec with new children")
             .clone();
         // Our dynamic filter and execution metrics are the state we need to reset.
         new_sort.filter = Some(new_sort.create_filter());
@@ -1558,10 +1619,26 @@ impl ExecutionPlan for SortExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = self
-            .expr()
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `SortExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            input,
+            expr,
+            // Runtime metrics, not part of the plan shape.
+            metrics_set: _,
+            preserve_partitioning,
+            fetch,
+            // Derived from `input` and `expr` at construction time.
+            common_sort_prefix: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            filter,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let expr = expr
             .iter()
             .map(|sort_expr| {
                 let sort_node = Box::new(protobuf::PhysicalSortExprNode {
@@ -1577,24 +1654,24 @@ impl ExecutionPlan for SortExec {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let dynamic_filter = match self.dynamic_filter_expr() {
-            Some(df) => {
-                let df_expr: Arc<dyn PhysicalExpr> = df;
-                Some(ctx.encode_expr(&df_expr)?)
-            }
-            None => None,
-        };
+        let dynamic_filter = filter
+            .as_ref()
+            .map(|filter| {
+                let df_expr: Arc<dyn PhysicalExpr> = filter.read().expr();
+                ctx.encode_expr(&df_expr)
+            })
+            .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Sort(Box::new(
                     protobuf::SortExecNode {
                         input: Some(Box::new(input)),
                         expr,
-                        fetch: match self.fetch() {
-                            Some(n) => n as i64,
-                            None => -1,
+                        fetch: match fetch {
+                            Some(n) => usize_to_wire(*n, "SortExec", "fetch")?,
+                            None => -1, // no limit
                         },
-                        preserve_partitioning: self.preserve_partitioning(),
+                        preserve_partitioning: *preserve_partitioning,
                         dynamic_filter,
                     },
                 )),
@@ -1609,6 +1686,7 @@ impl SortExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         use protobuf::physical_expr_node::ExprType;
         let sort = crate::expect_plan_variant!(
@@ -1616,11 +1694,18 @@ impl SortExec {
             protobuf::physical_plan_node::PhysicalPlanType::Sort,
             "SortExec",
         );
-        let input =
-            ctx.decode_required_child(sort.input.as_deref(), "SortExec", "input")?;
+        // Destructure exhaustively so that a new field on `SortExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::SortExecNode {
+            input,
+            expr,
+            fetch,
+            preserve_partitioning,
+            dynamic_filter,
+        } = &**sort;
+        let input = ctx.decode_required_child(input.as_deref(), "SortExec", "input")?;
         let input_schema = input.schema();
-        let exprs = sort
-            .expr
+        let exprs = expr
             .iter()
             .map(|expr| {
                 let Some(ExprType::Sort(sort_expr)) = expr.expr_type.as_ref() else {
@@ -1645,12 +1730,14 @@ impl SortExec {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return datafusion_common::internal_err!("SortExec requires an ordering");
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
+        let fetch = (*fetch >= 0)
+            .then(|| usize_from_wire(*fetch, "SortExec", "fetch"))
+            .transpose()?;
         let new_sort = SortExec::new(ordering, input)
             .with_fetch(fetch)
-            .with_preserve_partitioning(sort.preserve_partitioning);
+            .with_preserve_partitioning(*preserve_partitioning);
 
-        let new_sort = if let Some(df_proto) = &sort.dynamic_filter {
+        let new_sort = if let Some(df_proto) = dynamic_filter {
             let df_expr =
                 ctx.decode_expr(df_proto, new_sort.input().schema().as_ref())?;
             let df = (df_expr as Arc<dyn std::any::Any + Send + Sync>)
@@ -1660,12 +1747,334 @@ impl SortExec {
                         "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
                     )
                 })?;
-            new_sort.with_dynamic_filter_expr(df)?
+            new_sort.set_dynamic_filter(df)?
         } else {
             new_sort
         };
 
         Ok(Arc::new(new_sort))
+    }
+}
+
+/// Field-level tests for the `try_to_proto` / `try_from_proto` hooks.
+///
+/// These sit next to the fields they cover so they rot when a field is added,
+/// and they assert on the wire representation directly — `fetch`, in
+/// particular, is not printed by `SortExec`'s `Debug` impl, which is how a
+/// dropped `fetch` survived the central round-trip tests in #24165.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{
+        StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, column_node,
+        encoded_child_node, sort_expr_node, stub_child,
+    };
+    use arrow::compute::SortOptions;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_proto_models::protobuf;
+
+    /// A `SortExec` over `a ASC NULLS LAST` with the given fetch.
+    fn sort_fixture(fetch: Option<usize>) -> SortExec {
+        let input = stub_child();
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        )])
+        .unwrap();
+        SortExec::new(ordering, input).with_fetch(fetch)
+    }
+
+    /// Encode `plan` with a stub encoder, returning the `SortExecNode`.
+    fn encode(plan: &SortExec, encoder: &StubPlanEncoder) -> protobuf::SortExecNode {
+        let ctx = ExecutionPlanEncodeCtx::new(encoder);
+        let node = plan
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("SortExec should encode to Some(node)");
+        match node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::Sort(sort)) => *sort,
+            other => panic!("expected a Sort node, got {other:?}"),
+        }
+    }
+
+    /// A hand-built `SortExecNode` wrapped in its `PhysicalPlanNode`.
+    fn sort_node(node: protobuf::SortExecNode) -> protobuf::PhysicalPlanNode {
+        protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Sort(Box::new(node)),
+            ),
+        }
+    }
+
+    /// A decodable `SortExecNode`: one child, one sort key, no dynamic filter.
+    fn decodable_node(fetch: i64, preserve_partitioning: bool) -> protobuf::SortExecNode {
+        protobuf::SortExecNode {
+            input: Some(Box::new(encoded_child_node())),
+            expr: vec![sort_expr_node("a", 0, true, false)],
+            fetch,
+            preserve_partitioning,
+            dynamic_filter: None,
+        }
+    }
+
+    /// Decode `node`, returning the `SortExec`.
+    fn decode(node: protobuf::SortExecNode, decoder: &StubPlanDecoder) -> Arc<SortExec> {
+        let ctx = ExecutionPlanDecodeCtx::new(decoder);
+        SortExec::try_from_proto(&sort_node(node), &ctx)
+            .unwrap()
+            .downcast_ref::<SortExec>()
+            .expect("decoded plan should be a SortExec")
+            .clone()
+            .into()
+    }
+
+    #[test]
+    fn try_to_proto_encodes_absent_fetch_as_negative_one() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&sort_fixture(None), &encoder);
+
+        assert_eq!(node.fetch, -1);
+        // No fetch means no TopK dynamic filter to carry either.
+        assert_eq!(node.dynamic_filter, None);
+        assert_eq!(encoder.plan_calls(), 1);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_present_fetch() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&sort_fixture(Some(10)), &encoder);
+
+        assert_eq!(node.fetch, 10);
+    }
+
+    /// `Some(0)` must not collapse into the "absent" encoding: a `LIMIT 0`
+    /// sort returns no rows, an unlimited one returns all of them.
+    #[test]
+    fn try_to_proto_distinguishes_zero_fetch_from_absent_fetch() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&sort_fixture(Some(0)), &encoder);
+
+        assert_eq!(node.fetch, 0);
+    }
+
+    /// `usize::MAX` does not fit the signed wire field on a 64-bit target and
+    /// must be rejected instead of wrapping to the `-1` "absent" encoding.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_to_proto_rejects_usize_max_fetch() {
+        let encoder = StubPlanEncoder::ok();
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let err = sort_fixture(Some(usize::MAX))
+            .try_to_proto(&ctx)
+            .unwrap_err();
+
+        assert_eq!(
+            err.strip_backtrace(),
+            format!(
+                "Error during planning: SortExec: fetch value {} is out of range for the plan wire format",
+                usize::MAX
+            )
+        );
+    }
+
+    #[test]
+    fn try_to_proto_encodes_preserve_partitioning() {
+        let encoder = StubPlanEncoder::ok();
+        let plan = sort_fixture(None).with_preserve_partitioning(true);
+
+        assert!(encode(&plan, &encoder).preserve_partitioning);
+        assert!(
+            !encode(&sort_fixture(None), &StubPlanEncoder::ok()).preserve_partitioning
+        );
+    }
+
+    /// The wire format stores `asc`, the plan stores `descending`; the
+    /// inversion has to survive both directions.
+    #[test]
+    fn try_to_proto_inverts_descending_into_asc() {
+        let input = stub_child();
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )])
+        .unwrap();
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&SortExec::new(ordering, input), &encoder);
+
+        let sort_expr = match node.expr[0].expr_type.as_ref().unwrap() {
+            protobuf::physical_expr_node::ExprType::Sort(sort) => sort,
+            other => panic!("expected a Sort expr node, got {other:?}"),
+        };
+        assert!(!sort_expr.asc);
+        assert!(sort_expr.nulls_first);
+    }
+
+    /// A fetch turns the sort into a TopK, which produces a dynamic filter that
+    /// has to ride along on the wire.
+    #[test]
+    fn try_to_proto_encodes_the_topk_dynamic_filter() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&sort_fixture(Some(3)), &encoder);
+
+        assert!(node.dynamic_filter.is_some());
+        // One call for the sort key, one for the dynamic filter.
+        assert_eq!(encoder.expr_calls(), 2);
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let encoder = StubPlanEncoder::failing_on_plan(1);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        let err = sort_fixture(None).try_to_proto(&ctx).unwrap_err();
+        assert!(err.to_string().contains("stub plan encode failure"));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let encoder = StubPlanEncoder::failing_on_expr(1);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        let err = sort_fixture(None).try_to_proto(&ctx).unwrap_err();
+        assert!(err.to_string().contains("stub expr encode failure"));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_negative_fetch_as_absent() {
+        let decoder = StubPlanDecoder::ok();
+        let plan = decode(decodable_node(-1, false), &decoder);
+
+        assert_eq!(plan.fetch(), None);
+        assert_eq!(decoder.plan_calls(), 1);
+        assert_eq!(decoder.expr_calls(), 1);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_zero_fetch_as_some_zero() {
+        let decoder = StubPlanDecoder::ok();
+
+        assert_eq!(decode(decodable_node(0, false), &decoder).fetch(), Some(0));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_present_fetch() {
+        let decoder = StubPlanDecoder::ok();
+
+        assert_eq!(decode(decodable_node(7, false), &decoder).fetch(), Some(7));
+    }
+
+    #[test]
+    fn try_from_proto_restores_preserve_partitioning() {
+        let decoder = StubPlanDecoder::ok();
+
+        assert!(decode(decodable_node(-1, true), &decoder).preserve_partitioning());
+        assert!(!decode(decodable_node(-1, false), &decoder).preserve_partitioning());
+    }
+
+    #[test]
+    fn try_from_proto_restores_sort_options() {
+        let decoder = StubPlanDecoder::ok();
+        let mut node = decodable_node(-1, false);
+        node.expr = vec![sort_expr_node("a", 0, false, true)];
+
+        let plan = decode(node, &decoder);
+        let sort_expr = plan.expr().first();
+        assert!(sort_expr.options.descending);
+        assert!(sort_expr.options.nulls_first);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_different_plan_variant() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err = SortExec::try_from_proto(&encoded_child_node(), &ctx).unwrap_err();
+        assert!(err.to_string().contains("not a SortExec"));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_missing_input() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(-1, false);
+        node.input = None;
+
+        let err = SortExec::try_from_proto(&sort_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SortExec is missing required field 'input'")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_non_sort_expression() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(-1, false);
+        node.expr = vec![column_node("a", 0)];
+
+        let err = SortExec::try_from_proto(&sort_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SortExec expr must be a sort expression")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_an_empty_ordering() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(-1, false);
+        node.expr = vec![];
+
+        let err = SortExec::try_from_proto(&sort_node(node), &ctx).unwrap_err();
+        assert!(err.to_string().contains("SortExec requires an ordering"));
+    }
+
+    /// `dynamic_filter` is plan-owned state, not just another expression: the
+    /// node has to come back as a `DynamicFilterPhysicalExpr`, and one holding
+    /// anything else is rejected rather than quietly dropped. This is the
+    /// decode-side counterpart of the encode test above.
+    #[test]
+    fn try_from_proto_rejects_a_dynamic_filter_of_the_wrong_type() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(3, false);
+        node.dynamic_filter = Some(column_node("a", 0));
+
+        let err = SortExec::try_from_proto(&sort_node(node), &ctx).unwrap_err();
+        assert!(err.to_string().contains(
+            "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+        ));
+        // The sort key and the dynamic filter both reached the codec.
+        assert_eq!(decoder.expr_calls(), 2);
+    }
+
+    #[test]
+    fn try_from_proto_propagates_child_decode_error() {
+        let decoder = StubPlanDecoder::failing_on_plan(1);
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err = SortExec::try_from_proto(&sort_node(decodable_node(-1, false)), &ctx)
+            .unwrap_err();
+        assert!(err.to_string().contains("stub plan decode failure"));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let decoder = StubPlanDecoder::failing_on_expr(1);
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err = SortExec::try_from_proto(&sort_node(decodable_node(-1, false)), &ctx)
+            .unwrap_err();
+        assert!(err.to_string().contains("stub expr decode failure"));
     }
 }
 
@@ -1755,11 +2164,29 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -3191,13 +3618,13 @@ mod tests {
         .with_fetch(Some(10));
 
         // SortExec with fetch creates a dynamic filter automatically.
-        let original_id = sort
-            .dynamic_filter_expr()
-            .expect("should have dynamic filter with fetch")
+        let produced = sort.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        let original_id = produced[0]
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
 
-        // with_dynamic_filter replaces it with a new TopKDynamicFilters.
+        // set_dynamic_filter replaces it with a new TopKDynamicFilters.
         let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::new(Column::new("a", 0)) as _],
             lit(true),
@@ -3205,10 +3632,10 @@ mod tests {
         let new_id = new_df
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
-        let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
-        let restored_id = sort
-            .dynamic_filter_expr()
-            .expect("should still have dynamic filter")
+        let sort = sort.set_dynamic_filter(Arc::clone(&new_df))?;
+        let produced = sort.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        let restored_id = produced[0]
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
         assert_eq!(restored_id, new_id);
@@ -3238,6 +3665,19 @@ mod tests {
         );
     }
 
+    fn dynamic_filter_produced(
+        plan: &dyn ExecutionPlan,
+    ) -> Arc<DynamicFilterPhysicalExpr> {
+        let expr = plan
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
+            .expect("plan should produce a dynamic filter");
+        (expr as Arc<dyn std::any::Any + Send + Sync>)
+            .downcast::<DynamicFilterPhysicalExpr>()
+            .expect("produced expression should be a DynamicFilterPhysicalExpr")
+    }
+
     #[tokio::test]
     async fn test_preserved_topk_filter_waits_for_all_sort_partitions() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -3261,9 +3701,7 @@ mod tests {
         .with_fetch(Some(2))
         .with_preserve_partitioning(true);
 
-        let dynamic_filter = sort
-            .dynamic_filter_expr()
-            .expect("fetch sort should create a dynamic filter");
+        let dynamic_filter = dynamic_filter_produced(&sort);
         let sort = Arc::new(sort);
         let task_ctx = Arc::new(TaskContext::default());
 
@@ -3306,13 +3744,11 @@ mod tests {
             [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
             input,
         )
-        .with_dynamic_filter_expr(dynamic_filter)?
+        .set_dynamic_filter(dynamic_filter)?
         .with_preserve_partitioning(true)
         .with_fetch(Some(2));
 
-        let dynamic_filter = sort
-            .dynamic_filter_expr()
-            .expect("fetch sort should keep the dynamic filter");
+        let dynamic_filter = dynamic_filter_produced(&sort);
         assert_eq!(
             dynamic_filter
                 .expression_id()
@@ -3357,7 +3793,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(sort.with_dynamic_filter_expr(df).is_err());
+        assert!(sort.set_dynamic_filter(df).is_err());
         Ok(())
     }
 

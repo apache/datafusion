@@ -18,6 +18,7 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, Datum, Int64Array, Int64Builder, StringArrayType,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
@@ -34,7 +35,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use crate::regex::compile_regex;
+use crate::regex::{compile_regex, start_to_byte_offset};
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
@@ -52,20 +53,15 @@ use crate::regex::compile_regex;
     standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "start",
-        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1"
+        description = "Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1"
     ),
     argument(
         name = "N",
-        description = "- **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function."
+        description = "Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function."
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     ),
     argument(
         name = "subexpr",
@@ -296,35 +292,28 @@ where
     let mut regex_cache = RegexCache::default();
     let mut result = Int64Builder::with_capacity(len);
 
+    // A NULL in any argument produces a NULL result
+    let nulls = NullBuffer::union_many([
+        values.nulls(),
+        regex_array.nulls(),
+        start_array.and_then(|array| array.nulls()),
+        nth_array.and_then(|array| array.nulls()),
+        flags_array.and_then(|array| array.nulls()),
+        subexp_array.and_then(|array| array.nulls()),
+    ]);
+
     for i in 0..len {
-        if regex_array.is_null(i) {
+        if nulls.as_ref().is_some_and(|nulls| nulls.is_null(i)) {
             result.append_null();
-            continue;
-        }
-        let regex = regex_array.value(i);
-        if regex.is_empty() {
-            result.append_value(0);
             continue;
         }
 
-        if values.is_null(i) {
-            result.append_null();
-            continue;
-        }
         let value = values.value(i);
-        if value.is_empty() {
-            result.append_value(0);
-            continue;
-        }
-
-        let flags = match flags_array {
-            Some(flags) if !flags.is_null(i) => Some(flags.value(i)),
-            _ => None,
-        };
+        let regex = regex_array.value(i);
+        let flags = flags_array.map(|array| array.value(i));
         let pattern = regex_cache.get_or_compile(regex, flags)?;
 
-        // The defaults apply when the optional argument was not supplied at
-        // all. A supplied but null slot reads through as its raw buffer value.
+        // The defaults apply when the optional argument was not supplied.
         let start = start_array.map_or(1, |array| array.value(i));
         let nth = nth_array.map_or(1, |array| array.value(i));
         let subexp = subexp_array.map_or(0, |array| array.value(i));
@@ -376,7 +365,7 @@ impl<'a> RegexCache<'a> {
 /// Returns the 1-based character position of the `n`-th match of `pattern` in
 /// `value`, or 0 if there is no such match. The search begins at the 1-based
 /// character position `start`. A positive `subexpr` selects that capture group
-/// of the first match instead of the `n`-th match. `value` is non-empty.
+/// of the first match instead of the `n`-th match.
 fn get_index(
     value: &str,
     pattern: &Regex,
@@ -396,10 +385,7 @@ fn get_index(
         ));
     }
 
-    // Byte offset of the `start`-th character. A `start` past the end of the
-    // string leaves nothing to search, so no match is possible.
-    let Some((byte_start_offset, _)) = value.char_indices().nth((start - 1) as usize)
-    else {
+    let Some(byte_start_offset) = start_to_byte_offset(value, start) else {
         return Ok(0);
     };
     let search_slice = &value[byte_start_offset..];
@@ -451,6 +437,20 @@ mod tests {
         test_case_sensitive_regexp_instr_array_nth::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_instr_array_nth::<GenericStringArray<i64>>();
         test_case_sensitive_regexp_instr_array_nth::<StringViewArray>();
+
+        test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i32>>();
+        test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i64>>();
+        test_case_sensitive_regexp_instr_empty_pattern::<StringViewArray>();
+
+        test_case_sensitive_regexp_instr_zero_width_pattern::<GenericStringArray<i32>>();
+        test_case_sensitive_regexp_instr_zero_width_pattern::<GenericStringArray<i64>>();
+        test_case_sensitive_regexp_instr_zero_width_pattern::<StringViewArray>();
+
+        test_regexp_instr_null_scalar_args();
+
+        test_regexp_instr_null_array_rows::<GenericStringArray<i32>>();
+        test_regexp_instr_null_array_rows::<GenericStringArray<i64>>();
+        test_regexp_instr_null_array_rows::<StringViewArray>();
     }
 
     fn regexp_instr_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
@@ -479,7 +479,7 @@ mod tests {
     fn test_case_sensitive_regexp_instr_nulls() {
         let v = "";
         let r = "";
-        let expected = 0;
+        let expected = 1;
         let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
         let re = regexp_instr_with_scalar_values(&[v.to_string().into(), regex_sv]);
         // let res_exp = re.unwrap();
@@ -488,6 +488,29 @@ mod tests {
                 assert_eq!(v, Some(expected), "regexp_instr scalar test failed");
             }
             _ => panic!("Unexpected result"),
+        }
+
+        for (value, regex) in [
+            (
+                ScalarValue::Utf8(None),
+                ScalarValue::Utf8(Some(String::new())),
+            ),
+            (
+                ScalarValue::LargeUtf8(None),
+                ScalarValue::LargeUtf8(Some(String::new())),
+            ),
+            (
+                ScalarValue::Utf8View(None),
+                ScalarValue::Utf8View(Some(String::new())),
+            ),
+        ] {
+            let re = regexp_instr_with_scalar_values(&[value, regex]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, None, "regexp_instr NULL scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
         }
     }
     fn test_case_sensitive_regexp_instr_scalar() {
@@ -749,6 +772,126 @@ mod tests {
         });
     }
 
+    fn test_regexp_instr_null_scalar_args() {
+        // A NULL in any argument produces a NULL result
+        let cases: Vec<Vec<ScalarValue>> = vec![
+            // NULL start
+            vec![
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Utf8(Some("b".to_string())),
+                ScalarValue::Int64(None),
+            ],
+            // NULL N
+            vec![
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Utf8(Some("b".to_string())),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Int64(None),
+            ],
+            // NULL flags
+            vec![
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Utf8(Some("b".to_string())),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Utf8(None),
+            ],
+            // NULL subexpr
+            vec![
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Utf8(Some("(b)".to_string())),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Utf8(Some("i".to_string())),
+                ScalarValue::Int64(None),
+            ],
+        ];
+
+        for args in cases {
+            let re = regexp_instr_with_scalar_values(&args);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, None, "regexp_instr null scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+        }
+    }
+
+    fn test_regexp_instr_null_array_rows<A>()
+    where
+        A: From<Vec<Option<&'static str>>> + Array + 'static,
+    {
+        let values = A::from(vec![
+            None,
+            Some("abc"),
+            Some("abc"),
+            Some("abc"),
+            Some("abc"),
+            Some("abc"),
+            Some("abc"),
+        ]);
+        let regex = A::from(vec![
+            Some("b"),
+            None,
+            Some("b"),
+            Some("b"),
+            Some("b"),
+            Some("(b)"),
+            Some("b"),
+        ]);
+        let start = Int64Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+        ]);
+        let nth = Int64Array::from(vec![
+            Some(1),
+            Some(1),
+            Some(1),
+            None,
+            Some(1),
+            Some(1),
+            Some(1),
+        ]);
+        let flags = A::from(vec![
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            None,
+            Some("i"),
+            Some(""),
+        ]);
+        let subexp = Int64Array::from(vec![
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            None,
+            Some(0),
+        ]);
+
+        let expected =
+            Int64Array::from(vec![None, None, None, None, None, None, Some(2)]);
+
+        let re = regexp_instr_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(nth),
+            Arc::new(flags),
+            Arc::new(subexp),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
     fn test_case_sensitive_regexp_instr_array<A>()
     where
         A: From<Vec<&'static str>> + Array + 'static,
@@ -798,6 +941,40 @@ mod tests {
             Arc::new(nth),
         ])
         .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_sensitive_regexp_instr_empty_pattern<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["abc", "", "abc", "abc", "😀"]);
+        let regex = A::from(vec!["", "", "", "", ""]);
+        let start = Int64Array::from(vec![1, 1, 4, 5, 1]);
+        let nth = Int64Array::from(vec![1, 1, 1, 1, 2]);
+        let expected = Int64Array::from(vec![1, 1, 4, 0, 2]);
+
+        let re = regexp_instr_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(nth),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_sensitive_regexp_instr_zero_width_pattern<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["abc"]);
+        let regex = A::from(vec!["x*"]);
+        let start = Int64Array::from(vec![4]);
+        let expected = Int64Array::from(vec![4]);
+
+        let re = regexp_instr_func(&[Arc::new(values), Arc::new(regex), Arc::new(start)])
+            .unwrap();
         assert_eq!(re.as_ref(), &expected);
     }
 }

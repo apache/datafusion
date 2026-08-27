@@ -25,13 +25,14 @@ use std::time::Duration;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_common::display::GraphvizBuilder;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
 use crate::metrics::{MetricCategory, MetricType, MetricValue};
 use crate::render_tree::RenderTree;
 
+use crate::operator_statistics::StatisticsRegistry;
 use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
@@ -122,6 +123,7 @@ pub struct DisplayableExecutionPlan<'a> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// If schema should be displayed. See [`Self::set_show_schema`]
     show_schema: bool,
     /// Which metric categories should be included when rendering
@@ -129,6 +131,9 @@ pub struct DisplayableExecutionPlan<'a> {
     /// Optional filter by semantic category (rows / bytes / timing).
     /// `None` means show all categories; `Some(vec![])` means plan-only.
     metric_categories: Option<Vec<MetricCategory>>,
+    /// Optional filter by metric names. Only metric names in this list
+    /// will be rendered.
+    metric_names: Option<Vec<String>>,
     // (TreeRender) Maximum total width of the rendered tree
     tree_maximum_render_width: usize,
     /// Optional summary totals (currently only used by `pgjson`) — the total
@@ -152,45 +157,36 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            show_metrics: ShowMetrics::None,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::None)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows aggregated
     /// metrics
     pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            show_metrics: ShowMetrics::Aggregated,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::Aggregated)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows all low
     /// level metrics
     pub fn with_full_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+        Self::with_show_metrics(inner, ShowMetrics::Full)
+    }
+
+    fn with_show_metrics(
+        inner: &'a dyn ExecutionPlan,
+        show_metrics: ShowMetrics,
+    ) -> Self {
         Self {
             inner,
-            show_metrics: ShowMetrics::Full,
+            registry: StatisticsRegistry::new(),
+            show_metrics,
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
+            metric_names: None,
             tree_maximum_render_width: 240,
             summary: None,
         }
@@ -208,6 +204,12 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Enable display of statistics
     pub fn set_show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
+        self
+    }
+
+    /// Set the [`StatisticsRegistry`] consulted when computing displayed statistics.
+    pub fn set_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.registry = registry;
         self
     }
 
@@ -231,6 +233,18 @@ impl<'a> DisplayableExecutionPlan<'a> {
         metric_categories: Option<Vec<MetricCategory>>,
     ) -> Self {
         self.metric_categories = metric_categories;
+        self
+    }
+
+    /// Specify which metric names to include.
+    ///
+    /// - An empty vector means plan-only — suppress all metrics.
+    /// - `vec!["metric_1"]` means show only the metric named `metric_1`.
+    ///
+    /// Name filtering is intersected with other types of filters, like metric
+    /// category and metric type.
+    pub fn set_metric_names(mut self, metric_names: Vec<String>) -> Self {
+        self.metric_names = Some(metric_names);
         self
     }
 
@@ -276,9 +290,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -288,9 +304,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -300,9 +318,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -322,8 +342,10 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -334,8 +356,10 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     t,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                     graphviz_builder: GraphvizBuilder::default(),
                     parents: Vec::new(),
                 };
@@ -353,8 +377,10 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -403,6 +429,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
             summary: Option<AnalyzeSummary>,
         }
         impl fmt::Display for Wrapper<'_> {
@@ -413,6 +440,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                     objects: HashMap::new(),
                     parent_ids: Vec::new(),
                     next_id: 0,
@@ -446,6 +474,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
             summary: self.summary,
         }
     }
@@ -457,9 +486,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
 
         impl fmt::Display for Wrapper<'_> {
@@ -470,9 +501,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                 };
                 visitor.pre_visit(self.plan)?;
                 Ok(())
@@ -483,24 +516,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
-        }
-    }
-
-    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
-    pub fn to_stringified(
-        &self,
-        verbose: bool,
-        plan_type: PlanType,
-        explain_format: DisplayFormatType,
-    ) -> StringifiedPlan {
-        match (&explain_format, &plan_type) {
-            (DisplayFormatType::TreeRender, PlanType::FinalPhysicalPlan) => {
-                StringifiedPlan::new(plan_type, self.tree_render().to_string())
-            }
-            _ => StringifiedPlan::new(plan_type, self.indent(verbose).to_string()),
+            metric_names: self.metric_names.clone(),
         }
     }
 }
@@ -538,12 +558,15 @@ struct IndentVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// If schema should be displayed
     show_schema: bool,
     /// Which metric types should be rendered
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category (rows / bytes / timing).
     metric_categories: Option<&'a [MetricCategory]>,
+    /// Optional filter by metric name.
+    metric_names: Option<&'a [String]>,
 }
 
 impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
@@ -563,6 +586,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -574,6 +600,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -581,7 +610,7 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = StatisticsContext::new()
+            let stats = StatisticsContext::new_with_registry(self.registry.clone())
                 .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
@@ -612,10 +641,13 @@ struct GraphvizVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// Which metric types should be rendered
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category
     metric_categories: Option<&'a [MetricCategory]>,
+    /// Optional filter by metric name.
+    metric_names: Option<&'a [String]>,
 
     graphviz_builder: GraphvizBuilder,
     /// Used to record parent node ids when visiting a plan.
@@ -660,6 +692,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -671,6 +706,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -679,7 +717,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = StatisticsContext::new()
+            let stats = StatisticsContext::new_with_registry(self.registry.clone())
                 .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
@@ -729,6 +767,7 @@ struct PgJsonExecutionPlanVisitor<'a> {
     show_schema: bool,
     metric_types: &'a [MetricType],
     metric_categories: Option<&'a [MetricCategory]>,
+    metric_names: Option<&'a [String]>,
     objects: HashMap<u32, serde_json::Value>,
     parent_ids: Vec<u32>,
     next_id: u32,
@@ -809,6 +848,12 @@ impl PgJsonExecutionPlanVisitor<'_> {
         };
         let metrics = if let Some(cats) = self.metric_categories {
             metrics.filter_by_categories(cats)
+        } else {
+            metrics
+        };
+
+        let metrics = if let Some(names) = self.metric_names {
+            metrics.filter_by_names(names)
         } else {
             metrics
         };
@@ -1299,7 +1344,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
+            let extra_left_space = usize::from(!total_spaces.is_multiple_of(2));
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),
@@ -1451,11 +1496,17 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{Result, Statistics, internal_datafusion_err};
+    use datafusion_common::{
+        Result, Statistics, internal_datafusion_err, tree_node::TreeNodeRecursion,
+    };
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use crate::statistics::StatisticsArgs;
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, ExecutionPlan, PlanProperties,
+        ReplaceChildrenOptions,
+    };
 
     use super::DisplayableExecutionPlan;
 
@@ -1489,11 +1540,29 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -1573,10 +1642,11 @@ mod tests {
         use crate::empty::EmptyExec;
         use crate::filter::FilterExec;
         use crate::projection::ProjectionExec;
+        use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
         use datafusion_physical_expr::expressions::{binary, col, lit};
         use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
-        fn sample_plan() -> Arc<dyn crate::ExecutionPlan> {
+        fn sample_plan() -> Arc<dyn ExecutionPlan> {
             let schema = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1653,11 +1723,33 @@ mod tests {
                 fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
                     vec![&self.inner]
                 }
-                fn with_new_children(
+                fn apply_expressions(
+                    &self,
+                    _f: &mut dyn FnMut(
+                        &Arc<dyn PhysicalExpr>,
+                    ) -> Result<
+                        datafusion_common::tree_node::TreeNodeRecursion,
+                    >,
+                ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>
+                {
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                }
+
+                fn replace_children(
                     self: Arc<Self>,
                     _: Vec<Arc<dyn ExecutionPlan>>,
+                    _: ReplaceChildrenOptions,
                 ) -> Result<Arc<dyn ExecutionPlan>> {
                     unimplemented!()
+                }
+                fn with_new_children(
+                    self: Arc<Self>,
+                    children: Vec<Arc<dyn ExecutionPlan>>,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    self.replace_children(
+                        children,
+                        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                    )
                 }
                 fn execute(
                     &self,
@@ -1701,6 +1793,40 @@ mod tests {
             assert_eq!(root["Actual Rows"].as_u64(), Some(42));
             assert_eq!(root["Actual Total Time"].as_f64(), Some(5.0));
             assert_eq!(root["Extras"]["output_batches"].as_u64(), Some(7));
+
+            let metric_names = vec!["output_rows".to_string()];
+            for rendered in [
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+            ] {
+                assert!(rendered.contains("output_rows"));
+                assert!(!rendered.contains("elapsed_compute"));
+                assert!(!rendered.contains("output_batches"));
+            }
+
+            let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                .set_metric_names(metric_names)
+                .pgjson(false)
+                .to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let root = value[0].get("Plan").expect("plan");
+            assert_eq!(root["Actual Rows"].as_u64(), Some(42));
+            assert!(root.get("Actual Total Time").is_none());
+            assert!(root.get("Extras").is_none());
         }
 
         #[test]

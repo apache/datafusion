@@ -100,11 +100,11 @@ use futures::{
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
-use datafusion::optimizer::simplify_expressions::simplify_literal::parse_literal;
 use datafusion::{
+    catalog::Session,
     execution::{
-        RecordBatchStream, SendableRecordBatchStream, SessionState, SessionStateBuilder,
-        TaskContext, context::QueryPlanner,
+        RecordBatchStream, SendableRecordBatchStream, SessionStateBuilder, TaskContext,
+        context::QueryPlanner,
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
@@ -115,9 +115,13 @@ use datafusion::{
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::*,
 };
+use datafusion::{
+    optimizer::simplify_expressions::simplify_literal::parse_literal,
+    physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions},
+};
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
@@ -565,7 +569,7 @@ impl QueryPlanner for TableSampleQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             TableSampleExtensionPlanner,
@@ -587,7 +591,7 @@ impl ExtensionPlanner for TableSampleExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session_state: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
@@ -697,9 +701,10 @@ impl ExecutionPlan for SampleExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::try_new(
             children.swap_remove(0),
@@ -707,6 +712,16 @@ impl ExecutionPlan for SampleExec {
             self.upper_bound,
             self.seed,
         )?))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -748,6 +763,15 @@ impl ExecutionPlan for SampleExec {
             .to_inexact();
 
         Ok(Arc::new(stats))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

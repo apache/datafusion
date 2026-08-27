@@ -23,6 +23,7 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::{
     SendableRecordBatchStream,
@@ -46,13 +47,16 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::piecewise_merge_join::classic_join::{
     ClassicPWMJStream, PiecewiseMergeJoinStreamState,
 };
+use crate::joins::piecewise_merge_join::existence_join::ExistencePWMJStream;
 use crate::joins::piecewise_merge_join::utils::{
     build_visited_indices_map, is_existence_join, is_right_existence_join,
+    is_supported_existence_join,
 };
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    ReplaceChildrenOptions, validate_child_count,
 };
 use crate::{
     ExecutionPlan, PlanProperties,
@@ -162,17 +166,15 @@ use crate::{
 /// ```
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
-/// Existence joins are made magnitudes of times faster with a `PiecewiseMergeJoin` as we only need to find
-/// the min/max value of the streamed side to be able to emit all matches on the buffered side. By putting
-/// the side we need to mark onto the sorted buffer side, we can emit all these matches at once.
+/// Currently only `LeftSemi` and `LeftAnti` are supported. For these the marked side is
+/// already the left (buffered) side, so no input swap is needed. The rest are rejected in
+/// [`Self::try_new`]: `RightSemi`/`RightAnti`/`RightMark` mark the right side and need an
+/// input swap, and `LeftMark` needs an extra boolean column rather than a filtered slice.
 ///
-/// For less than operations (`<`) both inputs are to be sorted in descending order and vice versa for greater
-/// than (`>`) operations. `SortExec` is used to enforce sorting on the buffered side and streamed side does not
-/// need to be sorted due to only needing to find the min/max.
-///
-/// For Left Semi, Anti, and Mark joins we swap the inputs so that the marked side is on the buffered side.
-///
-/// The pseudocode for the algorithm looks like this:
+/// `LeftSemi`/`LeftAnti` are served by a dedicated stream, `ExistencePWMJStream` (see
+/// `existence_join.rs`). Instead of materializing row pairs it records the matched set as a
+/// single index -- the start of the matched suffix of the buffered side -- and slices the
+/// buffered batch at that index once every streamed partition has been consumed.
 ///
 /// ```text
 /// // Using the example of a less than `<` operation
@@ -294,10 +296,12 @@ impl PiecewiseMergeJoinExec {
         join_type: JoinType,
         num_partitions: usize,
     ) -> Result<Self> {
-        // TODO: Implement existence joins for PiecewiseMergeJoin
-        if is_existence_join(join_type) {
+        // Left Semi/Anti are handled by `ExistencePWMJStream` (the marked side is
+        // already the buffered side, so no input swap is needed). Right existence joins
+        // and Mark joins are not yet supported.
+        if is_existence_join(join_type) && !is_supported_existence_join(join_type) {
             return not_impl_err!(
-                "Existence Joins are currently not supported for PiecewiseMergeJoin"
+                "Existence join {join_type} is currently not supported for PiecewiseMergeJoin"
             );
         }
 
@@ -359,7 +363,6 @@ impl PiecewiseMergeJoinExec {
             &streamed,
             Arc::clone(&schema),
             join_type,
-            &on,
         )?;
 
         Ok(Self {
@@ -421,7 +424,6 @@ impl PiecewiseMergeJoinExec {
         streamed: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
-        join_on: &(PhysicalExprRef, PhysicalExprRef),
     ) -> Result<PlanProperties> {
         let eq_properties = join_equivalence_properties(
             buffered.equivalence_properties().clone(),
@@ -430,7 +432,12 @@ impl PiecewiseMergeJoinExec {
             schema,
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
-            std::slice::from_ref(join_on),
+            // `PiecewiseMergeJoin`'s `on` is a range predicate (e.g. `l < r`),
+            // not an equijoin key. Passing it here would register a false
+            // `left == right` output equivalence, letting the optimizer drop a
+            // required sort and return wrongly ordered results. Range joins add
+            // no column equivalences, so pass none.
+            &[],
         )?;
 
         let output_partitioning =
@@ -482,6 +489,14 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         vec![&self.buffered, &self.streamed]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to the two expressions being compared in the range predicate
+        crate::apply_expression_roots([&self.on.0, &self.on.1], f)
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         self.input_distribution_requirements().into_per_child()
     }
@@ -496,7 +511,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // Existence joins don't need to be sorted on one side.
         if is_right_existence_join(self.join_type) {
-            unimplemented!()
+            // Unreachable: `try_new` rejects right existence joins, and this signature
+            // cannot return `Result`. They swap the inputs, so whoever implements them
+            // must require the order on the streamed side instead.
+            unimplemented!(
+                "required_input_ordering for right existence joins; guarded by try_new"
+            )
         } else {
             // Sort the right side in memory, so we do not need to enforce any sorting
             vec![
@@ -508,56 +528,80 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         }
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                let buffered = children.swap_remove(0);
+                let streamed = children.swap_remove(0);
+                Ok(Arc::new(Self {
+                    buffered,
+                    streamed,
+                    on: self.on.clone(),
+                    operator: self.operator,
+                    join_type: self.join_type,
+                    schema: Arc::clone(&self.schema),
+                    left_child_plan_required_order: self
+                        .left_child_plan_required_order
+                        .clone(),
+                    right_batch_required_orders: self.right_batch_required_orders.clone(),
+                    sort_options: self.sort_options,
+                    cache: Arc::clone(&self.cache),
+                    num_partitions: self.num_partitions,
+
+                    // Re-set state.
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    buffered_fut: Default::default(),
+                }))
+            }
+            ChildrenPropertiesMode::Recompute => match &children[..] {
+                [left, right] => Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
+                    Arc::clone(left),
+                    Arc::clone(right),
+                    self.on.clone(),
+                    self.operator,
+                    self.join_type,
+                    self.num_partitions,
+                )?)),
+                _ => internal_err!(
+                    "PiecewiseMergeJoin should have 2 children, found {}",
+                    children.len()
+                ),
+            },
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        match &children[..] {
-            [left, right] => Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
-                Arc::clone(left),
-                Arc::clone(right),
-                self.on.clone(),
-                self.operator,
-                self.join_type,
-                self.num_partitions,
-            )?)),
-            _ => internal_err!(
-                "PiecewiseMergeJoin should have 2 children, found {}",
-                children.len()
-            ),
-        }
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let buffered = children.swap_remove(0);
-        let streamed = children.swap_remove(0);
-        Ok(Arc::new(Self {
-            buffered,
-            streamed,
-            on: self.on.clone(),
-            operator: self.operator,
-            join_type: self.join_type,
-            schema: Arc::clone(&self.schema),
-            left_child_plan_required_order: self.left_child_plan_required_order.clone(),
-            right_batch_required_orders: self.right_batch_required_orders.clone(),
-            sort_options: self.sort_options,
-            cache: Arc::clone(&self.cache),
-            num_partitions: self.num_partitions,
-
-            // Re-set state.
-            metrics: ExecutionPlanMetricsSet::new(),
-            buffered_fut: Default::default(),
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let buffered = Arc::clone(&self.buffered);
         let streamed = Arc::clone(&self.streamed);
-        self.with_new_children_and_same_properties(vec![buffered, streamed])
+        self.replace_children(
+            vec![buffered, streamed],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -569,6 +613,14 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let on_streamed = Arc::clone(&self.on.1);
 
         let metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        // The final pass over unmatched/existence rows must run exactly once, on the
+        // last streamed partition to finish. That is coordinated by an atomic counter
+        // seeded with the number of streamed partitions that will actually call
+        // `execute`, which is the streamed side's output partition count — not the
+        // planner's `target_partitions` (they can differ, e.g. when the streamed input
+        // has a single partition), otherwise the counter never reaches 1 and the final
+        // pass is skipped.
+        let streamed_partitions = self.streamed.output_partitioning().partition_count();
         let buffered_fut = self.buffered_fut.try_once(|| {
             let reservation = MemoryConsumer::new("PiecewiseMergeJoinInput")
                 .register(context.memory_pool());
@@ -580,7 +632,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 metrics.clone(),
                 reservation,
                 build_visited_indices_map(self.join_type),
-                self.num_partitions,
+                streamed_partitions,
             ))
         })?;
 
@@ -588,9 +640,27 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // TODO: Add existence joins + this is guarded at physical planner
-        if is_existence_join(self.join_type()) {
-            unreachable!()
+        let buffered_side =
+            BufferedSide::Initial(BufferedSideInitialState { buffered_fut });
+
+        if is_supported_existence_join(self.join_type) {
+            Ok(Box::pin(ExistencePWMJStream::try_new(
+                Arc::clone(&self.schema),
+                on_streamed,
+                self.join_type,
+                self.operator,
+                streamed,
+                buffered_side,
+                self.sort_options,
+                metrics,
+                batch_size,
+            )))
+        } else if is_existence_join(self.join_type) {
+            // Right existence joins and Mark joins are rejected in `try_new`.
+            internal_err!(
+                "PiecewiseMergeJoin does not support existence join {} (should have been rejected in try_new)",
+                self.join_type
+            )
         } else {
             Ok(Box::pin(ClassicPWMJStream::try_new(
                 Arc::clone(&self.schema),
@@ -598,7 +668,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.join_type,
                 self.operator,
                 streamed,
-                BufferedSide::Initial(BufferedSideInitialState { buffered_fut }),
+                buffered_side,
                 PiecewiseMergeJoinStreamState::WaitBufferedSide,
                 self.sort_options,
                 metrics,
@@ -609,6 +679,150 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            buffered,
+            streamed,
+            on,
+            operator,
+            join_type,
+            num_partitions,
+            // derived from the children's schemas by `try_new` on decode
+            schema: _,
+            // buffered side collected at execution time, not part of the plan
+            buffered_fut: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            left_child_plan_required_order: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            right_batch_required_orders: _,
+            // recomputed from `operator` and `join_type` by `try_new` on decode
+            sort_options: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let (on_buffered, on_streamed) = on;
+        let buffered = ctx.encode_child(buffered)?;
+        let streamed = ctx.encode_child(streamed)?;
+        let on_buffered = ctx.encode_expr(on_buffered)?;
+        let on_streamed = ctx.encode_expr(on_streamed)?;
+        let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::PiecewiseMergeJoin(
+                    Box::new(protobuf::PiecewiseMergeJoinExecNode {
+                        buffered: Some(Box::new(buffered)),
+                        streamed: Some(Box::new(streamed)),
+                        on_buffered: Some(on_buffered),
+                        on_streamed: Some(on_streamed),
+                        // Matches the `Operator` encoding used for `BinaryExpr`:
+                        // the `Debug` name of the variant.
+                        operator: format!("{operator:?}"),
+                        join_type: join_type.into(),
+                        num_partitions: *num_partitions as u64,
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl PiecewiseMergeJoinExec {
+    /// Reconstruct a [`PiecewiseMergeJoinExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Every other field of
+    /// the operator (schema, sort options, required orderings, plan properties) is
+    /// derived by [`PiecewiseMergeJoinExec::try_new`], so it is not on the wire.
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
+        use datafusion_proto_models::protobuf;
+
+        let join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::PiecewiseMergeJoin,
+            "PiecewiseMergeJoinExec",
+        );
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::PiecewiseMergeJoinExecNode {
+            buffered,
+            streamed,
+            on_buffered,
+            on_streamed,
+            operator,
+            join_type,
+            num_partitions,
+        } = &**join;
+
+        let buffered = ctx.decode_required_child(
+            buffered.as_deref(),
+            "PiecewiseMergeJoinExec",
+            "buffered",
+        )?;
+        let streamed = ctx.decode_required_child(
+            streamed.as_deref(),
+            "PiecewiseMergeJoinExec",
+            "streamed",
+        )?;
+        let on_buffered = ctx.decode_required_expr(
+            on_buffered.as_ref(),
+            buffered.schema().as_ref(),
+            "PiecewiseMergeJoinExec",
+            "on_buffered",
+        )?;
+        let on_streamed = ctx.decode_required_expr(
+            on_streamed.as_ref(),
+            streamed.schema().as_ref(),
+            "PiecewiseMergeJoinExec",
+            "on_streamed",
+        )?;
+
+        let operator = Operator::from_proto_name(operator).ok_or_else(|| {
+            internal_datafusion_err!(
+                "PiecewiseMergeJoinExec: unknown Operator '{operator}'"
+            )
+        })?;
+        let join_type = crate::joins::proto::join_type_from_proto(
+            *join_type,
+            "PiecewiseMergeJoinExec",
+        )?;
+
+        // Checked rather than `as usize`: a truncated partition count would not
+        // fail loudly, it would silently change how the buffered side is split.
+        let num_partitions =
+            usize::try_from(*num_partitions).map_err(|_| {
+                plan_datafusion_err!(
+                     "PiecewiseMergeJoinExec: num_partitions {num_partitions} cannot be represented as usize on this target"
+                )
+            })?;
+
+        Ok(Arc::new(Self::try_new(
+            buffered,
+            streamed,
+            (on_buffered, on_streamed),
+            operator,
+            join_type,
+            num_partitions,
+        )?))
     }
 }
 
@@ -711,6 +925,11 @@ pub(super) struct BufferedSideData {
     values: ArrayRef,
     pub(super) visited_indices_bitmap: SharedBitmapBuilder,
     pub(super) remaining_partitions: AtomicUsize,
+    /// Existence joins only: the start of the matched suffix of the buffered side, or
+    /// `usize::MAX` before the first match. `[existence_min_marked, len)` *is* the matched
+    /// set -- no bitmap is allocated. Shared so each partition benefits from what the
+    /// others have marked; it only ever decreases, so a stale read is safe.
+    pub(super) existence_min_marked: AtomicUsize,
     _reservation: MemoryReservation,
 }
 
@@ -727,6 +946,7 @@ impl BufferedSideData {
             values,
             visited_indices_bitmap,
             remaining_partitions: AtomicUsize::new(remaining_partitions),
+            existence_min_marked: AtomicUsize::new(usize::MAX),
             _reservation: reservation,
         }
     }
