@@ -171,10 +171,11 @@ fn map_deduplicate_keys(
         .first()
         .map(|offset| *offset as usize)
         .unwrap_or(0);
-    let mut cur_values_offset = values_offsets
+    let values_start_offset = values_offsets
         .first()
         .map(|offset| *offset as usize)
         .unwrap_or(0);
+    let mut cur_values_offset = values_start_offset;
 
     let mut new_last_offset = 0;
     new_offsets.push(new_last_offset);
@@ -264,7 +265,15 @@ fn map_deduplicate_keys(
         let value_indices_array = Int32Array::from(value_indices);
         take(&flat_values, &value_indices_array, None)?
     } else {
-        filter(&flat_values, &values_mask)?
+        // Values lists can be sliced independently of keys lists. Align the
+        // relative mask with their first offset, without allocating a slice
+        // wrapper for the common case where values start at zero.
+        let flat_values = if values_start_offset == 0 {
+            Cow::Borrowed(flat_values)
+        } else {
+            Cow::Owned(flat_values.slice(values_start_offset, values_mask.len()))
+        };
+        filter(flat_values.as_ref(), &values_mask)?
     };
     let offsets = OffsetBuffer::new(new_offsets.into());
     Ok((needed_keys, needed_values, offsets))
@@ -328,6 +337,175 @@ mod tests {
                 needed_values.value_data().as_ptr(),
                 "distinct keys should not copy values under last_value_wins={last_value_wins}"
             );
+        }
+    }
+
+    #[test]
+    fn wide_row_followed_by_small_rows() {
+        // The wide row grows the lookup table beyond the retention threshold
+        // for the following small and empty rows.
+        let wide_len = 512;
+        let keys = (0..wide_len).chain([0, 1, 0]).collect();
+        let values = std::iter::repeat_n(Some("wide"), wide_len as usize)
+            .chain([Some("small"), None, Some("last")])
+            .collect();
+        let (keys, values) = int32_utf8_inputs(keys, values);
+        let offsets = [0, wide_len, wide_len + 2, wide_len + 2, wide_len + 3];
+
+        for last_value_wins in [false, true] {
+            let result = map_from_keys_values_offsets_nulls(
+                &keys,
+                &values,
+                &offsets,
+                &offsets,
+                None,
+                None,
+                last_value_wins,
+            )
+            .unwrap();
+
+            let map = result.as_map();
+            assert_eq!(map.value_offsets(), &offsets);
+            assert_eq!(map.keys().to_data(), keys.to_data());
+            assert_eq!(map.values().to_data(), values.to_data());
+        }
+    }
+
+    #[test]
+    fn last_win_after_wide_row_preserves_key_order_and_values() {
+        let wide_len = 512;
+        let keys = (0..wide_len).chain([1, 0, 1, 2, 0, 1]).collect();
+        let values = std::iter::repeat_n(Some("wide"), wide_len as usize)
+            .chain([
+                Some("old-a"),
+                Some("old-b"),
+                Some("new-a"),
+                Some("c"),
+                None,
+                Some("next-row"),
+            ])
+            .collect();
+        let (keys, values) = int32_utf8_inputs(keys, values);
+        let offsets = [0, wide_len, wide_len + 5, wide_len + 6];
+
+        let result = map_from_keys_values_offsets_nulls(
+            &keys, &values, &offsets, &offsets, None, None, true,
+        )
+        .unwrap();
+
+        let expected_keys = (0..wide_len).chain([1, 0, 2, 1]).collect();
+        let expected_values = std::iter::repeat_n(Some("wide"), wide_len as usize)
+            .chain([Some("new-a"), None, Some("c"), Some("next-row")])
+            .collect();
+        let (expected_keys, expected_values) =
+            int32_utf8_inputs(expected_keys, expected_values);
+        let map = result.as_map();
+        assert_eq!(
+            map.value_offsets(),
+            &[0, wide_len, wide_len + 3, wide_len + 4]
+        );
+        assert_eq!(map.keys().to_data(), expected_keys.to_data());
+        assert_eq!(map.values().to_data(), expected_values.to_data());
+    }
+
+    #[test]
+    fn distinct_keys_with_nonzero_values_offset_reuse_payload_buffer() {
+        let (keys, values) = int32_utf8_inputs(
+            vec![1, 2, 3],
+            vec![Some("prefix"), Some("a"), None, Some("c"), Some("suffix")],
+        );
+        let keys_offsets = [0, 2, 3];
+        let values_offsets = [1, 3, 4];
+        let expected_values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let source_values = values.as_any().downcast_ref::<StringArray>().unwrap();
+
+        for last_value_wins in [false, true] {
+            let result = map_from_keys_values_offsets_nulls(
+                &keys,
+                &values,
+                &keys_offsets,
+                &values_offsets,
+                None,
+                None,
+                last_value_wins,
+            )
+            .unwrap();
+
+            let map = result.as_map();
+            assert_eq!(map.value_offsets(), &keys_offsets);
+            assert_eq!(map.keys().to_data(), keys.to_data());
+            let needed_values =
+                map.values().as_any().downcast_ref::<StringArray>().unwrap();
+            assert_eq!(needed_values, &expected_values);
+            assert_eq!(
+                needed_values.value_data().as_ptr(),
+                source_values.value_data().as_ptr(),
+            );
+        }
+    }
+
+    #[test]
+    fn last_win_with_nonzero_values_offset() {
+        let (keys, values) = int32_utf8_inputs(
+            vec![1, 2, 1],
+            vec![Some("prefix"), Some("a"), Some("b"), None, Some("suffix")],
+        );
+        let result = map_from_keys_values_offsets_nulls(
+            &keys,
+            &values,
+            &[0, 3],
+            &[1, 4],
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+
+        let map = result.as_map();
+        assert_eq!(map.value_offsets(), &[0, 2]);
+        assert_eq!(map.keys().to_data(), Int32Array::from(vec![1, 2]).to_data());
+        assert_eq!(
+            map.values().to_data(),
+            StringArray::from(vec![None, Some("b")]).to_data(),
+        );
+    }
+
+    #[test]
+    fn null_row_with_unequal_child_lengths_keeps_values_aligned() {
+        let (keys, values) = int32_utf8_inputs(
+            vec![1, 9, 9, 3, 4],
+            vec![Some("first"), Some("ignored"), Some("last"), None],
+        );
+        let keys_offsets = [0, 1, 3, 5];
+        let values_offsets = [0, 1, 2, 4];
+        let nulls = NullBuffer::from(vec![true, false, true]);
+
+        for last_value_wins in [false, true] {
+            for (keys_nulls, values_nulls) in [(Some(&nulls), None), (None, Some(&nulls))]
+            {
+                let result = map_from_keys_values_offsets_nulls(
+                    &keys,
+                    &values,
+                    &keys_offsets,
+                    &values_offsets,
+                    keys_nulls,
+                    values_nulls,
+                    last_value_wins,
+                )
+                .unwrap();
+
+                let map = result.as_map();
+                assert_eq!(map.value_offsets(), &[0, 1, 1, 3]);
+                assert_eq!(map.nulls(), Some(&nulls));
+                assert_eq!(
+                    map.keys().to_data(),
+                    Int32Array::from(vec![1, 3, 4]).to_data(),
+                );
+                assert_eq!(
+                    map.values().to_data(),
+                    StringArray::from(vec![Some("first"), Some("last"), None]).to_data(),
+                );
+            }
         }
     }
 
