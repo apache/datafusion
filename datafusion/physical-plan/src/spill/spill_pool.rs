@@ -476,7 +476,7 @@ pub fn spsc_channel(
 }
 
 /// Alias for [`mpsc_channel`].
-#[deprecated(note = "Use mpsc_channel instead")]
+#[deprecated(since = "55.0.0", note = "Use mpsc_channel instead")]
 pub fn channel(
     max_file_size_bytes: usize,
     spill_manager: Arc<SpillManager>,

@@ -1,4 +1,3 @@
-use crate::array_gen::StringArrayGenerator;
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,6 +15,7 @@ use crate::array_gen::StringArrayGenerator;
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array_gen::StringArrayGenerator;
 use crate::stagger_batch;
 use arrow::record_batch::RecordBatch;
 use rand::rngs::StdRng;
