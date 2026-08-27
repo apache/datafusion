@@ -290,9 +290,8 @@ pub(super) struct ParquetMorselizer {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
-    /// Maximum `IN (...)` list size that the pruning predicate will rewrite
-    /// into per-value statistics checks. Lists longer than this skip
-    /// container-level pruning. Sourced from
+    /// Maximum `IN (...)` list size eligible for statistics pruning. Longer
+    /// lists skip container-level pruning. Sourced from
     /// `datafusion.execution.parquet.max_in_list_size`.
     pub max_in_list_size: usize,
     /// Whether to read row groups in reverse order
@@ -1085,7 +1084,11 @@ impl MetadataLoadedParquetOpen {
         // Only build page pruning predicate if page index is enabled
         let page_pruning_predicate = if prepared.enable_page_index {
             prepared.predicate.as_ref().and_then(|predicate| {
-                let p = build_page_pruning_predicate(predicate, &physical_file_schema);
+                let p = build_page_pruning_predicate(
+                    predicate,
+                    &physical_file_schema,
+                    prepared.max_in_list_size,
+                );
                 (p.filter_number() > 0).then_some(p)
             })
         } else {
@@ -1814,10 +1817,12 @@ fn create_initial_plan(
 pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
+    max_in_list_size: usize,
 ) -> Arc<PagePruningAccessPlanFilter> {
-    Arc::new(PagePruningAccessPlanFilter::new(
+    Arc::new(PagePruningAccessPlanFilter::new_with_max_in_list_size(
         predicate,
-        Arc::clone(file_schema),
+        file_schema,
+        max_in_list_size,
     ))
 }
 
@@ -2091,7 +2096,7 @@ mod test {
         );
         let page_pruning_predicate = predicate.map(|expr| {
             let predicate = logical2physical(&expr, &arrow_schema);
-            build_page_pruning_predicate(&predicate, &arrow_schema)
+            build_page_pruning_predicate(&predicate, &arrow_schema, MAX_IN_LIST_SIZE)
         });
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());

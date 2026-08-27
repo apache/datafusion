@@ -1368,13 +1368,15 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
-        /// Maximum number of values in an `IN (...)` list for which pruning will
-        /// occur. Longer lists will not be used to prune files, row groups, or
-        /// data pages.
+        /// Maximum number of input values in an `IN (...)` list eligible for
+        /// min/max pruning. Lists above this cap, or a cap of 0, skip this
+        /// rewrite; other predicates and Bloom-filter pruning remain available.
         ///
-        /// Higher values help in cases such as filtering on a list of
-        /// ~25-100 identifiers, but also make the predicate more expensive to
-        /// evaluate. Set to 0 to disable `IN (...)` list pruning entirely.
+        /// Within the cap, nonempty lists of at most 20 values use the existing
+        /// per-value rewrite. Larger positive, non-null literal string lists
+        /// on a string column use a compact sorted domain. Other lists retain
+        /// the existing per-value rewrite, so raising the cap can make those
+        /// predicates expensive to build and evaluate.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
