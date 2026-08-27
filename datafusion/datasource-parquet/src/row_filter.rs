@@ -87,6 +87,7 @@ use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
 use crate::projection_read_plan::{
     ParquetReadPlan, PushdownChecker, PushdownColumns, assemble_read_plan,
+    build_read_plan_with_cast_clipping,
 };
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
@@ -281,12 +282,26 @@ pub(crate) fn build_parquet_read_plan(
         return Ok(None);
     };
 
-    let (read_plan, leaf_indices) = assemble_read_plan(
-        &required_columns.required_columns,
-        &required_columns.struct_field_accesses,
-        file_schema,
-        schema_descr,
-    );
+    // A retained Struct cast names the fields its conversion touches, so the
+    // read is clipped to those leaves rather than decoding the whole root.
+    // A cast whose target covers every leaf, or that cannot be clipped safely,
+    // falls back to a full read of that root inside the helper.
+    let (read_plan, leaf_indices) = if required_columns.cast_accesses.is_empty() {
+        assemble_read_plan(
+            &required_columns.required_columns,
+            &required_columns.struct_field_accesses,
+            file_schema,
+            schema_descr,
+        )
+    } else {
+        build_read_plan_with_cast_clipping(
+            file_schema,
+            schema_descr,
+            &required_columns.required_columns,
+            &required_columns.struct_field_accesses,
+            &required_columns.cast_accesses,
+        )
+    };
 
     let required_bytes = size_of_columns(&leaf_indices, metadata)?;
 
@@ -1237,11 +1252,12 @@ mod test {
     fn get_field_filter_candidate_has_correct_leaf_indices() {
         use arrow::array::{Int32Array, StringArray, StructArray};
 
-        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8})
-        // Parquet leaves: id=0, s.value=1, s.label=2
+        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8, unused: Utf8})
+        // Parquet leaves: id=0, s.value=1, s.label=2, s.unused=3
         let struct_fields: Fields = vec![
             Arc::new(Field::new("value", DataType::Int32, false)),
             Arc::new(Field::new("label", DataType::Utf8, false)),
+            Arc::new(Field::new("unused", DataType::Utf8, false)),
         ]
         .into();
         let schema = Arc::new(Schema::new(vec![
@@ -1258,6 +1274,9 @@ mod test {
                     vec![
                         Arc::new(Int32Array::from(vec![10, 20, 30])) as _,
                         Arc::new(StringArray::from(vec!["a", "b", "c"])) as _,
+                        Arc::new(StringArray::from(vec![
+                            "unused-a", "unused-b", "unused-c",
+                        ])) as _,
                     ],
                     None,
                 )),
@@ -1293,7 +1312,7 @@ mod test {
                 .expect("get_field filter on struct should be pushable");
 
         // The filter accesses only s.value, so only Parquet leaf 1 is needed.
-        // Leaf 2 (s.label) is not read, reducing unnecessary I/O.
+        // Neither sibling is read, reducing unnecessary I/O.
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]);
         assert_eq!(
@@ -1301,8 +1320,12 @@ mod test {
             "projection_mask should select only the accessed struct field leaf"
         );
 
-        // Schema adaptation can leave a Struct cast intact. Its runtime filter
-        // must read every sibling, while planning still rejects explicit casts.
+        // Schema adaptation retains Struct ancestors for some decimal conversions
+        // so an all-null parent can skip child conversion. Runtime filters must
+        // preserve every conversion named by the retained cast target.
+        // This target includes `label`, so its conversion must still run even
+        // though get_field selects only `value`. Planning keeps a residual filter
+        // for explicit Struct casts.
         let cast_type = DataType::Struct(
             vec![
                 Field::new("value", DataType::Int32, false),
@@ -1325,12 +1348,29 @@ mod test {
                 .build(&metadata)
                 .expect("building cast candidate")
                 .expect("an adapted struct cast must remain evaluable");
+        // Clip the unused sibling, but preserve the failing `label` conversion.
         let expected_mask =
-            ProjectionMask::roots(metadata.file_metadata().schema_descr(), [1]);
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1, 2]);
         assert_eq!(candidate.read_plan.projection_mask, expected_mask);
+        let DataType::Struct(physical_fields) = file_schema.field(1).data_type() else {
+            unreachable!("s is a struct")
+        };
+        let clipped_field =
+            file_schema
+                .field(1)
+                .clone()
+                .with_data_type(DataType::Struct(
+                    physical_fields.iter().take(2).cloned().collect(),
+                ));
         assert_eq!(
             candidate.read_plan.projected_schema.as_ref(),
-            &file_schema.project(&[1]).unwrap()
+            &Schema::new(vec![clipped_field])
+        );
+        assert_eq!(
+            candidate.required_bytes,
+            (metadata.row_group(0).column(1).compressed_size()
+                + metadata.row_group(0).column(2).compressed_size()) as usize,
+            "filter cost must count only the leaves the cast target reads"
         );
 
         // A simultaneous direct access must not prune siblings that the cast
@@ -1362,6 +1402,54 @@ mod test {
             .unwrap();
         let error = row_filter.evaluate(batch).unwrap_err().to_string();
         datafusion_common::assert_contains!(error, "While casting struct field 'label'");
+
+        // A retained cast whose target names only the selected field — the
+        // shape `retain_field_path` produces for an evolved decimal — clips the
+        // read to that field's leaf instead of decoding the whole root.
+        let narrow_cast_type =
+            DataType::Struct(vec![Field::new("value", DataType::Int32, false)].into());
+        let narrow_field = get_field().call(vec![
+            datafusion_expr::cast(col("s"), narrow_cast_type.clone()),
+            lit("value"),
+        ]);
+        let narrow_predicate = logical2physical(&narrow_field.gt(lit(5)), &file_schema);
+        let candidate =
+            FilterCandidateBuilder::new(narrow_predicate, Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building narrow cast candidate")
+                .expect("a clipped struct cast must remain evaluable");
+        assert_eq!(
+            candidate.read_plan.projection_mask,
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]),
+            "the read must be clipped to the leaf the cast target names"
+        );
+        assert_eq!(candidate.read_plan.projected_schema.fields().len(), 1);
+        assert_eq!(
+            candidate.read_plan.projected_schema.field(0).data_type(),
+            &narrow_cast_type,
+            "sibling leaves must be pruned from the filter schema"
+        );
+
+        // The clipped schema must still evaluate: every row has value > 5.
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .unwrap();
+        let batch = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .unwrap()
+            .with_projection(row_filter.projection().clone())
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row_filter.evaluate(batch).unwrap(),
+            BooleanArray::from(vec![true, true, true])
+        );
     }
 
     /// Deeply nested get_field: get_field(struct_col, 'outer', 'inner') where the

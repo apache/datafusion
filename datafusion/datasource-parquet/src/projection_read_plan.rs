@@ -178,15 +178,16 @@ pub(crate) struct PushdownChecker<'schema> {
     /// Struct field accesses via `get_field`.
     struct_field_accesses: Vec<StructFieldAccess>,
     /// Whole-column casts to a narrower nested type
-    /// (`CAST(col AS narrower_struct)`). Only collected when
-    /// [`Self::with_cast_collection`] enables it (projection analysis);
-    /// filter pushdown leaves this off.
+    /// (`CAST(col AS narrower_struct)`), collected either when
+    /// [`Self::with_cast_collection`] enables it (projection analysis) or when
+    /// [`Self::allow_struct_casts`] accepts a retained cast under a `get_field`
+    /// (filter pushdown).
     cast_accesses: Vec<CastColumnAccess>,
     /// Whether to collect [`Self::cast_accesses`].
     collect_cast_accesses: bool,
     /// Allow `get_field(CAST(struct_column AS Struct(...)), 'field', ...)`
-    /// after schema adaptation, preserving the cast and reading the full source
-    /// Struct. Both source and target must be Struct types.
+    /// after schema adaptation, preserving the cast and reading the leaves its
+    /// target names. Both source and target must be Struct types.
     /// Planning keeps this disabled so explicit casts retain a residual filter.
     allow_struct_casts: bool,
     /// Whether nested list columns are supported by the predicate semantics.
@@ -258,8 +259,17 @@ impl<'schema> PushdownChecker<'schema> {
         None
     }
 
-    /// Preserve a Struct cast retained by schema adaptation and read its full
-    /// root. Pruning siblings or moving the cast could change errors or nulls.
+    /// Preserve a Struct cast retained by schema adaptation and record the
+    /// leaves its target consumes.
+    ///
+    /// The cast is kept intact — moving it could change errors or nulls — but
+    /// the target itself names every field the conversion touches, so the read
+    /// can be clipped to those leaves. `cast_struct_column` resolves source
+    /// children by name and ignores the rest, so a leaf the target does not
+    /// name cannot affect the result. Note this clips by the *cast target*, not
+    /// by the `get_field` key: an explicit query cast names every field the
+    /// user asked to convert, so its siblings stay in the read and their
+    /// conversions still run.
     fn check_cast_struct_field_access(
         &mut self,
         func: &ScalarFunctionExpr,
@@ -304,7 +314,10 @@ impl<'schema> PushdownChecker<'schema> {
                 .data_type();
         }
 
-        self.required_columns.push(index);
+        self.cast_accesses.push(CastColumnAccess {
+            root_index: index,
+            target_type: cast.cast_type().clone(),
+        });
         Some(TreeNodeRecursion::Jump)
     }
 
@@ -518,8 +531,8 @@ pub(crate) struct PushdownColumns {
     /// Struct field accesses via `get_field`. Each entry records the root struct
     /// column index and the field path being accessed.
     pub(crate) struct_field_accesses: Vec<StructFieldAccess>,
-    /// Whole-column casts to a narrower nested type. Empty unless cast
-    /// collection was enabled on the checker.
+    /// Whole-column casts to a narrower nested type, collected for projections
+    /// or retained Struct casts accepted by the runtime filter checker.
     pub(crate) cast_accesses: Vec<CastColumnAccess>,
 }
 
@@ -607,13 +620,14 @@ pub(crate) fn build_projection_read_plan(
     all_cast_accesses.retain(|c| all_root_indices.binary_search(&c.root_index).is_err());
 
     if !all_cast_accesses.is_empty() {
-        return build_read_plan_with_cast_clipping(
+        let (read_plan, _leaf_indices) = build_read_plan_with_cast_clipping(
             file_schema,
             schema_descr,
             &all_root_indices,
             &all_struct_accesses,
             &all_cast_accesses,
         );
+        return read_plan;
     }
 
     // when no struct field accesses were found, fall back to root-level projection
@@ -645,8 +659,7 @@ enum RootRead {
 ///
 /// Per root, in ascending root-index order:
 /// - roots referenced as whole columns keep every leaf and their full
-///   physical field (whole-column reads take precedence; cast accesses on
-///   such roots were already dropped by the caller);
+///   physical field (whole-column reads take precedence over cast accesses);
 /// - roots consumed through one or more casts keep the union of the leaves
 ///   their targets name (see `crate::nested_schema_pruning`);
 /// - a root consumed through both casts and `get_field` accesses keeps the
@@ -657,13 +670,16 @@ enum RootRead {
 ///   `nested_schema_pruning::clip_for_cast`), an access that resolves to no
 ///   leaf at all, or a merged leaf set whose emitted Arrow type can't be
 ///   derived safely, falls back to a full read of that root.
-fn build_read_plan_with_cast_clipping(
+///
+/// Also returns the resolved Parquet leaf indices, sorted and deduplicated, so
+/// callers can size the columns the decoder will read.
+pub(crate) fn build_read_plan_with_cast_clipping(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
     whole_root_indices: &[usize],
     struct_accesses: &[StructFieldAccess],
     cast_accesses: &[CastColumnAccess],
-) -> ParquetReadPlan {
+) -> (ParquetReadPlan, Vec<usize>) {
     // Every referenced root's Parquet leaves, grouped in one pass over the
     // schema descriptor rather than one `leaf_indices_for_roots` scan per
     // root (this function may look up several roots).
@@ -767,17 +783,24 @@ fn build_read_plan_with_cast_clipping(
         fields.push(Arc::new(field.clone()));
     }
     // `ProjectionMask::leaves` only flips flags in a `vec![false; num_columns]`,
-    // so `leaf_indices` needs no sorting or deduplication here.
-    ParquetReadPlan {
-        projection_mask: ProjectionMask::leaves(
-            schema_descr,
-            leaf_indices.iter().copied(),
-        ),
-        projected_schema: Arc::new(Schema::new_with_metadata(
-            fields,
-            file_schema.metadata().clone(),
-        )),
-    }
+    // so the mask itself needs neither ordering nor deduplication. Callers that
+    // size the read do care, so normalize before handing the indices back:
+    // `size_of_columns` sums per index and would double-count a repeat.
+    leaf_indices.sort_unstable();
+    leaf_indices.dedup();
+    (
+        ParquetReadPlan {
+            projection_mask: ProjectionMask::leaves(
+                schema_descr,
+                leaf_indices.iter().copied(),
+            ),
+            projected_schema: Arc::new(Schema::new_with_metadata(
+                fields,
+                file_schema.metadata().clone(),
+            )),
+        },
+        leaf_indices,
+    )
 }
 
 /// Groups every Parquet leaf index by its root (Arrow) column index, in one
@@ -1757,7 +1780,7 @@ mod test {
                 vec![Arc::new(Field::new("p", DataType::Int32, true))].into(),
             ),
         };
-        let read_plan = build_read_plan_with_cast_clipping(
+        let (read_plan, _leaf_indices) = build_read_plan_with_cast_clipping(
             &file_schema,
             schema_descr,
             &[],
@@ -1927,7 +1950,7 @@ mod test {
             Schema::new(vec![divergent("a", "p", "q"), divergent("b", "m", "n")]);
 
         // `a` is reached by a narrowing cast, `b` only by `get_field`.
-        let read_plan = build_read_plan_with_cast_clipping(
+        let (read_plan, _leaf_indices) = build_read_plan_with_cast_clipping(
             &file_schema,
             schema_descr,
             &[],

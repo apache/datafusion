@@ -530,7 +530,14 @@ impl DefaultPhysicalExprAdapterRewriter {
         // narrowable by a parent get_field.
         // Container casts involving Struct values must keep their existing
         // dispatch: Arrow can unwrap a container into a Struct where cast_column
-        // cannot.
+        // cannot. That leaves one shape uncovered: unwrapping hands the Struct
+        // to Arrow's own cast, which has no all-null shortcut, so a decimal
+        // below it can still fail on an all-null input (for example
+        // `Dictionary(Int8, Struct<b: Utf8>)` to `Struct<b: Decimal128(10, -1)>`).
+        // The Parquet reader does not produce dictionary-encoded Struct columns,
+        // so this is not reachable through a Parquet scan; closing it would mean
+        // telling "Arrow must unwrap this" apart from "Arrow will convert a
+        // decimal while unwrapping" rather than dropping the carve-out.
         let source_type = physical_struct_field.data_type();
         let target_type = logical_struct_field.data_type();
         let is_struct = |data_type: &DataType| matches!(data_type, DataType::Struct(_));
