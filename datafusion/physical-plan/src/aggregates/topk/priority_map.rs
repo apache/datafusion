@@ -58,13 +58,14 @@ impl PriorityMap {
     }
 
     pub fn insert(&mut self, row_idx: usize) -> Result<()> {
-        assert!(self.map.len() <= self.capacity, "Overflow");
         debug_assert_eq!(self.null_count, 0);
 
         // if we're full, and the new val is worse than all our values, just bail
         if self.heap.is_worse(row_idx) {
             return Ok(());
         }
+        assert!(self.map.len() <= self.capacity, "Overflow");
+
         self.insert_eligible(row_idx)
     }
 
@@ -72,10 +73,6 @@ impl PriorityMap {
     /// separate from [`Self::insert`] so the common no-NULL path does not pay
     /// for NULL bookkeeping on every row.
     pub fn insert_with_null_groups(&mut self, row_idx: usize) -> Result<()> {
-        // valued groups are capped at `capacity`; up to `capacity` additional
-        // all-NULL groups may be tracked alongside them
-        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
-
         if self.heap.is_worse(row_idx) {
             // A group that was registered as all-NULL now has a value that
             // loses to the current top-k: it can no longer reach the top-k,
@@ -85,7 +82,17 @@ impl PriorityMap {
             }
             return Ok(());
         }
+        self.null_capacity_assert();
+
         self.insert_eligible(row_idx)
+    }
+
+    #[inline]
+    fn null_capacity_assert(&self) {
+        // TODO: do debug_assert instead?
+        // valued groups are capped at `capacity`; up to `capacity` additional
+        // all-NULL groups may be tracked alongside them
+        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
     }
 
     fn insert_eligible(&mut self, row_idx: usize) -> Result<()> {
@@ -123,8 +130,8 @@ impl PriorityMap {
     /// must still appear in the aggregation output; such groups all tie on the
     /// sort key, so tracking up to `capacity` of them preserves top-k semantics.
     pub fn insert_null(&mut self, row_idx: usize) {
-        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
         if self.map.insert_null(row_idx) {
+            self.null_capacity_assert();
             self.null_count += 1;
         }
     }
