@@ -259,6 +259,11 @@ impl FileScanConfig {
             .batch_size
             .map(|size| usize_from_wire(size, "FileScanConfig", "batch_size"))
             .transpose()?;
+        if batch_size == Some(0) {
+            return datafusion_common::plan_err!(
+                "FileScanConfig: batch_size must be greater than 0"
+            );
+        }
         let config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
             .with_file_groups(file_groups)
             .with_constraints(constraints)
