@@ -1178,6 +1178,8 @@ pub struct CastNode {
     >,
     #[prost(bool, optional, tag = "4")]
     pub nullable: ::core::option::Option<bool>,
+    #[prost(message, optional, tag = "5")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TryCastNode {
@@ -1192,6 +1194,8 @@ pub struct TryCastNode {
     >,
     #[prost(bool, optional, tag = "4")]
     pub nullable: ::core::option::Option<bool>,
+    #[prost(message, optional, tag = "5")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExprNode {
@@ -1842,6 +1846,8 @@ pub struct PhysicalTryCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalCastNode {
@@ -1849,6 +1855,8 @@ pub struct PhysicalCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {

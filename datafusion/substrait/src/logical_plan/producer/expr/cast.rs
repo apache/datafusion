@@ -18,7 +18,7 @@
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type_from_field};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue};
-use datafusion::logical_expr::{Cast, Expr, TryCast};
+use datafusion::logical_expr::{Cast, Expr, ExprSchemable, TryCast};
 use substrait::proto::Expression;
 use substrait::proto::expression::cast::FailureBehavior;
 use substrait::proto::expression::literal::LiteralType;
@@ -29,7 +29,8 @@ pub fn from_cast(
     cast: &Cast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let Cast { expr, field } = cast;
+    let Cast { expr, .. } = cast;
+    let (_, output_field) = Expr::Cast(cast.clone()).to_field(schema)?;
     // since substrait Null must be typed, so if we see a cast(null, dt), we make it a typed null
     if let Expr::Literal(lit, _) = expr.as_ref() {
         // only the untyped(a null scalar value) null literal need this special handling
@@ -40,7 +41,8 @@ pub fn from_cast(
                 nullable: true,
                 type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                 literal_type: Some(LiteralType::Null(to_substrait_type_from_field(
-                    producer, field,
+                    producer,
+                    &output_field,
                 )?)),
             };
             return Ok(Expression {
@@ -51,7 +53,7 @@ pub fn from_cast(
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type_from_field(producer, field)?),
+                r#type: Some(to_substrait_type_from_field(producer, &output_field)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ThrowException.into(),
             },
@@ -64,11 +66,12 @@ pub fn from_try_cast(
     cast: &TryCast,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    let TryCast { expr, field } = cast;
+    let TryCast { expr, .. } = cast;
+    let (_, output_field) = Expr::TryCast(cast.clone()).to_field(schema)?;
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
-                r#type: Some(to_substrait_type_from_field(producer, field)?),
+                r#type: Some(to_substrait_type_from_field(producer, &output_field)?),
                 input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ReturnNull.into(),
             },
@@ -85,7 +88,6 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;
     use datafusion::execution::SessionStateBuilder;
-    use datafusion::logical_expr::ExprSchemable;
     use substrait::proto::expression_reference::ExprType;
 
     #[tokio::test]

@@ -28,7 +28,7 @@ use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
+    CastTarget, ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
     HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
     LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     ValueOrLambda, Volatility, col,
@@ -5344,6 +5344,43 @@ fn test_no_substring_registered_alt_syntax() {
 }
 
 #[test]
+fn test_builtin_sql_casts_use_type_only_targets() -> Result<()> {
+    let plan = logical_plan("SELECT CAST(1 AS SMALLINT)")?;
+    let LogicalPlan::Projection(projection) = plan else {
+        panic!("expected projection")
+    };
+    let [Expr::Cast(cast)] = projection.expr.as_slice() else {
+        panic!("expected CAST expression")
+    };
+    assert!(matches!(&cast.field, CastTarget::DataType(DataType::Int16)));
+
+    let plan = logical_plan("SELECT TRY_CAST(1 AS SMALLINT)")?;
+    let LogicalPlan::Projection(projection) = plan else {
+        panic!("expected projection")
+    };
+    let [Expr::TryCast(try_cast)] = projection.expr.as_slice() else {
+        panic!("expected TRY_CAST expression")
+    };
+    assert!(matches!(
+        &try_cast.field,
+        CastTarget::DataType(DataType::Int16)
+    ));
+
+    let plan = logical_plan("SELECT TIMESTAMP '2001-01-01 18:00:00'")?;
+    let LogicalPlan::Projection(projection) = plan else {
+        panic!("expected projection")
+    };
+    let [Expr::Cast(cast)] = projection.expr.as_slice() else {
+        panic!("expected typed literal CAST expression")
+    };
+    assert!(matches!(
+        &cast.field,
+        CastTarget::DataType(DataType::Timestamp(Nanosecond, None))
+    ));
+    Ok(())
+}
+
+#[test]
 fn test_custom_type_plan() -> Result<()> {
     let sql = "SELECT DATETIME '2001-01-01 18:00:00'";
 
@@ -5376,6 +5413,18 @@ fn test_custom_type_plan() -> Result<()> {
     }
 
     let plan = plan_sql(sql);
+    let LogicalPlan::Projection(projection) = &plan else {
+        panic!("expected projection")
+    };
+    let Expr::Cast(cast) = &projection.expr[0] else {
+        panic!("expected CAST expression")
+    };
+    assert!(matches!(
+        &cast.field,
+        CastTarget::Field(field)
+            if field.data_type() == &DataType::Timestamp(Nanosecond, None)
+                && field.metadata().is_empty()
+    ));
 
     assert_snapshot!(
         plan,
@@ -5408,12 +5457,40 @@ fn test_custom_type_plan() -> Result<()> {
     );
 
     let plan = plan_sql("SELECT UUID '00010203-0405-0607-0809-000102030506'");
+    let LogicalPlan::Projection(projection) = &plan else {
+        panic!("expected projection")
+    };
+    let Expr::Cast(cast) = &projection.expr[0] else {
+        panic!("expected CAST expression")
+    };
+    assert!(
+        matches!(&cast.field, CastTarget::Field(field) if !field.metadata().is_empty())
+    );
+
     assert_snapshot!(
         plan,
         @r#"
     Projection: CAST(Utf8("00010203-0405-0607-0809-000102030506") AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>)
       EmptyRelation: rows=1
     "#
+    );
+
+    let plan = plan_sql("SELECT CAST(NULL AS ARRAY<UUID>)");
+    let LogicalPlan::Projection(projection) = &plan else {
+        panic!("expected projection")
+    };
+    let Expr::Cast(cast) = &projection.expr[0] else {
+        panic!("expected CAST expression")
+    };
+    let CastTarget::DataType(DataType::List(field)) = &cast.field else {
+        panic!("expected type-only list target")
+    };
+    assert_eq!(
+        field
+            .metadata()
+            .get("ARROW:extension:name")
+            .map(String::as_str),
+        Some("arrow.uuid")
     );
     Ok(())
 }

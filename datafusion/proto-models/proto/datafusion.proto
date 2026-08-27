@@ -738,6 +738,7 @@ message CastNode {
   datafusion_common.ArrowType arrow_type = 2;
   map<string, string> metadata = 3;
   optional bool nullable = 4;
+  datafusion_common.Field target_field = 5;
 }
 
 message TryCastNode {
@@ -745,6 +746,7 @@ message TryCastNode {
   datafusion_common.ArrowType arrow_type = 2;
   map<string, string> metadata = 3;
   optional bool nullable = 4;
+  datafusion_common.Field target_field = 5;
 }
 
 message SortExprNode {
@@ -1186,11 +1188,13 @@ message PhysicalCaseNode {
 message PhysicalTryCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  datafusion_common.Field target_field = 3;
 }
 
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  datafusion_common.Field target_field = 3;
 }
 
 message PhysicalNegativeNode {

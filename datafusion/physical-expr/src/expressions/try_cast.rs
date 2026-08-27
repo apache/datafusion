@@ -20,6 +20,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::cast::PhysicalCastTarget;
 use arrow::compute;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema};
@@ -34,28 +35,42 @@ use datafusion_expr::ColumnarValue;
 pub struct TryCastExpr {
     /// The expression to cast
     expr: Arc<dyn PhysicalExpr>,
-    /// The data type to cast to
-    cast_type: DataType,
+    target: PhysicalCastTarget,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
 impl PartialEq for TryCastExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.expr.eq(&other.expr) && self.cast_type == other.cast_type
+        self.expr.eq(&other.expr) && self.target == other.target
     }
 }
 
 impl Hash for TryCastExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
-        self.cast_type.hash(state);
+        self.target.hash(state);
     }
 }
 
 impl TryCastExpr {
-    /// Create a new CastExpr
+    /// Create a new `TryCastExpr` using only a `DataType`.
     pub fn new(expr: Arc<dyn PhysicalExpr>, cast_type: DataType) -> Self {
-        Self { expr, cast_type }
+        Self {
+            expr,
+            target: PhysicalCastTarget::type_only(cast_type),
+        }
+    }
+
+    /// Create a new `TryCastExpr` with an explicit target field, preserving its
+    /// name and metadata.
+    pub fn new_with_target_field(
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: FieldRef,
+    ) -> Self {
+        Self {
+            expr,
+            target: PhysicalCastTarget::explicit(target_field),
+        }
     }
 
     /// The expression to cast
@@ -65,19 +80,27 @@ impl TryCastExpr {
 
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
-        &self.cast_type
+        self.target.data_type()
+    }
+
+    /// Return this cast with a new input expression, preserving its target.
+    pub fn with_new_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            expr,
+            target: self.target.clone(),
+        }
     }
 }
 
 impl fmt::Display for TryCastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TRY_CAST({} AS {})", self.expr, self.cast_type)
+        write!(f, "TRY_CAST({} AS {})", self.expr, self.cast_type())
     }
 }
 
 impl PhysicalExpr for TryCastExpr {
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.cast_type.clone())
+        Ok(self.cast_type().clone())
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
@@ -90,14 +113,20 @@ impl PhysicalExpr for TryCastExpr {
             safe: true,
             format_options: DEFAULT_FORMAT_OPTIONS,
         };
-        value.cast_to(&self.cast_type, Some(&options))
+        value.cast_to(self.cast_type(), Some(&options))
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        self.expr
-            .return_field(input_schema)
-            .map(|f| f.as_ref().clone().with_data_type(self.cast_type.clone()))
-            .map(Arc::new)
+        let field = if let Some(target) = self.target.explicit_field() {
+            target.as_ref().clone()
+        } else {
+            self.expr
+                .return_field(input_schema)?
+                .as_ref()
+                .clone()
+                .with_data_type(self.cast_type().clone())
+        };
+        Ok(Arc::new(field.with_nullable(true)))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -108,16 +137,13 @@ impl PhysicalExpr for TryCastExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(TryCastExpr::new(
-            Arc::clone(&children[0]),
-            self.cast_type.clone(),
-        )))
+        Ok(Arc::new(self.with_new_expr(Arc::clone(&children[0]))))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TRY_CAST(")?;
         self.expr.fmt_sql(f)?;
-        write!(f, " AS {:?})", self.cast_type)
+        write!(f, " AS {:?})", self.cast_type())
     }
 
     #[cfg(feature = "proto")]
@@ -133,6 +159,11 @@ impl PhysicalExpr for TryCastExpr {
                 protobuf::PhysicalTryCastNode {
                     expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
                     arrow_type: Some(self.cast_type().try_into()?),
+                    target_field: self
+                        .target
+                        .explicit_field()
+                        .map(|field| field.as_ref().try_into())
+                        .transpose()?,
                 },
             ))),
         }))
@@ -165,9 +196,22 @@ impl TryCastExpr {
             "TryCastExpr",
             "arrow_type",
         )?;
-        let cast_type: DataType = arrow_type.try_into()?;
-
-        Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
+        let data_type: DataType = arrow_type.try_into()?;
+        if let Some(target_field) = try_cast.target_field.as_ref() {
+            let field: arrow::datatypes::Field = target_field.try_into()?;
+            if field.data_type() != &data_type {
+                return datafusion_common::internal_err!(
+                    "TryCastExpr target_field type {} does not match arrow_type {data_type}",
+                    field.data_type()
+                );
+            }
+            Ok(Arc::new(TryCastExpr::new_with_target_field(
+                expr,
+                Arc::new(field),
+            )))
+        } else {
+            Ok(Arc::new(TryCastExpr::new(expr, data_type)))
+        }
     }
 }
 
@@ -185,6 +229,25 @@ pub fn try_cast(
         Ok(Arc::clone(&expr))
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
+    } else {
+        not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}")
+    }
+}
+
+/// Return a physical expression that tries to cast `expr` to an explicit target
+/// field, preserving its name and metadata even when the data type already matches.
+pub fn try_cast_with_target_field(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    target_field: FieldRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let expr_type = expr.data_type(input_schema)?;
+    let cast_type = target_field.data_type();
+    if can_cast_types(&expr_type, cast_type) {
+        Ok(Arc::new(TryCastExpr::new_with_target_field(
+            expr,
+            target_field,
+        )))
     } else {
         not_impl_err!("Unsupported TRY_CAST from {expr_type} to {cast_type}")
     }
@@ -676,7 +739,11 @@ mod proto_tests {
         PhysicalExprNode {
             expr_id: None,
             expr_type: Some(physical_expr_node::ExprType::TryCast(Box::new(
-                PhysicalTryCastNode { expr, arrow_type },
+                PhysicalTryCastNode {
+                    expr,
+                    arrow_type,
+                    target_field: None,
+                },
             ))),
         }
     }
@@ -705,6 +772,50 @@ mod proto_tests {
             .expect("try cast type should be encoded");
         let data_type: DataType = arrow_type.try_into().unwrap();
         assert_eq!(data_type, DataType::Int32);
+    }
+
+    #[test]
+    fn proto_roundtrip_preserves_explicit_try_cast_target() {
+        let target = Arc::new(Field::new("", DataType::Int32, true));
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let try_cast = TryCastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Arc::clone(&target),
+        );
+        let encoded = try_cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&StubEncoder::ok()))
+            .unwrap()
+            .unwrap();
+        let Some(physical_expr_node::ExprType::TryCast(encoded)) = encoded.expr_type
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            encoded.target_field,
+            Some(target.as_ref().try_into().unwrap())
+        );
+
+        let mut node =
+            try_cast_node(Some(Box::new(column_node("a"))), Some(int32_arrow_type()));
+        let Some(physical_expr_node::ExprType::TryCast(proto_try_cast)) =
+            node.expr_type.as_mut()
+        else {
+            unreachable!()
+        };
+        proto_try_cast.target_field = encoded.target_field;
+        let decoded = TryCastExpr::try_from_proto(
+            &node,
+            &PhysicalExprDecodeCtx::new(&Schema::empty(), &StubDecoder::ok()),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded
+                .downcast_ref::<TryCastExpr>()
+                .unwrap()
+                .target
+                .explicit_field(),
+            Some(&target)
+        );
     }
 
     #[test]

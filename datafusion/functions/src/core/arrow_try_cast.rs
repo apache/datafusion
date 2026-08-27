@@ -20,8 +20,8 @@
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
 use datafusion_common::{
-    Result, arrow_datafusion_err, datatype::DataTypeExt, exec_datafusion_err, exec_err,
-    internal_err, types::logical_string, utils::take_function_args,
+    Result, arrow_datafusion_err, exec_datafusion_err, exec_err, internal_err,
+    types::logical_string, utils::take_function_args,
 };
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -137,10 +137,10 @@ impl ScalarUDFImpl for ArrowTryCastFunc {
         let new_expr = if source_type == target_type {
             source_arg
         } else {
-            Expr::TryCast(datafusion_expr::TryCast {
-                expr: Box::new(source_arg),
-                field: target_type.into_nullable_field_ref(),
-            })
+            Expr::TryCast(datafusion_expr::TryCast::new(
+                Box::new(source_arg),
+                target_type,
+            ))
         };
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }

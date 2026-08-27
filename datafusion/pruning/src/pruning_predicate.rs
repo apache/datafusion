@@ -1217,11 +1217,7 @@ fn rewrite_expr_to_prunable(
             scalar_expr,
             schema,
         )?;
-        let left = Arc::new(phys_expr::CastExpr::new_with_target_field(
-            left,
-            Arc::clone(cast.target_field()),
-            None,
-        ));
+        let left = Arc::new(cast.with_new_expr(left));
         // PruningPredicate does not support pruning on nested fields yet.
         // End-to-end nested-field pruning also requires Parquet statistics
         // extraction to agree with PruningPredicate on a stats representation
@@ -1236,10 +1232,7 @@ fn rewrite_expr_to_prunable(
             scalar_expr,
             schema,
         )?;
-        let left = Arc::new(phys_expr::TryCastExpr::new(
-            left,
-            try_cast.cast_type().clone(),
-        ));
+        let left = Arc::new(try_cast.with_new_expr(left));
         Ok((left, op, right))
     } else if let Some(neg) = column_expr.downcast_ref::<phys_expr::NegativeExpr>() {
         // `-col > lit()`  --> `col < -lit()`

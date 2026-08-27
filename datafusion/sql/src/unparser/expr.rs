@@ -262,7 +262,12 @@ impl Unparser<'_> {
                     end_token: AttachedToken::empty(),
                 })
             }
-            Expr::Cast(Cast { expr, field }) => Ok(self.cast_to_sql(expr, field)?),
+            Expr::Cast(Cast { expr, field }) => {
+                let target = field.explicit_field().cloned().unwrap_or_else(|| {
+                    field.data_type().clone().into_nullable_field_ref()
+                });
+                Ok(self.cast_to_sql(expr, &target)?)
+            }
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(window_fun) => {
@@ -556,10 +561,13 @@ impl Unparser<'_> {
             }
             Expr::TryCast(TryCast { expr, field }) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
+                let target = field.explicit_field().cloned().unwrap_or_else(|| {
+                    field.data_type().clone().into_nullable_field_ref()
+                });
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
-                    data_type: self.arrow_dtype_to_ast_dtype(field)?,
+                    data_type: self.arrow_dtype_to_ast_dtype(&target)?,
                     array: false,
                     format: None,
                 })

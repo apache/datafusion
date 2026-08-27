@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan::consumer::{
-    SubstraitConsumer, field_from_substrait_type_without_names,
+    SubstraitConsumer, from_substrait_type_without_names,
 };
 use datafusion::common::{DFSchema, substrait_err};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
@@ -38,13 +38,54 @@ pub async fn from_cast(
                     )
                     .await?,
             );
-            let field = field_from_substrait_type_without_names(consumer, output_type)?;
+            let data_type = from_substrait_type_without_names(consumer, output_type)?;
             if cast.failure_behavior() == ReturnNull {
-                Ok(Expr::TryCast(TryCast::new_from_field(input_expr, field)))
+                Ok(Expr::TryCast(TryCast::new(input_expr, data_type)))
             } else {
-                Ok(Expr::Cast(Cast::new_from_field(input_expr, field)))
+                Ok(Expr::Cast(Cast::new(input_expr, data_type)))
             }
         }
         None => substrait_err!("Cast expression without output type is not allowed"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::logical_expr::CastTarget;
+    use substrait::proto::expression::cast::FailureBehavior;
+    use substrait::proto::expression::{Literal, RexType, literal::LiteralType};
+    use substrait::proto::r#type::{I64, Kind};
+    use substrait::proto::{Expression, Type};
+
+    #[tokio::test]
+    async fn standard_casts_are_type_only() -> datafusion::common::Result<()> {
+        for failure_behavior in [FailureBehavior::ThrowException, ReturnNull] {
+            let cast = substrait_expression::Cast {
+                r#type: Some(Type {
+                    kind: Some(Kind::I64(I64::default())),
+                }),
+                input: Some(Box::new(Expression {
+                    rex_type: Some(RexType::Literal(Literal {
+                        literal_type: Some(LiteralType::I32(1)),
+                        ..Default::default()
+                    })),
+                })),
+                failure_behavior: failure_behavior.into(),
+            };
+            let consumer = test_consumer();
+            let expr = from_cast(&consumer, &cast, &DFSchema::empty()).await?;
+
+            let target = match expr {
+                Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+                    field
+                }
+                expr => panic!("expected cast expression, got {expr}"),
+            };
+            assert!(matches!(target, CastTarget::DataType(DataType::Int64)));
+        }
+        Ok(())
     }
 }

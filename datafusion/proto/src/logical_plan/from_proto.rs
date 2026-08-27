@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
     Result, ScalarValue, SplitPoint, TableReference, exec_datafusion_err, internal_err,
     plan_datafusion_err,
@@ -34,7 +33,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
+    Between, BinaryExpr, Case, Cast, CastTarget, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     Like, Operator, TryCast, WindowFrame,
     expr::{self, InList, WindowFunction},
@@ -45,6 +44,35 @@ use datafusion_proto_common::{FromProtoError as Error, from_proto::FromOptionalF
 use crate::protobuf::{self, CubeNode, GroupingSetNode, PlaceholderNode, RollupNode};
 
 use super::{AsLogicalPlan, LogicalExtensionCodec};
+
+/// Reconstruct cast target intent, using the legacy metadata and nullability
+/// convention when `target_field` is absent.
+fn cast_target_from_proto_parts(
+    data_type: DataType,
+    nullable: Option<bool>,
+    metadata: &std::collections::HashMap<String, String>,
+    target_field: Option<&protobuf::Field>,
+) -> std::result::Result<CastTarget, Error> {
+    if let Some(target_field) = target_field {
+        let field: Field = target_field.try_into()?;
+        if field.data_type() != &data_type {
+            return Err(proto_error(format!(
+                "Cast target field type {} does not match arrow_type {data_type}",
+                field.data_type()
+            )));
+        }
+        return Ok(CastTarget::explicit(Arc::new(field)));
+    }
+
+    if nullable.is_some_and(|nullable| !nullable) || !metadata.is_empty() {
+        Ok(CastTarget::explicit(Arc::new(
+            Field::new("", data_type, nullable.unwrap_or(true))
+                .with_metadata(metadata.clone()),
+        )))
+    } else {
+        Ok(CastTarget::type_only(data_type))
+    }
+}
 
 /// Reconstruct a [`WriteOp`] from a [`protobuf::DmlNode`], reading the
 /// `merge_into` payload when the type tag is `MergeInto`.
@@ -426,11 +454,13 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
-            let field = data_type
-                .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
-            Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
+            let field = cast_target_from_proto_parts(
+                cast.arrow_type.as_ref().required("arrow_type")?,
+                cast.nullable,
+                &cast.metadata,
+                cast.target_field.as_ref(),
+            )?;
+            Ok(Expr::Cast(Cast { expr, field }))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(
@@ -439,14 +469,13 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
-            let field = data_type
-                .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
-            Ok(Expr::TryCast(TryCast::new_from_field(
-                expr,
-                Arc::new(field),
-            )))
+            let field = cast_target_from_proto_parts(
+                cast.arrow_type.as_ref().required("arrow_type")?,
+                cast.nullable,
+                &cast.metadata,
+                cast.target_field.as_ref(),
+            )?;
+            Ok(Expr::TryCast(TryCast { expr, field }))
         }
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), ctx, "expr", codec)?,

@@ -2446,6 +2446,9 @@ impl serde::Serialize for CastNode {
         if self.nullable.is_some() {
             len += 1;
         }
+        if self.target_field.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CastNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
@@ -2458,6 +2461,9 @@ impl serde::Serialize for CastNode {
         }
         if let Some(v) = self.nullable.as_ref() {
             struct_ser.serialize_field("nullable", v)?;
+        }
+        if let Some(v) = self.target_field.as_ref() {
+            struct_ser.serialize_field("targetField", v)?;
         }
         struct_ser.end()
     }
@@ -2474,6 +2480,8 @@ impl<'de> serde::Deserialize<'de> for CastNode {
             "arrowType",
             "metadata",
             "nullable",
+            "target_field",
+            "targetField",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2482,6 +2490,7 @@ impl<'de> serde::Deserialize<'de> for CastNode {
             ArrowType,
             Metadata,
             Nullable,
+            TargetField,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2507,6 +2516,7 @@ impl<'de> serde::Deserialize<'de> for CastNode {
                             "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
                             "metadata" => Ok(GeneratedField::Metadata),
                             "nullable" => Ok(GeneratedField::Nullable),
+                            "targetField" | "target_field" => Ok(GeneratedField::TargetField),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2530,6 +2540,7 @@ impl<'de> serde::Deserialize<'de> for CastNode {
                 let mut arrow_type__ = None;
                 let mut metadata__ = None;
                 let mut nullable__ = None;
+                let mut target_field__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -2558,6 +2569,12 @@ impl<'de> serde::Deserialize<'de> for CastNode {
                             }
                             nullable__ = map_.next_value()?;
                         }
+                        GeneratedField::TargetField => {
+                            if target_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetField"));
+                            }
+                            target_field__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(CastNode {
@@ -2565,6 +2582,7 @@ impl<'de> serde::Deserialize<'de> for CastNode {
                     arrow_type: arrow_type__,
                     metadata: metadata__.unwrap_or_default(),
                     nullable: nullable__,
+                    target_field: target_field__,
                 })
             }
         }
@@ -18048,12 +18066,18 @@ impl serde::Serialize for PhysicalCastNode {
         if self.arrow_type.is_some() {
             len += 1;
         }
+        if self.target_field.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalCastNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
         }
         if let Some(v) = self.arrow_type.as_ref() {
             struct_ser.serialize_field("arrowType", v)?;
+        }
+        if let Some(v) = self.target_field.as_ref() {
+            struct_ser.serialize_field("targetField", v)?;
         }
         struct_ser.end()
     }
@@ -18068,12 +18092,15 @@ impl<'de> serde::Deserialize<'de> for PhysicalCastNode {
             "expr",
             "arrow_type",
             "arrowType",
+            "target_field",
+            "targetField",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Expr,
             ArrowType,
+            TargetField,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18097,6 +18124,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalCastNode {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
                             "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
+                            "targetField" | "target_field" => Ok(GeneratedField::TargetField),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18118,6 +18146,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalCastNode {
             {
                 let mut expr__ = None;
                 let mut arrow_type__ = None;
+                let mut target_field__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -18132,11 +18161,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalCastNode {
                             }
                             arrow_type__ = map_.next_value()?;
                         }
+                        GeneratedField::TargetField => {
+                            if target_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetField"));
+                            }
+                            target_field__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(PhysicalCastNode {
                     expr: expr__,
                     arrow_type: arrow_type__,
+                    target_field: target_field__,
                 })
             }
         }
@@ -21998,12 +22034,18 @@ impl serde::Serialize for PhysicalTryCastNode {
         if self.arrow_type.is_some() {
             len += 1;
         }
+        if self.target_field.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalTryCastNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
         }
         if let Some(v) = self.arrow_type.as_ref() {
             struct_ser.serialize_field("arrowType", v)?;
+        }
+        if let Some(v) = self.target_field.as_ref() {
+            struct_ser.serialize_field("targetField", v)?;
         }
         struct_ser.end()
     }
@@ -22018,12 +22060,15 @@ impl<'de> serde::Deserialize<'de> for PhysicalTryCastNode {
             "expr",
             "arrow_type",
             "arrowType",
+            "target_field",
+            "targetField",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Expr,
             ArrowType,
+            TargetField,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22047,6 +22092,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalTryCastNode {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
                             "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
+                            "targetField" | "target_field" => Ok(GeneratedField::TargetField),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22068,6 +22114,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalTryCastNode {
             {
                 let mut expr__ = None;
                 let mut arrow_type__ = None;
+                let mut target_field__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -22082,11 +22129,18 @@ impl<'de> serde::Deserialize<'de> for PhysicalTryCastNode {
                             }
                             arrow_type__ = map_.next_value()?;
                         }
+                        GeneratedField::TargetField => {
+                            if target_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetField"));
+                            }
+                            target_field__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(PhysicalTryCastNode {
                     expr: expr__,
                     arrow_type: arrow_type__,
+                    target_field: target_field__,
                 })
             }
         }
@@ -26888,6 +26942,9 @@ impl serde::Serialize for TryCastNode {
         if self.nullable.is_some() {
             len += 1;
         }
+        if self.target_field.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.TryCastNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
@@ -26900,6 +26957,9 @@ impl serde::Serialize for TryCastNode {
         }
         if let Some(v) = self.nullable.as_ref() {
             struct_ser.serialize_field("nullable", v)?;
+        }
+        if let Some(v) = self.target_field.as_ref() {
+            struct_ser.serialize_field("targetField", v)?;
         }
         struct_ser.end()
     }
@@ -26916,6 +26976,8 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
             "arrowType",
             "metadata",
             "nullable",
+            "target_field",
+            "targetField",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -26924,6 +26986,7 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
             ArrowType,
             Metadata,
             Nullable,
+            TargetField,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -26949,6 +27012,7 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
                             "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
                             "metadata" => Ok(GeneratedField::Metadata),
                             "nullable" => Ok(GeneratedField::Nullable),
+                            "targetField" | "target_field" => Ok(GeneratedField::TargetField),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -26972,6 +27036,7 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
                 let mut arrow_type__ = None;
                 let mut metadata__ = None;
                 let mut nullable__ = None;
+                let mut target_field__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -27000,6 +27065,12 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
                             }
                             nullable__ = map_.next_value()?;
                         }
+                        GeneratedField::TargetField => {
+                            if target_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("targetField"));
+                            }
+                            target_field__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(TryCastNode {
@@ -27007,6 +27078,7 @@ impl<'de> serde::Deserialize<'de> for TryCastNode {
                     arrow_type: arrow_type__,
                     metadata: metadata__.unwrap_or_default(),
                     nullable: nullable__,
+                    target_field: target_field__,
                 })
             }
         }

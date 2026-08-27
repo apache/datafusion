@@ -34,7 +34,6 @@ use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
-use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::metadata::format_type_and_metadata;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -984,26 +983,76 @@ pub enum GetFieldAccess {
     },
 }
 
+/// Target of a cast expression.
+///
+/// A type-only target inherits metadata from the source expression. An explicit
+/// field supplies its own metadata, including an empty map that clears source
+/// metadata.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub enum CastTarget {
+    /// Cast to a data type while inheriting source metadata.
+    DataType(DataType),
+    /// Cast to an explicit field, including its metadata policy.
+    Field(FieldRef),
+}
+
+impl CastTarget {
+    /// Create a target that inherits source metadata.
+    pub fn type_only(data_type: DataType) -> Self {
+        Self::DataType(data_type)
+    }
+
+    /// Create an explicit field target.
+    pub fn explicit(field: FieldRef) -> Self {
+        Self::Field(field)
+    }
+
+    /// Return the target data type.
+    pub fn data_type(&self) -> &DataType {
+        match self {
+            Self::DataType(data_type) => data_type,
+            Self::Field(field) => field.data_type(),
+        }
+    }
+
+    /// Return the explicit target field, or `None` for a type-only target.
+    pub fn explicit_field(&self) -> Option<&FieldRef> {
+        match self {
+            Self::DataType(_) => None,
+            Self::Field(field) => Some(field),
+        }
+    }
+
+    /// Return explicit target metadata, or `None` when metadata is inherited.
+    pub fn metadata(&self) -> Option<&std::collections::HashMap<String, String>> {
+        self.explicit_field().map(|field| field.metadata())
+    }
+}
+
 /// Cast expression
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
-    /// The `DataType` the expression will yield
-    pub field: FieldRef,
+    /// The target type and metadata policy.
+    pub field: CastTarget,
 }
 
 impl Cast {
-    /// Create a new Cast expression
+    /// Create a new Cast expression with a type-only target.
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self {
             expr,
-            field: data_type.into_nullable_field_ref(),
+            field: CastTarget::type_only(data_type),
         }
     }
 
+    /// Create a new Cast expression with explicit target metadata.
     pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
-        Self { expr, field }
+        Self {
+            expr,
+            field: CastTarget::explicit(field),
+        }
     }
 }
 
@@ -1012,21 +1061,25 @@ impl Cast {
 pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
-    /// The `DataType` the expression will yield
-    pub field: FieldRef,
+    /// The target type and metadata policy.
+    pub field: CastTarget,
 }
 
 impl TryCast {
-    /// Create a new TryCast expression
+    /// Create a new TryCast expression with a type-only target.
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self {
             expr,
-            field: data_type.into_nullable_field_ref(),
+            field: CastTarget::type_only(data_type),
         }
     }
 
+    /// Create a new TryCast expression with explicit target metadata.
     pub fn new_from_field(expr: Box<Expr>, field: FieldRef) -> Self {
-        Self { expr, field }
+        Self {
+            expr,
+            field: CastTarget::explicit(field),
+        }
     }
 }
 
@@ -3589,12 +3642,12 @@ impl Display for Expr {
             }
             Expr::Cast(Cast { expr, field }) => {
                 let formatted =
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()));
+                    format_type_and_metadata(field.data_type(), field.metadata());
                 write!(f, "CAST({expr} AS {formatted})")
             }
             Expr::TryCast(TryCast { expr, field }) => {
                 let formatted =
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()));
+                    format_type_and_metadata(field.data_type(), field.metadata());
                 write!(f, "TRY_CAST({expr} AS {formatted})")
             }
             Expr::Not(expr) => write!(f, "NOT {expr}"),
@@ -4199,10 +4252,10 @@ mod test {
 
     #[test]
     fn format_cast() -> Result<()> {
-        let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
-            field: DataType::Utf8.into_nullable_field_ref(),
-        });
+        let expr = Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)), None)),
+            DataType::Utf8,
+        ));
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, format!("{expr}"));
         // Note that CAST intentionally has a name that is different from its `Display`

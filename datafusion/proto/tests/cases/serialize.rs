@@ -24,8 +24,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable, Placeholder};
+use datafusion_expr::{Cast, Expr, ScalarUDF, TryCast, Volatility};
 use datafusion_expr::{ColumnarValue, HigherOrderUDF, col, create_udf, lambda, lit};
-use datafusion_expr::{Expr, ScalarUDF, Volatility};
 use datafusion_functions::string;
 use datafusion_proto::bytes::{
     Serializeable, logical_exprs_from_bytes_with_extension_codec,
@@ -162,6 +162,73 @@ fn udf_roundtrip_without_registry() {
 fn roundtrip_expr(expr: &Expr) -> Expr {
     let bytes = expr.to_bytes().unwrap();
     Expr::from_bytes(&bytes).unwrap()
+}
+
+#[test]
+fn roundtrip_casts_preserve_type_only_and_explicit_targets() {
+    let explicit_field_without_metadata = Arc::new(Field::new("", DataType::Int64, true));
+    let explicit_field_with_metadata = Arc::new(
+        Field::new("", DataType::Int64, true)
+            .with_metadata([("extension".to_string(), "custom".to_string())].into()),
+    );
+    let input = Box::new(lit(1_i32));
+    let cast_expressions = [
+        Expr::Cast(Cast::new(input.clone(), DataType::Int64)),
+        Expr::Cast(Cast::new_from_field(
+            input.clone(),
+            Arc::clone(&explicit_field_without_metadata),
+        )),
+        Expr::Cast(Cast::new_from_field(
+            input.clone(),
+            Arc::clone(&explicit_field_with_metadata),
+        )),
+        Expr::TryCast(TryCast::new(input.clone(), DataType::Int64)),
+        Expr::TryCast(TryCast::new_from_field(
+            input.clone(),
+            explicit_field_without_metadata,
+        )),
+        Expr::TryCast(TryCast::new_from_field(input, explicit_field_with_metadata)),
+    ];
+
+    for expr in cast_expressions {
+        assert_eq!(expr, roundtrip_expr(&expr));
+    }
+}
+
+#[test]
+fn decode_legacy_casts_without_target_field() {
+    let legacy_explicit_field = Arc::new(
+        Field::new("", DataType::Int64, false)
+            .with_metadata([("extension".to_string(), "custom".to_string())].into()),
+    );
+    let input = Box::new(lit(1_i32));
+    let cast_expressions = [
+        Expr::Cast(Cast::new_from_field(
+            input.clone(),
+            Arc::clone(&legacy_explicit_field),
+        )),
+        Expr::TryCast(TryCast::new_from_field(input, legacy_explicit_field)),
+    ];
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+
+    for expr in cast_expressions {
+        let mut proto = serialize_expr(&expr, &codec).unwrap();
+        match proto.expr_type.as_mut().unwrap() {
+            datafusion_proto::protobuf::logical_expr_node::ExprType::Cast(cast) => {
+                cast.target_field = None;
+            }
+            datafusion_proto::protobuf::logical_expr_node::ExprType::TryCast(
+                try_cast,
+            ) => {
+                try_cast.target_field = None;
+            }
+            other => panic!("expected cast proto, got {other:?}"),
+        }
+
+        let decoded = parse_expr(&proto, ctx.task_ctx().as_ref(), &codec).unwrap();
+        assert_eq!(decoded, expr);
+    }
 }
 
 #[test]

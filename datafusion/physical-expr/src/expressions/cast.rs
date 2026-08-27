@@ -54,13 +54,48 @@ fn can_cast_named_struct_types(source: &DataType, target: &DataType) -> bool {
     validate_data_type_compatibility("", source, target).is_ok()
 }
 
+/// Target type and metadata policy shared by physical cast expressions.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PhysicalCastTarget {
+    /// A synthesized target that inherits source field properties.
+    DataType(FieldRef),
+    /// An explicit target field, including explicitly empty metadata.
+    Field(FieldRef),
+}
+
+impl PhysicalCastTarget {
+    pub(crate) fn type_only(data_type: DataType) -> Self {
+        Self::DataType(data_type.into_nullable_field_ref())
+    }
+
+    pub(crate) fn explicit(field: FieldRef) -> Self {
+        Self::Field(field)
+    }
+
+    pub(crate) fn data_type(&self) -> &DataType {
+        self.field().data_type()
+    }
+
+    pub(crate) fn field(&self) -> &FieldRef {
+        match self {
+            Self::DataType(field) | Self::Field(field) => field,
+        }
+    }
+
+    pub(crate) fn explicit_field(&self) -> Option<&FieldRef> {
+        match self {
+            Self::DataType(_) => None,
+            Self::Field(field) => Some(field),
+        }
+    }
+}
+
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
 #[derive(Debug, Clone, Eq)]
 pub struct CastExpr {
     /// The expression to cast
     pub expr: Arc<dyn PhysicalExpr>,
-    /// Field metadata describing the desired output after casting
-    target_field: FieldRef,
+    target: PhysicalCastTarget,
     /// Cast options
     cast_options: CastOptions<'static>,
 }
@@ -69,7 +104,7 @@ pub struct CastExpr {
 impl PartialEq for CastExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
-            && self.target_field.eq(&other.target_field)
+            && self.target == other.target
             && self.cast_options.eq(&other.cast_options)
     }
 }
@@ -77,7 +112,7 @@ impl PartialEq for CastExpr {
 impl Hash for CastExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
-        self.target_field.hash(state);
+        self.target.hash(state);
         self.cast_options.hash(state);
     }
 }
@@ -102,9 +137,9 @@ impl CastExpr {
         cast_type: DataType,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
-        Self::new_with_target_field(
+        Self::new_with_target(
             expr,
-            cast_type.into_nullable_field_ref(),
+            PhysicalCastTarget::type_only(cast_type),
             cast_options,
         )
     }
@@ -123,9 +158,21 @@ impl CastExpr {
         target_field: FieldRef,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
+        Self::new_with_target(
+            expr,
+            PhysicalCastTarget::explicit(target_field),
+            cast_options,
+        )
+    }
+
+    fn new_with_target(
+        expr: Arc<dyn PhysicalExpr>,
+        target: PhysicalCastTarget,
+        cast_options: Option<CastOptions<'static>>,
+    ) -> Self {
         Self {
             expr,
-            target_field,
+            target,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
     }
@@ -137,12 +184,12 @@ impl CastExpr {
 
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
-        self.target_field.data_type()
+        self.target.data_type()
     }
 
-    /// Field metadata describing the output column after casting.
+    /// The field stored in the cast target.
     pub fn target_field(&self) -> &FieldRef {
-        &self.target_field
+        self.target.field()
     }
 
     /// The cast options
@@ -151,18 +198,22 @@ impl CastExpr {
     }
 
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if is_default_target_field(&self.target_field) {
-            self.expr.return_field(input_schema).map(|field| {
+        match self.target.explicit_field() {
+            Some(field) => Ok(Arc::clone(field)),
+            None => self.expr.return_field(input_schema).map(|source| {
                 Arc::new(
-                    field
+                    source
                         .as_ref()
                         .clone()
                         .with_data_type(self.cast_type().clone()),
                 )
-            })
-        } else {
-            Ok(Arc::clone(&self.target_field))
+            }),
         }
+    }
+
+    /// Return this cast with a new input expression, preserving its target.
+    pub fn with_new_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self::new_with_target(expr, self.target.clone(), Some(self.cast_options.clone()))
     }
 
     /// Check if casting from the specified source type to the target type is a
@@ -189,12 +240,6 @@ impl CastExpr {
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
         Self::check_bigger_cast(self.cast_type(), src)
     }
-}
-
-fn is_default_target_field(target_field: &FieldRef) -> bool {
-    target_field.name().is_empty()
-        && target_field.is_nullable()
-        && target_field.metadata().is_empty()
 }
 
 pub(crate) fn is_order_preserving_cast_family(
@@ -267,11 +312,7 @@ impl PhysicalExpr for CastExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(CastExpr::new_with_target_field(
-            Arc::clone(&children[0]),
-            Arc::clone(&self.target_field),
-            Some(self.cast_options.clone()),
-        )))
+        Ok(Arc::new(self.with_new_expr(Arc::clone(&children[0]))))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
@@ -319,6 +360,11 @@ impl PhysicalExpr for CastExpr {
                 protobuf::PhysicalCastNode {
                     expr: Some(Box::new(ctx.encode_child(self.expr())?)),
                     arrow_type: Some(self.cast_type().try_into()?),
+                    target_field: self
+                        .target
+                        .explicit_field()
+                        .map(|field| field.as_ref().try_into())
+                        .transpose()?,
                 },
             ))),
         }))
@@ -358,7 +404,23 @@ impl CastExpr {
             internal_datafusion_err!("CastExpr is missing required field 'arrow_type'")
         })?;
 
-        Ok(Arc::new(CastExpr::new(expr, arrow_type.try_into()?, None)))
+        let data_type: DataType = arrow_type.try_into()?;
+        if let Some(target_field) = cast_expr.target_field.as_ref() {
+            let field: arrow::datatypes::Field = target_field.try_into()?;
+            if field.data_type() != &data_type {
+                return internal_err!(
+                    "CastExpr target_field type {} does not match arrow_type {data_type}",
+                    field.data_type()
+                );
+            }
+            Ok(Arc::new(CastExpr::new_with_target_field(
+                expr,
+                Arc::new(field),
+                None,
+            )))
+        } else {
+            Ok(Arc::new(CastExpr::new(expr, data_type, None)))
+        }
     }
 }
 
@@ -372,12 +434,21 @@ pub fn cast_with_options(
     cast_type: DataType,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    cast_with_target_field(
-        expr,
-        input_schema,
-        cast_type.into_nullable_field_ref(),
-        cast_options,
-    )
+    let expr_type = expr.data_type(input_schema)?;
+    if expr_type == cast_type {
+        return Ok(Arc::clone(&expr));
+    }
+
+    let can_build_cast = if requires_nested_struct_cast(&expr_type, &cast_type) {
+        can_cast_named_struct_types(&expr_type, &cast_type)
+    } else {
+        can_cast_types(&expr_type, &cast_type)
+    };
+    if !can_build_cast {
+        return not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}");
+    }
+
+    Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
 }
 
 /// Return a PhysicalExpression representing `expr` casted to `target_field`,
@@ -396,10 +467,6 @@ pub fn cast_with_target_field(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     let cast_type = target_field.data_type();
-    if expr_type == *cast_type && is_default_target_field(&target_field) {
-        return Ok(Arc::clone(&expr));
-    }
-
     let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
         // Allow casts involving structs (including nested inside Lists, Dictionaries,
         // etc.) that pass name-based compatibility validation. This validation is
@@ -1277,7 +1344,11 @@ mod proto_tests {
         PhysicalExprNode {
             expr_id: None,
             expr_type: Some(physical_expr_node::ExprType::Cast(Box::new(
-                PhysicalCastNode { expr, arrow_type },
+                PhysicalCastNode {
+                    expr,
+                    arrow_type,
+                    target_field: None,
+                },
             ))),
         }
     }
@@ -1306,6 +1377,52 @@ mod proto_tests {
             .expect("cast type should be encoded");
         let data_type: DataType = arrow_type.try_into().unwrap();
         assert_eq!(data_type, Int64);
+    }
+
+    #[test]
+    fn proto_roundtrip_preserves_explicit_cast_target() {
+        let target = Arc::new(Field::new("", Int64, true));
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let cast = CastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Arc::clone(&target),
+            None,
+        );
+        let encoded = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&StubEncoder::ok()))
+            .unwrap()
+            .unwrap();
+        let Some(physical_expr_node::ExprType::Cast(encoded)) = encoded.expr_type else {
+            unreachable!()
+        };
+        assert_eq!(
+            encoded.target_field,
+            Some(target.as_ref().try_into().unwrap())
+        );
+
+        let mut node = proto_cast_node(
+            Some(Box::new(column_node("a"))),
+            Some(proto_int64_arrow_type()),
+        );
+        let Some(physical_expr_node::ExprType::Cast(proto_cast)) =
+            node.expr_type.as_mut()
+        else {
+            unreachable!()
+        };
+        proto_cast.target_field = encoded.target_field;
+        let decoded = CastExpr::try_from_proto(
+            &node,
+            &PhysicalExprDecodeCtx::new(&Schema::empty(), &StubDecoder::ok()),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded
+                .downcast_ref::<CastExpr>()
+                .unwrap()
+                .target
+                .explicit_field(),
+            Some(&target)
+        );
     }
 
     #[test]

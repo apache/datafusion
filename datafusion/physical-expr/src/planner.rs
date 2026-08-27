@@ -384,14 +384,30 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
-            create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?,
-            input_schema,
-            Arc::clone(field),
-            None,
-        ),
+        Expr::Cast(Cast { expr, field }) => {
+            let physical_expr = create_physical_expr(
+                expr,
+                input_dfschema,
+                execution_props,
+                planning_ctx,
+            )?;
+            if field.explicit_field().is_some() {
+                let (_, output_field) = e.to_field(input_dfschema)?;
+                expressions::cast_with_target_field(
+                    physical_expr,
+                    input_schema,
+                    output_field,
+                    None,
+                )
+            } else {
+                expressions::cast(physical_expr, input_schema, field.data_type().clone())
+            }
+        }
         Expr::TryCast(TryCast { expr, field }) => {
-            if !field.metadata().is_empty() {
+            if field
+                .metadata()
+                .is_some_and(|metadata| !metadata.is_empty())
+            {
                 let (_, src_field) = expr.to_field(input_dfschema)?;
                 return plan_err!(
                     "TryCast from {} to {} is not supported",
@@ -399,20 +415,30 @@ pub fn create_physical_expr(
                         src_field.data_type(),
                         Some(src_field.metadata()),
                     ),
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
+                    format_type_and_metadata(field.data_type(), field.metadata())
                 );
             }
 
-            expressions::try_cast(
-                create_physical_expr(
-                    expr,
-                    input_dfschema,
-                    execution_props,
-                    planning_ctx,
-                )?,
-                input_schema,
-                field.data_type().clone(),
-            )
+            let physical_expr = create_physical_expr(
+                expr,
+                input_dfschema,
+                execution_props,
+                planning_ctx,
+            )?;
+            if field.explicit_field().is_some() {
+                let (_, output_field) = e.to_field(input_dfschema)?;
+                expressions::try_cast_with_target_field(
+                    physical_expr,
+                    input_schema,
+                    output_field,
+                )
+            } else {
+                expressions::try_cast(
+                    physical_expr,
+                    input_schema,
+                    field.data_type().clone(),
+                )
+            }
         }
         Expr::Not(expr) => expressions::not(create_physical_expr(
             expr,
@@ -842,12 +868,17 @@ mod tests {
             Arc::clone(&target_field),
         ));
 
+        let logical_output = cast_expr.to_field(&DFSchema::try_from(schema.clone())?)?.1;
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
+        let output = physical.return_field(&schema)?;
 
-        assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
-        assert!(physical.nullable(&schema)?);
+        assert_eq!(output, logical_output);
+        assert_eq!(cast.target_field(), &output);
+        assert_eq!(output.name(), "a");
+        assert_eq!(output.data_type(), &DataType::Int64);
+        assert_eq!(output.metadata(), target_field.metadata());
+        assert!(!physical.nullable(&schema)?);
 
         Ok(())
     }
@@ -884,10 +915,12 @@ mod tests {
 
         let physical = lower_cast_expr(&cast_expr, &schema)?;
         let cast = as_planner_cast(&physical);
+        let output = physical.return_field(&schema)?;
 
-        assert_eq!(cast.target_field(), &target_field);
-        assert_eq!(physical.return_field(&schema)?, target_field);
-        assert!(physical.nullable(&schema)?);
+        assert_eq!(cast.target_field(), &output);
+        assert_eq!(output.name(), "a");
+        assert_eq!(output.metadata(), target_field.metadata());
+        assert!(!physical.nullable(&schema)?);
 
         Ok(())
     }

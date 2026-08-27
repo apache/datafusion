@@ -32,10 +32,10 @@ use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
     plan_datafusion_err,
 };
-use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
+use datafusion_expr::{CastTarget, Expr};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
@@ -668,14 +668,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         sql_type: &SQLDataType,
     ) -> Result<FieldRef> {
-        // First check if any of the registered type_planner can handle this type
-        if let Some(type_planner) = self.context_provider.get_type_planner()
-            && let Some(data_type) = type_planner.plan_type_field(sql_type)?
-        {
-            return Ok(data_type);
+        if let Some(field) = self.plan_custom_type_field(sql_type)? {
+            return Ok(field);
         }
 
-        // If no type_planner can handle this type, use the default conversion
+        self.convert_builtin_data_type_to_field(sql_type)
+    }
+
+    pub(crate) fn convert_data_type_to_cast_target(
+        &self,
+        sql_type: &SQLDataType,
+    ) -> Result<CastTarget> {
+        if let Some(field) = self.plan_custom_type_field(sql_type)? {
+            return Ok(CastTarget::explicit(field));
+        }
+
+        let field = self.convert_builtin_data_type_to_field(sql_type)?;
+        Ok(CastTarget::type_only(field.data_type().clone()))
+    }
+
+    fn plan_custom_type_field(&self, sql_type: &SQLDataType) -> Result<Option<FieldRef>> {
+        match self.context_provider.get_type_planner() {
+            Some(type_planner) => type_planner.plan_type_field(sql_type),
+            None => Ok(None),
+        }
+    }
+
+    fn convert_builtin_data_type_to_field(
+        &self,
+        sql_type: &SQLDataType,
+    ) -> Result<FieldRef> {
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
