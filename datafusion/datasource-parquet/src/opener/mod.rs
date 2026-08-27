@@ -33,6 +33,7 @@ use crate::push_decoder::{
 };
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
+use crate::source::{single_column_dynamic_filter_columns, single_column_index};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
     ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
@@ -61,7 +62,9 @@ use datafusion_common::{
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
-use datafusion_physical_expr::utils::{conjunction_opt, split_conjunction};
+use datafusion_physical_expr::utils::{
+    collect_columns, conjunction_opt, split_conjunction,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -1484,24 +1487,49 @@ impl RowGroupsPrunedParquetOpen {
             // When the narrow-projection gate declined the static conjuncts
             // but kept pushdown enabled for a dynamic filter
             // (`pushdown_dynamic_filters_only`), build the RowFilter from
-            // only the dynamic-filter conjuncts: the static conjuncts are
-            // evaluated by the `FilterExec` above the scan, so also running
-            // them here would evaluate them twice per batch. They remain in
-            // `prepared.predicate`, where they drive stats / bloom /
-            // page-index pruning.
+            // the dynamic-filter conjuncts plus any static conjunct whose
+            // only column matches the sole column of a dynamic conjunct
+            // (mirroring the gate's decision in
+            // `ParquetSource::try_pushdown_filters`): those statics were
+            // pushed (`PushedDown::Yes`) because the parquet reader fuses
+            // same-projection predicates into one decode pass. The other
+            // static conjuncts are evaluated by the `FilterExec` above the
+            // scan, so also running them here would evaluate them twice per
+            // batch; they remain in `prepared.predicate`, where they drive
+            // stats / bloom / page-index pruning. Conjuncts referencing no
+            // column (e.g. statics folded to a literal by per-file schema
+            // adaptation) are kept: they cost nothing to evaluate and
+            // keeping them preserves enforcement if their `FilterExec` copy
+            // was dropped.
             let dynamic_only_predicate = (prepared.pushdown_filters
                 && prepared.pushdown_dynamic_filters_only)
                 .then_some(prepared.predicate.as_ref())
                 .flatten()
                 .and_then(|predicate| {
+                    let conjuncts = split_conjunction(predicate);
+                    let dynamic_single_cols =
+                        single_column_dynamic_filter_columns(conjuncts.iter().copied());
                     conjunction_opt(
-                        split_conjunction(predicate)
+                        conjuncts
                             .into_iter()
-                            .map(Arc::clone)
                             .filter(|conjunct| {
-                                DynamicFilterTracking::classify(conjunct)
+                                if DynamicFilterTracking::classify(conjunct)
                                     .contains_dynamic_filter()
-                            }),
+                                {
+                                    return true;
+                                }
+                                match single_column_index(conjunct) {
+                                    // Fusable with a same-column dynamic
+                                    // predicate: keep.
+                                    Some(idx) => dynamic_single_cols.contains(&idx),
+                                    // Zero or multiple columns. Zero-column
+                                    // conjuncts are kept (see above); the
+                                    // multi-column case was declined by the
+                                    // gate and lives in the FilterExec.
+                                    None => collect_columns(conjunct).is_empty(),
+                                }
+                            })
+                            .map(Arc::clone),
                     )
                 });
             let pushdown_predicate = if prepared.pushdown_dynamic_filters_only {

@@ -48,7 +48,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, split_conjunction};
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -545,6 +545,34 @@ impl ParquetSource {
     }
 }
 
+/// Index of the single column `expr` references, or `None` when it
+/// references zero or multiple columns.
+pub(crate) fn single_column_index(expr: &Arc<dyn PhysicalExpr>) -> Option<usize> {
+    let columns = collect_columns(expr);
+    match columns.len() {
+        1 => columns.iter().next().map(|c| c.index()),
+        _ => None,
+    }
+}
+
+/// Column indexes that appear as the *sole* column of some dynamic-filter
+/// conjunct in `conjuncts`.
+///
+/// A static conjunct on one of these columns shares its projection with a
+/// dynamic predicate, so pushing both lets the parquet reader fuse them into
+/// a single decode pass (arrow-rs same-projection filter fusion) — scan-level
+/// pruning at no extra decode cost. Used by the narrow-projection gate
+/// (`pushdown_dynamic_filters_only`) to decide which static conjuncts stay
+/// pushed, and by the opener to build the matching RowFilter.
+pub(crate) fn single_column_dynamic_filter_columns<'a>(
+    conjuncts: impl Iterator<Item = &'a Arc<dyn PhysicalExpr>>,
+) -> std::collections::HashSet<usize> {
+    conjuncts
+        .filter(|c| DynamicFilterTracking::classify(c).contains_dynamic_filter())
+        .filter_map(single_column_index)
+        .collect()
+}
+
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
 pub(crate) fn parse_coerce_int96_string(
     str_setting: &str,
@@ -1024,17 +1052,36 @@ impl FileSource for ParquetSource {
             // The gate declined the static conjuncts: parents keep them (a
             // `FilterExec` above the scan evaluates them), and only
             // dynamic-filter conjuncts are pushed into the scan's
-            // RowFilter. The static conjuncts were still merged into
-            // `source.predicate` above, where they drive stats / bloom /
-            // page-index pruning but not row filtering.
+            // RowFilter — with one exception. A static conjunct whose only
+            // column is also the sole column of a dynamic conjunct IS
+            // pushed: the parquet reader fuses same-projection predicates
+            // into one decode pass (arrow-rs same-projection filter
+            // fusion), so pushing it adds scan-level pruning without a
+            // second decode pass (e.g. ClickBench Q25, where the static
+            // `SearchPhrase <> ''` prunes the dominant empty strings that
+            // the TopK threshold on the same column cannot). The remaining
+            // static conjuncts were still merged into `source.predicate`
+            // above, where they drive stats / bloom / page-index pruning
+            // but not row filtering.
+            let dynamic_single_cols = single_column_dynamic_filter_columns(
+                self.predicate
+                    .as_ref()
+                    .map(|p| split_conjunction(p))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .chain(filters.iter().map(|f| &f.predicate)),
+            );
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
                 filters
                     .iter()
                     .map(|f| {
-                        if matches!(f.discriminant, PushedDown::Yes)
-                            && DynamicFilterTracking::classify(&f.predicate)
+                        let keep = matches!(f.discriminant, PushedDown::Yes)
+                            && (DynamicFilterTracking::classify(&f.predicate)
                                 .contains_dynamic_filter()
-                        {
+                                || single_column_index(&f.predicate).is_some_and(
+                                    |idx| dynamic_single_cols.contains(&idx),
+                                ));
+                        if keep {
                             PushedDown::Yes
                         } else {
                             PushedDown::No
@@ -2574,5 +2621,77 @@ mod tests {
             "static conjunct should be merged into the scan predicate for \
              pruning, got: {predicate:?}"
         );
+    }
+
+    /// Same shape as
+    /// [`test_narrow_projection_gate_with_dynamic_filter_pushes_only_dynamic`],
+    /// but the static conjunct is on the *same* column as the dynamic
+    /// filter (the ClickBench Q25 shape:
+    /// `WHERE "SearchPhrase" <> '' ORDER BY "SearchPhrase" LIMIT 10`).
+    /// The parquet reader fuses same-projection predicates into one decode
+    /// pass, so this static conjunct must stay pushed (`PushedDown::Yes`):
+    /// it prunes rows at scan level (e.g. the dominant empty strings the
+    /// TopK threshold cannot exclude) at no extra decode cost.
+    #[test]
+    fn test_narrow_projection_gate_keeps_fusable_same_column_static() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_datasource::TableSchema;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let table_schema = TableSchema::from(file_schema);
+        let full_schema: arrow::datatypes::SchemaRef =
+            Arc::clone(table_schema.table_schema());
+
+        let projection = ProjectionExprs::from_indices(&[0usize, 1], &full_schema);
+        let mut source = ParquetSource::new(table_schema).with_pushdown_filters(true);
+        source.projection = projection;
+
+        // Dynamic threshold on `b`, static conjuncts on `b` (fusable) and
+        // `a` (not fusable).
+        let dyn_col = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        source.predicate = Some(Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![dyn_col],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>);
+
+        let fusable_static =
+            logical2physical(&col("b").eq(logical_lit(1i64)), &full_schema);
+        let unrelated_static =
+            logical2physical(&col("a").eq(logical_lit(1i64)), &full_schema);
+        let config = ConfigOptions::default();
+
+        let prop = source
+            .try_pushdown_filters(vec![fusable_static, unrelated_static], &config)
+            .expect("try_pushdown_filters must not error");
+
+        assert_eq!(prop.filters.len(), 2);
+        assert!(
+            matches!(prop.filters[0], PushedDown::Yes),
+            "static conjunct on the dynamic filter's column must stay \
+             pushed: same-projection fusion evaluates it in the same decode \
+             pass as the dynamic threshold"
+        );
+        assert!(
+            matches!(prop.filters[1], PushedDown::No),
+            "static conjunct on an unrelated column must be declined so the \
+             FilterExec above the scan keeps it"
+        );
+
+        let updated = prop
+            .updated_node
+            .as_ref()
+            .expect("gate path must attach an updated source")
+            .downcast_ref::<ParquetSource>()
+            .expect("updated node must be a ParquetSource");
+        assert!(updated.pushdown_filters());
+        assert!(updated.pushdown_dynamic_filters_only);
     }
 }
