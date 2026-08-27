@@ -841,6 +841,7 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Struct(_)
             | DataType::Union(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
+            DataType::Dictionary(_, _) => Box::new(HLLAccumulator::new()),
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
             }
@@ -919,6 +920,7 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _)
+            | DataType::Dictionary(_, _)
     )
 }
 
@@ -932,10 +934,10 @@ mod tests {
         use super::*;
         use arrow::array::{
             AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-            Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-            IntervalYearMonthArray, StringViewArray,
+            DictionaryArray, Int32Array, Int64Array, IntervalDayTimeArray,
+            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray, StringViewArray,
         };
-        use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
+        use arrow::datatypes::{Int32Type, IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
         // A string longer than the 12-byte inline limit
         const LONG: &str = "this string is definitely longer than twelve bytes";
@@ -1246,6 +1248,37 @@ mod tests {
             let result = acc.evaluate(EmitTo::All).unwrap();
             let counts = result.as_any().downcast_ref::<UInt64Array>().unwrap();
             assert_eq!(counts.value(0), 3);
+        }
+
+        #[test]
+        fn dictionary_int32_utf8_per_row_and_groups_acc() {
+            // {"a", "b", "b", "c", "c", "c"} — 3 distinct logical values
+            let keys = Int32Array::from(vec![0, 1, 1, 2, 2, 2]);
+            let values = StringArray::from(vec!["a", "b", "c"]);
+            let array: ArrayRef = Arc::new(
+                DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap(),
+            );
+
+            assert!(is_hll_groups_type(array.data_type()));
+
+            let mut per_row = HLLAccumulator::new();
+            per_row.update_batch(&[Arc::clone(&array)]).unwrap();
+            assert_eq!(distinct_count(&mut per_row), 3);
+
+            let group_indices = vec![0usize; array.len()];
+            let mut groups = HllGroupsAccumulator::new();
+            groups
+                .update_batch(&[Arc::clone(&array)], &group_indices, None, 1)
+                .unwrap();
+            let result = groups.evaluate(EmitTo::All).unwrap();
+            assert_eq!(
+                result
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap()
+                    .value(0),
+                3
+            );
         }
 
         /// Regression: a short (≤ 12-byte) Utf8View string must hash identically
