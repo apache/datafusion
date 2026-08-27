@@ -415,25 +415,28 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         mapper.extend([(b_hi.map_idx, b_idx), (a_hi.map_idx, a_idx)].into_iter());
     }
 
-    fn heapify_down(&mut self, node_idx: usize, mapper: &mut Vec<(usize, usize)>) {
-        let left_child = node_idx * 2 + 1;
+    fn heapify_down(&mut self, mut node_idx: usize, mapper: &mut Vec<(usize, usize)>) {
         let desc = self.desc;
-        let entry = self.heap.get(node_idx).expect("Missing node!");
-        let entry = entry.as_ref().expect("Missing node!");
-        let mut best_idx = node_idx;
-        let mut best_val = &entry.val;
-        for child_idx in left_child..=left_child + 1 {
-            if let Some(Some(child)) = self.heap.get(child_idx)
-                && ((!desc && child.val.comp(best_val) == Ordering::Greater)
-                    || (desc && child.val.comp(best_val) == Ordering::Less))
-            {
-                best_val = &child.val;
-                best_idx = child_idx;
+        loop {
+            let left_child = node_idx * 2 + 1;
+            let entry = self.heap.get(node_idx).expect("Missing node!");
+            let entry = entry.as_ref().expect("Missing node!");
+            let mut best_idx = node_idx;
+            let mut best_val = &entry.val;
+            for child_idx in left_child..=left_child + 1 {
+                if let Some(Some(child)) = self.heap.get(child_idx)
+                    && ((!desc && child.val.comp(best_val) == Ordering::Greater)
+                        || (desc && child.val.comp(best_val) == Ordering::Less))
+                {
+                    best_val = &child.val;
+                    best_idx = child_idx;
+                }
             }
-        }
-        if best_val.comp(&entry.val) != Ordering::Equal {
+            if best_val.comp(&entry.val) == Ordering::Equal {
+                break;
+            }
             self.swap(best_idx, node_idx, mapper);
-            self.heapify_down(best_idx, mapper);
+            node_idx = best_idx;
         }
     }
 
