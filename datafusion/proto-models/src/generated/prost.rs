@@ -1557,7 +1557,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1622,6 +1622,10 @@ pub mod physical_expr_node {
         LambdaVariable(super::PhysicalLambdaVariableExprNode),
         #[prost(message, tag = "27")]
         RangeExpr(super::PhysicalRangeExprNode),
+        #[prost(message, tag = "28")]
+        SqlSimilarToPattern(
+            ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
+        ),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1636,6 +1640,11 @@ pub struct PhysicalDynamicFilterNode {
     pub inner_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(bool, tag = "5")]
     pub is_complete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalSqlSimilarToPatternNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {
@@ -1938,6 +1947,14 @@ pub struct FileScanExecConf {
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
     #[prost(message, optional, tag = "15")]
     pub output_partitioning: ::core::option::Option<Partitioning>,
+    /// Compression used by formats such as CSV and JSON. Absent means uncompressed
+    /// for compatibility with payloads written before this field existed.
+    #[prost(
+        enumeration = "super::datafusion_common::CompressionTypeVariant",
+        optional,
+        tag = "16"
+    )]
+    pub file_compression_type: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1964,6 +1981,9 @@ pub struct CsvScanExecNode {
     pub newlines_in_values: bool,
     #[prost(bool, tag = "8")]
     pub truncate_rows: bool,
+    /// Custom one-byte line terminator. Absent means the default newline terminator.
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -1986,6 +2006,9 @@ pub mod csv_scan_exec_node {
 pub struct JsonScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+    /// Absent means newline-delimited JSON for compatibility with older payloads.
+    #[prost(bool, optional, tag = "2")]
+    pub newline_delimited: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {
@@ -1996,6 +2019,8 @@ pub struct AvroScanExecNode {
 pub struct ArrowScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+    #[prost(enumeration = "ArrowIpcFormat", tag = "2")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MemoryScanExecNode {
@@ -2548,6 +2573,8 @@ pub struct SortMergeJoinExecNode {
     pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
     pub null_equality: i32,
+    #[prost(uint32, repeated, tag = "8")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncFuncExecNode {
@@ -2790,6 +2817,36 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+/// Identifies which Arrow IPC format an ArrowScanExecNode reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ArrowIpcFormat {
+    /// Arrow IPC file format (with footer, supports range-based parallel reading).
+    /// This is the default for payloads encoded before the format field existed.
+    File = 0,
+    /// Arrow IPC stream format (without footer, sequential reading only)
+    Stream = 1,
+}
+impl ArrowIpcFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::File => "ARROW_IPC_FORMAT_FILE",
+            Self::Stream => "ARROW_IPC_FORMAT_STREAM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ARROW_IPC_FORMAT_FILE" => Some(Self::File),
+            "ARROW_IPC_FORMAT_STREAM" => Some(Self::Stream),
             _ => None,
         }
     }

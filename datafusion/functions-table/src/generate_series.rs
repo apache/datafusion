@@ -552,14 +552,14 @@ impl TableProvider for GenerateSeriesTable {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size.get();
         let generator = self.as_generator(batch_size)?;
         let mut exec = LazyMemoryExec::try_new(self.schema(), vec![generator])?
-            .with_projection(projection.cloned());
+            .with_projection(projection.map(|p| p.to_vec()));
 
         if let Some(ordering) = self.output_ordering(exec.schema().as_ref()) {
             exec.add_ordering([ordering]);

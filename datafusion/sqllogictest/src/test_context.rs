@@ -54,12 +54,15 @@ use datafusion::{
 use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
-use range_partitioning::register_range_partitioned_table;
+use range_partitioning::{
+    register_range_partitioned_table, register_range_sorted_time_bin_table,
+};
 
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
@@ -130,6 +133,15 @@ impl TestContext {
                 state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
         }
 
+        if matches!(
+            relative_path.file_name().and_then(|name| name.to_str()),
+            Some("statistics_registry.slt")
+        ) {
+            state_builder = state_builder.with_statistics_registry(
+                StatisticsRegistry::default_with_builtin_providers(),
+            );
+        }
+
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
@@ -178,6 +190,10 @@ impl TestContext {
             "range_partitioning.slt" => {
                 info!("Registering range partitioned table");
                 register_range_partitioned_table(test_ctx.session_ctx());
+            }
+            "range_sorted_time_bin_agg.slt" => {
+                info!("Registering range-sorted time-bin table");
+                register_range_sorted_time_bin_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
@@ -388,7 +404,7 @@ pub fn register_temp_table(ctx: &SessionContext) {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _: Option<&Vec<usize>>,
+            _: Option<&[usize]>,
             _: &[Expr],
             _: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {

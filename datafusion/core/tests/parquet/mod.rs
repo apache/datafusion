@@ -59,6 +59,7 @@ mod page_pruning;
 mod row_group_pruning;
 mod schema;
 mod schema_coercion;
+mod string_in_list_pruning;
 mod utils;
 
 #[cfg(test)]

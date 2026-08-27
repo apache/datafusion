@@ -35,6 +35,8 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
+use datafusion::prelude::SessionConfig;
+
 use crate::parquet::Unit::RowGroup;
 use crate::parquet::{ContextWithParquet, Scenario};
 
@@ -297,9 +299,18 @@ fn build_five_thousand_row_rgs(schema: &Arc<Schema>) -> Vec<RecordBatch> {
         .collect()
 }
 
-/// Co-existence test for **page-index `RowSelection`** + dynamic RG
-/// pruning. Tests that the `into_builder` rebuild preserves the
-/// `RowSelection` derived from page-index pruning across RG drops.
+/// Regression test for <https://github.com/apache/datafusion/issues/24355>:
+/// when a page-index `RowSelection` is live, the runtime dynamic row-group
+/// pruner is intentionally **not built**, so its `into_builder` rebuild can
+/// never drop a row group without slicing the carried selection (which would
+/// silently return wrong rows). Correctness is bought at the cost of the
+/// dynamic-pruning optimization for this scan.
+///
+/// The behavior asserted below (pruner disabled →
+/// `row_groups_pruned_dynamic_filter == 0`) is expected to change once the
+/// proper upstream fix lands, which keeps both mechanisms:
+/// <https://github.com/apache/arrow-rs/issues/10624> (tracked on the
+/// DataFusion side in <https://github.com/apache/datafusion/issues/24358>).
 ///
 /// Layout: 5 RGs × 1000 rows, with `data_page_row_count_limit=100` so
 /// each RG has 10 pages of 100 rows.
@@ -309,17 +320,14 @@ fn build_five_thousand_row_rgs(schema: &Arc<Schema>) -> Vec<RecordBatch> {
 ///   first 5 pages (values 0..500) are pruned, the last 5 (500..1000)
 ///   are scanned. RGs 1..4 keep all their pages (every page has
 ///   `max >= 500`). The decoder receives a `RowSelection` that masks
-///   out those first 5 pages of RG 0.
-/// - `ORDER BY v DESC LIMIT 5` fills the TopK heap from RG 4
-///   (`max=4999`); the tightened threshold (≥ 4995) then proves RGs
-///   0..3 unreachable and the runtime pruner drops them in one
-///   `into_builder` rebuild.
-///
-/// If `into_builder` did **not** preserve the row selection (or
-/// truncated / shifted it incorrectly), either the result rows would
-/// drift or the count of pruned pages would drop to zero.
+///   out those first 5 pages of RG 0 — its presence is what suppresses
+///   the runtime pruner.
+/// - `ORDER BY v DESC LIMIT 5` would let the tightened TopK threshold
+///   (≥ 4995) prune RGs 0..3, but because a row selection is present the
+///   runtime pruner is never created, so `row_groups_pruned_dynamic_filter`
+///   stays 0. Results are still correct and page-index pruning still runs.
 #[tokio::test]
-async fn dynamic_rg_pruning_coexists_with_page_index_row_selection() {
+async fn dynamic_rg_pruning_disabled_when_page_index_row_selection_present() {
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
     let batches = build_five_thousand_row_rgs(&schema);
 
@@ -348,12 +356,9 @@ async fn dynamic_rg_pruning_coexists_with_page_index_row_selection() {
         );
     }
 
-    // Page-index pruning must have engaged: RG 0's first 5 pages are
-    // entirely < 500. If `into_builder` dropped the row-selection state,
-    // this metric would still report the original count (it is captured
-    // at file open). Combined with the dynamic-pruner assertion below it
-    // proves both mechanisms were active and that the rebuild left the
-    // selection coherent — otherwise the result rows above would drift.
+    // Page-index pruning still engages: RG 0's first 5 pages are entirely
+    // < 500. #24355 only suppresses the *runtime* row-group pruner, not
+    // page-index pruning, so this must remain non-zero.
     let pages_pruned = output.metric_value("page_index_pages_pruned").unwrap_or(0);
     assert!(
         pages_pruned >= 5,
@@ -362,13 +367,18 @@ async fn dynamic_rg_pruning_coexists_with_page_index_row_selection() {
         output.description(),
     );
 
+    // The runtime dynamic pruner must be disabled while a page-index row
+    // selection is live (#24355): with no pruner there is no rebuild that
+    // could misapply the carried selection. Before the fix the pruner ran
+    // and this metric was >= 1.
     let pruned = output
         .row_groups_pruned_dynamic_filter()
         .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
-    assert!(
-        pruned >= 1,
-        "with TopK + tight threshold the runtime pruner must skip at least \
-         one row group; pruned={pruned}\n{}",
+    assert_eq!(
+        pruned,
+        0,
+        "runtime row-group pruning must be skipped when a page-index row \
+         selection is present; pruned={pruned}\n{}",
         output.description(),
     );
 }
@@ -631,6 +641,94 @@ fn build_q26_batches(schema: &Arc<Schema>) -> Vec<RecordBatch> {
         .collect()
 }
 
+/// Per-RG `fully_matched` `RowFilter` skip optimization.
+///
+/// Stats prove that every row of a fully-matched row group satisfies the
+/// pushdown predicate, so the parquet decoder can skip the per-row
+/// `RowFilter` for that RG entirely. The stream rebuilds the decoder at
+/// the boundary with an empty `RowFilter` and toggles back to the real
+/// one at the next non-fully-matched RG.
+///
+/// Layout: 4 RGs of 3 values each. Predicate `v >= 3 AND v <= 10` makes
+/// RG 0 a straddler (1, 2 fail the lower bound), RGs 1..=2 fully matched
+/// (every value in [3, 10] by stats), and RG 3 a straddler again (11, 12
+/// fail the upper bound). This exercises the full toggle lifecycle:
+/// filter ON (RG 0) → OFF across the fully-matched run (RGs 1..=2) → back
+/// ON (RG 3), covering both the fully-matched → non-fully-matched and the
+/// reverse transition.
+///
+/// Expected behavior:
+/// - the static prune marks RGs 1..=2 as fully_matched at file open;
+/// - the stream installs the real `RowFilter` initially (RG 0 not fm);
+/// - at the RG 0 → RG 1 boundary the toggle rebuilds with an empty filter
+///   and bumps `row_filter_skipped_fully_matched`;
+/// - at the RG 2 → RG 3 boundary the toggle reinstalls the real filter, so
+///   11 and 12 are correctly excluded;
+/// - the query result is identical to running with the filter on.
+#[tokio::test]
+async fn fully_matched_rgs_skip_row_filter() {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    // 4 RGs of 3 rows each. Predicate `v >= 3 AND v <= 10`:
+    //   RG 0: 1, 2, 3   ← keeps {3}; min=1,max=3 → straddler, filter ON
+    //   RG 1: 4, 5, 6   ← all in [3,10] → fully matched, filter OFF
+    //   RG 2: 7, 8, 9   ← fully matched, filter OFF
+    //   RG 3: 10,11,12  ← keeps {10}; 11,12 fail v<=10 → straddler, filter back ON
+    let groups: [[i64; 3]; 4] = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]];
+    let batches: Vec<RecordBatch> = groups
+        .iter()
+        .map(|vals| {
+            let col: ArrayRef = Arc::new(Int64Array::from(vals.to_vec()));
+            RecordBatch::try_new(Arc::clone(&schema), vec![col]).unwrap()
+        })
+        .collect();
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(3),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx
+        .query("SELECT v FROM t WHERE v >= 3 AND v <= 10 ORDER BY v ASC")
+        .await;
+
+    // Correctness: every value in [3, 10], ascending.
+    let expected_rows: Vec<i64> = (3..=10).collect();
+    assert_eq!(output.result_rows, expected_rows.len());
+    let formatted = output.pretty_results();
+    for v in expected_rows {
+        assert!(
+            formatted.contains(&format!("| {v} ")),
+            "output must contain {v}; got:\n{formatted}",
+        );
+    }
+    // The RG 2 → RG 3 transition (fully-matched → non-fully-matched) must
+    // reinstall the real filter, so 11 and 12 are filtered out. If the
+    // toggle failed to restore the filter they would leak through.
+    for v in [11i64, 12] {
+        assert!(
+            !formatted.contains(&format!("| {v} ")),
+            "value {v} must be filtered out by the reinstalled RowFilter; \
+             got:\n{formatted}",
+        );
+    }
+
+    // Behavior: the per-RG `RowFilter` toggle must have fired at least
+    // once when transitioning from RG 0 (not fm) into the fully-matched
+    // run RGs 1..=2.
+    let skipped = output
+        .metric_value("row_filter_skipped_fully_matched")
+        .unwrap_or(0);
+    assert!(
+        skipped >= 1,
+        "row_filter_skipped_fully_matched must fire at least once; \
+         skipped={skipped}\n{}",
+        output.description(),
+    );
+}
+
 /// Regression for #24352: with `pushdown_filters` + TopK dynamic filter, a row
 /// group whose post-predicate selection is empty is silently finished by
 /// arrow-rs without handing back a reader. Before `rg_plan` was synced to the
@@ -647,12 +745,20 @@ async fn topk_pushdown_does_not_reread_delivered_row_group() {
 
     // `RowGroup(2048)` writes one row group per 2048-row batch (4 RGs) and
     // enables `pushdown_filters`, required for the dynamic filter to reach the
-    // parquet scan.
-    let mut ctx = ContextWithParquet::with_custom_data(
+    // parquet scan. Page-index reading is disabled: this test exercises the
+    // #24352 empty-row-group / rg_plan-sync path, which is row-filter-driven and
+    // does not need the page index. With the page index on, `search_phrase <> ''`
+    // produces an intra-row-group `RowSelection`, and #24355 disables the runtime
+    // pruner whenever a row selection is present — which would stop this test
+    // from exercising the dynamic pruner at all.
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.enable_page_index = false;
+    let mut ctx = ContextWithParquet::with_config(
         Scenario::Int,
         RowGroup(2048),
-        Arc::clone(&schema),
-        batches,
+        config,
+        Some(Arc::clone(&schema)),
+        Some(batches),
     )
     .await;
 

@@ -503,9 +503,8 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
-    /// Return the maximum size of an `IN (...)` list that the pruning
-    /// predicate will rewrite into per-value statistics checks. Lists
-    /// longer than this skip container-level pruning. Reads from
+    /// Return the maximum size of an `IN (...)` list eligible for statistics
+    /// pruning. Longer lists skip container-level pruning. Reads from
     /// `datafusion.execution.parquet.max_in_list_size`.
     pub fn max_in_list_size(&self) -> usize {
         self.table_parquet_options.global.max_in_list_size
@@ -1232,15 +1231,12 @@ impl ParquetSource {
         use datafusion_execution::object_store::ObjectStoreUrl;
         use datafusion_proto_models::protobuf;
 
-        let scan = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) => {
-                scan
-            }
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not a ParquetScan"
-                );
-            }
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not a ParquetScan"
+            );
         };
 
         let base_conf = scan.base_conf.as_ref().ok_or_else(|| {

@@ -989,11 +989,10 @@ async fn query_single_parquet_file_pushdown_filters_progressive_io() {
     +----------------------+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 5
+    Total Requests: 4
     - GET  (opts) path=parquet_table.parquet head=true
     - GET  (ranges) path=parquet_table.parquet ranges=4-534
     - GET  (ranges) path=parquet_table.parquet ranges=534-951,951-1064
-    - GET  (ranges) path=parquet_table.parquet ranges=1064-1594
     - GET  (ranges) path=parquet_table.parquet ranges=1594-2124
     "
     );
@@ -1008,6 +1007,10 @@ struct Test {
     /// * `None`: uses the default (does not set a size_hint)
     /// * `Some(None)`L: set prefetch hint to None (prefetching)
     /// * `Some(Some(size))`: set prefetch hint to size
+    #[expect(
+        clippy::option_option,
+        reason = "The nesting is meaningful, see the doc comment above"
+    )]
     parquet_metadata_size_hint: Option<Option<usize>>,
 }
 

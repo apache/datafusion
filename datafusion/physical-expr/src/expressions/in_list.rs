@@ -38,12 +38,13 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod branchless_filter;
+mod fixed_size_binary_filter;
 mod primitive_filter;
 mod result;
 mod static_filter;
 mod strategy;
 
-use static_filter::StaticFilter;
+use static_filter::StaticFilterRef;
 use strategy::instantiate_static_filter;
 
 /// InList
@@ -51,7 +52,7 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
-    static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+    static_filter: Option<StaticFilterRef>,
 }
 
 impl Debug for InListExpr {
@@ -148,7 +149,7 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
-        static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+        static_filter: Option<StaticFilterRef>,
     ) -> Self {
         Self {
             expr,
@@ -222,8 +223,8 @@ impl InListExpr {
     /// Create a new InList expression, using a static filter when possible.
     ///
     /// This validates data types and attempts to create a static filter for constant
-    /// list expressions. Uses specialized StaticFilter implementations for better
-    /// performance (e.g., Int32StaticFilter for Int32).
+    /// list expressions. Uses specialized branchless, bitmap, or hash-set filters
+    /// when the list's physical representation supports them.
     ///
     /// Returns an error if data types don't match. If the list contains non-constant
     /// expressions, falls back to dynamic evaluation at runtime.
@@ -2592,7 +2593,7 @@ mod tests {
         // Create IN list with Int32 literals: (100, 200, 300)
         let list = vec![lit(100i32), lit(200i32), lit(300i32)];
 
-        // Create InListExpr via in_list() - this uses Int32StaticFilter for Int32 lists
+        // Create InListExpr via in_list(), which selects a primitive static filter.
         let expr = in_list(col_a, list, &false, &schema)?;
 
         // Create dictionary-encoded batch with values [100, 200, 500]
@@ -3547,6 +3548,38 @@ mod tests {
                 "dict-needle failed for {dt:?}"
             );
         }
+
+        // FixedSizeBinary in_array, FixedSizeBinary and Dictionary needles
+        let fsb_in = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+                [9, 10, 11, 12].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        let fsb_needle = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [13, 14, 15, 16].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(Arc::clone(&fsb_needle), Arc::clone(&fsb_in))?
+        );
+        // The dictionary does not reference its second value, so that value
+        // must not become a member of the flattened list.
+        let dict_fsb_in = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![0, 2]),
+            Arc::clone(&fsb_in),
+        ));
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(false), Some(false)]),
+            eval_in_list_from_array(wrap_in_dict(fsb_needle), dict_fsb_in)?
+        );
 
         // Utf8 (falls through to ArrayStaticFilter)
         let utf8_in = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;

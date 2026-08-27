@@ -40,12 +40,14 @@ we'll gladly set up a new repository for your extension.
 | ---------------------------- | ----------------- | --------------------------------------------------------------------------------- |
 | [DataFusion Table Providers] | [`TableProvider`] | Support for `PostgreSQL`, `MySQL`, `SQLite`, `DuckDB`, and `Flight SQL`           |
 | [DataFusion Federation]      | Framework         | Allows DataFusion to execute (part of) a query plan by a remote execution engine. |
+| [DataFusion Bloom]           | Execution layer   | Runs adaptive predicate transfer before DataFusion's native joins                 |
 | [DataFusion ORC]             | [`TableProvider`] | [Apache ORC] file format                                                          |
 | [DataFusion JSON Functions]  | Functions         | Scalar functions for querying JSON strings                                        |
 
 [`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 [datafusion table providers]: https://github.com/datafusion-contrib/datafusion-table-providers
 [datafusion federation]: https://github.com/datafusion-contrib/datafusion-federation
+[datafusion bloom]: https://github.com/YimingQiao/datafusion-bloom
 [datafusion orc]: https://github.com/datafusion-contrib/datafusion-orc
 [apache orc]: https://orc.apache.org/
 [datafusion json functions]: https://github.com/datafusion-contrib/datafusion-functions-json
