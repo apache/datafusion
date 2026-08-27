@@ -437,7 +437,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         let b_hi = self.heap[b_idx].as_ref();
         let a_hi = self.heap[a_idx].as_ref();
 
-        mapper.extend([(b_hi.map_idx, b_idx), (a_hi.map_idx, a_idx)].into_iter());
+        mapper.extend([(b_hi.map_idx, b_idx), (a_hi.map_idx, a_idx)]);
     }
 
     fn heapify_down(&mut self, mut node_idx: usize, mapper: &mut Vec<(usize, usize)>) {
