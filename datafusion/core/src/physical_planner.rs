@@ -29,7 +29,8 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
+    Aggregate, EmptyRelation, Join, Limit, Projection, Sort, TableScan, Unnest, Values,
+    Window,
 };
 use crate::logical_expr::{Expr, LogicalPlan, PlanType, Repartition};
 use crate::physical_expr::{
@@ -88,12 +89,14 @@ use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessar
 use datafusion_expr::physical_planning_context::{
     PhysicalPlanningContext, ScalarSubqueryResults, SubqueryIndex,
 };
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
 };
@@ -1268,6 +1271,26 @@ impl DefaultPhysicalPlanner {
             }
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
+                // Try to evaluate skip and fetch expressions.
+                let context = SimplifyContext::builder().build();
+                let simplifier = ExprSimplifier::new(context);
+
+                let skip = match &limit.skip {
+                    Some(expr) => Some(Box::new(simplifier.simplify(*expr.clone())?)),
+                    None => None,
+                };
+
+                let fetch = match &limit.fetch {
+                    Some(expr) => Some(Box::new(simplifier.simplify(*expr.clone())?)),
+                    None => None,
+                };
+
+                let limit = Limit {
+                    input: Arc::clone(&limit.input),
+                    skip,
+                    fetch,
+                };
+
                 let input = children.one()?;
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
                     return not_impl_err!(
@@ -1282,20 +1305,26 @@ impl DefaultPhysicalPlanner {
                     );
                 };
 
-                // GlobalLimitExec requires a single partition for input
-                let input = if input.output_partitioning().partition_count() == 1 {
-                    input
-                } else {
-                    // Apply a LocalLimitExec to each partition. The optimizer will also insert
-                    // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
-                    if let Some(fetch) = fetch {
-                        Arc::new(LocalLimitExec::new(input, fetch + skip))
-                    } else {
-                        input
+                match fetch {
+                    Some(0) => {
+                        // Return an empty exec node if the number of requested rows is 0
+                        Arc::new(EmptyExec::new(input.schema()))
                     }
-                };
+                    Some(fetch) => {
+                        // GlobalLimitExec requires a single partition for input
+                        let input = if input.output_partitioning().partition_count() == 1
+                        {
+                            input
+                        } else {
+                            // Apply a LocalLimitExec to each partition. The optimizer will also insert
+                            // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
+                            Arc::new(LocalLimitExec::new(input, fetch + skip))
+                        };
 
-                Arc::new(GlobalLimitExec::new(input, skip, fetch))
+                        Arc::new(GlobalLimitExec::new(input, skip, Some(fetch)))
+                    }
+                    None => Arc::new(GlobalLimitExec::new(input, skip, None)),
+                }
             }
             LogicalPlan::Unnest(Unnest {
                 list_type_columns,

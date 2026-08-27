@@ -58,8 +58,8 @@ use datafusion_datasource_json::file_format::{
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RangePartitioning,
-    RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
+    AggregateUDF, DmlStatement, HigherOrderUDF, RangePartitioning, RecursiveQuery,
+    TableSource, Unnest, WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
@@ -982,15 +982,22 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
-                let skip = limit.skip.max(0) as usize;
-
-                let fetch = if limit.fetch < 0 {
-                    None
-                } else {
-                    Some(limit.fetch as usize)
+                let skip = match &limit.skip {
+                    Some(expr) => {
+                        Some(from_proto::parse_expr(expr, ctx, extension_codec)?)
+                    }
+                    None => None,
+                };
+                let fetch = match &limit.fetch {
+                    Some(expr) => {
+                        Some(from_proto::parse_expr(expr, ctx, extension_codec)?)
+                    }
+                    None => None,
                 };
 
-                LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
+                LogicalPlanBuilder::from(input)
+                    .limit_by_expr(skip, fetch)?
+                    .build()
             }
             LogicalPlanType::Join(join) => {
                 let left_keys: Vec<Expr> =
@@ -1738,23 +1745,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     limit.input.as_ref(),
                     extension_codec,
                 )?;
-                let SkipType::Literal(skip) = limit.get_skip_type()? else {
-                    return Err(proto_error(
-                        "LogicalPlan::Limit only supports literal skip values",
-                    ));
+                let skip = match &limit.skip {
+                    Some(expr) => Some(Box::new(serialize_expr(expr, extension_codec)?)),
+                    None => None,
                 };
-                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-                    return Err(proto_error(
-                        "LogicalPlan::Limit only supports literal fetch values",
-                    ));
+
+                let fetch = match &limit.fetch {
+                    Some(expr) => Some(Box::new(serialize_expr(expr, extension_codec)?)),
+                    None => None,
                 };
 
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: skip as i64,
-                            fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
+                            skip,
+                            fetch,
                         },
                     ))),
                 })

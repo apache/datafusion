@@ -12045,25 +12045,21 @@ impl serde::Serialize for LimitNode {
         if self.input.is_some() {
             len += 1;
         }
-        if self.skip != 0 {
+        if self.skip.is_some() {
             len += 1;
         }
-        if self.fetch != 0 {
+        if self.fetch.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.LimitNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
-        if self.skip != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("skip", ToString::to_string(&self.skip).as_str())?;
+        if let Some(v) = self.skip.as_ref() {
+            struct_ser.serialize_field("skip", v)?;
         }
-        if self.fetch != 0 {
-            #[allow(clippy::needless_borrow)]
-            #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
+        if let Some(v) = self.fetch.as_ref() {
+            struct_ser.serialize_field("fetch", v)?;
         }
         struct_ser.end()
     }
@@ -12143,24 +12139,20 @@ impl<'de> serde::Deserialize<'de> for LimitNode {
                             if skip__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("skip"));
                             }
-                            skip__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
+                            skip__ = map_.next_value()?;
                         }
                         GeneratedField::Fetch => {
                             if fetch__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("fetch"));
                             }
-                            fetch__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
+                            fetch__ = map_.next_value()?;
                         }
                     }
                 }
                 Ok(LimitNode {
                     input: input__,
-                    skip: skip__.unwrap_or_default(),
-                    fetch: fetch__.unwrap_or_default(),
+                    skip: skip__,
+                    fetch: fetch__,
                 })
             }
         }

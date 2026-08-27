@@ -438,11 +438,14 @@ message CrossJoinNode {
 }
 
 message LimitNode {
+  reserved 2, 3;
   LogicalPlanNode input = 1;
-  // The number of rows to skip before fetch; non-positive means don't skip any
-  int64 skip = 2;
-  // Maximum number of rows to fetch; negative means no limit
-  int64 fetch = 3;
+  // The number of rows to skip before fetch; 
+  // If it is Literal and non-positive means don't skip any
+  LogicalExprNode skip = 4;
+  // Maximum number of rows to fetch; 
+  // If it is Literal and negative means no limit
+  LogicalExprNode fetch = 5;
 }
 
 message SelectionExecNode {
