@@ -420,7 +420,7 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     }
 }
 
-fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
+pub(crate) fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     match array.data_type() {
         DataType::Utf8View => {
             let string_view = array
