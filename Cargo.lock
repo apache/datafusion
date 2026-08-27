@@ -1767,6 +1767,7 @@ dependencies = [
  "tempfile",
  "test-utils",
  "tokio",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
  "zstd",

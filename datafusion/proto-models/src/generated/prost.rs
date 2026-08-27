@@ -1342,7 +1342,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1428,6 +1428,10 @@ pub mod physical_plan_node {
         ArrowScan(super::ArrowScanExecNode),
         #[prost(message, tag = "39")]
         ScalarSubquery(::prost::alloc::boxed::Box<super::ScalarSubqueryExecNode>),
+        #[prost(message, tag = "40")]
+        PiecewiseMergeJoin(
+            ::prost::alloc::boxed::Box<super::PiecewiseMergeJoinExecNode>,
+        ),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2575,6 +2579,25 @@ pub struct SortMergeJoinExecNode {
     pub null_equality: i32,
     #[prost(uint32, repeated, tag = "8")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PiecewiseMergeJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub buffered: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub streamed: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    /// The buffered-side and streamed-side halves of the single range predicate.
+    #[prost(message, optional, tag = "3")]
+    pub on_buffered: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub on_streamed: ::core::option::Option<PhysicalExprNode>,
+    /// `Operator` variant name, e.g. "Lt". Must be one of Lt/LtEq/Gt/GtEq.
+    #[prost(string, tag = "5")]
+    pub operator: ::prost::alloc::string::String,
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "6")]
+    pub join_type: i32,
+    #[prost(uint64, tag = "7")]
+    pub num_partitions: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncFuncExecNode {
