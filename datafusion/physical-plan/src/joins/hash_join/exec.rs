@@ -118,7 +118,9 @@ fn try_create_array_map(
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
 ) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
-    if on_left.len() != 1 {
+    // `bounds` are also collected for dynamic filters, on any key type, so the
+    // key type cannot be inferred from their presence.
+    if !is_perfect_hash_join_candidate(on_left, schema)? {
         return Ok(None);
     }
 
@@ -2542,7 +2544,12 @@ impl BuildSideState {
     }
 }
 
-fn should_collect_min_max_for_perfect_hash(
+/// Returns whether the build side could be joined with an [`ArrayMap`]
+/// (perfect hash join): a single join key of a supported integer type.
+///
+/// Only a candidate: the final decision also depends on the observed key
+/// range and density, see [`try_create_array_map`].
+fn is_perfect_hash_join_candidate(
     on_left: &[PhysicalExprRef],
     schema: &SchemaRef,
 ) -> Result<bool> {
@@ -2600,15 +2607,14 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
-    let should_collect_min_max_for_phj =
-        should_collect_min_max_for_perfect_hash(&on_left, &schema)?;
+    let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
     let initial = BuildSideState::try_new(
         metrics,
         reservation,
         on_left.clone(),
         &schema,
-        should_compute_dynamic_filters || should_collect_min_max_for_phj,
+        should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
     let state = left_stream
@@ -2768,7 +2774,7 @@ async fn collect_left_input(
         }
     };
 
-    if should_collect_min_max_for_phj && !should_compute_dynamic_filters {
+    if is_phj_candidate && !should_compute_dynamic_filters {
         bounds = None;
     }
 
@@ -7530,6 +7536,225 @@ mod tests {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
             ++
             ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// Regression test for a `NullEqualsNull` join whose build-side join key is
+    /// a dictionary with NULL stored in the dictionary *values*.
+    ///
+    /// Such a key is only logically NULL: `null_count() == 0` because the key
+    /// bitmap has no physical nulls, but `logical_null_count() > 0`. The hash
+    /// join must still treat it as a NULL key in two places:
+    ///
+    /// 1. The build side must not be turned into an `ArrayMap` (perfect hash
+    ///    join), which only supports plain integer keys. Bounds are collected
+    ///    for the dynamic filter regardless of key type, so the `ArrayMap`
+    ///    path must check the key type itself instead of inferring it from
+    ///    the presence of bounds; otherwise the build fails with
+    ///    `Unsupported type for ArrayMap`.
+    /// 2. The dynamic filter pushed to the probe side must be widened with
+    ///    `c2 IS NULL OR ...`, so the probe row with a NULL key still reaches
+    ///    the join and null-matches the build NULL. Without it the filter
+    ///    `c2 >= 1 AND c2 <= 2 AND c2 IN (...)` evaluates to NULL for that
+    ///    row and silently drops it.
+    ///
+    /// Setup: build keys `[1, NULL, 2]`, probe keys `[1, NULL, 4]`, inner join
+    /// with a `FilterExec` consuming the join's dynamic filter on the probe side.
+    /// Expected output: the `1 = 1` row and the `NULL = NULL` row.
+    #[tokio::test]
+    async fn test_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
+    -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Dictionary values: [1, NULL, 2]; keys: [0, 1, 2] => logical [1, NULL, 2]
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "d1",
+            vec![Some(100), Some(200), Some(300)],
+        );
+        let left_key = left
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(left_key.column(0).null_count(), 0);
+        assert_eq!(left_key.column(0).logical_null_count(), 1);
+
+        // Dictionary values: [1, NULL, 4]; keys: [0, 1, 2] => logical [1, NULL, 4]
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "d2",
+            vec![Some(10), Some(20), Some(40)],
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        // Wire the join's dynamic filter into a FilterExec over the probe side so
+        // that the filter is actually built (bounds are only collected when the
+        // probe subtree contains a consumer) and applied to the probe rows.
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right = Arc::new(FilterExecBuilder::new(consumer, right).build()?);
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        // (1) Building the hash table must not fail on the dictionary key.
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // (2) The build-side logical NULL must widen the pushed filter with
+        // `IS NULL`, because the join is NullEqualsNull.
+        dynamic_filter.wait_complete().await;
+        let filter = dynamic_filter.current()?.to_string();
+        assert!(
+            filter.contains("c2@0 IS NULL OR"),
+            "expected an IS NULL disjunct in the pushed filter, got: {filter}"
+        );
+
+        // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
+        // NULL survived the pushed filter.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+----+----+
+            | c1 | d1  | c2 | d2 |
+            +----+-----+----+----+
+            |    | 200 |    | 20 |
+            | 1  | 100 | 1  | 10 |
+            +----+-----+----+----+
+            ");
+        }
+        Ok(())
+    }
+
+    /// The [`PartitionMode::Partitioned`] counterpart of
+    /// [`test_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null`].
+    ///
+    /// Here the build-side logical NULL lives in exactly one build partition, so
+    /// the `keys_have_null` flag has to survive the per-partition aggregation in
+    /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
+    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
+    /// that one branch would still drop it for every other route.
+    #[tokio::test]
+    async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
+    -> Result<()> {
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_dynamic_filter_pushdown = true;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let partition_count = 4;
+
+        // Dictionary values: [1, NULL, 2]; keys: [0, 1, 2] => logical [1, NULL, 2]
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "d1",
+            vec![Some(100), Some(200), Some(300)],
+        );
+        // Dictionary values: [1, NULL, 4]; keys: [0, 1, 2] => logical [1, NULL, 4]
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "d2",
+            vec![Some(10), Some(20), Some(40)],
+        );
+
+        let left_key =
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as PhysicalExprRef;
+        let right_key =
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as PhysicalExprRef;
+        let on = vec![(Arc::clone(&left_key), Arc::clone(&right_key))];
+
+        // Hash-repartition both sides so the join runs with real partition routing:
+        // the build NULL and the probe NULL land in the same partition, and every
+        // other partition reports a NULL-free build.
+        let left_repartitioned: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(
+                left,
+                Partitioning::Hash(vec![left_key], partition_count),
+            )?);
+        let right_repartitioned: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(
+                right,
+                Partitioning::Hash(vec![Arc::clone(&right_key)], partition_count),
+            )?);
+
+        // The FilterExec sits above the repartition so each probe partition is only
+        // read after the join has waited for every partition's build report, which
+        // makes the finalized (routed and widened) filter the one actually applied.
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right_filtered: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExecBuilder::new(consumer, right_repartitioned).build()?);
+
+        let mut join = HashJoinExec::try_new(
+            left_repartitioned,
+            right_filtered,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        let batches = crate::execution_plan::collect(Arc::new(join), task_ctx).await?;
+
+        dynamic_filter.wait_complete().await;
+        let filter = dynamic_filter.current()?.to_string();
+        // The aggregated build-side NULL must widen the routed filter once, at the
+        // top: `c2 IS NULL OR CASE hash(c2) % 4 WHEN ... END`.
+        assert!(
+            filter.contains("CASE"),
+            "expected a routed partitioned filter, got: {filter}"
+        );
+        assert!(
+            filter.starts_with("c2@0 IS NULL OR"),
+            "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
+        );
+
+        // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
+        // NULL survived the pushed filter on its route.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+----+----+
+            | c1 | d1  | c2 | d2 |
+            +----+-----+----+----+
+            |    | 200 |    | 20 |
+            | 1  | 100 | 1  | 10 |
+            +----+-----+----+----+
             ");
         }
         Ok(())
