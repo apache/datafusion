@@ -104,7 +104,7 @@ arrow-avro = { version = "59.2.0", default-features = false, features = [
 arrow-buffer = { version = "59.2.0", default-features = false }
 arrow-data = { version = "59.2.0", default-features = false }
 arrow-flight = { version = "59.2.0", features = [
-    "flight-sql-experimental",
+    "flight-sql",
 ] }
 # Both codecs are required here to make sure that code paths like
 # file-spilling have access to all compression codecs.
@@ -177,7 +177,7 @@ liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "59.2.0", default-features = false, features = [
     "arrow",
@@ -418,3 +418,20 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+## Temporary arrow-rs patch until 60.0.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-array = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-avro = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-buffer = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-cast = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-data = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-ipc = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-schema = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-select = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-string = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-ord = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+arrow-flight = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }
+parquet = { git = "https://github.com/haohuaijin/arrow-rs.git", rev = "53e2cc6ec644e1d71cf84002fbc5a5500427dbaf" }

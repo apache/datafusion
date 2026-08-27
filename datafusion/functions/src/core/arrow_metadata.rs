@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{MapBuilder, StringBuilder};
+use arrow::array::{MapBuilder, MapFieldNames, StringBuilder};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
@@ -129,8 +129,18 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
             let value = metadata.get(key).cloned();
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value)))
         } else if args.args.len() == 1 {
-            let mut map_builder =
-                MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+            // Match the field names declared in `return_type` (the arrow-rs
+            // default changed to `key`/`value` in arrow 60)
+            let map_field_names = MapFieldNames {
+                entry: "entries".to_string(),
+                key: "keys".to_string(),
+                value: "values".to_string(),
+            };
+            let mut map_builder = MapBuilder::new(
+                Some(map_field_names),
+                StringBuilder::new(),
+                StringBuilder::new(),
+            );
 
             let mut entries: Vec<_> = metadata.iter().collect();
             entries.sort_by_key(|(k, _)| *k);
