@@ -935,7 +935,8 @@ mod tests {
         use arrow::array::{
             AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
             DictionaryArray, Int32Array, Int64Array, IntervalDayTimeArray,
-            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray, StringViewArray,
+            IntervalMonthDayNanoArray, IntervalYearMonthArray, StringArray,
+            StringViewArray,
         };
         use arrow::datatypes::{Int32Type, IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
@@ -1252,7 +1253,7 @@ mod tests {
 
         #[test]
         fn dictionary_int32_utf8_per_row_and_groups_acc() {
-            // {"a", "b", "b", "c", "c", "c"} — 3 distinct logical values
+            // 3 distinct logical values
             let keys = Int32Array::from(vec![0, 1, 1, 2, 2, 2]);
             let values = StringArray::from(vec!["a", "b", "c"]);
             let array: ArrayRef = Arc::new(
