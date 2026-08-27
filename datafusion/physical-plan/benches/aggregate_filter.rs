@@ -44,7 +44,7 @@ use tokio::runtime::Runtime;
 const NUM_ROWS: usize = 65_536;
 const BATCH_SIZE: usize = 8_192;
 const NUM_GROUPS: usize = 1_024;
-const FILTER_PERCENTS: [usize; 5] = [1, 10, 50, 90, 99];
+const FILTER_PERCENTS: &[usize] = &[1, 10, 50, 90, 99, 100];
 
 #[derive(Clone, Copy)]
 enum AggregateLayout {
@@ -298,7 +298,7 @@ fn aggregate_filter_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Elements(NUM_ROWS as u64));
 
         benchmark_case(&mut group, &runtime, layout, "unfiltered", None);
-        for filter_percent in FILTER_PERCENTS {
+        for &filter_percent in FILTER_PERCENTS {
             benchmark_case(
                 &mut group,
                 &runtime,
