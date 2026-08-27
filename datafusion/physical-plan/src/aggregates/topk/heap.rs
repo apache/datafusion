@@ -412,8 +412,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         let b_hi = self.heap[b_idx].as_ref().expect("Missing heap entry");
         let a_hi = self.heap[a_idx].as_ref().expect("Missing heap entry");
 
-        mapper.push((b_hi.map_idx, b_idx));
-        mapper.push((a_hi.map_idx, a_idx));
+        mapper.extend([(b_hi.map_idx, b_idx), (a_hi.map_idx, a_idx)].into_iter());
     }
 
     fn heapify_down(&mut self, node_idx: usize, mapper: &mut Vec<(usize, usize)>) {
