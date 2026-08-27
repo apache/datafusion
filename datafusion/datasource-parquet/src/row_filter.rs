@@ -401,6 +401,28 @@ pub fn build_row_filter(
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
+    Ok(build_row_filter_with_mask(
+        expr,
+        file_schema,
+        metadata,
+        reorder_predicates,
+        file_metrics,
+    )?
+    .map(|(filter, _mask)| filter))
+}
+
+/// Like [`build_row_filter`], but also returns the union of the
+/// [`ProjectionMask`]s of all predicates in the filter (the set of parquet
+/// leaf columns that will be read to evaluate the filter). Used by the
+/// opener to compute the byte ranges needed for a whole row group when
+/// `progressive_io` is disabled.
+pub(crate) fn build_row_filter_with_mask(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    metadata: &ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+) -> Result<Option<(RowFilter, ProjectionMask)>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
@@ -458,10 +480,20 @@ pub fn build_row_filter(
                 predicate_rows_matched,
                 time.clone(),
             )
-            .map(|pred| Box::new(pred) as _)
+            .map(|pred| Box::new(pred) as Box<dyn ArrowPredicate>)
         })
         .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
+        .map(|filters: Vec<Box<dyn ArrowPredicate>>| {
+            let mut mask_iter = filters.iter().map(|f| f.projection());
+            let mut filter_mask = mask_iter
+                .next()
+                .expect("candidates is non-empty, checked above")
+                .clone();
+            for mask in mask_iter {
+                filter_mask.union(mask);
+            }
+            Some((RowFilter::new(filters), filter_mask))
+        })
 }
 
 /// Builds row filters for a parquet decoder.
@@ -476,6 +508,9 @@ pub(crate) struct RowFilterGenerator<'a> {
     reorder_predicates: bool,
     file_metrics: &'a ParquetFileMetrics,
     first_row_filter: Option<RowFilter>,
+    /// Union of the [`ProjectionMask`]s of all predicates in the built
+    /// filter. `None` when no filter could be built.
+    filter_mask: Option<ProjectionMask>,
 }
 
 impl<'a> RowFilterGenerator<'a> {
@@ -493,6 +528,7 @@ impl<'a> RowFilterGenerator<'a> {
             reorder_predicates,
             file_metrics,
             first_row_filter: None,
+            filter_mask: None,
         };
         generator.first_row_filter = generator.build();
         generator
@@ -502,16 +538,25 @@ impl<'a> RowFilterGenerator<'a> {
         self.first_row_filter.take().or_else(|| self.build())
     }
 
-    fn build(&self) -> Option<RowFilter> {
+    /// Returns the union of the [`ProjectionMask`]s of all predicates in the
+    /// row filter, or `None` if no filter was built.
+    pub(crate) fn filter_mask(&self) -> Option<&ProjectionMask> {
+        self.filter_mask.as_ref()
+    }
+
+    fn build(&mut self) -> Option<RowFilter> {
         let predicate = self.predicate?;
-        match build_row_filter(
+        match build_row_filter_with_mask(
             predicate,
             self.physical_file_schema,
             self.file_metadata,
             self.reorder_predicates,
             self.file_metrics,
         ) {
-            Ok(Some(filter)) => Some(filter),
+            Ok(Some((filter, mask))) => {
+                self.filter_mask = Some(mask);
+                Some(filter)
+            }
             Ok(None) => None,
             Err(e) => {
                 log::debug!(

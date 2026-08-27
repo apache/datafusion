@@ -920,6 +920,85 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
     );
 }
 
+#[tokio::test]
+async fn query_single_parquet_file_pushdown_filters_one_shot_io() {
+    let test = Test::new().with_single_file_parquet().await;
+    test.set("datafusion.execution.parquet.pushdown_filters", "true")
+        .await;
+    // Opt out of the narrow-projection pushdown gate: these tests exist to
+    // demonstrate the pushdown I/O pattern, which requires a RowFilter to
+    // actually be installed.
+    test.set(
+        "datafusion.execution.parquet.pushdown_filter_mode",
+        "always",
+    )
+    .await;
+
+    // With filter pushdown enabled and `progressive_io` disabled (the
+    // default), all data needed for each row group (columns needed by the
+    // filter and the projection) is fetched with a single request per row
+    // group: the same I/O pattern as when pushdown_filters is disabled.
+    assert_snapshot!(
+        test.query("select min(b) from parquet_table WHERE a > 50").await,
+        @r"
+    ------- Query Output (1 rows) -------
+    +----------------------+
+    | min(parquet_table.b) |
+    +----------------------+
+    | 1051                 |
+    +----------------------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (ranges) path=parquet_table.parquet ranges=4-534,534-1064
+    - GET  (ranges) path=parquet_table.parquet ranges=1064-1594,1594-2124
+    "
+    );
+}
+
+#[tokio::test]
+async fn query_single_parquet_file_pushdown_filters_progressive_io() {
+    let test = Test::new().with_single_file_parquet().await;
+    test.set("datafusion.execution.parquet.pushdown_filters", "true")
+        .await;
+    // Opt out of the narrow-projection pushdown gate: these tests exist to
+    // demonstrate the pushdown I/O pattern, which requires a RowFilter to
+    // actually be installed.
+    test.set(
+        "datafusion.execution.parquet.pushdown_filter_mode",
+        "always",
+    )
+    .await;
+    test.set("datafusion.execution.parquet.progressive_io", "true")
+        .await;
+
+    // With `progressive_io` enabled (and an offset index present in the
+    // file), each row group is fetched progressively: first the columns
+    // needed to evaluate the filter (`a`), then the remaining projected
+    // columns (`b`) for the rows that passed, resulting in multiple
+    // requests per row group.
+    assert_snapshot!(
+        test.query("select min(b) from parquet_table WHERE a > 50").await,
+        @r"
+    ------- Query Output (1 rows) -------
+    +----------------------+
+    | min(parquet_table.b) |
+    +----------------------+
+    | 1051                 |
+    +----------------------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 5
+    - GET  (opts) path=parquet_table.parquet head=true
+    - GET  (ranges) path=parquet_table.parquet ranges=4-534
+    - GET  (ranges) path=parquet_table.parquet ranges=534-951,951-1064
+    - GET  (ranges) path=parquet_table.parquet ranges=1064-1594
+    - GET  (ranges) path=parquet_table.parquet ranges=1594-2124
+    "
+    );
+}
+
 /// Runs tests with a request counting object store
 struct Test {
     object_store: Arc<RequestCountingObjectStore>,
@@ -959,6 +1038,17 @@ impl Test {
     /// Returns a string representation of all recorded requests thus far
     fn requests(&self) -> String {
         format!("{}", self.object_store)
+    }
+
+    /// Set a session configuration value via SQL `SET`
+    async fn set(&self, key: &str, value: &str) {
+        self.session_context
+            .sql(&format!("set {key} = {value}"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
     }
 
     /// Store the specified bytes at the given path
