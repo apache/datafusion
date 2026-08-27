@@ -83,8 +83,8 @@ fn get_stats(
 /// 4. Do not reorder the join if neither statistic is available, or if
 ///    `datafusion.optimizer.join_reordering` is disabled.
 ///
-/// Used configurations inside arg `config`
-/// - `config.optimizer.join_reordering`: allows or forbids statistics-driven join swapping
+/// Used configurations
+/// - `optimizer.join_reordering`: allows or forbids statistics-driven join swapping
 pub(crate) fn should_swap_join_order(
     left: &dyn ExecutionPlan,
     right: &dyn ExecutionPlan,
@@ -187,10 +187,10 @@ fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
 /// When the `ignore_threshold` is false, this function will also check left
 /// and right sizes in bytes or rows.
 ///
-/// Used configurations inside arg `config`
-/// - `config.optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
-/// - `config.optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
-/// - `config.optimizer.join_reordering`: allows or forbids input swapping
+/// Used configurations
+/// - `optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
+/// - `optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
+/// - `optimizer.join_reordering`: allows or forbids input swapping
 pub(crate) fn try_collect_left(
     hash_join: &HashJoinExec,
     ignore_threshold: bool,
@@ -254,8 +254,8 @@ pub(crate) fn try_collect_left(
 /// If swapping is optimal and supported, creates a swapped partitioned hash join; otherwise,
 /// creates a standard partitioned hash join.
 ///
-/// Used configurations inside arg `config`
-/// - `config.optimizer.join_reordering`: allows or forbids statistics-driven join swapping
+/// Used configurations
+/// - `optimizer.join_reordering`: allows or forbids statistics-driven join swapping
 pub(crate) fn partitioned_hash_join(
     hash_join: &HashJoinExec,
     context: &dyn PhysicalOptimizerContext,
@@ -290,10 +290,10 @@ pub(crate) fn partitioned_hash_join(
 /// optimize hash and cross joins in the plan according to available statistical
 /// information.
 ///
-/// Used configurations inside arg `config`
-/// - `config.optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
-/// - `config.optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
-/// - `config.optimizer.join_reordering`: allows or forbids input swapping
+/// Used configurations
+/// - `optimizer.hash_join_single_partition_threshold`: byte threshold for `CollectLeft`
+/// - `optimizer.hash_join_single_partition_threshold_rows`: row threshold for `CollectLeft`
+/// - `optimizer.join_reordering`: allows or forbids input swapping
 fn statistical_join_selection_subrule(
     plan: Arc<dyn ExecutionPlan>,
     context: &dyn PhysicalOptimizerContext,
