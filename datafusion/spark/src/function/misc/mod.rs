@@ -16,10 +16,23 @@
 // under the License.
 
 use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
-pub mod expr_fn {}
+mod equal_null;
+
+make_udf_function!(equal_null::SparkEqualNull, equal_null);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        equal_null,
+        "Returns true if arg1 equals arg2, or if both are NULL; false otherwise",
+        arg1 arg2
+    ));
+}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![]
+    vec![equal_null()]
 }

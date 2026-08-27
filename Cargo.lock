@@ -2629,6 +2629,7 @@ dependencies = [
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-nested",
+ "datafusion-physical-expr-common",
  "datafusion-session",
  "log",
  "num-traits",
