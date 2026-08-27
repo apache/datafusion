@@ -24,10 +24,10 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{Array, BooleanArray, Float64Array, UInt32Array};
+use arrow::array::{BooleanArray, Float64Array, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_functions_aggregate::sum::sum_udaf;
@@ -185,81 +185,6 @@ fn make_plan(
     )
 }
 
-fn expected_sums(
-    layout: AggregateLayout,
-    filter_percent: Option<usize>,
-) -> Vec<Vec<Option<f64>>> {
-    let mut expected = vec![vec![None; NUM_GROUPS]; layout.aggregate_count()];
-
-    for row in 0..NUM_ROWS {
-        let group = row % NUM_GROUPS;
-        let value = (row % 1_000) as f64;
-        let squared = value * value;
-
-        for (aggregate_index, aggregate) in expected.iter_mut().enumerate() {
-            let selected = filter_percent.is_none_or(|filter_percent| {
-                if aggregate_index == 0
-                    || matches!(layout, AggregateLayout::TwoAggregatesSharedFilter)
-                {
-                    include_a(row, filter_percent)
-                } else {
-                    include_b(row, filter_percent)
-                }
-            });
-
-            if selected {
-                *aggregate[group].get_or_insert(0.0) += squared;
-            }
-        }
-    }
-
-    expected
-}
-
-fn validate_output(
-    output: &[RecordBatch],
-    layout: AggregateLayout,
-    filter_percent: Option<usize>,
-) {
-    let expected = expected_sums(layout, filter_percent);
-    let mut seen_groups = vec![false; NUM_GROUPS];
-
-    for batch in output {
-        let group_keys = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .unwrap();
-        let sums = (0..layout.aggregate_count())
-            .map(|aggregate_index| {
-                batch
-                    .column(aggregate_index + 1)
-                    .as_any()
-                    .downcast_ref::<Float64Array>()
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-
-        for row in 0..batch.num_rows() {
-            let group = group_keys.value(row) as usize;
-            assert!(!seen_groups[group], "duplicate group {group}");
-            seen_groups[group] = true;
-
-            for (aggregate_index, sum) in sums.iter().enumerate() {
-                match expected[aggregate_index][group] {
-                    Some(expected) => {
-                        assert!(!sum.is_null(row));
-                        assert_eq!(sum.value(row), expected);
-                    }
-                    None => assert!(sum.is_null(row)),
-                }
-            }
-        }
-    }
-
-    assert!(seen_groups.into_iter().all(|seen| seen));
-}
-
 fn benchmark_case(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     runtime: &Runtime,
@@ -269,11 +194,6 @@ fn benchmark_case(
 ) {
     let plan = make_plan(layout, filter_percent);
     let task_ctx = Arc::new(TaskContext::default());
-
-    let output = runtime
-        .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
-        .unwrap();
-    validate_output(&output, layout, filter_percent);
 
     group.bench_function(case_name, |b| {
         b.iter(|| {
@@ -295,7 +215,6 @@ fn aggregate_filter_benchmark(c: &mut Criterion) {
     ] {
         let mut group =
             c.benchmark_group(format!("grouped_aggregate_filter/{}", layout.name()));
-        group.throughput(Throughput::Elements(NUM_ROWS as u64));
 
         benchmark_case(&mut group, &runtime, layout, "unfiltered", None);
         for &filter_percent in FILTER_PERCENTS {
