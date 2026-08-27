@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Spark Compatible Functions &#8212; Apache DataFusion  documentation</title>
+    <title>Upgrade Guides &#8212; Apache DataFusion  documentation</title>
   
   
   
@@ -42,14 +42,14 @@
     <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'library-user-guide/functions/spark';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'library-user-guide/upgrading/56.0.0';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <link rel="canonical" href="https://datafusion.apache.org/library-user-guide/functions/spark.html" />
+    <link rel="canonical" href="https://datafusion.apache.org/library-user-guide/upgrading/56.0.0.html" />
     <link rel="icon" href="../../_static/favicon.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Custom Table Provider" href="../custom-table-providers.html" />
-    <link rel="prev" title="Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions" href="adding-udfs.html" />
+    <link rel="next" title="Upgrade Guides" href="55.0.0.html" />
+    <link rel="prev" title="Upgrade Guides" href="index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -302,19 +302,19 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../index.html">Introduction</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/56.0.0.html">DataFusion 56.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/52.0.0.html">DataFusion 52.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/51.0.0.html">DataFusion 51.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/50.0.0.html">DataFusion 50.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/49.0.0.html">DataFusion 49.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/48.0.1.html">DataFusion 48.0.1</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/48.0.0.html">DataFusion 48.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/47.0.0.html">DataFusion 47.0.0</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../upgrading/46.0.0.html">DataFusion 46.0.0</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Upgrade Guides</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">DataFusion 56.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="55.0.0.html">DataFusion 55.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="54.0.0.html">DataFusion 54.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="53.0.0.html">DataFusion 53.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="52.0.0.html">DataFusion 52.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="51.0.0.html">DataFusion 51.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="50.0.0.html">DataFusion 50.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="49.0.0.html">DataFusion 49.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.1.html">DataFusion 48.0.1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="48.0.0.html">DataFusion 48.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="47.0.0.html">DataFusion 47.0.0</a></li>
+<li class="toctree-l2"><a class="reference internal" href="46.0.0.html">DataFusion 46.0.0</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="../extensions.html">Extensions List</a></li>
@@ -325,9 +325,9 @@
 
 <li class="toctree-l1"><a class="reference internal" href="../building-logical-plans.html">Building Logical Plans</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../catalogs.html">Catalogs, Schemas, and Tables</a></li>
-<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Functions</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
-<li class="toctree-l2 current active"><a class="current reference internal" href="#">Spark Compatible Functions</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../functions/spark.html">Spark Compatible Functions</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="../custom-table-providers.html">Custom Table Provider</a></li>
@@ -412,9 +412,9 @@
       </a>
     </li>
     
-    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Functions</a></li>
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Upgrade Guides</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Spark Compatible Functions</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Upgrade Guides</span></li>
   </ul>
 </nav>
 </div>
@@ -449,11 +449,59 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="spark-compatible-functions">
-<h1>Spark Compatible Functions<a class="headerlink" href="#spark-compatible-functions" title="Link to this heading">#</a></h1>
-<p>The <a class="reference external" href="https://crates.io/crates/datafusion-spark"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code></a> crate provides Apache Spark-compatible expressions for
-use with DataFusion.</p>
-<p>Please see the documentation for the <a class="reference external" href="https://docs.rs/datafusion-spark/latest/datafusion_spark/"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> crate</a> for more details.</p>
+<section id="upgrade-guides">
+<h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
+<section id="datafusion-56-0-0">
+<h2>DataFusion 56.0.0<a class="headerlink" href="#datafusion-56-0-0" title="Link to this heading">#</a></h2>
+<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
+in this section pertains to features and changes that have already been merged
+to the main branch and are awaiting release in this version.</p>
+<section id="datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> config flag is deprecated and
+now ignored (setting it emits a deprecation warning). The pluggable
+<code class="docutils literal notranslate"><span class="pre">StatisticsRegistry</span></code> is always consulted during the single statistics walk:
+providers registered on the session take effect directly. With no providers
+registered the registry is a no-op, so default behavior is unchanged from the
+previous default (<code class="docutils literal notranslate"><span class="pre">use_statistics_registry</span> <span class="pre">=</span> <span class="pre">false</span></code>).</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Anyone who set <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code>. The setting is
+still accepted (with a deprecation warning) but has no effect, and will be
+removed in a future release.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<ul class="simple">
+<li><p>Drop any <code class="docutils literal notranslate"><span class="pre">use_statistics_registry</span></code> setting.</p></li>
+<li><p>To use statistics providers, register them on the session with
+<code class="docutils literal notranslate"><span class="pre">SessionStateBuilder::with_statistics_registry(...)</span></code>. To keep the built-in
+NDV-aware providers the flag previously enabled, register
+<code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::default_with_builtin_providers()</span></code>.</p></li>
+<li><p>To opt out, register nothing (the default).</p></li>
+</ul>
+</section>
+<section id="defaultstatisticsprovider-is-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated<a class="headerlink" href="#defaultstatisticsprovider-is-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::operator_statistics::DefaultStatisticsProvider</span></code> is
+deprecated. It is redundant: the statistics walk (<code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code>) falls back
+to each operator’s <code class="docutils literal notranslate"><span class="pre">statistics_from_inputs</span></code> when the provider chain delegates or
+is empty, so a terminal “default” provider is no longer needed. It is no longer
+part of <code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::default_with_builtin_providers()</span></code>.</p>
+<p><strong>Migration guide:</strong></p>
+<ul class="simple">
+<li><p>Remove <code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> from any custom provider chain; register no
+terminal provider instead (the walk falls back on its own).</p></li>
+</ul>
+</section>
+<section id="statisticsregistry-compute-and-compute-base-are-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated<a class="headerlink" href="#statisticsregistry-compute-and-compute-base-are-deprecated" title="Link to this heading">#</a></h3>
+<p>Use the walk instead:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">StatisticsContext</span><span class="p">::</span><span class="n">new_with_registry</span><span class="p">(</span><span class="n">registry</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">compute_extended</span><span class="p">(</span><span class="n">plan</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">StatisticsArgs</span><span class="p">::</span><span class="n">new</span><span class="p">())</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// or .compute(...) for core Statistics</span>
+</pre></div>
+</div>
+</section>
+</section>
 </section>
 
 
@@ -467,20 +515,20 @@ use with DataFusion.</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="adding-udfs.html"
+       href="index.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</p>
+        <p class="prev-next-title">Upgrade Guides</p>
       </div>
     </a>
     <a class="right-next"
-       href="../custom-table-providers.html"
+       href="55.0.0.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Custom Table Provider</p>
+        <p class="prev-next-title">Upgrade Guides</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -496,10 +544,27 @@ use with DataFusion.</p>
 
 
   <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/functions/spark.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/upgrading/56.0.0.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -514,7 +579,7 @@ use with DataFusion.</p>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../../_sources/library-user-guide/functions/spark.md.txt">
+    <a href="../../_sources/library-user-guide/upgrading/56.0.0.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>

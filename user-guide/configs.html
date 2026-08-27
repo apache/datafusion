@@ -303,6 +303,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../library-user-guide/index.html">Introduction</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../library-user-guide/upgrading/index.html">Upgrade Guides</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/56.0.0.html">DataFusion 56.0.0</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/55.0.0.html">DataFusion 55.0.0</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/54.0.0.html">DataFusion 54.0.0</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../library-user-guide/upgrading/53.0.0.html">DataFusion 53.0.0</a></li>
@@ -911,7 +912,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-odd"><td><p>datafusion.optimizer.use_statistics_registry</p></td>
 <td><p>false</p></td>
-<td><p>When set to true, the physical plan optimizer uses the pluggable <code class="docutils literal notranslate"><span class="pre">StatisticsRegistry</span></code> for statistics propagation across operators. This enables more accurate cardinality estimates compared to each operator’s built-in <code class="docutils literal notranslate"><span class="pre">partition_statistics</span></code>.</p></td>
+<td><p>(Deprecated) Ignored: the physical plan optimizer always consults the session’s pluggable <code class="docutils literal notranslate"><span class="pre">StatisticsRegistry</span></code> (register providers on the <code class="docutils literal notranslate"><span class="pre">SessionState</span></code>; with none it is a no-op).</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.optimizer.prefer_hash_join</p></td>
 <td><p>true</p></td>
