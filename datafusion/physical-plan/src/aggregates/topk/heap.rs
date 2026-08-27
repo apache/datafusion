@@ -348,12 +348,13 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     }
 
     pub fn drain(&mut self) -> (Vec<VAL>, Vec<usize>) {
-        let mut map = Vec::with_capacity(self.len);
+        let mut map = Vec::new();
         let mut vals = Vec::with_capacity(self.len);
         let mut map_idxs = Vec::with_capacity(self.len);
         while let Some(worst_hi) = self.pop(&mut map) {
             vals.push(worst_hi.val);
             map_idxs.push(worst_hi.map_idx);
+            map.clear();
         }
         vals.reverse();
         map_idxs.reverse();
