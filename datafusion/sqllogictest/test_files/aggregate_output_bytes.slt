@@ -1,0 +1,91 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# --------------------------------------------
+# Regression test for the hash aggregation `output_bytes` metric.
+#
+# The hash aggregate's grouping table materializes its emitted output as a
+# single RecordBatch and then slices it into `batch_size`-sized chunks across
+# successive `poll_next` calls. Those slices share the same underlying
+# buffers (Arrow `.slice()` is zero-copy), so each buffer must only be
+# counted once in `output_bytes`, no matter how many slices reference it.
+#
+# Using `RecordBatch::record_output` (as the streams used to) recomputes
+# memory usage from scratch on every slice, with no memory of buffers
+# already counted -- so all N slices of one materialization each count the
+# shared buffers again, inflating `output_bytes` by ~Nx. `RecordBatchMemoryMetrics`
+# fixes this by tracking already-counted buffers across all the slices of one
+# materialization, so a shared buffer is only counted on the first slice
+# that references it.
+#
+# The two `output_bytes` values below (1264.0 B vs 1344.0 B) are close but
+# not bit-for-bit equal -- `batch_size` also affects how `DataSourceExec`
+# chunks the *input* to the aggregator, independently of how the aggregate's
+# own output gets sliced, which shifts the exact materialized size by a few
+# bytes. That's expected and not what this test checks. What matters is that
+# `output_bytes` does not scale with the number of output batches: it must
+# stay at `1344.0 B` when sliced into 3 batches, not jump to ~3x that value.
+# --------------------------------------------
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.analyze_level = dev;
+
+statement ok
+CREATE TABLE agg_output_bytes_src AS
+SELECT value AS group_col, 1::BIGINT AS value_col
+FROM generate_series(0, 29) AS t(value);
+
+# batch_size = 100: the 30-row emit fits in one output batch, no slicing.
+statement ok
+set datafusion.execution.batch_size = 100;
+
+query TT
+EXPLAIN ANALYZE
+SELECT group_col, COUNT(value_col) FROM agg_output_bytes_src GROUP BY group_col;
+----
+Plan with Metrics
+01)AggregateExec: mode=Single, gby=[group_col@0 as group_col], aggr=[count(agg_output_bytes_src.value_col)], metrics=[output_rows=30, elapsed_compute=<slt:ignore>, output_bytes=1264.0 B, output_batches=1, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, aggregate_arguments_time=<slt:ignore>, aggregation_time=<slt:ignore>, emitting_time=<slt:ignore>, time_calculating_group_ids=<slt:ignore>]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+# batch_size = 10: the same 30-row emit is sliced into 3 output batches, all
+# sharing buffers with the same underlying materialized batch. output_bytes
+# must stay at 1344.0 B, not be inflated to ~3x that (see header comment).
+statement ok
+set datafusion.execution.batch_size = 10;
+
+query TT
+EXPLAIN ANALYZE
+SELECT group_col, COUNT(value_col) FROM agg_output_bytes_src GROUP BY group_col;
+----
+Plan with Metrics
+01)AggregateExec: mode=Single, gby=[group_col@0 as group_col], aggr=[count(agg_output_bytes_src.value_col)], metrics=[output_rows=30, elapsed_compute=<slt:ignore>, output_bytes=1344.0 B, output_batches=3, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, aggregate_arguments_time=<slt:ignore>, aggregation_time=<slt:ignore>, emitting_time=<slt:ignore>, time_calculating_group_ids=<slt:ignore>]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+statement ok
+DROP TABLE agg_output_bytes_src;
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+reset datafusion.explain.analyze_level;
+
+statement ok
+set datafusion.execution.target_partitions = 4;

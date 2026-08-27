@@ -37,8 +37,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use datafusion_common::format::{MetricCategory, MetricType};
 use datafusion_physical_expr_common::metrics::{
-    Count, CustomMetricValue, Gauge, MetricValue, MetricsSet, PruningMetrics,
-    RatioMergeStrategy, RatioMetrics, Time, Timestamp,
+    Count, CustomMetricValue, Gauge, MetricValue, MetricsSet, OutputBytesCount,
+    PruningMetrics, RatioMergeStrategy, RatioMetrics, Time, Timestamp,
 };
 use datafusion_physical_expr_common::metrics::{Label, Metric};
 use stabby::string::String as SString;
@@ -396,6 +396,12 @@ fn count_from_value(v: u64) -> Count {
     c
 }
 
+fn output_bytes_count_from_value(v: u64) -> OutputBytesCount {
+    let c = OutputBytesCount::new();
+    c.add(v as usize);
+    c
+}
+
 fn gauge_from_value(v: u64) -> Gauge {
     let g = Gauge::new();
     g.add(v as usize);
@@ -478,7 +484,9 @@ impl From<FFI_MetricValue> for MetricValue {
             }
             FFI_MetricValue::SpillCount(n) => Self::SpillCount(count_from_value(n)),
             FFI_MetricValue::SpilledBytes(n) => Self::SpilledBytes(count_from_value(n)),
-            FFI_MetricValue::OutputBytes(n) => Self::OutputBytes(count_from_value(n)),
+            FFI_MetricValue::OutputBytes(n) => {
+                Self::OutputBytes(output_bytes_count_from_value(n))
+            }
             FFI_MetricValue::OutputBatches(n) => Self::OutputBatches(count_from_value(n)),
             FFI_MetricValue::SpilledRows(n) => Self::SpilledRows(count_from_value(n)),
             FFI_MetricValue::CurrentMemoryUsage(n) => {
@@ -610,9 +618,11 @@ mod tests {
         assert_value_roundtrip(MetricValue::OutputRows(c.clone()));
         assert_value_roundtrip(MetricValue::SpillCount(c.clone()));
         assert_value_roundtrip(MetricValue::SpilledBytes(c.clone()));
-        assert_value_roundtrip(MetricValue::OutputBytes(c.clone()));
         assert_value_roundtrip(MetricValue::OutputBatches(c.clone()));
         assert_value_roundtrip(MetricValue::SpilledRows(c.clone()));
+
+        let obc = OutputBytesCount::new();
+        assert_value_roundtrip(MetricValue::OutputBytes(obc.clone()));
 
         let g = Gauge::new();
         g.add(123);
