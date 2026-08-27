@@ -109,18 +109,10 @@ SELECT date_bin('30 minutes', ts) FROM ree_timestamps;
 2023-12-04T00:00:00
 2023-12-04T00:30:00
 
-# RANGE window frames are intentionally NOT supported over an REE-encoded
-# ORDER BY column and must fail at planning time, unlike Dictionary (which
-# extract_window_frame_target_type() in
-# datafusion/optimizer/src/analyzer/type_coercion.rs does unwrap). An offset
-# RANGE bound (`k PRECEDING`/`k FOLLOWING`) is computed by adding/subtracting
-# the offset from the current row's value, and a value pulled from a
-# still-REE-wrapped column isn't something arrow's arithmetic kernels handle
-# -- so rather than let that reach execution (silently or otherwise), REE is
-# rejected up front for RANGE frames of any bound kind. Tracked upstream at
-# https://github.com/apache/arrow-rs/issues/10891 (arithmetic kernel support
-# for RunEndEncoded); once that lands, this can go back to a real query.
-query error Cannot run range queries on datatype: RunEndEncoded
+# RANGE window frame ordered by an REE-encoded column: extract_window_frame_target_type()
+# unwraps RunEndEncoded the same way it does for Dictionary, so a frame that
+# doesn't need offset arithmetic.
+query II
 SELECT
     temperature,
     SUM(temperature) OVER (
@@ -132,8 +124,18 @@ SELECT
     ) AS windowed_sum
 FROM sensor_readings
 ORDER BY temperature;
+----
+20 20
+22 42
+23 65
+24 89
 
-query error Cannot run range queries on datatype: RunEndEncoded
+# An offset RANGE bound (`k PRECEDING`/`k FOLLOWING`, unlike CURRENT ROW or
+# UNBOUNDED above) is computed by adding/subtracting the offset from the
+# current row's value, and arrow's numeric kernels don't support arithmetic
+# on a still-RunEndEncoded-wrapped value (tracked at
+# https://github.com/apache/arrow-rs/issues/10891).
+query error RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type
 SELECT
     temperature,
     SUM(temperature) OVER (
