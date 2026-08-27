@@ -465,46 +465,39 @@ impl DefaultPhysicalExprAdapterRewriter {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let get_field_expr =
-            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
-                Some(expr) => expr,
-                None => return Ok(None),
-            };
-
-        let source_expr = match get_field_expr.args().first() {
-            Some(expr) => expr,
-            None => return Ok(None),
+        let Some(get_field_expr) =
+            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
+        else {
+            return Ok(None);
         };
 
-        let field_name_expr = match get_field_expr.args().get(1) {
-            Some(expr) => expr,
-            None => return Ok(None),
+        let Some(source_expr) = get_field_expr.args().first() else {
+            return Ok(None);
         };
 
-        let lit = match field_name_expr.downcast_ref::<Literal>() {
-            Some(lit) => lit,
-            None => return Ok(None),
+        let Some(field_name_expr) = get_field_expr.args().get(1) else {
+            return Ok(None);
         };
 
-        let field_name = match lit.value().try_as_str().flatten() {
-            Some(name) => name,
-            None => return Ok(None),
+        let Some(lit) = field_name_expr.downcast_ref::<Literal>() else {
+            return Ok(None);
         };
 
-        let column = match source_expr.downcast_ref::<Column>() {
-            Some(column) => column,
-            None => return Ok(None),
+        let Some(field_name) = lit.value().try_as_str().flatten() else {
+            return Ok(None);
         };
 
-        let physical_field =
-            match self.physical_file_schema.field_with_name(column.name()) {
-                Ok(field) => field,
-                Err(_) => return Ok(None),
-            };
+        let Some(column) = source_expr.downcast_ref::<Column>() else {
+            return Ok(None);
+        };
 
-        let physical_struct_fields = match physical_field.data_type() {
-            DataType::Struct(fields) => fields,
-            _ => return Ok(None),
+        let Ok(physical_field) = self.physical_file_schema.field_with_name(column.name())
+        else {
+            return Ok(None);
+        };
+
+        let DataType::Struct(physical_struct_fields) = physical_field.data_type() else {
+            return Ok(None);
         };
 
         if physical_struct_fields
@@ -514,23 +507,20 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(None);
         }
 
-        let logical_field = match self.logical_file_schema.field_with_name(column.name())
-        {
-            Ok(field) => field,
-            Err(_) => return Ok(None),
+        let Ok(logical_field) = self.logical_file_schema.field_with_name(column.name())
+        else {
+            return Ok(None);
         };
 
-        let logical_struct_fields = match logical_field.data_type() {
-            DataType::Struct(fields) => fields,
-            _ => return Ok(None),
+        let DataType::Struct(logical_struct_fields) = logical_field.data_type() else {
+            return Ok(None);
         };
 
-        let logical_struct_field = match logical_struct_fields
+        let Some(logical_struct_field) = logical_struct_fields
             .iter()
             .find(|f| f.name() == field_name)
-        {
-            Some(field) => field,
-            None => return Ok(None),
+        else {
+            return Ok(None);
         };
 
         let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;

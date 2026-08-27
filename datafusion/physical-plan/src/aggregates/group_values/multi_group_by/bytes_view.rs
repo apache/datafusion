@@ -18,9 +18,10 @@
 use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
-use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, ByteView, GenericByteViewArray,
+    NullBufferBuilder,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
@@ -69,7 +70,7 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     max_block_size: usize,
 
     /// Nulls
-    nulls: MaybeNullBufferBuilder,
+    nulls: NullBufferBuilder,
 
     /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
@@ -88,7 +89,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             in_progress: Vec::new(),
             completed: Vec::new(),
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
-            nulls: MaybeNullBufferBuilder::new(),
+            nulls: NullBufferBuilder::empty(),
             _phantom: PhantomData {},
         }
     }
@@ -110,13 +111,13 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Null row case, set and return
         if arr.is_null(row) {
-            self.nulls.append(true);
+            self.nulls.append_null();
             self.views.push(0);
             return;
         }
 
         // Not null row case
-        self.nulls.append(false);
+        self.nulls.append_non_null();
         self.do_append_val_inner(arr, row);
     }
 
@@ -168,7 +169,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             }
 
             Nulls::None => {
-                self.nulls.append_n(rows.len(), false);
+                self.nulls.append_n_non_nulls(rows.len());
                 if arr.data_buffers().is_empty() {
                     // Fast path: all strings are inline (≤12 bytes).
                     // The input array's u128 views are already in the correct format;
@@ -191,7 +192,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             }
 
             Nulls::All => {
-                self.nulls.append_n(rows.len(), true);
+                self.nulls.append_n_nulls(rows.len());
                 let new_len = self.views.len() + rows.len();
                 self.views.resize(new_len, 0);
             }
@@ -475,7 +476,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             self.flush_in_progress();
         }
         self.completed
-            .drain(0..last_remaining_buffer_index + 1)
+            .drain(0..=last_remaining_buffer_index)
             .collect()
     }
 

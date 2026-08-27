@@ -1404,7 +1404,7 @@ mod test {
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
         extract_expressions(&col("a"), &mut result);
-        assert!(result.len() == 1);
+        assert_eq!(result.len(), 1);
         Ok(())
     }
 

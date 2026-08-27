@@ -314,11 +314,11 @@ first_value(expression [ORDER BY expression])
 
 ```sql
 > SELECT first_value(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| first_value(column_name ORDER BY other_column)|
-+-----------------------------------------------+
-| first_element                                 |
-+-----------------------------------------------+
++------------------------------------------------+
+| first_value(column_name ORDER BY other_column) |
++------------------------------------------------+
+| first_element                                  |
++------------------------------------------------+
 ```
 
 ### `grouping`
@@ -705,7 +705,7 @@ nth_value(expression, n ORDER BY expression)
 #### Arguments
 
 - **expression**: The column or expression to retrieve the nth value from.
-- **n**: The position (nth) of the value to retrieve, based on the ordering.
+- **n**: The position of the value to retrieve. Positive values count from the first value, starting at 1; negative values count backward from the last value, where -1 returns the last value.
 
 #### Example
 

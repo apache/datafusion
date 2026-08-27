@@ -60,6 +60,9 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     val_hashes: Vec<u64>,
     /// Value hash for each inner slot, so `take_n` can update `value_dedup` without rehashing.
     slot_hash: Vec<u64>,
+    /// The last `dict.values()` Arc hashed in `append_val`. When the incoming
+    /// values array is `ptr_eq` to this, `val_hashes` can be reused directly.
+    cached_values: Option<ArrayRef>,
     _phantom: PhantomData<K>,
 }
 
@@ -77,6 +80,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             val_to_inner: Vec::default(),
             val_hashes: Vec::default(),
             slot_hash: Vec::default(),
+            cached_values: None,
             _phantom: PhantomData,
         }
     }
@@ -163,6 +167,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     }
 
     fn hash_values(&mut self, values: &ArrayRef) {
+        self.cached_values = None;
         self.val_hashes.clear();
         self.val_hashes.resize(values.len(), 0);
         create_hashes(
@@ -304,9 +309,25 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             }
             Some(val_idx) => {
                 let dict_values = dict.values();
-                let single = dict_values.slice(val_idx, 1);
-                self.hash_values(&single);
-                self.find_or_insert_value(dict_values, val_idx, self.val_hashes[0])?
+                // check if the dictionary values array we are hashing was already seen.
+                // if its arc was already stored we dont need to rehash the entire array again
+                // if its new hash the entire array and store an arc ptr for future use
+                let cache_hit = self
+                    .cached_values
+                    .as_ref()
+                    .is_some_and(|c| Arc::ptr_eq(c, dict_values));
+                if !cache_hit {
+                    self.val_hashes.clear();
+                    self.val_hashes.resize(dict_values.len(), 0);
+                    create_hashes(
+                        std::slice::from_ref(dict_values),
+                        &self.random_state,
+                        &mut self.val_hashes,
+                    )
+                    .unwrap();
+                    self.cached_values = Some(Arc::clone(dict_values));
+                }
+                self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])?
             }
         };
         self.group_to_inner.push(inner_slot);

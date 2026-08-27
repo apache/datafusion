@@ -1113,7 +1113,24 @@ impl SortExec {
     ///
     /// Validates that the filter's children reference valid columns in
     /// the sort's input schema.
+    #[deprecated(
+        since = "56.0.0",
+        note = "unused by DataFusion; `SortExec` restores its dynamic filter in `SortExec::try_from_proto`, which sets the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn with_dynamic_filter_expr(
+        self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        self.set_dynamic_filter(filter)
+    }
+
+    /// Replace the dynamic filter expression for this sort, resetting any
+    /// internal state which depends on the previous one and validating that the
+    /// filter's children reference valid columns in the sort's input schema.
+    ///
+    /// Only used to restore the filter when decoding a serialized plan: every
+    /// other code path creates the filter in [`SortExec::with_fetch`].
+    fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -1603,9 +1620,24 @@ impl ExecutionPlan for SortExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = self
-            .expr()
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `SortExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            input,
+            expr,
+            // Runtime metrics, not part of the plan shape.
+            metrics_set: _,
+            preserve_partitioning,
+            fetch,
+            // Derived from `input` and `expr` at construction time.
+            common_sort_prefix: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            filter,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let expr = expr
             .iter()
             .map(|sort_expr| {
                 let sort_node = Box::new(protobuf::PhysicalSortExprNode {
@@ -1621,11 +1653,12 @@ impl ExecutionPlan for SortExec {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let dynamic_filter = self
-            .dynamic_expressions_produced()
-            .into_iter()
-            .next()
-            .map(|expr| ctx.encode_expr(&expr))
+        let dynamic_filter = filter
+            .as_ref()
+            .map(|filter| {
+                let df_expr: Arc<dyn PhysicalExpr> = filter.read().expr();
+                ctx.encode_expr(&df_expr)
+            })
             .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -1633,11 +1666,11 @@ impl ExecutionPlan for SortExec {
                     protobuf::SortExecNode {
                         input: Some(Box::new(input)),
                         expr,
-                        fetch: match self.fetch() {
-                            Some(n) => n as i64,
+                        fetch: match fetch {
+                            Some(n) => *n as i64,
                             None => -1,
                         },
-                        preserve_partitioning: self.preserve_partitioning(),
+                        preserve_partitioning: *preserve_partitioning,
                         dynamic_filter,
                     },
                 )),
@@ -1659,11 +1692,18 @@ impl SortExec {
             protobuf::physical_plan_node::PhysicalPlanType::Sort,
             "SortExec",
         );
-        let input =
-            ctx.decode_required_child(sort.input.as_deref(), "SortExec", "input")?;
+        // Destructure exhaustively so that a new field on `SortExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::SortExecNode {
+            input,
+            expr,
+            fetch,
+            preserve_partitioning,
+            dynamic_filter,
+        } = &**sort;
+        let input = ctx.decode_required_child(input.as_deref(), "SortExec", "input")?;
         let input_schema = input.schema();
-        let exprs = sort
-            .expr
+        let exprs = expr
             .iter()
             .map(|expr| {
                 let Some(ExprType::Sort(sort_expr)) = expr.expr_type.as_ref() else {
@@ -1688,12 +1728,12 @@ impl SortExec {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return datafusion_common::internal_err!("SortExec requires an ordering");
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as usize);
+        let fetch = (*fetch >= 0).then_some(*fetch as usize);
         let new_sort = SortExec::new(ordering, input)
             .with_fetch(fetch)
-            .with_preserve_partitioning(sort.preserve_partitioning);
+            .with_preserve_partitioning(*preserve_partitioning);
 
-        let new_sort = if let Some(df_proto) = &sort.dynamic_filter {
+        let new_sort = if let Some(df_proto) = dynamic_filter {
             let df_expr =
                 ctx.decode_expr(df_proto, new_sort.input().schema().as_ref())?;
             let df = (df_expr as Arc<dyn std::any::Any + Send + Sync>)
@@ -1703,7 +1743,7 @@ impl SortExec {
                         "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
                     )
                 })?;
-            new_sort.with_dynamic_filter_expr(df)?
+            new_sort.set_dynamic_filter(df)?
         } else {
             new_sort
         };
@@ -3582,7 +3622,7 @@ mod tests {
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
 
-        // with_dynamic_filter replaces it with a new TopKDynamicFilters.
+        // set_dynamic_filter replaces it with a new TopKDynamicFilters.
         let new_df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::new(Column::new("a", 0)) as _],
             lit(true),
@@ -3590,7 +3630,7 @@ mod tests {
         let new_id = new_df
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
-        let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let sort = sort.set_dynamic_filter(Arc::clone(&new_df))?;
         let produced = sort.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
         let restored_id = produced[0]
@@ -3702,7 +3742,7 @@ mod tests {
             [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
             input,
         )
-        .with_dynamic_filter_expr(dynamic_filter)?
+        .set_dynamic_filter(dynamic_filter)?
         .with_preserve_partitioning(true)
         .with_fetch(Some(2));
 
@@ -3751,7 +3791,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(sort.with_dynamic_filter_expr(df).is_err());
+        assert!(sort.set_dynamic_filter(df).is_err());
         Ok(())
     }
 

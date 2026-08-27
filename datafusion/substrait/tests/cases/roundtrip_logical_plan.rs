@@ -611,7 +611,7 @@ async fn roundtrip_inlist_2() -> Result<()> {
 #[tokio::test]
 // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
 async fn roundtrip_inlist_3() -> Result<()> {
-    let inlist = (0..THRESHOLD_INLINE_INLIST + 1)
+    let inlist = (0..=THRESHOLD_INLINE_INLIST)
         .map(|i| format!("'{i}'"))
         .collect::<Vec<_>>()
         .join(", ");
@@ -2323,9 +2323,8 @@ impl HigherOrderUDFImpl for ArrayTransform {
             unreachable!()
         };
 
-        let field = match list.data_type() {
-            DataType::List(field) => field,
-            _ => unreachable!(),
+        let DataType::List(field) = list.data_type() else {
+            unreachable!()
         };
 
         Ok(LambdaParametersProgress::Complete(vec![vec![
