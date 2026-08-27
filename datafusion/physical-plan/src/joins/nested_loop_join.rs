@@ -4172,6 +4172,96 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_nlj_memory_limited_left_semi_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::LeftSemi, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Left semi: only left rows that matched at least one right row.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 5  | 5  | 50 |
+        +----+----+----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_left_anti_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::LeftAnti, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Left anti: left rows that did NOT match any right row.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+
+        | a1 | b1 | c1  |
+        +----+----+-----+
+        | 11 | 8  | 110 |
+        | 9  | 8  | 90  |
+        +----+----+-----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_left_mark_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::LeftMark, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Left mark: all left rows with a bool column indicating match.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+-------+
+        | a1 | b1 | c1  | mark  |
+        +----+----+-----+-------+
+        | 11 | 8  | 110 | false |
+        | 5  | 5  | 50  | true  |
+        | 9  | 8  | 90  | false |
+        +----+----+-----+-------+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_nlj_fits_in_memory_no_spill() -> Result<()> {
         // Use a large memory limit — everything fits, no spilling needed.
         let task_ctx = task_ctx_with_memory_limit(10_000_000, 16)?;
