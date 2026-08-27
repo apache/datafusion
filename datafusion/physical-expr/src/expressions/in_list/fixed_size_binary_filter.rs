@@ -53,7 +53,7 @@ use arrow::datatypes::{
 use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err};
 
 use super::primitive_filter::instantiate_primitive_filter;
-use super::static_filter::{StaticFilter, StaticFilterRef, handle_dictionary};
+use super::static_filter::{StaticFilter, StaticFilterRef};
 
 /// Reinterpret fixed-size binary values as same-width primitive values.
 ///
@@ -99,8 +99,6 @@ where
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
-
         if v.data_type() != &self.data_type {
             return Err(exec_datafusion_err!(
                 "FixedSizeBinary filter: expected {} array, got {}",
@@ -165,6 +163,7 @@ mod tests {
     use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
     use arrow::datatypes::Int8Type;
 
+    use super::super::dictionary_filter::DictionaryFilter;
     use super::*;
 
     fn value(width: i32, index: usize, miss: bool) -> Vec<u8> {
@@ -268,7 +267,7 @@ mod tests {
 
     #[test]
     fn handles_dictionary_needles() -> Result<()> {
-        let filter = make_filter(4, &[Some(value(4, 7, false))])?;
+        let filter = DictionaryFilter::new(make_filter(4, &[Some(value(4, 7, false))])?);
         let dictionary_values: ArrayRef = Arc::new(array(
             4,
             &[Some(value(4, 7, false)), Some(value(4, 8, false))],
