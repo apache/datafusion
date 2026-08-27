@@ -4440,6 +4440,109 @@ async fn collect_stream(stream: SendableRecordBatchStream) -> Result<Vec<RecordB
     common::collect(stream).await
 }
 
+#[rstest::rstest]
+#[case::empty_inner(true, false)]
+#[case::matching_key(false, false)]
+#[case::matching_key_with_filter(false, true)]
+#[tokio::test]
+async fn bitwise_emits_completed_batches_before_pending_outer(
+    #[values(LeftMark, RightMark)] join_type: JoinType,
+    #[case] empty_inner: bool,
+    #[case] with_filter: bool,
+) -> Result<()> {
+    let outer_batches = vec![
+        build_table_i32(
+            ("id", &vec![0, 1]),
+            ("key", &vec![1, 1]),
+            ("value", &vec![10, 20]),
+        ),
+        build_table_i32(
+            ("id", &vec![2, 3]),
+            ("key", &vec![1, 1]),
+            ("value", &vec![10, 20]),
+        ),
+    ];
+    let inner_batch = if empty_inner {
+        RecordBatch::new_empty(outer_batches[0].schema())
+    } else {
+        build_table_i32(("id", &vec![0]), ("key", &vec![1]), ("value", &vec![10]))
+    };
+    let outer = Box::pin(PendingStream::new(outer_batches.clone(), vec![false, true]));
+    let inner = Box::pin(PendingStream::new(vec![inner_batch], vec![false]));
+    let filter = with_filter.then(|| {
+        JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left_value", 0)),
+                Operator::Eq,
+                Arc::new(Column::new("right_value", 1)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 2,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 2,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("left_value", DataType::Int32, false),
+                Field::new("right_value", DataType::Int32, false),
+            ])),
+        )
+    });
+    let mut fields = outer.schema().fields().to_vec();
+    fields.push(Arc::new(Field::new("mark", DataType::Boolean, false)));
+    let schema = Arc::new(Schema::new(fields));
+    let metrics = ExecutionPlanMetricsSet::new();
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(inner.schema(), &metrics);
+    let mut stream = BitwiseSortMergeJoinStream::try_new(
+        Arc::clone(&schema),
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        outer,
+        inner,
+        vec![Arc::new(Column::new("key", 1))],
+        vec![Arc::new(Column::new("key", 1))],
+        filter,
+        join_type,
+        2,
+        0,
+        &metrics,
+        reservation,
+        spill_manager,
+        runtime_env,
+    )?;
+
+    // The first outer batch already fills an output batch. Do not wait for the next
+    // outer batch, even when draining unmatched rows or continuing the same key group.
+    let first = match futures::poll!(stream.next()) {
+        Poll::Ready(Some(batch)) => batch?,
+        other => panic!("Completed output must precede pending outer input: {other:?}"),
+    };
+    let mut output = vec![first];
+    output.extend(collect_stream(stream).await?);
+
+    let expected = outer_batches
+        .iter()
+        .map(|batch| {
+            let mut columns = batch.columns().to_vec();
+            columns.push(Arc::new(BooleanArray::from(vec![
+                !empty_inner,
+                !empty_inner && !with_filter,
+            ])));
+            RecordBatch::try_new(Arc::clone(&schema), columns)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        arrow::compute::concat_batches(&schema, &output)?,
+        arrow::compute::concat_batches(&schema, &expected)?,
+    );
+    Ok(())
+}
+
 // ==================== join_time metric tests ====================
 //
 // These verify that `join_time` measures only the join's own work: waiting
