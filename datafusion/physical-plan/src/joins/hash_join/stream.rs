@@ -559,13 +559,11 @@ impl HashJoinStream {
             .bounds
             .clone()
             .unwrap_or_else(|| PartitionBounds::new(vec![]));
-        // Use the logical null count: a dictionary key whose entry points at a
-        // NULL dictionary value is a NULL key even though the key bitmap has no
-        // physical nulls (`null_count() == 0` but `logical_null_count() > 0`).
+        // Arrow tracks null counts per array, so this costs no data scan.
         let keys_have_null = left_data
             .values()
             .iter()
-            .any(|array| array.logical_null_count() > 0);
+            .any(|array| array.null_count() > 0);
 
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
