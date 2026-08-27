@@ -79,7 +79,10 @@ unsafe extern "C" fn task_ctx_fn_wrapper(
         sresult!(
             ctx_provider
                 .inner()
-                .map(FFI_TaskContext::from)
+                // This context is used as a `FunctionRegistry` while
+                // encoding and decoding plans, not to reach object stores, so
+                // it needs no runtime handle.
+                .map(|ctx| FFI_TaskContext::new(ctx, None))
                 .ok_or_else(|| {
                     ffi_datafusion_err!(
                         "TaskContextProvider went out of scope over FFI boundary."

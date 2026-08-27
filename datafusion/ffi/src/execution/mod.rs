@@ -15,8 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod memory_pool;
+pub mod object_store;
+pub mod runtime_env;
 mod task_ctx;
 pub mod task_ctx_provider;
 
+pub use memory_pool::{FFI_MemoryPool, FFI_TryGrowResult, ForeignMemoryPool};
+pub use object_store::{
+    FFI_ObjectStore, FFI_ObjectStoreRegistry, ForeignObjectStore,
+    ForeignObjectStoreRegistry,
+};
+pub use runtime_env::{FFI_RuntimeConfig, FFI_RuntimeEnv};
 pub use task_ctx::FFI_TaskContext;
 pub use task_ctx_provider::FFI_TaskContextProvider;

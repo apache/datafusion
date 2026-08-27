@@ -2200,6 +2200,7 @@ dependencies = [
  "arrow-schema",
  "async-ffi",
  "async-trait",
+ "bytes",
  "chrono",
  "datafusion",
  "datafusion-catalog",
@@ -2223,10 +2224,12 @@ dependencies = [
  "futures",
  "libloading",
  "log",
+ "object_store",
  "prost",
  "semver",
  "stabby",
  "tokio",
+ "url",
 ]
 
 [[package]]

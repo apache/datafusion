@@ -137,6 +137,85 @@ mod tests {
         Ok(())
     }
 
+    /// A table provider that builds its own object store, registers it on the
+    /// session during planning, and reads it back during execution.
+    ///
+    /// Planning happens in the loaded module and execution is driven from this
+    /// executable, so the session's `RuntimeEnv` has to cross the FFI boundary
+    /// intact for the store to be found at execution time.
+    ///
+    /// The same scan reports the memory pool limit it observes, checking that
+    /// `datafusion.execution.memory_limit` reaches a foreign plan.
+    #[tokio::test]
+    async fn test_object_store_crosses_ffi_boundary() -> Result<()> {
+        use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use datafusion_execution::memory_pool::GreedyMemoryPool;
+        use datafusion_ffi::tests::object_store_provider::{
+            EXPECTED_VALUES, UNLIMITED_MEMORY,
+        };
+        use std::sync::Arc;
+
+        const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+
+        let module = get_module()?;
+
+        // Build a context with a distinctive memory limit so the value observed
+        // inside the module identifies which pool it actually reached.
+        let runtime_env = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(MEMORY_LIMIT)))
+            .build_arc()?;
+        let ctx = Arc::new(SessionContext::new_with_config_rt(
+            SessionConfig::new(),
+            runtime_env,
+        ));
+        let codec = super::utils::codec_for(&ctx);
+
+        let ffi_provider = (module.create_object_store_table)(codec);
+        let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
+
+        ctx.register_table("remote_table", foreign)?;
+        let batches = ctx.table("remote_table").await?.collect().await?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total_rows,
+            EXPECTED_VALUES.len(),
+            "scan should read every value back out of the registered store"
+        );
+
+        let values: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .expect("column a should be Int32")
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(values, EXPECTED_VALUES.to_vec());
+
+        let observed_limit = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::UInt64Array>()
+            .expect("column mem_limit should be UInt64")
+            .value(0);
+        assert_ne!(
+            observed_limit, UNLIMITED_MEMORY,
+            "the foreign plan saw an unbounded pool, so the host's memory limit \
+             did not cross the boundary"
+        );
+        assert_eq!(
+            observed_limit, MEMORY_LIMIT as u64,
+            "the foreign plan should see the host's configured memory limit"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_table_provider_factory() -> Result<()> {
         let table_provider_module = get_module()?;
