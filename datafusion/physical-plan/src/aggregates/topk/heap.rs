@@ -39,8 +39,20 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 /// A custom version of `Ord` that only exists to we can implement it for the Values in our heap
-pub trait Comparable {
-    fn comp(&self, other: &Self) -> Ordering;
+pub trait Comparable<Rhs: ?Sized = Self> {
+    fn comp(&self, other: &Rhs) -> Ordering;
+}
+
+impl Comparable<String> for str {
+    fn comp(&self, other: &String) -> Ordering {
+        self.cmp(other.as_str())
+    }
+}
+
+impl Comparable for String {
+    fn comp(&self, other: &Self) -> Ordering {
+        self.cmp(other)
+    }
 }
 
 impl Comparable for Option<String> {
@@ -50,14 +62,51 @@ impl Comparable for Option<String> {
 }
 
 /// A "type alias" for Values which are stored in our heap
-pub trait ValueType: Comparable + Clone + Debug {}
+pub trait ValueType: Comparable + Clone + Debug + Default {}
 
-impl<T> ValueType for T where T: Comparable + Clone + Debug {}
+impl<T> ValueType for T where T: Comparable + Clone + Debug + Default {}
+
+const VACANT_MAP_IDX: usize = usize::MAX;
 
 /// An entry in our heap, which contains both the value and a index into an external HashTable
 struct HeapItem<VAL: ValueType> {
     val: VAL,
     map_idx: usize,
+}
+impl<VAL: ValueType> HeapItem<VAL> {
+    fn is_vacant(&self) -> bool {
+        self.map_idx == VACANT_MAP_IDX
+    }
+
+    fn is_occupied(&self) -> bool {
+        self.map_idx != VACANT_MAP_IDX
+    }
+
+    fn map_idx(&self) -> Option<usize> {
+        self.is_occupied().then_some(self.map_idx)
+    }
+
+    fn take(&mut self) -> Option<Self> {
+        self.is_occupied().then(|| std::mem::take(self))
+    }
+
+    fn as_ref(&self) -> &Self {
+        debug_assert!(self.is_occupied());
+        self
+    }
+
+    fn as_mut(&mut self) -> &mut Self {
+        debug_assert!(self.is_occupied());
+        self
+    }
+}
+impl<VAL: ValueType> Default for HeapItem<VAL> {
+    fn default() -> Self {
+        Self {
+            val: VAL::default(),
+            map_idx: VACANT_MAP_IDX,
+        }
+    }
 }
 
 /// A custom heap implementation that allows several things that couldn't be achieved with
@@ -70,7 +119,7 @@ struct TopKHeap<VAL: ValueType> {
     desc: bool,
     len: usize,
     capacity: usize,
-    heap: Vec<Option<HeapItem<VAL>>>,
+    heap: Vec<HeapItem<VAL>>,
 }
 
 /// An interface to hide the generic type signature of TopKHeap behind arrow arrays
@@ -141,7 +190,7 @@ where
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
         let new_val = self.batch.value(row_idx);
-        self.heap.append_or_replace(new_val, map_idx, map);
+        self.heap.append_or_replace(&new_val, map_idx, map);
     }
 
     fn replace_if_better(
@@ -151,7 +200,7 @@ where
         map: &mut Vec<(usize, usize)>,
     ) {
         let new_val = self.batch.value(row_idx);
-        self.heap.replace_if_better(heap_idx, new_val, map);
+        self.heap.replace_if_better(&new_val, heap_idx, map);
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
@@ -175,7 +224,7 @@ where
     for<'a> &'a S: StringArrayType<'a>,
 {
     batch: S,
-    heap: TopKHeap<Option<String>>,
+    heap: TopKHeap<String>,
     desc: bool,
 }
 
@@ -196,7 +245,7 @@ where
 
 impl<S> ArrowHeap for StringHeap<S>
 where
-    S: Array + Clone + From<Vec<Option<String>>> + 'static,
+    S: Array + Clone + From<Vec<String>> + 'static,
     for<'a> &'a S: StringArrayType<'a>,
 {
     fn value_type(&self) -> &DataType {
@@ -220,14 +269,8 @@ where
         // allocating a `String` unless this row would actually replace an
         // existing heap entry.
         let new_val = (&self.batch).value(row_idx);
-        let worst_val = self.heap.worst_val().expect("Missing root");
-        match worst_val {
-            None => false,
-            Some(worst_str) => {
-                (!self.desc && new_val > worst_str.as_str())
-                    || (self.desc && new_val < worst_str.as_str())
-            }
-        }
+        let worst_val = self.heap.worst_val().expect("Missing root").as_str();
+        (!self.desc && new_val > worst_val) || (self.desc && new_val < worst_val)
     }
 
     fn worst_map_idx(&self) -> usize {
@@ -235,12 +278,7 @@ where
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        // When appending (heap not full) we must allocate to own the string
-        // because it will be stored in the heap. For replacements we avoid
-        // allocation until `replace_if_better` confirms a replacement is
-        // necessary.
-        let new_str = (&self.batch).value(row_idx).to_string();
-        let new_val = Some(new_str);
+        let new_val = (&self.batch).value(row_idx);
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -250,31 +288,8 @@ where
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     ) {
-        let new_str = (&self.batch).value(row_idx);
-        let existing = self.heap.heap[heap_idx]
-            .as_ref()
-            .expect("Missing heap item");
-
-        // Compare borrowed reference first—no allocation yet.
-        // We compare the borrowed `&str` with the stored `Option<String>` and
-        // only allocate (`to_string()`) when a replacement is required.
-        match &existing.val {
-            None => {
-                // Existing is null; new value always wins
-                let new_val = Some(new_str.to_string());
-                self.heap.replace_if_better(heap_idx, new_val, map);
-            }
-            Some(existing_str) => {
-                // Compare borrowed strings first
-                if (!self.desc && new_str < existing_str.as_str())
-                    || (self.desc && new_str > existing_str.as_str())
-                {
-                    let new_val = Some(new_str.to_string());
-                    self.heap.replace_if_better(heap_idx, new_val, map);
-                }
-                // Else: no improvement, no allocation
-            }
-        }
+        let new_val = (&self.batch).value(row_idx);
+        self.heap.replace_if_better(new_val, heap_idx, map);
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
@@ -290,18 +305,17 @@ impl<VAL: ValueType> TopKHeap<VAL> {
             desc,
             capacity: limit,
             len: 0,
-            heap: (0..=limit).map(|_| None).collect::<Vec<_>>(),
+            heap: (0..=limit).map(|_| HeapItem::default()).collect::<Vec<_>>(),
         }
     }
 
     pub fn worst_val(&self) -> Option<&VAL> {
         let root = self.heap.first()?;
-        let hi = root.as_ref()?;
-        Some(&hi.val)
+        root.is_occupied().then_some(&root.val)
     }
 
     pub fn worst_map_idx(&self) -> usize {
-        self.heap[0].as_ref().map(|hi| hi.map_idx).unwrap_or(0)
+        self.heap[0].map_idx().unwrap_or(0)
     }
 
     pub fn is_full(&self) -> bool {
@@ -312,12 +326,14 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         self.len
     }
 
-    pub fn append_or_replace(
+    pub fn append_or_replace<Q>(
         &mut self,
-        new_val: VAL,
+        new_val: &Q,
         map_idx: usize,
         map: &mut Vec<(usize, usize)>,
-    ) {
+    ) where
+        Q: ToOwned<Owned = VAL> + ?Sized,
+    {
         if self.is_full() {
             self.replace_root(new_val, map_idx, map);
         } else {
@@ -325,9 +341,14 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         }
     }
 
-    fn append(&mut self, new_val: VAL, map_idx: usize, mapper: &mut Vec<(usize, usize)>) {
-        let hi = HeapItem::new(new_val, map_idx);
-        self.heap[self.len] = Some(hi);
+    fn append<Q>(&mut self, new_val: &Q, map_idx: usize, mapper: &mut Vec<(usize, usize)>)
+    where
+        Q: ToOwned<Owned = VAL> + ?Sized,
+    {
+        let hi = &mut self.heap[self.len];
+        debug_assert!(hi.is_vacant());
+        hi.map_idx = map_idx;
+        new_val.clone_into(&mut hi.val);
         self.heapify_up(self.len, mapper);
         self.len += 1;
     }
@@ -361,31 +382,35 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         (vals, map_idxs)
     }
 
-    fn replace_root(
+    fn replace_root<Q>(
         &mut self,
-        new_val: VAL,
+        new_val: &Q,
         map_idx: usize,
         mapper: &mut Vec<(usize, usize)>,
-    ) {
-        let hi = self.heap[0].as_mut().expect("No root");
-        hi.val = new_val;
+    ) where
+        Q: ToOwned<Owned = VAL> + ?Sized,
+    {
+        let hi = self.heap[0].as_mut();
+        new_val.clone_into(&mut hi.val);
         hi.map_idx = map_idx;
         self.heapify_down(0, mapper);
     }
 
-    pub fn replace_if_better(
+    pub fn replace_if_better<Q>(
         &mut self,
+        new_val: &Q,
         heap_idx: usize,
-        new_val: VAL,
         mapper: &mut Vec<(usize, usize)>,
-    ) {
-        let existing = self.heap[heap_idx].as_mut().expect("Missing heap item");
+    ) where
+        Q: ToOwned<Owned = VAL> + Comparable<VAL> + ?Sized,
+    {
+        let existing = self.heap[heap_idx].as_mut();
         if (!self.desc && new_val.comp(&existing.val) != Ordering::Less)
             || (self.desc && new_val.comp(&existing.val) != Ordering::Greater)
         {
             return;
         }
-        existing.val = new_val;
+        new_val.clone_into(&mut existing.val);
         self.heapify_down(heap_idx, mapper);
     }
 
@@ -393,8 +418,8 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         let desc = self.desc;
         while idx != 0 {
             let parent_idx = (idx - 1) / 2;
-            let node = self.heap[idx].as_ref().expect("No heap item");
-            let parent = self.heap[parent_idx].as_ref().expect("No heap item");
+            let node = self.heap[idx].as_ref();
+            let parent = self.heap[parent_idx].as_ref();
             if (!desc && node.val.comp(&parent.val) != Ordering::Greater)
                 || (desc && node.val.comp(&parent.val) != Ordering::Less)
             {
@@ -409,8 +434,8 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     fn swap(&mut self, a_idx: usize, b_idx: usize, mapper: &mut Vec<(usize, usize)>) {
         self.heap.swap(a_idx, b_idx);
 
-        let b_hi = self.heap[b_idx].as_ref().expect("Missing heap entry");
-        let a_hi = self.heap[a_idx].as_ref().expect("Missing heap entry");
+        let b_hi = self.heap[b_idx].as_ref();
+        let a_hi = self.heap[a_idx].as_ref();
 
         mapper.extend([(b_hi.map_idx, b_idx), (a_hi.map_idx, a_idx)].into_iter());
     }
@@ -419,12 +444,12 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         let desc = self.desc;
         loop {
             let left_child = node_idx * 2 + 1;
-            let entry = self.heap.get(node_idx).expect("Missing node!");
-            let entry = entry.as_ref().expect("Missing node!");
+            let entry = self.heap[node_idx].as_ref();
             let mut best_idx = node_idx;
             let mut best_val = &entry.val;
             for child_idx in left_child..=left_child + 1 {
-                if let Some(Some(child)) = self.heap.get(child_idx)
+                if let Some(child) = self.heap.get(child_idx)
+                    && child.is_occupied()
                     && ((!desc && child.val.comp(best_val) == Ordering::Greater)
                         || (desc && child.val.comp(best_val) == Ordering::Less))
                 {
@@ -441,7 +466,9 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     }
 
     fn _tree_print(&self, idx: usize, prefix: &str, is_tail: bool, output: &mut String) {
-        if let Some(Some(hi)) = self.heap.get(idx) {
+        if let Some(hi) = self.heap.get(idx)
+            && hi.is_occupied()
+        {
             let connector = if idx != 0 {
                 if is_tail { "└── " } else { "├── " }
             } else {
@@ -477,15 +504,6 @@ impl<VAL: ValueType> Display for TopKHeap<VAL> {
             self._tree_print(0, "", true, &mut output);
         }
         write!(f, "{output}")
-    }
-}
-
-impl<VAL: ValueType> HeapItem<VAL> {
-    pub fn new(val: VAL, buk_idx: usize) -> Self {
-        Self {
-            val,
-            map_idx: buk_idx,
-        }
     }
 }
 
@@ -613,7 +631,7 @@ mod tests {
     fn should_append() -> Result<()> {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
-        heap.append_or_replace(1, 1, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
 
         let actual = heap.to_string();
         assert_snapshot!(actual, @"val=1 idx=0, bucket=1");
@@ -626,10 +644,10 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
 
-        heap.append_or_replace(1, 1, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
         assert_eq!(map, vec![]);
 
-        heap.append_or_replace(2, 2, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
         assert_eq!(map, vec![(2, 0), (1, 1)]);
 
         let actual = heap.to_string();
@@ -646,9 +664,9 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(3, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
-        heap.append_or_replace(3, 3, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
+        heap.append_or_replace(&3, 3, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=3 idx=0, bucket=3
@@ -657,7 +675,7 @@ mod tests {
         ");
 
         let mut map = vec![];
-        heap.append_or_replace(0, 0, &mut map);
+        heap.append_or_replace(&0, 0, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=2 idx=0, bucket=2
@@ -674,10 +692,10 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(4, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
-        heap.append_or_replace(3, 3, &mut map);
-        heap.append_or_replace(4, 4, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
+        heap.append_or_replace(&3, 3, &mut map);
+        heap.append_or_replace(&4, 4, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=4 idx=0, bucket=4
@@ -687,7 +705,7 @@ mod tests {
         ");
 
         let mut map = vec![];
-        heap.replace_if_better(1, 0, &mut map);
+        heap.replace_if_better(&0, 1, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=4 idx=0, bucket=4
@@ -705,8 +723,8 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
 
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
@@ -725,8 +743,8 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
 
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
@@ -741,4 +759,6 @@ mod tests {
 
         Ok(())
     }
+
+    // TODO: test TopKHeap of String?
 }

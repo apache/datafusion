@@ -378,7 +378,6 @@ impl<ID: PartialEq> TopKHashTable<ID> {
     ) -> (usize, InsertKind)
     where
         Q: ToOwned<Owned = ID> + ?Sized,
-        ID: BorrowMut<Q::Owned>,
     {
         // Check if entry exists - this is the only hash table lookup
         let mut replaced_null = false;
@@ -410,12 +409,11 @@ impl<ID: PartialEq> TopKHashTable<ID> {
     fn push_store_item<Q>(&mut self, hash: u64, id: Option<&Q>, heap_idx: usize) -> usize
     where
         Q: ToOwned<Owned = ID> + ?Sized,
-        ID: BorrowMut<Q::Owned>,
     {
         let id = if Self::use_free_slots() {
             id.map(|id| match self.free_slots.pop() {
                 Some(mut slot) => {
-                    id.clone_into(slot.borrow_mut());
+                    id.clone_into(&mut slot);
                     slot
                 }
                 _ => id.to_owned(),
