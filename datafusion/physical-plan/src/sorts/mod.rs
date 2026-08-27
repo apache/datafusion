@@ -20,6 +20,7 @@
 mod builder;
 mod cursor;
 mod merge;
+mod merge_memory_pool;
 #[cfg(test)]
 mod merge_trace;
 mod multi_level_merge;
