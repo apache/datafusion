@@ -5042,10 +5042,9 @@ impl ScalarValue {
             DataType::Struct(_) => {
                 let s = array.as_struct();
                 if s.fields().is_empty() {
-                    Arc::new(StructArray::new_empty_fields(
-                        s.len(),
-                        s.nulls().cloned(),
-                    ))
+                    // Zero-field structs carry no child buffers to compact, so
+                    // return the input array unchanged.
+                    array
                 } else {
                     let columns = s
                         .columns()
@@ -11623,8 +11622,10 @@ mod tests {
 
     #[test]
     fn test_compact_empty_struct() {
-        let nulls = NullBuffer::from(vec![true, false, true]);
-        let empty_struct = Arc::new(StructArray::new_empty_fields(3, Some(nulls)));
+        // A struct scalar wraps a single-row StructArray; use a null row to also
+        // exercise null-buffer preservation.
+        let nulls = NullBuffer::from(vec![false]);
+        let empty_struct = Arc::new(StructArray::new_empty_fields(1, Some(nulls)));
         let mut scalar = ScalarValue::Struct(empty_struct);
 
         // Before fix: panics inside compact_view_buffers calling StructArray::new on 0 fields
@@ -11633,22 +11634,19 @@ mod tests {
         let ScalarValue::Struct(arr) = &scalar else {
             panic!("expected Struct")
         };
-        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr.num_columns(), 0);
         assert_eq!(arr.null_count(), 1);
-        assert!(!arr.is_null(0));
-        assert!(arr.is_null(1));
-        assert!(!arr.is_null(2));
+        assert!(arr.is_null(0));
     }
 
     #[test]
     fn test_compact_nested_empty_struct() {
         // 1. List of empty structs
-        let inner_struct_field = Arc::new(Field::new(
-            "item",
-            DataType::Struct(Fields::empty()),
-            true,
-        ));
-        let inner_struct_arr = Arc::new(StructArray::new_empty_fields(2, None)) as ArrayRef;
+        let inner_struct_field =
+            Arc::new(Field::new("item", DataType::Struct(Fields::empty()), true));
+        let inner_struct_arr =
+            Arc::new(StructArray::new_empty_fields(2, None)) as ArrayRef;
         let list_arr = ListArray::new(
             inner_struct_field,
             OffsetBuffer::new(vec![0i32, 2].into()),
