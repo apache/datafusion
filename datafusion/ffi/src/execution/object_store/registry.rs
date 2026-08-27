@@ -140,10 +140,10 @@ unsafe extern "C" fn register_store_fn_wrapper(
     store: FFI_ObjectStore,
 ) -> FFI_Option<FFI_ObjectStore> {
     let Ok(url) = parse_url(&url) else {
-        // `register_store` cannot report an error. An unparseable URL can only
+        // `register_store` cannot report an error. An unparsable URL can only
         // come from a caller that built one by hand, and silently dropping the
         // registration would be worse than a log line.
-        log::warn!("Ignoring object store registration for unparseable URL '{url}'");
+        log::warn!("Ignoring object store registration for unparsable URL '{url}'");
         return FFI_Option::None;
     };
 
