@@ -1996,7 +1996,7 @@ impl HashJoinExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
+        use datafusion_common::{internal_datafusion_err, utils::usize_from_wire};
         use datafusion_proto_models::protobuf;
         use std::any::Any;
 
@@ -2081,21 +2081,8 @@ impl HashJoinExec {
         // Restore the row limit that `limit_pushdown` may have pushed into the
         // join. The field is presence-tracked, so a message written before it
         // existed decodes to `None` (no limit) rather than to `Some(0)`.
-        //
-        // The conversion is checked, not `as usize`: `fetch` is a `u64` on the
-        // wire but a `usize` in the plan, and on a 32-bit target `as usize`
-        // truncates. A fetch of `1 << 32` would become `0` -- not merely a
-        // wrong limit but the worst one, silently turning the query into an
-        // empty result. Report the out-of-range value instead. Please do not
-        // "simplify" this back to `as usize`.
         let fetch = fetch
-            .map(|f| {
-                usize::try_from(f).map_err(|_| {
-                    plan_datafusion_err!(
-                        "HashJoinExec: fetch value {f} cannot be represented as usize on this target"
-                    )
-                })
-            })
+            .map(|fetch| usize_from_wire(fetch, "HashJoinExec", "fetch"))
             .transpose()?;
 
         let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
