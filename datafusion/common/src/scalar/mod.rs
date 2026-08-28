@@ -7694,6 +7694,43 @@ mod tests {
     }
 
     #[test]
+    fn scalar_iter_to_array_mismatched_parameterized_types() {
+        use ScalarValue::*;
+
+        let cases = [
+            (
+                "decimal precision",
+                vec![Decimal128(None, 10, 2), Decimal128(None, 11, 2)],
+            ),
+            (
+                "decimal scale",
+                vec![Decimal128(None, 10, 2), Decimal128(None, 10, 3)],
+            ),
+            (
+                "timestamp timezone",
+                vec![
+                    TimestampNanosecond(None, None),
+                    TimestampNanosecond(None, Some(Arc::from("UTC"))),
+                ],
+            ),
+            (
+                "fixed-size binary width",
+                vec![FixedSizeBinary(1, None), FixedSizeBinary(2, None)],
+            ),
+        ];
+
+        for (name, scalars) in cases {
+            let error = ScalarValue::iter_to_array(scalars).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Inconsistent types in ScalarValue::iter_to_array"),
+                "{name}: unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn scalar_try_from_array_null() {
         let array = vec![Some(33), None].into_iter().collect::<Int64Array>();
         let array: ArrayRef = Arc::new(array);
