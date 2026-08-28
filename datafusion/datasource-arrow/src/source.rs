@@ -414,6 +414,9 @@ impl FileSource for ArrowSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Exhaustive destructure: adding a field to `ArrowSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
         let Self {
             format,
             // Runtime metrics, not part of the plan.

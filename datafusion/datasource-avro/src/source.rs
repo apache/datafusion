@@ -189,6 +189,9 @@ impl FileSource for AvroSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Exhaustive destructure: adding a field to `AvroSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
         let Self {
             // Serialized in `base` and used to rebuild the source on decode.
             table_schema: _,
