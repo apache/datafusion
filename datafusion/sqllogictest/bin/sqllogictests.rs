@@ -429,6 +429,27 @@ fn is_env_truthy(name: &str) -> bool {
         })
 }
 
+/// Selects which engine a matrix run drives each combination with. Also names
+/// the label used for record-condition matching and for counting records.
+#[derive(Clone, Copy)]
+enum Engine {
+    DataFusion,
+    #[cfg(feature = "substrait")]
+    SubstraitRoundTrip,
+}
+
+impl Engine {
+    /// Label used both to match record conditions (`add_label`) and to count the
+    /// records the progress bar expects (`count_records`).
+    fn label(self) -> &'static str {
+        match self {
+            Engine::DataFusion => "Datafusion",
+            #[cfg(feature = "substrait")]
+            Engine::SubstraitRoundTrip => "DatafusionSubstraitRoundTrip",
+        }
+    }
+}
+
 #[cfg(feature = "substrait")]
 async fn run_test_file_substrait_round_trip(
     test_file: TestFile,
@@ -439,60 +460,16 @@ async fn run_test_file_substrait_round_trip(
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     colored_output: bool,
 ) -> Result<()> {
-    let TestFile {
-        path,
-        relative_path,
-    } = test_file;
-
-    // Parsed once and replayed for every configuration.
-    let records = parse_records(&path)?;
-    let count = count_records(&records, "DatafusionSubstraitRoundTrip");
-    let configurations = test_configurations(&path)?;
-
-    // Reborrow so each combination's future moves in `Copy` references, keeping
-    // the closure callable per combination.
-    let path = &path;
-    let relative_path = &relative_path;
-    let records = &records;
-    let mp = &mp;
-    let mp_style = &mp_style;
-    let currently_executing_sql_tracker = &currently_executing_sql_tracker;
-
-    // Run once per configMatrix combination.
-    run_each_configuration(configurations, |test_configuration| async move {
-        let Some((test_ctx, pb)) = setup_combination(
-            relative_path,
-            test_configuration.settings(),
-            mp,
-            mp_style,
-            count,
-        )
-        .await?
-        else {
-            info!("Skipping: {}", path.display());
-            return Ok(());
-        };
-
-        let mut runner = sqllogictest::Runner::new(|| async {
-            Ok(DataFusionSubstraitRoundTrip::new(
-                test_ctx.session_ctx().clone(),
-                relative_path.clone(),
-                pb.clone(),
-            )
-            .with_currently_executing_sql_tracker(
-                currently_executing_sql_tracker.clone(),
-            ))
-        });
-        runner.add_label("DatafusionSubstraitRoundTrip");
-        runner.with_column_validator(strict_column_validator);
-        runner.with_normalizer(value_normalizer);
-        runner.with_validator(validator);
-        let result =
-            run_file_in_runner(path, records, &mut runner, filters, colored_output).await;
-        pb.finish_and_clear();
-
-        result
-    })
+    run_matrix(
+        Engine::SubstraitRoundTrip,
+        test_file,
+        validator,
+        mp,
+        mp_style,
+        filters,
+        currently_executing_sql_tracker,
+        colored_output,
+    )
     .await
 }
 
@@ -522,6 +499,37 @@ async fn run_test_file(
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     colored_output: bool,
 ) -> Result<()> {
+    run_matrix(
+        Engine::DataFusion,
+        test_file,
+        validator,
+        mp,
+        mp_style,
+        filters,
+        currently_executing_sql_tracker,
+        colored_output,
+    )
+    .await
+}
+
+/// Runs `test_file` once per `# configMatrix:` combination with `engine`. The
+/// default and Substrait runners both delegate here, so neither bypasses the
+/// matrix loop. The Postgres runner does not participate: it runs a file once,
+/// ignoring any `# configMatrix:` directives.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the sibling run_* runners plus the engine selector"
+)]
+async fn run_matrix(
+    engine: Engine,
+    test_file: TestFile,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+    filters: &[Filter],
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    colored_output: bool,
+) -> Result<()> {
     let TestFile {
         path,
         relative_path,
@@ -529,62 +537,172 @@ async fn run_test_file(
 
     // Parsed once and replayed for every configuration.
     let records = parse_records(&path)?;
-    let count = count_records(&records, "Datafusion");
+    let count = count_records(&records, engine.label());
     let configurations = test_configurations(&path)?;
 
-    // Reborrow so each combination's future moves in `Copy` references, keeping
-    // the closure callable per combination.
-    let path = &path;
-    let relative_path = &relative_path;
-    let records = &records;
-    let mp = &mp;
-    let mp_style = &mp_style;
-    let currently_executing_sql_tracker = &currently_executing_sql_tracker;
+    // Borrow the parse-once state so every combination reuses it. Each field is
+    // `Copy` or a shared reference, so the closure below stays callable per
+    // combination and its future stays `Send` for the spawned task.
+    let matrix = MatrixRunner {
+        engine,
+        path: &path,
+        relative_path: &relative_path,
+        records: &records,
+        filters,
+        currently_executing_sql_tracker: &currently_executing_sql_tracker,
+        validator,
+        colored_output,
+        mp: &mp,
+        mp_style: &mp_style,
+        count,
+    };
+    let matrix = &matrix;
 
-    // Run once per configMatrix combination.
-    run_each_configuration(configurations, |test_configuration| async move {
-        let Some((test_ctx, pb)) = setup_combination(
-            relative_path,
-            test_configuration.settings(),
-            mp,
-            mp_style,
-            count,
-        )
-        .await?
-        else {
-            info!("Skipping: {}", path.display());
+    // The single dispatch through the configMatrix loop.
+    run_each_configuration(configurations, |configuration| async move {
+        matrix.run_combination(configuration.settings()).await
+    })
+    .await
+}
+
+/// Everything a matrix run needs to replay one file's records for a single
+/// combination. Holds the parse-once state by reference so it is shared across
+/// combinations rather than re-parsed.
+struct MatrixRunner<'a> {
+    engine: Engine,
+    path: &'a Path,
+    relative_path: &'a Path,
+    records: &'a [Record<DFColumnType>],
+    filters: &'a [Filter],
+    currently_executing_sql_tracker: &'a CurrentlyExecutingSqlTracker,
+    validator: Validator,
+    colored_output: bool,
+    mp: &'a MultiProgress,
+    mp_style: &'a ProgressStyle,
+    count: u64,
+}
+
+impl MatrixRunner<'_> {
+    /// Set up the context for one combination, apply its overrides, dispatch to
+    /// the engine, and finalize. `settings` are this combination's overrides.
+    async fn run_combination(&self, settings: &[(String, String)]) -> Result<()> {
+        let Some((test_ctx, pb)) = self.setup_combination(settings).await? else {
+            info!("Skipping: {}", self.path.display());
             return Ok(());
         };
 
-        // If DataFusion configuration has changed during test file runs, errors will be
-        // pushed to this vec.
-        // HACK: managed externally because `sqllogictest` is an external dependency, and
-        // it doesn't have an API to directly access the inner runner.
+        match self.engine {
+            Engine::DataFusion => self.run_datafusion(&test_ctx, pb).await,
+            #[cfg(feature = "substrait")]
+            Engine::SubstraitRoundTrip => {
+                self.run_substrait_round_trip(&test_ctx, pb).await
+            }
+        }
+    }
+
+    /// Per-combination setup: build the test context, apply this combination's
+    /// configMatrix overrides, and create the progress bar. Returns `Ok(None)`
+    /// when the file should be skipped (unsupported feature); the caller logs it.
+    async fn setup_combination(
+        &self,
+        settings: &[(String, String)],
+    ) -> Result<Option<(TestContext, ProgressBar)>> {
+        let Some(test_ctx) = TestContext::try_new_for_test_file(self.relative_path).await
+        else {
+            return Ok(None);
+        };
+        setup_scratch_dir(self.relative_path)?;
+        // Before the engine is built: it snapshots config to detect drift.
+        test_ctx
+            .apply_config_overrides(settings, self.relative_path)
+            .await?;
+
+        let pb = self.mp.add(ProgressBar::new(self.count));
+        pb.set_style(self.mp_style.clone());
+        pb.set_message(self.relative_path.display().to_string());
+        Ok(Some((test_ctx, pb)))
+    }
+
+    /// Default engine. Also collects any config the file left modified and shuts
+    /// the runner's connections down afterward.
+    async fn run_datafusion(
+        &self,
+        test_ctx: &TestContext,
+        pb: ProgressBar,
+    ) -> Result<()> {
+        // If DataFusion configuration has changed during test file runs, errors
+        // will be pushed to this vec.
+        // HACK: managed externally because `sqllogictest` is an external
+        // dependency, and it doesn't have an API to directly access the inner
+        // runner.
         let config_change_errors = Arc::new(Mutex::new(Vec::new()));
         let mut runner = sqllogictest::Runner::new(|| async {
             Ok(DataFusion::new(
                 test_ctx.session_ctx().clone(),
-                relative_path.clone(),
+                self.relative_path.to_path_buf(),
                 pb.clone(),
             )
-            .with_currently_executing_sql_tracker(currently_executing_sql_tracker.clone())
+            .with_currently_executing_sql_tracker(
+                self.currently_executing_sql_tracker.clone(),
+            )
             .with_config_change_errors(Arc::clone(&config_change_errors)))
         });
-        runner.add_label("Datafusion");
-        runner.with_column_validator(strict_column_validator);
-        runner.with_normalizer(value_normalizer);
-        runner.with_validator(validator);
-        let result =
-            run_file_in_runner(path, records, &mut runner, filters, colored_output).await;
-        pb.finish_and_clear();
+        let result = self.drive_runner(&mut runner, &pb).await;
 
         runner.shutdown_async().await;
 
         // A correctness failure takes precedence; otherwise surface any config
         // the file left modified.
         result.and_then(|()| config_change_result(&config_change_errors))
-    })
-    .await
+    }
+
+    /// Substrait round-trip engine: each query's logical plan is converted to
+    /// Substrait and back before execution.
+    #[cfg(feature = "substrait")]
+    async fn run_substrait_round_trip(
+        &self,
+        test_ctx: &TestContext,
+        pb: ProgressBar,
+    ) -> Result<()> {
+        let mut runner = sqllogictest::Runner::new(|| async {
+            Ok(DataFusionSubstraitRoundTrip::new(
+                test_ctx.session_ctx().clone(),
+                self.relative_path.to_path_buf(),
+                pb.clone(),
+            )
+            .with_currently_executing_sql_tracker(
+                self.currently_executing_sql_tracker.clone(),
+            ))
+        });
+        self.drive_runner(&mut runner, &pb).await
+    }
+
+    /// Label the runner, install the shared validators, replay the records, and
+    /// clear the progress bar. Engine-independent, so every engine shares it.
+    async fn drive_runner<D, M>(
+        &self,
+        runner: &mut sqllogictest::Runner<D, M>,
+        pb: &ProgressBar,
+    ) -> Result<()>
+    where
+        D: AsyncDB<ColumnType = DFColumnType>,
+        M: MakeConnection<Conn = D>,
+    {
+        runner.add_label(self.engine.label());
+        runner.with_column_validator(strict_column_validator);
+        runner.with_normalizer(value_normalizer);
+        runner.with_validator(self.validator);
+        let result = run_file_in_runner(
+            self.path,
+            self.records,
+            runner,
+            self.filters,
+            self.colored_output,
+        )
+        .await;
+        pb.finish_and_clear();
+        result
+    }
 }
 
 async fn run_file_in_runner<D, M>(
@@ -659,32 +777,6 @@ fn count_records(records: &[Record<DFColumnType>], label: &str) -> u64 {
         .count() as u64
 }
 
-/// Per-combination setup shared by the default and Substrait runners: build the
-/// test context, apply the configMatrix overrides, and create the progress bar.
-/// Returns `Ok(None)` when the file should be skipped (unsupported feature); the
-/// caller logs the skip.
-async fn setup_combination(
-    relative_path: &Path,
-    settings: &[(String, String)],
-    mp: &MultiProgress,
-    mp_style: &ProgressStyle,
-    count: u64,
-) -> Result<Option<(TestContext, ProgressBar)>> {
-    let Some(test_ctx) = TestContext::try_new_for_test_file(relative_path).await else {
-        return Ok(None);
-    };
-    setup_scratch_dir(relative_path)?;
-    // Before the engine is built: it snapshots config to detect drift.
-    test_ctx
-        .apply_config_overrides(settings, relative_path)
-        .await?;
-
-    let pb = mp.add(ProgressBar::new(count));
-    pb.set_style(mp_style.clone());
-    pb.set_message(relative_path.display().to_string());
-    Ok(Some((test_ctx, pb)))
-}
-
 #[cfg(feature = "postgres")]
 async fn run_test_file_with_postgres(
     test_file: TestFile,
@@ -757,7 +849,9 @@ async fn run_complete_file(
 
     // `update_test_file` rewrites the file from a single run, so it cannot hold
     // one expected-output set per configuration.
-    if test_configurations(&path)?.iter().any(|c| !c.is_empty()) {
+    let declares_config_matrix =
+        test_configurations(&path)?.iter().any(|c| !c.is_empty());
+    if declares_config_matrix {
         return exec_err!(
             "Cannot use --complete on {}: it declares `# configMatrix:` \
              directives, and completion would overwrite the file with the \
