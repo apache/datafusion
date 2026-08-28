@@ -30,8 +30,8 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     AsOfJoinExec, AsOfMatchExpr, HashJoinExec, NestedLoopJoinExec, PartitionMode,
-    PiecewiseMergeJoinExec,
-    SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
+    PiecewiseMergeJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
+    SymmetricHashJoinExec,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::ScalarValue;
