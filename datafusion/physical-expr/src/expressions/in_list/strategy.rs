@@ -17,31 +17,96 @@
 
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow::compute::cast;
+use arrow::array::{ArrayRef, AsArray};
+use arrow::compute::take;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
+use super::dictionary_filter::DictionaryFilter;
+use super::fixed_size_binary_filter::instantiate_fixed_size_binary_filter;
 use super::primitive_filter::instantiate_primitive_filter;
 use super::static_filter::StaticFilterRef;
 
-pub(super) fn instantiate_static_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
+pub(super) fn instantiate_static_filter(
+    in_array: ArrayRef,
+    needle_data_type: &DataType,
+) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
 
-    if let Some(filter) = instantiate_primitive_filter(&in_array)? {
-        return Ok(filter);
-    }
+    let filter = if let Some(filter) = instantiate_fixed_size_binary_filter(&in_array)? {
+        filter
+    } else if let Some(filter) = instantiate_primitive_filter(&in_array)? {
+        filter
+    } else {
+        Arc::new(ArrayStaticFilter::try_new(in_array)?)
+    };
 
-    Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
+    // Plain inputs can call the concrete filter directly. Dictionary inputs
+    // share one adapter across all concrete filter types.
+    if matches!(needle_data_type, DataType::Dictionary(_, _)) {
+        Ok(Arc::new(DictionaryFilter::new(filter)))
+    } else {
+        Ok(filter)
+    }
 }
 
-fn flatten_dictionary_haystack(in_array: ArrayRef) -> Result<ArrayRef> {
-    // Flatten dictionary-encoded haystacks to their value type so that
-    // specialized primitive filters are used instead of falling through to the
-    // generic ArrayStaticFilter.
-    match in_array.data_type() {
-        DataType::Dictionary(_, value_type) => Ok(cast(&in_array, value_type.as_ref())?),
-        _ => Ok(in_array),
+fn flatten_dictionary_haystack(mut in_array: ArrayRef) -> Result<ArrayRef> {
+    // Flatten every dictionary layer so the final value type can use a
+    // specialized filter.
+    while let Some(dictionary) = in_array.as_any_dictionary_opt() {
+        in_array = take(dictionary.values().as_ref(), dictionary.keys(), None)?;
+    }
+
+    Ok(in_array)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{
+        BooleanArray, DictionaryArray, Int8Array, Int16Array, Int32Array,
+    };
+
+    use super::*;
+
+    fn nested_dictionary(keys: Int16Array) -> Result<ArrayRef> {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        // This dictionary represents [1, 3, NULL].
+        let inner: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int8Array::from(vec![0, 2, 1]),
+            values,
+        )?);
+        Ok(Arc::new(DictionaryArray::try_new(keys, inner)?))
+    }
+
+    #[test]
+    fn nested_dictionary_haystacks_only_include_referenced_values() -> Result<()> {
+        let needles = Int32Array::from(vec![1, 2, 3]);
+
+        // The null in the inner dictionary is not referenced by the outer one.
+        let filter = instantiate_static_filter(
+            nested_dictionary(Int16Array::from(vec![0, 1]))?,
+            &DataType::Int32,
+        )?;
+        assert_eq!(filter.null_count(), 0);
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![true, false, true])
+        );
+
+        // Referencing that same value gives the list normal SQL null semantics.
+        let filter = instantiate_static_filter(
+            nested_dictionary(Int16Array::from(vec![0, 2]))?,
+            &DataType::Int32,
+        )?;
+        assert_eq!(filter.null_count(), 1);
+        assert_eq!(
+            filter.contains(&needles, false)?,
+            BooleanArray::from(vec![Some(true), None, None])
+        );
+
+        Ok(())
     }
 }

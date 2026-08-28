@@ -813,7 +813,9 @@ impl From<protobuf::Precision> for Precision<usize> {
                     if let Ok(ScalarValue::UInt64(Some(val))) =
                         ScalarValue::try_from(&val)
                     {
-                        Precision::Exact(val as usize)
+                        // A value that does not fit in `usize` decodes as
+                        // unknown rather than a silently truncated statistic.
+                        usize::try_from(val).map_or(Precision::Absent, Precision::Exact)
                     } else {
                         Precision::Absent
                     }
@@ -826,7 +828,7 @@ impl From<protobuf::Precision> for Precision<usize> {
                     if let Ok(ScalarValue::UInt64(Some(val))) =
                         ScalarValue::try_from(&val)
                     {
-                        Precision::Inexact(val as usize)
+                        usize::try_from(val).map_or(Precision::Absent, Precision::Inexact)
                     } else {
                         Precision::Absent
                     }
