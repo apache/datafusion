@@ -1863,7 +1863,7 @@ JOIN range_partitioned p ON b.range_key = p.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
-02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, predicate=range_key@0 = 5 OR range_key@0 = 20, pruning_predicate=range_key_null_count@2 != row_count@3 AND range_key_min@0 <= 5 AND 5 <= range_key_max@1 OR range_key_null_count@2 != row_count@3 AND range_key_min@0 <= 20 AND 20 <= range_key_max@1, required_guarantees=[range_key in (20, 5)]
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, predicate=range_key@0 = 5 OR range_key@0 = 20, pruning_predicate=range_key_null_count@2 != row_count@3 AND (range_key_min@0 <= 5 AND 5 <= range_key_max@1 OR range_key_min@0 <= 20 AND 20 <= range_key_max@1), required_guarantees=[range_key in (20, 5)]
 03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 query TT

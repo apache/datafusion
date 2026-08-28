@@ -49,7 +49,9 @@ use datafusion_expr_common::casts::try_cast_literal_to_type;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
-use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
+use datafusion_physical_expr_common::physical_expr::{
+    is_volatile, snapshot_physical_expr_opt,
+};
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
@@ -538,6 +540,7 @@ impl<'a> PruningPredicateBuilder<'a> {
         // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
         let predicate_expr =
             PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
+        let predicate_expr = factor_common_guards(predicate_expr);
         let literal_guarantees = LiteralGuarantee::analyze(&predicate);
 
         Ok(PruningPredicate {
@@ -2239,6 +2242,226 @@ pub(crate) enum StatisticsType {
     RowCount,
 }
 
+/// Recursion-depth cap for [`factor_common_guards_known_non_volatile`],
+/// counting only levels where the child's operator differs from its
+/// parent's (an "alternation" -- a run of the *same* operator costs no
+/// depth at all, since [`flatten_chain_known_non_volatile`] collapses it in
+/// one iterative pass). `Arc<dyn PhysicalExpr>`'s `Eq`/`Hash` are fully
+/// structural with no caching or pointer-identity shortcut (by design:
+/// `fold_and`/`fold_or` build a fresh `Arc` at every level, so two
+/// genuinely-equal subtrees are essentially never the same pointer here),
+/// so a `HashSet` operation on a subtree of size `S` costs O(S). Recursing
+/// per alternation on a chain of depth `N` therefore costs O(N) per level
+/// across O(N) levels: O(N^2) total, and this has been observed to behave
+/// worse than that in practice (likely a cache-effect on top of the
+/// asymptotic cost) for depths in the low thousands. 32 is a generous
+/// margin over any realistic hand-written or generated WHERE clause's
+/// AND/OR alternation depth -- capping it bounds worst-case cost to
+/// O(32*N), i.e. negligible regardless of how deep a pathological input
+/// goes, at the price of leaving conjuncts below the cap unfactored (always
+/// correct, just a smaller win, exactly like the existing opaque-leaf
+/// fallback for non-`BinaryExpr` nodes).
+const MAX_FACTOR_ALTERNATION_DEPTH: usize = 32;
+
+/// Factors conjuncts common to every branch of an `AND`/`OR` node out of the
+/// finished pruning predicate tree, e.g. the null-count guard
+/// `wrap_null_count_check_expr` attaches to every rewritten leaf comparison
+/// on a column. `(G AND P) AND (G AND Q) == G AND P AND Q` and
+/// `(G AND P) OR (G AND Q) == G AND (P OR Q)`, so this never changes which
+/// containers get pruned, only how many redundant comparisons are evaluated.
+fn factor_common_guards(expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+    if is_volatile(&expr) {
+        return expr;
+    }
+    // `expr` is now proven fully non-volatile; every function below assumes
+    // this without rechecking.
+    factor_common_guards_known_non_volatile(expr)
+}
+
+fn factor_common_guards_known_non_volatile(
+    expr: Arc<dyn PhysicalExpr>,
+) -> Arc<dyn PhysicalExpr> {
+    factor_common_guards_known_non_volatile_impl(expr, 0)
+}
+
+fn factor_common_guards_known_non_volatile_impl(
+    expr: Arc<dyn PhysicalExpr>,
+    alternation_depth: usize,
+) -> Arc<dyn PhysicalExpr> {
+    // Only BinaryExpr And/Or nodes are unwrapped; anything else (e.g. a
+    // literal `CaseExpr`) is an opaque leaf -- always safe, but such a node
+    // gets no benefit from this pass unless it's expanded into nested
+    // And/Or first.
+    let Some(bin) = expr.downcast_ref::<phys_expr::BinaryExpr>() else {
+        return expr;
+    };
+    let op = *bin.op();
+    if op != Operator::And && op != Operator::Or {
+        return expr;
+    }
+    // See MAX_FACTOR_ALTERNATION_DEPTH's doc comment: past this depth,
+    // leave the rest unfactored rather than pay quadratic-or-worse cost on
+    // a pathologically deep alternating tree. Always correct -- same
+    // fallback as the opaque-leaf case above, just triggered by depth
+    // instead of node type.
+    if alternation_depth >= MAX_FACTOR_ALTERNATION_DEPTH {
+        return expr;
+    }
+
+    let mut raw_arms = Vec::new();
+    flatten_chain_known_non_volatile(&expr, op, &mut raw_arms);
+
+    // Factoring a child can turn it into an `op` node itself (e.g. an `OR`
+    // arm whose common guard got hoisted out as `G AND (...)`, sitting under
+    // an outer `AND`) -- re-flatten each factored arm against the current
+    // `op` so its now-exposed conjuncts/disjuncts are merged with siblings
+    // at this level instead of staying opaque.
+    let mut arms = Vec::with_capacity(raw_arms.len());
+    for arm in raw_arms {
+        flatten_chain_known_non_volatile(
+            &factor_common_guards_known_non_volatile_impl(arm, alternation_depth + 1),
+            op,
+            &mut arms,
+        );
+    }
+
+    match op {
+        Operator::And => factor_and(arms),
+        Operator::Or => factor_or(arms),
+        _ => unreachable!("checked above"),
+    }
+}
+
+/// Flattens a chain of nested `op` nodes into `out` (`And(And(a,b),c) ->
+/// [a, b, c]`), iteratively -- a long ORM-generated AND/OR chain has depth
+/// equal to its condition count, and recursing per node risks a stack
+/// overflow.
+///
+/// Callers must already know `expr` is non-volatile (e.g. via
+/// [`is_volatile`] on an ancestor) -- this does not recheck.
+fn flatten_chain_known_non_volatile(
+    expr: &Arc<dyn PhysicalExpr>,
+    op: Operator,
+    out: &mut Vec<Arc<dyn PhysicalExpr>>,
+) {
+    let mut stack = vec![Arc::clone(expr)];
+    while let Some(node) = stack.pop() {
+        if let Some(bin) = node.downcast_ref::<phys_expr::BinaryExpr>()
+            && *bin.op() == op
+        {
+            // Push right before left so left is popped (and thus visited)
+            // first, preserving the original left-to-right arm order.
+            stack.push(Arc::clone(bin.right()));
+            stack.push(Arc::clone(bin.left()));
+        } else {
+            out.push(node);
+        }
+    }
+}
+
+/// Only called after [`factor_common_guards`]'s top-level [`is_volatile`]
+/// check, so `expr` is already proven non-volatile.
+fn and_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
+    let mut out = Vec::new();
+    flatten_chain_known_non_volatile(expr, Operator::And, &mut out);
+    out
+}
+
+fn fold_and(arms: Vec<Arc<dyn PhysicalExpr>>) -> Arc<dyn PhysicalExpr> {
+    let mut iter = arms.into_iter();
+    let first = iter.next().expect("factor_and: at least one arm");
+    iter.fold(first, |acc, arm| {
+        if is_always_false(&acc) || is_always_false(&arm) {
+            Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(false))))
+        } else if is_always_true(&acc) {
+            arm
+        } else if is_always_true(&arm) {
+            acc
+        } else {
+            and_expr(acc, arm)
+        }
+    })
+}
+
+fn fold_or(arms: Vec<Arc<dyn PhysicalExpr>>) -> Arc<dyn PhysicalExpr> {
+    let mut iter = arms.into_iter();
+    let first = iter.next().expect("factor_or: at least one arm");
+    iter.fold(first, |acc, arm| {
+        if is_always_true(&acc) || is_always_true(&arm) {
+            Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(true))))
+        } else if is_always_false(&acc) {
+            arm
+        } else if is_always_false(&arm) {
+            acc
+        } else {
+            or_expr(acc, arm)
+        }
+    })
+}
+
+fn factor_and(arms: Vec<Arc<dyn PhysicalExpr>>) -> Arc<dyn PhysicalExpr> {
+    if arms.len() == 1 {
+        return arms.into_iter().next().unwrap();
+    }
+    let mut seen: HashSet<Arc<dyn PhysicalExpr>> = HashSet::with_capacity(arms.len());
+    let mut deduped = Vec::with_capacity(arms.len());
+    for arm in arms {
+        if seen.insert(Arc::clone(&arm)) {
+            deduped.push(arm);
+        }
+    }
+    fold_and(deduped)
+}
+
+/// `Or([G AND P, G AND Q, ...]) -> G AND (P OR Q OR ...)`. Each arm's
+/// top-level `AND` conjuncts (a non-`AND` arm counts as a single-conjunct
+/// set) are intersected via `HashSet` rather than pairwise comparison. If no
+/// conjunct is common to every arm, the node is rebuilt unchanged.
+///
+/// Known limitation: only hoists a conjunct common to *every* arm, not
+/// shared subsets -- e.g. `a IN (1,2,3) OR b IS NULL` gets no benefit even
+/// though 3 of 4 arms share an `a`-guard. Never incorrect, just a missed
+/// optimization.
+fn factor_or(arms: Vec<Arc<dyn PhysicalExpr>>) -> Arc<dyn PhysicalExpr> {
+    if arms.len() == 1 {
+        return arms.into_iter().next().unwrap();
+    }
+
+    let conjunct_sets: Vec<Vec<Arc<dyn PhysicalExpr>>> =
+        arms.iter().map(and_conjuncts).collect();
+
+    let mut common: Vec<Arc<dyn PhysicalExpr>> = conjunct_sets[0].clone();
+    for set in &conjunct_sets[1..] {
+        if common.is_empty() {
+            break;
+        }
+        let set: HashSet<&Arc<dyn PhysicalExpr>> = set.iter().collect();
+        common.retain(|c| set.contains(c));
+    }
+
+    if common.is_empty() {
+        return fold_or(arms);
+    }
+
+    let common_set: HashSet<&Arc<dyn PhysicalExpr>> = common.iter().collect();
+    let leftovers: Vec<Arc<dyn PhysicalExpr>> = conjunct_sets
+        .into_iter()
+        .map(|set| {
+            let rest: Vec<Arc<dyn PhysicalExpr>> = set
+                .into_iter()
+                .filter(|c| !common_set.contains(c))
+                .collect();
+            if rest.is_empty() {
+                Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(true)))) as _
+            } else {
+                fold_and(rest)
+            }
+        })
+        .collect();
+
+    fold_and(vec![fold_and(common), fold_or(leftovers)])
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -2267,6 +2490,50 @@ mod tests {
     };
     use datafusion_physical_expr::planner::logical2physical;
     use itertools::Itertools;
+
+    /// A leaf [`PhysicalExpr`] that reports itself as volatile, for testing
+    /// that [`factor_common_guards`] leaves volatile expressions untouched.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct VolatileTestExpr;
+
+    impl std::fmt::Display for VolatileTestExpr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "VOLATILE()")
+        }
+    }
+
+    impl PhysicalExpr for VolatileTestExpr {
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            Ok(DataType::Boolean)
+        }
+
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            unimplemented!("VolatileTestExpr is never evaluated in these tests")
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "VOLATILE()")
+        }
+
+        fn is_volatile_node(&self) -> bool {
+            true
+        }
+    }
 
     #[derive(Debug, Default)]
     /// Mock statistic provider for tests
@@ -3963,6 +4230,889 @@ mod tests {
         )?;
         assert_eq!(not_in.evaluate(&batch)?.into_array(2)?.null_count(), 2);
         Ok(())
+    }
+
+    fn build_via_builder(expr: Expr, schema: &SchemaRef) -> Arc<dyn PhysicalExpr> {
+        let physical = logical2physical(&expr, schema);
+        PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(schema))
+            .try_build(physical)
+            .unwrap()
+            .predicate_expr()
+            .to_owned()
+    }
+
+    /// Builds a `PruningPredicate` the same way `try_build` does, but stops
+    /// short of the `factor_common_guards` pass.
+    fn build_unfactored(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+    ) -> PruningPredicate {
+        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
+        let mut required_columns = RequiredColumns::new();
+        let predicate_expr = build_predicate_expression(
+            &expr,
+            schema,
+            &mut required_columns,
+            &unhandled_hook,
+            MAX_IN_LIST_SIZE,
+        );
+        let predicate_schema = required_columns.schema();
+        let predicate_expr = PhysicalExprSimplifier::new(&predicate_schema)
+            .simplify(predicate_expr)
+            .unwrap();
+        let literal_guarantees = LiteralGuarantee::analyze(&expr);
+        PruningPredicate {
+            schema: Arc::clone(schema),
+            predicate_expr,
+            required_columns,
+            orig_expr: expr,
+            literal_guarantees,
+        }
+    }
+
+    /// One row = one query (built via `col()`/`lit()` chains) evaluated
+    /// against one set of row-group metadata. Builds the predicate both with
+    /// (`factored`, the real `try_build` path) and without (`unfactored`) the
+    /// `factor_common_guards` pass, evaluates `.prune()` on both against
+    /// `statistics`, and asserts they return the exact same per-row-group
+    /// true/false decisions -- and that those decisions equal `expected`. To
+    /// validate a new query against new row-group metadata, add a case here;
+    /// no new test function needed.
+    struct PruneEquivalenceCase {
+        name: &'static str,
+        schema: SchemaRef,
+        expr: Expr,
+        statistics: TestStatistics,
+        expected: &'static [bool],
+    }
+
+    #[test]
+    fn factor_common_guards_prune_equivalence_cases() {
+        // Int64, not Int32: this test intentionally skips DataFusion's usual
+        // type-coercion/analyzer pass, so the column type must already match
+        // the (explicitly `i64`) literal type below.
+        let i_schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)]));
+        let c1c2_schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int64, true),
+            Field::new("c2", DataType::Int64, true),
+        ]));
+
+        let cases = vec![
+            PruneEquivalenceCase {
+                name: "BETWEEN, container entirely null -> pruned regardless of \
+                       the (stale) min/max values",
+                schema: Arc::clone(&i_schema),
+                expr: col("i").between(lit(1i64), lit(5i64)),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats::new_i64(vec![Some(0)], vec![Some(0)])
+                        .with_null_counts(vec![Some(1)])
+                        .with_row_counts(vec![Some(1)]),
+                ),
+                expected: &[false],
+            },
+            PruneEquivalenceCase {
+                name: "BETWEEN, min/max are in range but null count unknown -> \
+                       kept, since \"maybe all null\" can't be ruled out \
+                       (Kleene NULL, not FALSE)",
+                schema: Arc::clone(&i_schema),
+                expr: col("i").between(lit(1i64), lit(5i64)),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats {
+                        min: Some(Arc::new(Int64Array::from(vec![Some(2)]))),
+                        max: Some(Arc::new(Int64Array::from(vec![Some(2)]))),
+                        null_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
+                        row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+                        ..ContainerStats::default()
+                    },
+                ),
+                expected: &[true],
+            },
+            PruneEquivalenceCase {
+                name: "IN list across 4 row groups: all-null, missing min/max, \
+                       out of range, and a real match",
+                schema: Arc::clone(&i_schema),
+                expr: col("i").in_list(vec![lit(1i64), lit(2i64), lit(3i64)], false),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats {
+                        min: Some(Arc::new(Int64Array::from(vec![
+                            Some(0),
+                            None,
+                            Some(10),
+                            Some(2),
+                        ]))),
+                        max: Some(Arc::new(Int64Array::from(vec![
+                            Some(0),
+                            Some(3),
+                            Some(20),
+                            Some(2),
+                        ]))),
+                        null_counts: Some(Arc::new(UInt64Array::from(vec![
+                            Some(1),
+                            Some(0),
+                            Some(0),
+                            Some(0),
+                        ]))),
+                        row_counts: Some(Arc::new(UInt64Array::from(vec![
+                            Some(1),
+                            Some(5),
+                            Some(5),
+                            Some(5),
+                        ]))),
+                        ..ContainerStats::default()
+                    },
+                ),
+                expected: &[false, true, false, true],
+            },
+            PruneEquivalenceCase {
+                name: "asymmetric OR (`c1 IN (1,2) OR c2 > 10`) across 3 row \
+                       groups -- an all-null c1 must not sink a container that \
+                       c2 alone can still match",
+                schema: Arc::clone(&c1c2_schema),
+                expr: col("c1")
+                    .in_list(vec![lit(1i64), lit(2i64)], false)
+                    .or(col("c2").gt(lit(10i64))),
+                statistics: TestStatistics::new()
+                    .with(
+                        "c1",
+                        ContainerStats {
+                            min: Some(Arc::new(Int64Array::from(vec![
+                                Some(0),
+                                Some(1),
+                                Some(0),
+                            ]))),
+                            max: Some(Arc::new(Int64Array::from(vec![
+                                Some(0),
+                                Some(1),
+                                Some(0),
+                            ]))),
+                            null_counts: Some(Arc::new(UInt64Array::from(vec![
+                                Some(1),
+                                Some(0),
+                                Some(1),
+                            ]))),
+                            row_counts: Some(Arc::new(UInt64Array::from(vec![
+                                Some(1),
+                                Some(1),
+                                Some(1),
+                            ]))),
+                            ..ContainerStats::default()
+                        },
+                    )
+                    .with(
+                        "c2",
+                        ContainerStats {
+                            min: Some(Arc::new(Int64Array::from(vec![
+                                Some(20),
+                                Some(0),
+                                Some(1),
+                            ]))),
+                            max: Some(Arc::new(Int64Array::from(vec![
+                                Some(20),
+                                Some(0),
+                                Some(5),
+                            ]))),
+                            null_counts: Some(Arc::new(UInt64Array::from(vec![
+                                Some(0),
+                                Some(0),
+                                Some(0),
+                            ]))),
+                            row_counts: Some(Arc::new(UInt64Array::from(vec![
+                                Some(1),
+                                Some(1),
+                                Some(1),
+                            ]))),
+                            ..ContainerStats::default()
+                        },
+                    ),
+                // row 0: c1 all-null but c2 (min=max=20) definitely > 10 -> kept
+                // row 1: c1 has the value 1 in range -> kept
+                // row 2: c1 all-null and c2's range [1,5] can't exceed 10 -> pruned
+                expected: &[true, true, false],
+            },
+            PruneEquivalenceCase {
+                name: "NOT IN (1,2,3): all-null forces prune via the guard; \
+                       an unknown null count is masked by definitely-true \
+                       range clauses (kept); an exact excluded value prunes \
+                       independent of the guard; an out-of-list value is kept",
+                schema: Arc::clone(&i_schema),
+                expr: col("i").in_list(vec![lit(1i64), lit(2i64), lit(3i64)], true),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats::new_i64(
+                        vec![Some(0), Some(10), Some(2), Some(10)],
+                        vec![Some(0), Some(20), Some(2), Some(10)],
+                    )
+                    .with_null_counts(vec![Some(1), None, Some(0), Some(0)])
+                    .with_row_counts(vec![
+                        Some(1),
+                        Some(5),
+                        Some(1),
+                        Some(1),
+                    ]),
+                ),
+                expected: &[false, true, false, true],
+            },
+            PruneEquivalenceCase {
+                name: "IN (1..=5) across 5 row groups (3+-arm OR sharing one \
+                       factored guard) exercises every Kleene combination of \
+                       the guard with the disjunction: all-null (pruned); \
+                       definitely out of range (pruned); definitely in range \
+                       (kept); unknown null count but definitely out of \
+                       range, where the disjunction's definite FALSE \
+                       short-circuits the AND regardless of the guard \
+                       (pruned); unknown null count but possibly in range, \
+                       where the guard's NULL propagates (kept)",
+                schema: Arc::clone(&i_schema),
+                expr: col("i").in_list((1..=5).map(|v| lit(v as i64)).collect(), false),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats::new_i64(
+                        vec![Some(0), Some(100), Some(1), Some(10), Some(1)],
+                        vec![Some(0), Some(100), Some(1), Some(20), Some(1)],
+                    )
+                    .with_null_counts(vec![Some(1), Some(0), Some(0), None, None])
+                    .with_row_counts(vec![
+                        Some(1),
+                        Some(1),
+                        Some(1),
+                        Some(5),
+                        Some(1),
+                    ]),
+                ),
+                expected: &[false, false, true, false, true],
+            },
+            PruneEquivalenceCase {
+                name: "`i IS DISTINCT FROM 1 OR i > 100`: IS DISTINCT FROM's \
+                       null-count>0 guard is structurally different from the \
+                       ordinary null_count != row_count guard the second \
+                       predicate needs, so factor_or must find no common \
+                       conjunct and leave both branches independently \
+                       evaluated -- not partially/incorrectly merged",
+                schema: Arc::clone(&i_schema),
+                expr: is_distinct_from(col("i"), lit(1i64)).or(col("i").gt(lit(100i64))),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats::new_i64(
+                        vec![None, Some(1), Some(0)],
+                        vec![None, Some(1), Some(200)],
+                    )
+                    .with_null_counts(vec![Some(1), Some(0), Some(0)])
+                    .with_row_counts(vec![Some(1), Some(1), Some(1)]),
+                ),
+                // row 0: all-null -> IS DISTINCT FROM is null-safe true for
+                //        every row regardless of the other predicate -> kept
+                // row 1: every row is definitely 1 and definitely not > 100
+                //        -> neither disjunct can be true -> pruned
+                // row 2: min=0 already differs from 1 -> kept
+                expected: &[true, false, true],
+            },
+            PruneEquivalenceCase {
+                name: "`i IN (-5,2) AND i >= 0`: the IN list's OR gets its \
+                       own guard hoisted internally, and the outer AND's \
+                       sibling guard from `i >= 0` must be merged with it \
+                       during re-open rather than left duplicated -- and \
+                       neither the IN clause nor the range clause may be \
+                       silently dropped in the process. `-5` (outside the \
+                       range but in the list) and `5` (in the range but not \
+                       in the list) are chosen specifically so that dropping \
+                       either clause would flip a row's decision, unlike an \
+                       all-non-negative list where both bugs would \
+                       coincidentally prune the same rows",
+                schema: Arc::clone(&i_schema),
+                expr: col("i")
+                    .in_list(vec![lit(-5i64), lit(2i64)], false)
+                    .and(col("i").gt_eq(lit(0i64))),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats::new_i64(
+                        vec![Some(-5), Some(5), Some(2), Some(0)],
+                        vec![Some(-5), Some(5), Some(2), Some(0)],
+                    )
+                    .with_null_counts(vec![Some(0), Some(0), Some(0), Some(1)])
+                    .with_row_counts(vec![
+                        Some(1),
+                        Some(1),
+                        Some(1),
+                        Some(1),
+                    ]),
+                ),
+                // row 0: value -5 is in the list but fails `>= 0` -> pruned;
+                //        a bug that dropped the range clause would keep it
+                // row 1: value 5 passes `>= 0` but isn't in the list ->
+                //        pruned; a bug that dropped the IN clause would
+                //        keep it
+                // row 2: value 2 is in the list and passes `>= 0` -> kept
+                // row 3: all-null -> pruned via the (single, shared) guard
+                expected: &[false, false, true, false],
+            },
+            PruneEquivalenceCase {
+                name: "`c1 IN (1,2,3) AND c2 IN (4,5,6)`: two independently \
+                       factored multi-arm ORs on different columns sit \
+                       under the same outer AND, so the re-open/re-merge \
+                       step must expose and correctly evaluate both \
+                       columns' hoisted guards simultaneously, not just one \
+                       at a time",
+                schema: Arc::clone(&c1c2_schema),
+                expr: col("c1")
+                    .in_list(vec![lit(1i64), lit(2i64), lit(3i64)], false)
+                    .and(col("c2").in_list(vec![lit(4i64), lit(5i64), lit(6i64)], false)),
+                statistics: TestStatistics::new()
+                    .with(
+                        "c1",
+                        ContainerStats::new_i64(
+                            vec![Some(1), Some(10), Some(1), Some(0)],
+                            vec![Some(1), Some(10), Some(1), Some(0)],
+                        )
+                        .with_null_counts(vec![Some(0), Some(0), Some(0), Some(1)])
+                        .with_row_counts(vec![
+                            Some(1),
+                            Some(1),
+                            Some(1),
+                            Some(1),
+                        ]),
+                    )
+                    .with(
+                        "c2",
+                        ContainerStats::new_i64(
+                            vec![Some(4), Some(4), Some(10), Some(4)],
+                            vec![Some(4), Some(4), Some(10), Some(4)],
+                        )
+                        .with_null_counts(vec![Some(0), Some(0), Some(0), Some(0)])
+                        .with_row_counts(vec![
+                            Some(1),
+                            Some(1),
+                            Some(1),
+                            Some(1),
+                        ]),
+                    ),
+                // row 0: c1=1 (in list), c2=4 (in list) -> kept
+                // row 1: c1=10 (not in list) -- if c1's factored guard/range
+                //        were dropped or miscombined with c2's during the
+                //        simultaneous re-open, this row could wrongly keep
+                //        -> pruned
+                // row 2: c2=10 (not in list), symmetric case for the other
+                //        column -> pruned
+                // row 3: c1 all-null -> pruned via c1's guard regardless of c2
+                expected: &[true, false, false, false],
+            },
+            PruneEquivalenceCase {
+                name: "`i IN (11, NULL)`: the NULL-literal disjunct is \
+                       unconditionally Kleene-NULL and must not be folded \
+                       away or incorrectly hoisted alongside the `11`-valued disjunct",
+                schema: Arc::clone(&i_schema),
+                expr: col("i")
+                    .in_list(vec![lit(11i64), lit(ScalarValue::Int64(None))], false),
+                statistics: TestStatistics::new().with(
+                    "i",
+                    ContainerStats::new_i64(
+                        vec![Some(11), Some(5), Some(0)],
+                        vec![Some(11), Some(5), Some(1000)],
+                    )
+                    .with_null_counts(vec![Some(0), Some(0), None])
+                    .with_row_counts(vec![Some(1), Some(1), Some(5)]),
+                ),
+                // row 0: value definitely 11 -> in list -> kept
+                // row 1: value definitely 5 -> not 11, and the NULL-literal
+                //        disjunct is Kleene NULL -> OR(false, NULL) = NULL
+                //        -> not provably false -> kept (the interesting
+                //        case: a NULL in the IN-list keeps an otherwise
+                //        prunable row group)
+                // row 2: unknown null count, range covers 11 -> guard is
+                //        NULL -> kept regardless of the disjuncts
+                expected: &[true, true, true],
+            },
+        ];
+
+        for case in cases {
+            let physical = logical2physical(&case.expr, &case.schema);
+            let factored = PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(&case.schema))
+                .try_build(Arc::clone(&physical))
+                .unwrap();
+            let unfactored = build_unfactored(physical, &case.schema);
+
+            let factored_result = factored.prune(&case.statistics).unwrap();
+            let unfactored_result = unfactored.prune(&case.statistics).unwrap();
+            assert_eq!(
+                factored_result, unfactored_result,
+                "factored/unfactored prune() disagree on case `{}`",
+                case.name
+            );
+            assert_eq!(
+                factored_result, case.expected,
+                "prune() result doesn't match `expected` on case `{}`",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn factor_common_guards_between_one_column() {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = col("c1").between(lit(1), lit(5));
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_max@0 >= 1 AND c1_min@3 <= 5"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_in_list_one_column() {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = col("c1").in_list(vec![lit(1), lit(2), lit(3)], false);
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@2 != row_count@3 AND \
+             (c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1 OR c1_min@0 <= 3 AND 3 <= c1_max@1)"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_negated_in_list_one_column() {
+        // NOT IN compiles to an AND of NotEq comparisons, so this exercises
+        // the AND-side dedup identity rather than the OR-side hoist.
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = col("c1").in_list(vec![lit(1), lit(2), lit(3)], true);
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@2 != row_count@3 AND (c1_min@0 != 1 OR 1 != c1_max@1) \
+             AND (c1_min@0 != 2 OR 2 != c1_max@1) AND (c1_min@0 != 3 OR 3 != c1_max@1)"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_mixed_column_no_cross_merge() {
+        // Distinct columns get distinct null-count guards, so nothing merges
+        // despite sharing one `row_count` column.
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+        let expr = col("c1").gt_eq(lit(1)).and(col("c2").lt_eq(lit(5)));
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_max@0 >= 1 \
+             AND c2_null_count@4 != row_count@2 AND c2_min@3 <= 5"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_asymmetric_or_no_partial_merge() {
+        // Only 2 of 3 arms share the c1 guard, so nothing should be hoisted
+        // -- a guard common to some but not all arms must not be partially
+        // factored.
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, false),
+        ]));
+        let expr = col("c1")
+            .in_list(vec![lit(1), lit(2)], false)
+            .or(col("c2").gt(lit(10)));
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= 1 AND 1 <= c1_max@1 \
+             OR c1_null_count@2 != row_count@3 AND c1_min@0 <= 2 AND 2 <= c1_max@1 \
+             OR c2_null_count@5 != row_count@3 AND c2_max@4 > 10"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_or_with_three_plus_arms() {
+        // 5 disjuncts sharing one guard, none of them adjacent pairs only --
+        // this is what N-ary flattening (as opposed to pairwise merging) is
+        // needed to catch.
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = col("c1").in_list((1..=5).map(lit).collect(), false);
+        let predicate_expr = build_via_builder(expr, &schema);
+        let s = predicate_expr.to_string();
+        assert_eq!(s.matches("c1_null_count@2 != row_count@3").count(), 1);
+        for v in 1..=5 {
+            assert!(
+                s.contains(&format!("{v} <= c1_max@1")),
+                "missing arm for {v} in {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn factor_common_guards_or_multi_conjunct_common_set() {
+        // `(c1=1 AND c2=1 AND c3=1) OR (c1=1 AND c2=1 AND c3=2)`: two
+        // conjuncts (on c1 and c2) are common to both arms, not just one --
+        // `factor_or` must hoist the whole shared set together as
+        // `c1=1 AND c2=1 AND (c3=1 OR c3=2)`, not just the first match it
+        // finds.
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+            Field::new("c3", DataType::Int32, true),
+        ]));
+        let expr = col("c1")
+            .eq(lit(1))
+            .and(col("c2").eq(lit(1)))
+            .and(col("c3").eq(lit(1)))
+            .or(col("c1")
+                .eq(lit(1))
+                .and(col("c2").eq(lit(1)))
+                .and(col("c3").eq(lit(2))));
+        let predicate_expr = build_via_builder(expr, &schema);
+        let s = predicate_expr.to_string();
+        // both shared guards appear exactly once, not once per arm
+        assert_eq!(s.matches("c1_null_count").count(), 1);
+        assert_eq!(s.matches("c2_null_count").count(), 1);
+        // the shared equality checks are hoisted out of the disjunction too
+        assert_eq!(s.matches("c1_min").count(), 1);
+        assert_eq!(s.matches("c2_min").count(), 1);
+        // c3, the only differing conjunct, is still checked once per arm
+        assert_eq!(s.matches("c3_min").count(), 2);
+    }
+
+    #[test]
+    fn factor_common_guards_or_hoists_compound_conjunct() {
+        // `(X AND p) OR (X AND q)`, where `X = (x1 OR x2)` is itself
+        // compound, not a single leaf -- factor_or's HashSet-based
+        // common-conjunct detection must treat `X` as one opaque structural
+        // unit and hoist it whole, rather than decomposing it and
+        // cross-matching its internals against the other arm.
+        let x1: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("x1", 0));
+        let x2: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("x2", 1));
+        let x = or_expr(x1, x2);
+        let p: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("p", 2));
+        let q: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("q", 3));
+        let expr = or_expr(and_expr(Arc::clone(&x), p), and_expr(Arc::clone(&x), q));
+        let factored = factor_common_guards(expr);
+        assert_eq!(factored.to_string(), "(x1@0 OR x2@1) AND (p@2 OR q@3)");
+    }
+
+    #[test]
+    fn flatten_chain_known_non_volatile_wide_and_chain() {
+        // Confirms the iterative flattener handles an AND chain deep enough
+        // that a naive recursive version would stack-overflow (e.g. a long
+        // list of `col = val AND ...` clauses generated by an ORM), without
+        // limiting `N` to this function's own capacity: unrelated recursive
+        // code (`is_volatile`, `BinaryExpr`'s `Display`, even plain `Drop`
+        // of a chain this deep) would overflow first, including at this
+        // test's own teardown. Fixing those is out of scope here.
+        const N: i32 = 8_000;
+        let mut expr: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("c0", 0));
+        for i in 1..N {
+            let col_i: Arc<dyn PhysicalExpr> =
+                Arc::new(phys_expr::Column::new(&format!("c{i}"), i as usize));
+            expr = and_expr(expr, col_i);
+        }
+
+        let mut arms = Vec::new();
+        flatten_chain_known_non_volatile(&expr, Operator::And, &mut arms);
+        assert_eq!(arms.len() as i32, N);
+    }
+
+    #[test]
+    fn factor_common_guards_deeply_alternating_and_or_no_stack_overflow() {
+        // Alternates AND/OR at every nesting level -- unlike a same-operator
+        // chain (handled iteratively by flatten_chain_known_non_volatile
+        // above), each alternation forces one more level of genuine Rust
+        // call-stack recursion in factor_common_guards_known_non_volatile's
+        // self-call for a child whose operator differs from its parent's. A
+        // predicate this shape is plausible from a UI rule-builder or
+        // programmatically composed filter.
+        //
+        // Before MAX_FACTOR_ALTERNATION_DEPTH existed, this shape's runtime
+        // grew worse than quadratically with depth (~0.02s at depth 100,
+        // ~6.6s at depth 1,000) rather than just its stack depth: every
+        // level of this recursion re-hashes the entire remaining subtree via
+        // factor_and/factor_or's HashSet, and `Arc<dyn PhysicalExpr>`'s Hash
+        // is itself, independently, super-linear in subtree size (measured
+        // directly: ~8ms/25ms/102ms/572ms for one single hash at depth
+        // 500/1,000/2,000/4,000) -- a separate, pre-existing limitation in
+        // `datafusion-physical-expr`'s Hash impl, not something this pass
+        // introduced or can fix, in the same out-of-scope category as
+        // Display and Drop on a tree this deep (see the sibling wide-chain
+        // test). The depth cap bounds the number of times that expensive
+        // hash gets paid to a constant instead of once per level, which is
+        // what this test demonstrates: this shape used to be the dominant
+        // cost driver, and after the cap it no longer is.
+        //
+        // Calls factor_common_guards_known_non_volatile directly, bypassing
+        // factor_common_guards's is_volatile pre-check, which has that same
+        // kind of pre-existing recursion over any tree shape and isn't what
+        // this test is isolating.
+        const N: i32 = 500;
+        let mut expr: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("c0", 0));
+        for i in 1..N {
+            let col_i: Arc<dyn PhysicalExpr> =
+                Arc::new(phys_expr::Column::new(&format!("c{i}"), i as usize));
+            expr = if i % 2 == 0 {
+                and_expr(col_i, expr)
+            } else {
+                or_expr(col_i, expr)
+            };
+        }
+        let _ = factor_common_guards_known_non_volatile(expr); // must not overflow
+    }
+
+    #[test]
+    fn factor_common_guards_or_fully_absorbed_arm_no_and_true_residue() {
+        // `(g AND p) OR g`: the second arm's only conjunct `g` is entirely
+        // contained in the common set {g}, so its leftover is empty (folds
+        // to `true`). The final `common AND (leftovers)` combine must fold
+        // that away via `fold_and` rather than leaving a dangling
+        // `... AND true` in the output -- by the absorption law this whole
+        // expression is just `g`.
+        let g: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("g", 0));
+        let p: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("p", 1));
+        let expr = or_expr(and_expr(Arc::clone(&g), Arc::clone(&p)), Arc::clone(&g));
+        let factored = factor_common_guards(expr);
+        assert_eq!(factored.to_string(), "g@0");
+    }
+
+    #[test]
+    fn factor_common_guards_skips_volatile_expr() {
+        // Same shape as the absorption case above (`(g AND p) OR g`), which
+        // *would* get simplified down to `g` if factoring ran on it -- except
+        // `p` here is volatile. `factor_common_guards` must leave the whole
+        // expression untouched in that case: factoring is free to reorder,
+        // dedupe, or re-evaluate sub-expressions relative to how many times
+        // the original tree would evaluate them, which is only sound for a
+        // deterministic (non-volatile) sub-expression.
+        let g: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("g", 0));
+        let volatile: Arc<dyn PhysicalExpr> = Arc::new(VolatileTestExpr);
+        let expr = or_expr(and_expr(Arc::clone(&g), volatile), Arc::clone(&g));
+        let factored = factor_common_guards(Arc::clone(&expr));
+        assert!(
+            Arc::ptr_eq(&factored, &expr),
+            "expression containing a volatile sub-expression must be \
+             returned unchanged (same Arc), got {factored}"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_or_fully_absorbed_arm_prune_equivalence() {
+        // Same absorption identity as above, but from a real guard/range
+        // pair (not placeholder columns), checked via `prune()` against
+        // real statistics rather than only `to_string()`. This shape isn't
+        // reachable through any known SQL predicate, hence built directly
+        // rather than via the builder.
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)]));
+        let physical = logical2physical(&col("i").gt_eq(lit(1i64)), &schema);
+
+        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
+        let mut required_columns = RequiredColumns::new();
+        let and_g_p = build_predicate_expression(
+            &physical,
+            &schema,
+            &mut required_columns,
+            &unhandled_hook,
+            MAX_IN_LIST_SIZE,
+        );
+        let g = Arc::clone(
+            and_g_p
+                .downcast_ref::<phys_expr::BinaryExpr>()
+                .expect("build_predicate_expression produced AND(G, P)")
+                .left(),
+        );
+        let absorbed = or_expr(Arc::clone(&and_g_p), g);
+
+        let predicate_schema = required_columns.schema();
+        let unfactored_expr = PhysicalExprSimplifier::new(&predicate_schema)
+            .simplify(Arc::clone(&absorbed))
+            .unwrap();
+        let factored_expr = factor_common_guards(Arc::clone(&unfactored_expr));
+        assert_eq!(
+            factored_expr.to_string(),
+            "i_null_count@1 != row_count@2",
+            "absorption should collapse to just the guard"
+        );
+
+        let literal_guarantees = LiteralGuarantee::analyze(&physical);
+        let build = |predicate_expr: Arc<dyn PhysicalExpr>| PruningPredicate {
+            schema: Arc::clone(&schema),
+            predicate_expr,
+            required_columns: required_columns.clone(),
+            orig_expr: Arc::clone(&physical),
+            literal_guarantees: literal_guarantees.clone(),
+        };
+        let unfactored = build(unfactored_expr);
+        let factored = build(factored_expr);
+
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i64(
+                vec![Some(0), Some(1), Some(-5), Some(-5)],
+                vec![Some(0), Some(1), Some(-5), Some(-5)],
+            )
+            .with_null_counts(vec![Some(1), Some(0), Some(0), None])
+            .with_row_counts(vec![Some(1), Some(1), Some(1), Some(1)]),
+        );
+        // row 0: all-null -> G false -> pruned, both versions agree
+        // row 1: value 1, satisfies `P` (>= 1) -> kept, both agree
+        // row 2: value -5, definitely fails `P` (>= 1) -- absorption means
+        //        `P` is irrelevant once a bare-`G` arm exists alongside it,
+        //        so this row is kept anyway despite failing the range
+        //        check; the unfactored form must agree via the identity,
+        //        not by coincidence
+        // row 3: unknown null count, value -5 -- `G` is NULL, so factored
+        //        keeps (Kleene NULL); unfactored: AND(NULL, false)=false,
+        //        OR(false, NULL)=NULL -> also kept
+        let expected = [false, true, true, true];
+        let factored_result = factored.prune(&statistics).unwrap();
+        let unfactored_result = unfactored.prune(&statistics).unwrap();
+        assert_eq!(
+            factored_result, unfactored_result,
+            "factored/unfactored prune() disagree"
+        );
+        assert_eq!(factored_result, expected);
+    }
+
+    #[test]
+    fn factor_common_guards_is_distinct_from_through_builder() {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = is_distinct_from(col("c1"), lit(1));
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@0 > 0 OR c1_min@2 != 1 OR 1 != c1_max@3"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_is_not_distinct_from_through_builder() {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = is_not_distinct_from(col("c1"), lit(1));
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@0 != row_count@1 AND c1_min@2 <= 1 AND 1 <= c1_max@3"
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_or_associativity_invariant() {
+        // Real predicates always build a left-leaning chain; this checks
+        // `factor_common_guards` gives the same result on an equivalent
+        // right-leaning chain too.
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = col("c1").in_list(vec![lit(1), lit(2), lit(3)], false);
+        let left_leaning = build_raw(&expr, &schema);
+
+        let mut arms = Vec::new();
+        flatten_chain_known_non_volatile(&left_leaning, Operator::Or, &mut arms);
+        let right_leaning = arms
+            .into_iter()
+            .rev()
+            .reduce(|acc, arm| or_expr(arm, acc))
+            .unwrap();
+
+        assert_eq!(
+            factor_common_guards(left_leaning).to_string(),
+            factor_common_guards(right_leaning).to_string()
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_and_associativity_invariant() {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+            Field::new("c3", DataType::Int32, true),
+        ]));
+        let expr = col("c1")
+            .gt_eq(lit(1))
+            .and(col("c2").gt_eq(lit(2)))
+            .and(col("c3").gt_eq(lit(3)));
+        let left_leaning = build_raw(&expr, &schema);
+
+        let mut arms = Vec::new();
+        flatten_chain_known_non_volatile(&left_leaning, Operator::And, &mut arms);
+        let right_leaning = arms
+            .into_iter()
+            .rev()
+            .reduce(|acc, arm| and_expr(arm, acc))
+            .unwrap();
+
+        assert_eq!(
+            factor_common_guards(left_leaning).to_string(),
+            factor_common_guards(right_leaning).to_string()
+        );
+    }
+
+    #[test]
+    fn factor_common_guards_and_wrapping_factored_or() {
+        // `c1 IN (-5,2) AND c1 >= 0`: hoisting the IN-list's OR guard
+        // produces `G AND (arm1 OR arm2)` nested under the outer AND's own
+        // `G` sibling; the outer level must re-open and merge them, not
+        // treat the nested AND as opaque. Full string equality (not just a
+        // guard-occurrence count) catches a regression that drops either
+        // conjunct while leaving the guard count unchanged. `-5` is chosen
+        // so the IN and `>= 0` clauses disagree on at least one value,
+        // rather than an all-non-negative list where dropping either
+        // clause would happen to prune the same rows.
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let expr = col("c1")
+            .in_list(vec![lit(-5), lit(2)], false)
+            .and(col("c1").gt_eq(lit(0)));
+        let predicate_expr = build_via_builder(expr, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "c1_null_count@2 != row_count@3 AND \
+             (c1_min@0 <= -5 AND -5 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1) \
+             AND c1_max@1 >= 0"
+        );
+    }
+
+    // build_is_distinct_from's/build_is_not_distinct_from's hand-rolled shape
+    // OR(AND(IsNull(lit), G), AND(IsNotNull(lit), OR(...))) looks like a
+    // factorable OR-of-ANDs, but its first conjuncts differ (IsNull vs
+    // IsNotNull), so the intersection must come up empty. Tested directly on
+    // the raw `build_predicate_expression` output, skipping the simplifier:
+    // with a real predicate schema it folds `IsNull(lit)`/`IsNotNull(lit)` to
+    // true/false before this pass ever runs, which would collapse one whole
+    // branch away and mask the case this test targets.
+    fn build_raw(expr: &Expr, schema: &SchemaRef) -> Arc<dyn PhysicalExpr> {
+        let physical = logical2physical(expr, schema);
+        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
+        build_predicate_expression(
+            &physical,
+            schema,
+            &mut RequiredColumns::new(),
+            &unhandled_hook,
+            MAX_IN_LIST_SIZE,
+        )
+    }
+
+    #[test]
+    fn factor_common_guards_is_distinct_from_shape_untouched() {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let raw = build_raw(&is_distinct_from(col("c1"), lit(1)), &schema);
+        let factored = factor_common_guards(Arc::clone(&raw));
+        assert_eq!(factored.to_string(), raw.to_string());
+    }
+
+    #[test]
+    fn factor_common_guards_is_not_distinct_from_shape_untouched() {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let raw = build_raw(&is_not_distinct_from(col("c1"), lit(1)), &schema);
+        let factored = factor_common_guards(Arc::clone(&raw));
+        assert_eq!(factored.to_string(), raw.to_string());
     }
 
     #[test]

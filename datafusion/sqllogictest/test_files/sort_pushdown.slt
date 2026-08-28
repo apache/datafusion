@@ -155,7 +155,7 @@ logical_plan
 03)----TableScan: multi_rg_sorted projection=[id, category, value], partial_filters=[multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")]
 physical_plan
 01)SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], sort_order_for_reorder=[id@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], sort_order_for_reorder=[id@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=category_null_count@2 != row_count@3 AND (category_min@0 <= alpha AND alpha <= category_max@1 OR category_min@0 <= gamma AND gamma <= category_max@1), required_guarantees=[category in (alpha, gamma)]
 
 # Verify the results are correct despite reverse scanning with row selection
 # Expected: gamma values (6, 5) then alpha values (2, 1), in DESC order by id
@@ -491,7 +491,7 @@ logical_plan
 03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("daily") OR timeseries_parquet.timeframe = Utf8View("weekly")]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[period_end@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=(timeframe@0 = daily OR timeframe@0 = weekly) AND DynamicFilter [ empty ], sort_order_for_reorder=[period_end@1 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= daily AND daily <= timeframe_max@1 OR timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= weekly AND weekly <= timeframe_max@1, required_guarantees=[timeframe in (daily, weekly)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=(timeframe@0 = daily OR timeframe@0 = weekly) AND DynamicFilter [ empty ], sort_order_for_reorder=[period_end@1 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=timeframe_null_count@2 != row_count@3 AND (timeframe_min@0 <= daily AND daily <= timeframe_max@1 OR timeframe_min@0 <= weekly AND weekly <= timeframe_max@1), required_guarantees=[timeframe in (daily, weekly)]
 
 # Test 2.9: Complex case - literal constant in sort expression itself
 # The literal 'constant' is ignored in sort analysis
