@@ -125,7 +125,7 @@ otherwise identical functions over different columns stay distinct when
 per-partition metrics are combined.
 
 Each per-aggregate timer additionally carries an `aggregate` label holding the
-rendered aggregate expression (for example, `sum(t.a)`). Combining metrics
+rendered aggregate expression (for example, `SUM(a)`). Combining metrics
 across partitions drops labels, so this label is only shown in the "Plan with
 Full Metrics" section of `EXPLAIN ANALYZE VERBOSE`, which reports metrics per
 partition.
