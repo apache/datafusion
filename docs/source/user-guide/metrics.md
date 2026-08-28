@@ -70,7 +70,7 @@ an aggregate expression in the operator and `phase` is one of the following:
 
 | Phase              | Description                                                                                   |
 | ------------------ | --------------------------------------------------------------------------------------------- |
-| `arguments`        | Evaluating the aggregate's argument expressions and filters into input arrays.                |
+| `arguments`        | Evaluating the aggregate's argument expressions into input arrays.                            |
 | `update`           | Updating an accumulator from raw input values.                                                |
 | `merge`            | Merging partial accumulator states.                                                           |
 | `state`            | Obtaining an accumulator's intermediate state for partial output or aggregate spilling.       |
@@ -79,10 +79,18 @@ an aggregate expression in the operator and `phase` is one of the following:
 
 For example, an operator for `SELECT SUM(a), SUM(b) FROM t` reports
 `agg_expr_0_arguments_time` and `agg_expr_0_update_time` for `SUM(a)`, and
-`agg_expr_1_arguments_time` and `agg_expr_1_update_time` for `SUM(b)`. Each
-metric also has an `aggregate` label containing the aggregate expression (for
-example, `SUM(a)`), so otherwise identical functions over different columns
-remain distinct when metrics are combined across partitions.
+`agg_expr_1_arguments_time` and `agg_expr_1_update_time` for `SUM(b)`. The
+index is positional and refers to the same position in the `aggr=[...]` list
+printed on the operator's plan line, which is how an indexed timer is mapped
+back to an aggregate expression. Because the index is part of the metric name,
+otherwise identical functions over different columns stay distinct when
+per-partition metrics are combined.
+
+Each metric additionally carries an `aggregate` label holding the rendered
+aggregate expression (for example, `sum(t.a)`). Combining metrics across
+partitions drops labels, so this label is only shown in the "Plan with Full
+Metrics" section of `EXPLAIN ANALYZE VERBOSE`, which reports metrics per
+partition.
 
 The phases present depend on the aggregate mode and implementation. For
 non-grouped aggregation, partial mode records `update` and `state`, partial
@@ -95,11 +103,18 @@ timers measure intermediate-state emission, including during spilling. The group
 aggregate path records only the per-aggregate `arguments` timer, because it
 maintains values directly rather than using accumulators.
 
+Where an aggregate has a `FILTER` clause, non-grouped aggregation and the
+hash-table grouped paths evaluate that filter inside the aggregate's
+`arguments` timer. The legacy grouped hash path evaluates filters outside the
+per-aggregate timers, so its `arguments` timers cover argument evaluation only.
+
 These detailed timers are additive observability metrics. They are `Dev`
 metrics, so they appear in `EXPLAIN ANALYZE` when its analyze level includes
-`Dev` (the default), but are omitted at the `Summary` level. Use `EXPLAIN ANALYZE VERBOSE` to show the per-partition values; the normal display combines
-partitions. A query such as the following keeps the per-expression metrics
-readable while showing which aggregate each indexed timer represents:
+`Dev` (the default), but are omitted at the `Summary` level. The normal display
+combines partitions; use `EXPLAIN ANALYZE VERBOSE` to additionally show the
+per-partition values together with each metric's `aggregate` label. For a query
+such as the following, the per-expression metrics stay readable, and the
+operator's `aggr=[...]` list names the aggregate behind each timer index:
 
 ```sql
 EXPLAIN ANALYZE
