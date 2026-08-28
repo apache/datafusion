@@ -1767,6 +1767,7 @@ dependencies = [
  "tempfile",
  "test-utils",
  "tokio",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
  "zstd",
@@ -2546,11 +2547,13 @@ dependencies = [
  "datafusion-proto-common",
  "datafusion-proto-models",
  "doc-comment",
+ "flate2",
  "object_store",
  "pretty_assertions",
  "prost",
  "recursive",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -2582,6 +2585,7 @@ name = "datafusion-pruning"
 version = "55.0.0"
 dependencies = [
  "arrow",
+ "criterion",
  "datafusion-common",
  "datafusion-datasource",
  "datafusion-expr",

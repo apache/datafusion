@@ -87,6 +87,7 @@ use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
 use crate::projection_read_plan::{
     ParquetReadPlan, PushdownChecker, PushdownColumns, assemble_read_plan,
+    build_read_plan_with_cast_clipping,
 };
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
@@ -166,9 +167,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 timer.stop();
                 Ok(bool_arr)
             })
+            // `ExternalError` is the only `ArrowError` variant that keeps a
+            // source, and therefore the only one that leaves the original error
+            // recoverable (see `DataFusionError::find_root`)
             .map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Error evaluating filter predicate: {e:?}"
+                ArrowError::ExternalError(Box::new(
+                    e.context("Error evaluating filter predicate"),
                 ))
             })
     }
@@ -240,12 +244,17 @@ impl FilterCandidateBuilder {
 ///
 /// Returns `None` if the expression cannot be pushed down (e.g., references
 /// unsupported nested types or columns not in the file).
+/// Struct casts are accepted only after schema adaptation, not while planning
+/// against the table schema: adaptation may insert another cast underneath an
+/// explicit cast, leaving an expression the runtime checker cannot handle.
 fn pushdown_columns(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
+    allow_struct_casts: bool,
 ) -> Result<Option<PushdownColumns>> {
     let allow_list_columns = supports_list_predicates(expr);
-    let mut checker = PushdownChecker::new(file_schema, allow_list_columns);
+    let mut checker =
+        PushdownChecker::new(file_schema, allow_list_columns, allow_struct_casts);
     expr.visit(&mut checker)?;
     Ok((!checker.prevents_pushdown()).then(|| checker.into_sorted_columns()))
 }
@@ -269,16 +278,30 @@ pub(crate) fn build_parquet_read_plan(
 ) -> Result<Option<(ParquetReadPlan, usize)>> {
     let schema_descr = metadata.file_metadata().schema_descr();
 
-    let Some(required_columns) = pushdown_columns(expr, file_schema)? else {
+    let Some(required_columns) = pushdown_columns(expr, file_schema, true)? else {
         return Ok(None);
     };
 
-    let (read_plan, leaf_indices) = assemble_read_plan(
-        &required_columns.required_columns,
-        &required_columns.struct_field_accesses,
-        file_schema,
-        schema_descr,
-    );
+    // A retained Struct cast names the fields its conversion touches, so the
+    // read is clipped to those leaves rather than decoding the whole root.
+    // A cast whose target covers every leaf, or that cannot be clipped safely,
+    // falls back to a full read of that root inside the helper.
+    let (read_plan, leaf_indices) = if required_columns.cast_accesses.is_empty() {
+        assemble_read_plan(
+            &required_columns.required_columns,
+            &required_columns.struct_field_accesses,
+            file_schema,
+            schema_descr,
+        )
+    } else {
+        build_read_plan_with_cast_clipping(
+            file_schema,
+            schema_descr,
+            &required_columns.required_columns,
+            &required_columns.struct_field_accesses,
+            &required_columns.cast_accesses,
+        )
+    };
 
     let required_bytes = size_of_columns(&leaf_indices, metadata)?;
 
@@ -355,7 +378,7 @@ pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
 ) -> bool {
-    match pushdown_columns(expr, file_schema) {
+    match pushdown_columns(expr, file_schema, false) {
         Ok(Some(_)) => true,
         Ok(None) | Err(_) => false,
     }
@@ -545,13 +568,13 @@ pub(crate) fn row_filter_from_prebuilt(
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Fields};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DataFusionError, ScalarValue};
 
     use arrow::array::{
         Int32Array, ListBuilder, StringArray, StringBuilder, StructArray,
     };
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_expr::{Expr, col};
+    use datafusion_expr::{Cast, Expr, col, lit};
     use datafusion_functions::core::get_field;
     use datafusion_functions_nested::array_has::{
         array_has_all_udf, array_has_any_udf, array_has_udf,
@@ -690,6 +713,82 @@ mod test {
 
         let filtered = row_filter.evaluate(first_rb);
         assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![true; 8])));
+    }
+
+    /// A predicate that fails while it is being evaluated must report the
+    /// original error, not an opaque string, so that callers can still tell a
+    /// user error apart from an internal one.
+    #[test]
+    fn evaluate_reports_the_original_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["not_an_int"]))],
+        )
+        .expect("record batch");
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().expect("reopen file"))
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // Casting the column in the file to `Int32` fails on this data
+        let expr = Expr::Cast(Cast::new(Box::new(col("s")), DataType::Int32)).eq(lit(1));
+        let expr = logical2physical(&expr, &file_schema);
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
+
+        let mut predicate = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let mut parquet_reader = parquet_reader_builder
+            .with_projection(predicate.projection().clone())
+            .build()
+            .expect("building reader");
+        let first_rb = parquet_reader
+            .next()
+            .expect("expected record batch")
+            .expect("expected error free record batch");
+
+        let err = predicate
+            .evaluate(first_rb)
+            .expect_err("evaluating the predicate should fail");
+
+        // The cast failure is still reachable, rather than being flattened into
+        // an untyped `ArrowError::ComputeError`
+        let err = DataFusionError::from(err);
+        let root = err.find_root();
+        assert!(
+            matches!(
+                root,
+                DataFusionError::ArrowError(inner, _)
+                    if matches!(inner.as_ref(), ArrowError::CastError(_))
+            ),
+            "expected the original cast error, got {root:?}"
+        );
+
+        // and the message still says where the failure happened
+        let message = err.to_string();
+        assert!(
+            message.contains("Error evaluating filter predicate"),
+            "{message}"
+        );
+        assert!(message.contains("Cannot cast string"), "{message}");
     }
 
     #[test]
@@ -1153,11 +1252,12 @@ mod test {
     fn get_field_filter_candidate_has_correct_leaf_indices() {
         use arrow::array::{Int32Array, StringArray, StructArray};
 
-        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8})
-        // Parquet leaves: id=0, s.value=1, s.label=2
+        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8, unused: Utf8})
+        // Parquet leaves: id=0, s.value=1, s.label=2, s.unused=3
         let struct_fields: Fields = vec![
             Arc::new(Field::new("value", DataType::Int32, false)),
             Arc::new(Field::new("label", DataType::Utf8, false)),
+            Arc::new(Field::new("unused", DataType::Utf8, false)),
         ]
         .into();
         let schema = Arc::new(Schema::new(vec![
@@ -1174,6 +1274,9 @@ mod test {
                     vec![
                         Arc::new(Int32Array::from(vec![10, 20, 30])) as _,
                         Arc::new(StringArray::from(vec!["a", "b", "c"])) as _,
+                        Arc::new(StringArray::from(vec![
+                            "unused-a", "unused-b", "unused-c",
+                        ])) as _,
                     ],
                     None,
                 )),
@@ -1202,18 +1305,150 @@ mod test {
         let expr = get_field_expr.gt(Expr::Literal(ScalarValue::Int32(Some(5)), None));
         let expr = logical2physical(&expr, &file_schema);
 
-        let candidate = FilterCandidateBuilder::new(expr, file_schema)
-            .build(&metadata)
-            .expect("building candidate")
-            .expect("get_field filter on struct should be pushable");
+        let candidate =
+            FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building candidate")
+                .expect("get_field filter on struct should be pushable");
 
         // The filter accesses only s.value, so only Parquet leaf 1 is needed.
-        // Leaf 2 (s.label) is not read, reducing unnecessary I/O.
+        // Neither sibling is read, reducing unnecessary I/O.
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]);
         assert_eq!(
             candidate.read_plan.projection_mask, expected_mask,
             "projection_mask should select only the accessed struct field leaf"
+        );
+
+        // Schema adaptation retains Struct ancestors for some decimal conversions
+        // so an all-null parent can skip child conversion. Runtime filters must
+        // preserve every conversion named by the retained cast target.
+        // This target includes `label`, so its conversion must still run even
+        // though get_field selects only `value`. Planning keeps a residual filter
+        // for explicit Struct casts.
+        let cast_type = DataType::Struct(
+            vec![
+                Field::new("value", DataType::Int32, false),
+                Field::new("label", DataType::Int32, true),
+            ]
+            .into(),
+        );
+        let cast_field = get_field().call(vec![
+            datafusion_expr::cast(col("s"), cast_type),
+            lit("value"),
+        ]);
+        let projection = logical2physical(&cast_field, &file_schema);
+        let cast_predicate = logical2physical(&cast_field.gt(lit(5)), &file_schema);
+        assert!(!can_expr_be_pushed_down_with_schemas(
+            &cast_predicate,
+            &file_schema
+        ));
+        let candidate =
+            FilterCandidateBuilder::new(cast_predicate, Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building cast candidate")
+                .expect("an adapted struct cast must remain evaluable");
+        // Clip the unused sibling, but preserve the failing `label` conversion.
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1, 2]);
+        assert_eq!(candidate.read_plan.projection_mask, expected_mask);
+        let DataType::Struct(physical_fields) = file_schema.field(1).data_type() else {
+            unreachable!("s is a struct")
+        };
+        let clipped_field =
+            file_schema
+                .field(1)
+                .clone()
+                .with_data_type(DataType::Struct(
+                    physical_fields.iter().take(2).cloned().collect(),
+                ));
+        assert_eq!(
+            candidate.read_plan.projected_schema.as_ref(),
+            &Schema::new(vec![clipped_field])
+        );
+        assert_eq!(
+            candidate.required_bytes,
+            (metadata.row_group(0).column(1).compressed_size()
+                + metadata.row_group(0).column(2).compressed_size()) as usize,
+            "filter cost must count only the leaves the cast target reads"
+        );
+
+        // A simultaneous direct access must not prune siblings that the cast
+        // needs in the output projection either.
+        let projection_plan = crate::projection_read_plan::build_projection_read_plan(
+            [expr, projection],
+            &file_schema,
+            metadata.file_metadata().schema_descr(),
+        );
+        assert_eq!(projection_plan.projection_mask, expected_mask);
+        assert_eq!(
+            projection_plan.projected_schema,
+            candidate.read_plan.projected_schema
+        );
+
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .unwrap();
+        let batch = builder
+            .with_projection(row_filter.projection().clone())
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let error = row_filter.evaluate(batch).unwrap_err().to_string();
+        datafusion_common::assert_contains!(error, "While casting struct field 'label'");
+
+        // A retained cast whose target names only the selected field — the
+        // shape `retain_field_path` produces for an evolved decimal — clips the
+        // read to that field's leaf instead of decoding the whole root.
+        let narrow_cast_type =
+            DataType::Struct(vec![Field::new("value", DataType::Int32, false)].into());
+        let narrow_field = get_field().call(vec![
+            datafusion_expr::cast(col("s"), narrow_cast_type.clone()),
+            lit("value"),
+        ]);
+        let narrow_predicate = logical2physical(&narrow_field.gt(lit(5)), &file_schema);
+        let candidate =
+            FilterCandidateBuilder::new(narrow_predicate, Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building narrow cast candidate")
+                .expect("a clipped struct cast must remain evaluable");
+        assert_eq!(
+            candidate.read_plan.projection_mask,
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]),
+            "the read must be clipped to the leaf the cast target names"
+        );
+        assert_eq!(candidate.read_plan.projected_schema.fields().len(), 1);
+        assert_eq!(
+            candidate.read_plan.projected_schema.field(0).data_type(),
+            &narrow_cast_type,
+            "sibling leaves must be pruned from the filter schema"
+        );
+
+        // The clipped schema must still evaluate: every row has value > 5.
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .unwrap();
+        let batch = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .unwrap()
+            .with_projection(row_filter.projection().clone())
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row_filter.evaluate(batch).unwrap(),
+            BooleanArray::from(vec![true, true, true])
         );
     }
 

@@ -5960,7 +5960,16 @@ file_row_index()
 #### Example
 
 ```sql
-SELECT file_row_index() FROM t;
+> COPY (SELECT * from values (100), (200), (300)) to '/tmp/foo.parquet';
+
+> select *, input_file_name(), file_row_index() from '/tmp/foo.parquet';
++---------+-------------------+------------------+
+| column1 | input_file_name() | file_row_index() |
++---------+-------------------+------------------+
+| 100     | tmp/foo.parquet   | 0                |
+| 200     | tmp/foo.parquet   | 1                |
+| 300     | tmp/foo.parquet   | 2                |
++---------+-------------------+------------------+
 ```
 
 ### `get_field`
@@ -6032,7 +6041,16 @@ input_file_name()
 #### Example
 
 ```sql
-SELECT input_file_name() FROM t;
+> COPY (SELECT * from values (100), (200), (300)) to '/tmp/foo.parquet';
+
+> select *, input_file_name(), file_row_index() from '/tmp/foo.parquet';
++---------+-------------------+------------------+
+| column1 | input_file_name() | file_row_index() |
++---------+-------------------+------------------+
+| 100     | tmp/foo.parquet   | 0                |
+| 200     | tmp/foo.parquet   | 1                |
+| 300     | tmp/foo.parquet   | 2                |
++---------+-------------------+------------------+
 ```
 
 ### `try_cast_to_type`

@@ -358,6 +358,17 @@ pub enum AggregateMode {
     /// This reduces shuffling traffic in a distributed setting. See
     /// <https://github.com/datafusion-contrib/datafusion-distributed/issues/360>
     /// for details.
+    ///
+    /// # Best-Effort Reduction
+    ///
+    /// `PartialReduce` is meant as an optimization: it reduces the volume of
+    /// intermediate state (for example, before sending it over the network),
+    /// and thus its output may not be fully reduced. In particular, an
+    /// implementation may emit partially merged state, or pass its input
+    /// through unchanged (for example, under memory pressure), so the same
+    /// group key may appear in multiple output batches. Consumers must merge
+    /// the output of a `PartialReduce` aggregation exactly as they would
+    /// merge the output of a `Partial` aggregation.
     PartialReduce,
 }
 
@@ -2516,6 +2527,7 @@ impl AggregateExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_physical_expr::aggregate::AggregateExprBuilder;
         use datafusion_proto_models::protobuf;
         use protobuf::physical_aggregate_expr_node::AggregateFunction;
@@ -2690,11 +2702,10 @@ impl AggregateExec {
             )
         }?;
         let aggregate = if let Some(limit) = limit {
+            let fetch = usize_from_wire(limit.limit, "AggregateExec", "limit")?;
             let options = match limit.descending {
-                Some(descending) => {
-                    LimitOptions::new_with_order(limit.limit as usize, descending)
-                }
-                None => LimitOptions::new(limit.limit as usize),
+                Some(descending) => LimitOptions::new_with_order(fetch, descending),
+                None => LimitOptions::new(fetch),
             };
             aggregate.with_limit_options(Some(options))
         } else {
