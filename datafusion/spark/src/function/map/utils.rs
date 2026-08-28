@@ -185,12 +185,14 @@ fn map_deduplicate_keys(
     // overwrites that slot's value. `keys_mask` selects the first-seen keys.
     // Keep a matching `values_mask` for the common case where no overwrite
     // occurs, so Arrow's all-true filter path can share the original value
-    // buffers. Only materialize `value_indices` with `take` after an actual
-    // LAST_WIN overwrite changes the value selection order.
+    // buffers. Use `take` for value reordering after a LAST_WIN overwrite or
+    // for narrowed large child offsets that cannot be used directly by `slice`.
     let mut keys_mask_builder = BooleanBuilder::new();
     let mut values_mask_builder = BooleanBuilder::new();
     let mut value_indices: Vec<i32> = Vec::new();
-    let mut needs_value_take = false;
+    // LargeList offsets can narrow to negative i32 values. Keep take's index
+    // handling for those offsets instead of sign-extending them for slice.
+    let mut needs_value_take = values_offsets.first().is_some_and(|offset| *offset < 0);
     let mut key_to_output_idx: HashMap<ScalarValue, usize> = HashMap::new();
     for (row_idx, (next_keys_offset, next_values_offset)) in keys_offsets
         .iter()
@@ -200,6 +202,7 @@ fn map_deduplicate_keys(
     {
         let num_keys_entries = *next_keys_offset as usize - cur_keys_offset;
         let num_values_entries = *next_values_offset as usize - cur_values_offset;
+        needs_value_take |= *next_values_offset < 0;
 
         let key_is_valid = keys_nulls.is_none_or(|buf| buf.is_valid(row_idx));
         let value_is_valid = values_nulls.is_none_or(|buf| buf.is_valid(row_idx));
@@ -250,9 +253,11 @@ fn map_deduplicate_keys(
             }
         } else {
             // The result entry is NULL — no keys/values emitted. Still pad the
-            // masks so they stay aligned with their respective flat arrays.
+            // masks used by filter so they stay aligned with their flat arrays.
             keys_mask_builder.append_n(num_keys_entries, false);
-            values_mask_builder.append_n(num_values_entries, false);
+            if !needs_value_take {
+                values_mask_builder.append_n(num_values_entries, false);
+            }
         }
         new_offsets.push(new_last_offset);
         cur_keys_offset += num_keys_entries;
@@ -282,7 +287,7 @@ fn map_deduplicate_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{Int32Array, LargeListArray, NullArray, StringArray};
 
     fn int32_utf8_inputs(
         keys: Vec<i32>,
@@ -441,6 +446,93 @@ mod tests {
                 needed_values.value_data().as_ptr(),
                 source_values.value_data().as_ptr(),
             );
+        }
+    }
+
+    #[test]
+    fn large_list_values_near_i32_offset_limit() {
+        let keys: ArrayRef = Arc::new(Int32Array::from(vec![7]));
+        keys.to_data().validate_full().unwrap();
+
+        for start in [(1_i64 << 31) - 2, 1_i64 << 31] {
+            for row_valid in [true, false] {
+                // NullArray represents the large child without a large allocation.
+                let values: ArrayRef = Arc::new(LargeListArray::new(
+                    Arc::new(Field::new("item", DataType::Null, true)),
+                    OffsetBuffer::new(vec![start, start + 1].into()),
+                    Arc::new(NullArray::new(start as usize + 1)),
+                    Some(NullBuffer::from(vec![row_valid])),
+                ));
+                values.to_data().validate_full().unwrap();
+                let values_offsets = get_list_offsets(&values).unwrap();
+                let expected_keys = if row_valid { vec![7] } else { vec![] };
+
+                for last_value_wins in [false, true] {
+                    let result = map_from_keys_values_offsets_nulls(
+                        &keys,
+                        get_list_values(&values).unwrap(),
+                        &[0, 1],
+                        &values_offsets,
+                        None,
+                        values.nulls(),
+                        last_value_wins,
+                    )
+                    .unwrap();
+
+                    result.to_data().validate_full().unwrap();
+                    let map = result.as_map();
+                    assert_eq!(map.len(), 1);
+                    assert_eq!(map.is_null(0), !row_valid);
+                    assert_eq!(map.value_offsets(), &[0, expected_keys.len() as i32]);
+                    assert_eq!(
+                        map.keys().to_data(),
+                        Int32Array::from(expected_keys.clone()).to_data(),
+                    );
+                    assert_eq!(
+                        map.values().to_data(),
+                        NullArray::new(expected_keys.len()).to_data(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn null_large_list_values_cross_i32_offset_limit() {
+        let start = (1_i64 << 31) - 1;
+        let keys: ArrayRef = Arc::new(Int32Array::from(vec![7, 8]));
+        // The first values row is NULL and crosses the narrowing boundary.
+        // The second row must still produce its map entry at the large offset.
+        let values: ArrayRef = Arc::new(LargeListArray::new(
+            Arc::new(Field::new("item", DataType::Null, true)),
+            OffsetBuffer::new(vec![start, start + 1, start + 2].into()),
+            Arc::new(NullArray::new(start as usize + 2)),
+            Some(NullBuffer::from(vec![false, true])),
+        ));
+        keys.to_data().validate_full().unwrap();
+        values.to_data().validate_full().unwrap();
+        let values_offsets = get_list_offsets(&values).unwrap();
+
+        for last_value_wins in [false, true] {
+            let result = map_from_keys_values_offsets_nulls(
+                &keys,
+                get_list_values(&values).unwrap(),
+                &[0, 1, 2],
+                &values_offsets,
+                None,
+                values.nulls(),
+                last_value_wins,
+            )
+            .unwrap();
+
+            result.to_data().validate_full().unwrap();
+            let map = result.as_map();
+            assert_eq!(map.len(), 2);
+            assert!(map.is_null(0));
+            assert!(map.is_valid(1));
+            assert_eq!(map.value_offsets(), &[0, 0, 1]);
+            assert_eq!(map.keys().to_data(), Int32Array::from(vec![8]).to_data());
+            assert_eq!(map.values().to_data(), NullArray::new(1).to_data());
         }
     }
 
