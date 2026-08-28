@@ -63,10 +63,36 @@ subsequent join processing time.
 
 ### AggregateExec
 
-`AggregateExec` records per-aggregate timers in addition to its common and
-aggregate operator metrics. The timers are named
-`agg_expr_{index}_{phase}_time`, where `index` is the zero-based position of
-an aggregate expression in the operator and `phase` is one of the following:
+`AggregateExec` exposes the common `BaselineMetrics`, the operator-level
+metrics below, and a timer per aggregate expression and execution phase.
+
+| Metric                     | Description                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| time_calculating_group_ids | Time spent resolving input rows to group IDs.                                                                                         |
+| aggregate_arguments_time   | Total time spent evaluating the inputs to the aggregate functions. `agg_expr_{index}_arguments_time` breaks this down per expression. |
+| aggregation_time           | Time spent feeding the evaluated inputs into the accumulators.                                                                        |
+| emitting_time              | Time spent producing output batches, including finalizing the grouping expressions and the accumulators.                              |
+| skipped_aggregation_rows   | Number of input rows passed through without aggregating them, when partial aggregation is skipped.                                    |
+| reduction_factor           | Rows emitted per row consumed by a partial aggregation, displayed as `66.67% (2/3)`.                                                  |
+| spill_count                | Number of spill files written when the aggregation exceeds its memory budget.                                                         |
+| spilled_bytes              | Total number of bytes written to spill files.                                                                                         |
+| spilled_rows               | Total number of rows written to spill files.                                                                                          |
+
+These operator-level metrics are recorded by the grouped aggregation paths
+only: an `AggregateExec` without a `GROUP BY` reports just `BaselineMetrics`
+and the per-aggregate timers. `reduction_factor` and `skipped_aggregation_rows`
+are recorded in partial mode only, and `skipped_aggregation_rows` only when
+partial-aggregation skipping is enabled. The boundary between
+`time_calculating_group_ids` and `aggregation_time` differs between the grouped
+implementations: the hash-table paths time grouping-expression evaluation as
+`time_calculating_group_ids` and include interning group values in
+`aggregation_time`, while the legacy grouped hash path times interning as
+`time_calculating_group_ids` and limits `aggregation_time` to the accumulator
+calls.
+
+The per-aggregate timers are named `agg_expr_{index}_{phase}_time`, where
+`index` is the zero-based position of an aggregate expression in the operator
+and `phase` is one of the following:
 
 | Phase              | Description                                                                                   |
 | ------------------ | --------------------------------------------------------------------------------------------- |
@@ -92,16 +118,17 @@ partitions drops labels, so this label is only shown in the "Plan with Full
 Metrics" section of `EXPLAIN ANALYZE VERBOSE`, which reports metrics per
 partition.
 
-The phases present depend on the aggregate mode and implementation. For
-non-grouped aggregation, partial mode records `update` and `state`, partial
-reduce mode records `merge` and `state`, final mode records `merge` and
-`evaluate`, and single mode records `update` and `evaluate`. Hash aggregation
-uses `update`, `state`, and `convert_to_state` in partial mode; `merge` and
-`state` in partial-reduce mode; `merge`, `state`, and `evaluate` in final mode;
-and `update`, `state`, `merge`, and `evaluate` in single mode. Its `state`
-timers measure intermediate-state emission, including during spilling. The grouped TopK
-aggregate path records only the per-aggregate `arguments` timer, because it
-maintains values directly rather than using accumulators.
+`arguments` is recorded in every mode. The accumulator phases that are present
+depend on the aggregate mode and implementation. For non-grouped aggregation,
+partial mode records `update` and `state`, partial reduce mode records `merge`
+and `state`, final mode records `merge` and `evaluate`, and single mode records
+`update` and `evaluate`. Hash aggregation uses `update`, `state`, and
+`convert_to_state` in partial mode; `merge` and `state` in partial-reduce mode;
+`merge`, `state`, and `evaluate` in final mode; and `update`, `state`, `merge`,
+and `evaluate` in single mode. Its `state` timers measure intermediate-state
+emission, including during spilling. The grouped TopK aggregate path records
+only the per-aggregate `arguments` timer, because it maintains values directly
+rather than using accumulators.
 
 Where an aggregate has a `FILTER` clause, non-grouped aggregation and the
 hash-table grouped paths evaluate that filter inside the aggregate's
