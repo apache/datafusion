@@ -1103,7 +1103,7 @@ fn calculate_percentile<T: ArrowPrimitiveType, I: PercentileInterpolator<T>>(
 mod tests {
     use super::*;
     use arrow::array::Float64Array;
-    use arrow::datatypes::{Decimal64Type, Float16Type, Float64Type};
+    use arrow::datatypes::{Decimal64Type, Decimal128Type, Float16Type, Float64Type};
     use half::f16;
 
     #[test]
@@ -1233,6 +1233,29 @@ mod tests {
         assert_eq!(
             result, 30000i64,
             "100th percentile should be maximum value 300.00"
+        );
+    }
+
+    #[test]
+    fn percentile_cont_decimal128_subtraction_overflow() {
+        // Case for interpolation overflow (upper - lower cannot fit i128),
+        // where `interpolate` takes the second branch
+        let boundary = 100_000_000_000_000_000_000_000_000_000_000_000_000i128;
+        let lower = -boundary;
+        let upper = boundary;
+        assert!(upper.checked_sub(lower).is_none(), "test premise: must overflow");
+
+        let mut values = vec![lower, upper];
+        let result = calculate_percentile::<Decimal128Type, DecimalInterpolator>(
+            &mut values,
+            0.25,
+        )
+        .expect("evaluate failed")
+        .expect("expected Some value");
+
+        assert_eq!(
+            result, -boundary/2,
+            "interpolation should split into two additive parts without overflowing"
         );
     }
 }
