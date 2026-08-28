@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
+use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, ScalarValue, internal_err};
@@ -43,7 +44,58 @@ fn empty_list_scalar(list_type: &DataType) -> Result<ScalarValue> {
         );
     };
     let empty = arrow::array::new_empty_array(field.data_type());
-    Ok(SingleRowListArrayBuilder::new(empty).build_list_scalar())
+    Ok(SingleRowListArrayBuilder::new(empty)
+        .with_field(field)
+        .build_list_scalar())
+}
+
+fn collect_type(element_type: DataType) -> DataType {
+    DataType::List(Arc::new(Field::new_list_field(element_type, false)))
+}
+
+/// Rebuild an accumulator result with the aggregate's declared list field.
+///
+/// The shared array aggregate accumulators use a nullable list field and can
+/// derive nested fields from runtime arrays. Spark collect aggregates always
+/// drop null inputs, so their element field is non-nullable. Reusing the
+/// declared field also keeps nested types consistent with planning.
+fn normalize_list_scalar(
+    value: ScalarValue,
+    list_type: &DataType,
+) -> Result<ScalarValue> {
+    let DataType::List(field) = list_type else {
+        return internal_err!(
+            "collect_list/collect_set expected List return type, got {list_type:?}"
+        );
+    };
+    let ScalarValue::List(array) = value else {
+        return internal_err!(
+            "collect_list/collect_set accumulator returned a non-List value"
+        );
+    };
+    if array.len() != 1 {
+        return internal_err!(
+            "collect_list/collect_set accumulator returned {} rows, expected one",
+            array.len()
+        );
+    }
+    if array.is_null(0) {
+        return Ok(ScalarValue::new_null_list(
+            field.data_type().clone(),
+            field.is_nullable(),
+            1,
+        ));
+    }
+
+    let values = array.value(0);
+    let values = if values.data_type() == field.data_type() {
+        values
+    } else {
+        cast(values.as_ref(), field.data_type())?
+    };
+    Ok(SingleRowListArrayBuilder::new(values)
+        .with_field(field)
+        .build_list_scalar())
 }
 
 // <https://spark.apache.org/docs/latest/api/sql/index.html#collect_list>
@@ -76,17 +128,14 @@ impl AggregateUDFImpl for SparkCollectList {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            arg_types[0].clone(),
-            true,
-        ))))
+        Ok(collect_type(arg_types[0].clone()))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new_list(
                 format_state_name(args.name, "collect_list"),
-                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                Field::new_list_field(args.input_fields[0].data_type().clone(), false),
                 true,
             )
             .into(),
@@ -137,17 +186,14 @@ impl AggregateUDFImpl for SparkCollectSet {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            arg_types[0].clone(),
-            true,
-        ))))
+        Ok(collect_type(arg_types[0].clone()))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
             Field::new_list(
                 format_state_name(args.name, "collect_set"),
-                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                Field::new_list_field(args.input_fields[0].data_type().clone(), false),
                 true,
             )
             .into(),
@@ -192,7 +238,11 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        self.inner.state()
+        self.inner
+            .state()?
+            .into_iter()
+            .map(|value| normalize_list_scalar(value, &self.list_type))
+            .collect()
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -200,7 +250,7 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
         if result.is_null() {
             empty_list_scalar(&self.list_type)
         } else {
-            Ok(result)
+            normalize_list_scalar(result, &self.list_type)
         }
     }
 
@@ -214,5 +264,171 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
 
     fn size(&self) -> usize {
         self.inner.size() + self.list_type.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int32Array, StructArray};
+    use arrow::datatypes::Fields;
+
+    fn list_type(element_type: DataType) -> DataType {
+        DataType::List(Arc::new(Field::new_list_field(element_type, false)))
+    }
+
+    fn accumulator(
+        element_type: &DataType,
+        distinct: bool,
+    ) -> Result<Box<dyn Accumulator>> {
+        let return_type = list_type(element_type.clone());
+        if distinct {
+            Ok(Box::new(NullToEmptyListAccumulator::new(
+                DistinctArrayAggAccumulator::try_new(element_type, None, true)?,
+                return_type,
+            )))
+        } else {
+            Ok(Box::new(NullToEmptyListAccumulator::new(
+                ArrayAggAccumulator::try_new(element_type, true)?,
+                return_type,
+            )))
+        }
+    }
+
+    fn assert_empty_list(value: &ScalarValue) {
+        let ScalarValue::List(array) = value else {
+            panic!("expected a list scalar")
+        };
+        assert_eq!(array.value(0).len(), 0);
+    }
+
+    fn assert_nested_values(value: &ScalarValue) {
+        let ScalarValue::List(array) = value else {
+            panic!("expected a list scalar")
+        };
+        let values = array.value(0);
+        let structs = values
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("expected struct values");
+        let integers = structs
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("expected Int32 struct field");
+        let mut actual: Vec<i32> = integers.iter().map(Option::unwrap).collect();
+        actual.sort_unstable();
+        assert_eq!(actual, vec![1, 2]);
+    }
+
+    #[test]
+    fn collect_types_have_non_nullable_elements() -> Result<()> {
+        let element_type = DataType::Int32;
+        let expected = list_type(element_type.clone());
+
+        for aggregate in [
+            &SparkCollectList::new() as &dyn AggregateUDFImpl,
+            &SparkCollectSet::new() as &dyn AggregateUDFImpl,
+        ] {
+            assert_eq!(
+                aggregate.return_type(std::slice::from_ref(&element_type))?,
+                expected
+            );
+
+            let input_field = Arc::new(Field::new("input", element_type.clone(), true));
+            let state_fields = aggregate.state_fields(StateFieldsArgs {
+                name: aggregate.name(),
+                input_fields: &[input_field],
+                return_field: Arc::new(Field::new("result", expected.clone(), false)),
+                ordering_fields: &[],
+                is_distinct: false,
+            })?;
+            assert_eq!(state_fields[0].data_type(), &expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_results_have_non_nullable_elements() -> Result<()> {
+        let expected = list_type(DataType::Int32);
+
+        for aggregate in [
+            &SparkCollectList::new() as &dyn AggregateUDFImpl,
+            &SparkCollectSet::new() as &dyn AggregateUDFImpl,
+        ] {
+            let value = aggregate.default_value(&expected)?;
+            assert!(!value.is_null());
+            assert_eq!(value.data_type(), expected);
+            assert_empty_list(&value);
+        }
+
+        for distinct in [false, true] {
+            let value = accumulator(&DataType::Int32, distinct)?.evaluate()?;
+            assert!(!value.is_null());
+            assert_eq!(value.data_type(), expected);
+            assert_empty_list(&value);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn accumulator_state_and_output_preserve_nested_type() -> Result<()> {
+        let declared_fields =
+            Fields::from(vec![Field::new("required", DataType::Int32, false)]);
+        let element_type = DataType::Struct(declared_fields.clone());
+        let expected = list_type(element_type.clone());
+
+        // Exercise the downstream case from the issue: runtime arrays can carry
+        // different nested nullability than the aggregate's declared type.
+        let runtime_fields =
+            Fields::from(vec![Field::new("required", DataType::Int32, true)]);
+        let values = Arc::new(StructArray::new(
+            runtime_fields,
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2)]))],
+            None,
+        )) as ArrayRef;
+
+        for distinct in [false, true] {
+            let mut partial = accumulator(&element_type, distinct)?;
+            partial.update_batch(std::slice::from_ref(&values))?;
+
+            let state = partial.state()?;
+            assert_eq!(state[0].data_type(), expected);
+            assert_nested_values(&state[0]);
+
+            let value = partial.evaluate()?;
+            assert_eq!(value.data_type(), expected);
+            assert_nested_values(&value);
+
+            let mut final_accumulator = accumulator(&element_type, distinct)?;
+            final_accumulator.merge_batch(&[state[0].to_array()?])?;
+            let merged = final_accumulator.evaluate()?;
+            assert_eq!(merged.data_type(), expected);
+            assert_nested_values(&merged);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalization_reuses_matching_primitive_values() -> Result<()> {
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let values_ptr = values.values().as_ptr();
+        let scalar = SingleRowListArrayBuilder::new(values).build_list_scalar();
+
+        let normalized = normalize_list_scalar(scalar, &list_type(DataType::Int32))?;
+        let ScalarValue::List(array) = normalized else {
+            panic!("expected a list scalar")
+        };
+        let normalized_values = array.value(0);
+        let normalized_values = normalized_values
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("expected Int32 values");
+
+        assert_eq!(normalized_values.values().as_ptr(), values_ptr);
+        Ok(())
     }
 }
