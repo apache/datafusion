@@ -546,19 +546,21 @@ fn timestamp_widening_ordered_preimage(
 /// intermediate bound cannot be represented as `i128`.
 fn trunc_toward_zero_bucket(value: i64, bucket_width: i128) -> Option<(i128, i128)> {
     let value = value as i128;
-    if value > 0 {
-        let lower = value.checked_mul(bucket_width)?;
-        let upper = value.checked_add(1)?.checked_mul(bucket_width)?;
-        Some((lower, upper))
-    } else if value == 0 {
-        Some((1_i128.checked_sub(bucket_width)?, bucket_width))
-    } else {
-        let lower = value
-            .checked_sub(1)?
-            .checked_mul(bucket_width)?
-            .checked_add(1)?;
-        let upper = value.checked_mul(bucket_width)?.checked_add(1)?;
-        Some((lower, upper))
+    match value.cmp(&0) {
+        Ordering::Greater => {
+            let lower = value.checked_mul(bucket_width)?;
+            let upper = value.checked_add(1)?.checked_mul(bucket_width)?;
+            Some((lower, upper))
+        }
+        Ordering::Equal => Some((1_i128.checked_sub(bucket_width)?, bucket_width)),
+        Ordering::Less => {
+            let lower = value
+                .checked_sub(1)?
+                .checked_mul(bucket_width)?
+                .checked_add(1)?;
+            let upper = value.checked_mul(bucket_width)?.checked_add(1)?;
+            Some((lower, upper))
+        }
     }
 }
 
@@ -2619,12 +2621,7 @@ mod tests {
         for target_value in [i64::MIN, i64::MAX] {
             let target_value = i128::from(target_value);
             let floor = target_value.div_euclid(quotient);
-            let ceil = floor
-                + if target_value.rem_euclid(quotient) != 0 {
-                    1
-                } else {
-                    0
-                };
+            let ceil = floor + i128::from(target_value.rem_euclid(quotient) != 0);
             for (op, expected) in [
                 (Operator::GtEq, ceil),
                 (Operator::Gt, floor),
