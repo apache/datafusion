@@ -2628,18 +2628,14 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_columns<I, S>(columns: I) -> Result<Self>
+    pub fn from_columns<'a, I>(columns: I) -> Result<Self>
     where
-        I: IntoIterator<Item = (S, ArrayRef)>,
-        S: AsRef<str>,
+        I: IntoIterator<Item = (&'a str, ArrayRef)>,
     {
         let (fields, arrays): (Vec<_>, Vec<_>) = columns
             .into_iter()
             .map(|(name, array)| {
-                (
-                    Field::new(name.as_ref(), array.data_type().clone(), true),
-                    array,
-                )
+                (Field::new(name, array.data_type().clone(), true), array)
             })
             .unzip();
         let schema = Arc::new(Schema::new(fields));

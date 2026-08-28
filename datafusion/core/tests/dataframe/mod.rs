@@ -7033,6 +7033,85 @@ async fn test_dataframe_from_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_dataframe_from_columns_empty() {
+    let result = DataFrame::from_columns(vec![]);
+    let err = result.expect_err("empty columns should return an error");
+    assert_eq!(
+        err.to_string(),
+        "Arrow error: Invalid argument error: must either specify a row count or at least one column",
+    );
+
+    let result = DataFrame::from_columns([]);
+    let err = result.expect_err("empty columns should return an error");
+    assert_eq!(
+        err.to_string(),
+        "Arrow error: Invalid argument error: must either specify a row count or at least one column",
+    );
+}
+
+#[tokio::test]
+async fn test_dataframe_from_columns_with_iterator() -> Result<()> {
+    let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+    let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
+    let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
+    let i32s: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0, 1]));
+    let i64s: ArrayRef = Arc::new(Int64Array::from(vec![-1, 0, 1]));
+
+    let u8s: ArrayRef = Arc::new(UInt8Array::from(vec![0, 1, 2]));
+    let u16s: ArrayRef = Arc::new(UInt16Array::from(vec![0, 1, 2]));
+    let u32s: ArrayRef = Arc::new(UInt32Array::from(vec![0, 1, 2]));
+    let u64s: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1, 2]));
+
+    let f16s: ArrayRef = Arc::new(Float16Array::from(vec![
+        half::f16::from_f64(1.0),
+        half::f16::from_f64(2.0),
+        half::f16::from_f64(3.0),
+    ]));
+    let f32s: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]));
+    let f64s: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+
+    let strings: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+
+    let columns = [
+        ("bool", bools),
+        ("i8", i8s),
+        ("i16", i16s),
+        ("i32", i32s),
+        ("i64", i64s),
+        ("u8", u8s),
+        ("u16", u16s),
+        ("u32", u32s),
+        ("u64", u64s),
+        ("f16", f16s),
+        ("f32", f32s),
+        ("f64", f64s),
+        ("str", strings),
+    ];
+
+    let df =
+        DataFrame::from_columns(columns.into_iter().map(|(name, array)| (name, array)))?;
+
+    assert_eq!(df.schema().fields().len(), 13);
+    assert_eq!(df.clone().count().await?, 3);
+    let rows = df.sort(vec![col("i32").sort(true, true)])?;
+    assert_batches_eq!(
+        &[
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+            "| false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
+            "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
+            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+        ],
+        &rows.collect().await?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_dataframe_macro() -> Result<()> {
     let bools = [true, false, true];
     let i8s = [-1_i8, 0, 1];
