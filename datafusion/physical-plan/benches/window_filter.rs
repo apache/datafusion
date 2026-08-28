@@ -72,7 +72,7 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn make_batches(filter_percent: usize) -> Vec<RecordBatch> {
+fn make_batches(filter_percent: Option<usize>) -> Vec<RecordBatch> {
     (0..NUM_BATCHES)
         .map(|batch_index| {
             let start = batch_index * BATCH_SIZE;
@@ -81,7 +81,11 @@ fn make_batches(filter_percent: usize) -> Vec<RecordBatch> {
             let value = Float64Array::from_iter_values((start..end).map(|i| i as f64));
             let include = BooleanArray::from(
                 (start..end)
-                    .map(|i| (i * filter_percent) % 100 < filter_percent)
+                    .map(|i| {
+                        filter_percent
+                            .map(|percent| (i * percent) % 100 < percent)
+                            .unwrap_or(true)
+                    })
                     .collect::<Vec<_>>(),
             );
 
@@ -138,7 +142,7 @@ fn whole_partition_frame() -> WindowFrame {
 }
 
 fn make_window_plan(
-    filter_percent: usize,
+    filter_percent: Option<usize>,
     argument_kind: ArgumentKind,
     window_frame: WindowFrame,
 ) -> Arc<dyn ExecutionPlan> {
@@ -149,7 +153,10 @@ fn make_window_plan(
     }];
     let window_expr = create_window_expr(
         &WindowFunctionDefinition::AggregateUDF(sum_udaf()),
-        format!("sum({}) FILTER (WHERE include)", argument_kind.name()),
+        match filter_percent {
+            Some(_) => format!("sum({}) FILTER (WHERE include)", argument_kind.name()),
+            None => format!("sum({})", argument_kind.name()),
+        },
         &[window_argument(argument_kind, &schema)],
         &[],
         &order_by,
@@ -157,7 +164,7 @@ fn make_window_plan(
         Arc::clone(&schema),
         false,
         false,
-        Some(col("include", &schema).unwrap()),
+        filter_percent.map(|_| col("include", &schema).unwrap()),
     )
     .unwrap();
 
@@ -195,10 +202,27 @@ fn benchmark_window_case(
     let mut group = c.benchmark_group(format!("window_aggregate_filter/{name}"));
     group.sample_size(sample_size);
 
+    let plan = make_window_plan(None, ArgumentKind::Column, window_frame.clone());
+    let task_ctx = Arc::new(TaskContext::default());
+    group.bench_function(
+        BenchmarkId::new(ArgumentKind::Column.name(), "no_filter"),
+        |b| {
+            b.iter(|| {
+                let batches = runtime
+                    .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
+                    .unwrap();
+                black_box(batches);
+            })
+        },
+    );
+
     for &filter_percent in filter_percents {
         for &argument_kind in argument_kinds {
-            let plan =
-                make_window_plan(filter_percent, argument_kind, window_frame.clone());
+            let plan = make_window_plan(
+                Some(filter_percent),
+                argument_kind,
+                window_frame.clone(),
+            );
             let task_ctx = Arc::new(TaskContext::default());
             group.bench_function(
                 BenchmarkId::new(
@@ -240,8 +264,12 @@ fn window_filter_benchmark(c: &mut Criterion) {
         &runtime,
         "bounded_sliding_10_rows",
         &sliding_frame(),
-        &[ArgumentKind::Column, ArgumentKind::Power],
-        &[30],
+        &[
+            ArgumentKind::Column,
+            ArgumentKind::Divide,
+            ArgumentKind::Power,
+        ],
+        &[10, 30, 50],
         10,
     );
     benchmark_window_case(
