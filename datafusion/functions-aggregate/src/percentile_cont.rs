@@ -1243,7 +1243,10 @@ mod tests {
         let boundary = 100_000_000_000_000_000_000_000_000_000_000_000_000i128;
         let lower = -boundary;
         let upper = boundary;
-        assert!(upper.checked_sub(lower).is_none(), "test premise: must overflow");
+        assert!(
+            upper.checked_sub(lower).is_none(),
+            "test premise: must overflow"
+        );
 
         let mut values = vec![lower, upper];
         let result = calculate_percentile::<Decimal128Type, DecimalInterpolator>(
@@ -1254,7 +1257,8 @@ mod tests {
         .expect("expected Some value");
 
         assert_eq!(
-            result, -boundary/2,
+            result,
+            -boundary / 2,
             "interpolation should split into two additive parts without overflowing"
         );
     }
