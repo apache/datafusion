@@ -38,6 +38,8 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod branchless_filter;
+mod dictionary_filter;
+mod fixed_size_binary_filter;
 mod primitive_filter;
 mod result;
 mod static_filter;
@@ -215,7 +217,7 @@ impl InListExpr {
             expr,
             list,
             negated,
-            Some(instantiate_static_filter(array)?),
+            Some(instantiate_static_filter(array, &expr_data_type)?),
         ))
     }
 
@@ -242,7 +244,7 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
             None => None, // Non-constant expressions, fall back to dynamic evaluation
         };
 
@@ -1259,6 +1261,31 @@ mod tests {
             vec![None, None, None],
             expr,
             &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_nested_dictionary_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![0, 0, 0]))],
+        )?;
+        let needle = lit(ScalarValue::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(2))),
+            )),
+        ));
+
+        let expr = in_list(needle, vec![lit(1_i32), lit(2_i32)], &false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(vec![true, true, true])
         );
 
         Ok(())
@@ -3547,6 +3574,38 @@ mod tests {
                 "dict-needle failed for {dt:?}"
             );
         }
+
+        // FixedSizeBinary in_array, FixedSizeBinary and Dictionary needles
+        let fsb_in = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+                [9, 10, 11, 12].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        let fsb_needle = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [13, 14, 15, 16].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(Arc::clone(&fsb_needle), Arc::clone(&fsb_in))?
+        );
+        // The dictionary does not reference its second value, so that value
+        // must not become a member of the flattened list.
+        let dict_fsb_in = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![0, 2]),
+            Arc::clone(&fsb_in),
+        ));
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(false), Some(false)]),
+            eval_in_list_from_array(wrap_in_dict(fsb_needle), dict_fsb_in)?
+        );
 
         // Utf8 (falls through to ArrayStaticFilter)
         let utf8_in = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;

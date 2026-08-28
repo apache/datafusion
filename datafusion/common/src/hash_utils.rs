@@ -740,8 +740,8 @@ where
     OffsetSize: OffsetSizeTrait,
 {
     // In case values is sliced, hash only the bytes used by the offsets of this ListArray
-    let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
-    let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
+    let first_offset = array.value_offsets().first().copied().unwrap_or_default();
+    let last_offset = array.value_offsets().last().copied().unwrap_or_default();
     let value_bytes_len = (last_offset - first_offset).as_usize();
     let mut values_hashes = vec![0u64; value_bytes_len];
     child_hashing.create_hashes(

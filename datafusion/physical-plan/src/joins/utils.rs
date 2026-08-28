@@ -64,6 +64,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
@@ -1956,6 +1957,21 @@ pub(crate) trait BatchTransformer: Debug + Clone {
     /// Returns `None` if all batches have been produced.
     /// The boolean flag indicates whether the batch is the last one.
     fn next(&mut self) -> Option<(RecordBatch, bool)>;
+
+    /// Adds all memory retained by this transformer to `counter`.
+    ///
+    /// The stream shares this counter with its other retained batches, so
+    /// implementations must let it deduplicate shared Arrow buffers and array objects.
+    fn count_memory(&self, counter: &mut RecordBatchMemoryCounter);
+}
+
+fn count_retained_batch_memory(
+    batch: Option<&RecordBatch>,
+    counter: &mut RecordBatchMemoryCounter,
+) {
+    if let Some(batch) = batch {
+        counter.count_batch_with_array_overhead(batch);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1978,6 +1994,10 @@ impl BatchTransformer for NoopBatchTransformer {
 
     fn next(&mut self) -> Option<(RecordBatch, bool)> {
         self.batch.take().map(|batch| (batch, true))
+    }
+
+    fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
+        count_retained_batch_memory(self.batch.as_ref(), counter);
     }
 }
 
@@ -2026,6 +2046,10 @@ impl BatchTransformer for BatchSplitter {
         }
 
         Some((sliced_batch, last))
+    }
+
+    fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
+        count_retained_batch_memory(self.batch.as_ref(), counter);
     }
 }
 

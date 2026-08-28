@@ -412,8 +412,6 @@ mod tests {
         let metadata = create_test_metadata(vec![100, 100, 100]);
 
         let mut access_plan = ParquetAccessPlan::new_all(3);
-
-        // Skip all rows in all row groups
         for i in 0..3 {
             access_plan
                 .scan_selection(i, RowSelection::from(vec![RowSelector::skip(100)]));
@@ -423,6 +421,11 @@ mod tests {
         let prepared_plan = access_plan
             .prepare(rg_metadata)
             .expect("Failed to create PreparedAccessPlan");
+        assert!(
+            prepared_plan.row_group_indexes.is_empty(),
+            "all-empty selections must be stripped to an empty plan",
+        );
+        assert!(prepared_plan.row_selection.is_none());
 
         // All row groups are empty after pruning, so they are stripped and the
         // prepared plan is empty (rather than carrying a selection that skips
