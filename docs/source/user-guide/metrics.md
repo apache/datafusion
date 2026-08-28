@@ -68,7 +68,7 @@ metrics below, and a timer per aggregate expression and execution phase.
 
 | Metric                     | Description                                                                                                                           |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| time_calculating_group_ids | Time spent resolving input rows to group IDs.                                                                                         |
+| time_calculating_group_ids | Time spent preparing group keys; see the note below for path-specific coverage.                                                       |
 | aggregate_arguments_time   | Total time spent evaluating the inputs to the aggregate functions. `agg_expr_{index}_arguments_time` breaks this down per expression. |
 | aggregation_time           | Time spent feeding the evaluated inputs into the accumulators.                                                                        |
 | emitting_time              | Time spent producing output batches, including finalizing the grouping expressions and the accumulators.                              |
@@ -77,12 +77,15 @@ metrics below, and a timer per aggregate expression and execution phase.
 | spill_count                | Number of spill files written when the aggregation exceeds its memory budget.                                                         |
 | spilled_bytes              | Total number of bytes written to spill files.                                                                                         |
 | spilled_rows               | Total number of rows written to spill files.                                                                                          |
+| peak_mem_used              | Peak tracked memory held by the grouped aggregation, in bytes; recorded by the fallback grouped hash path only.                       |
 
 These operator-level metrics are recorded by the grouped aggregation paths
 only: an `AggregateExec` without a `GROUP BY` reports just `BaselineMetrics`
 and the per-aggregate timers. `reduction_factor` and `skipped_aggregation_rows`
-are recorded in partial mode only, and `skipped_aggregation_rows` only when
-partial-aggregation skipping is enabled.
+are recorded in partial mode only. `skipped_aggregation_rows` is recorded only
+when partial-aggregation skipping is enabled for a single, non-grouping-sets
+`GROUP BY`; a `datafusion.execution.skip_partial_aggregation_probe_ratio_threshold`
+of `>= 1.0` disables the feature.
 
 `time_calculating_group_ids` and `aggregation_time` do not cover the same work
 in every grouped implementation, so their values are comparable only within one
@@ -93,7 +96,7 @@ on those paths the individual timers do not add up to `elapsed_compute`.
 | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
 | Hash aggregation over unordered input                                                                                 | Evaluating the grouping expressions | Interning group values, then the accumulator calls                                            |
 | Hash aggregation over ordered input (`ordering_mode=Sorted` or `ordering_mode=PartiallySorted(...)` on the plan line) | Evaluating the grouping expressions | The accumulator calls only; interning group values is not covered by any metric               |
-| Legacy grouped hash path (grouping sets and other cases not yet migrated)                                             | Interning group values              | The accumulator calls only; evaluating the grouping expressions is not covered by any metric  |
+| Legacy grouped hash path (grouping sets and other cases not yet migrated)                                             | Interning group values              | The accumulator calls only; value is inflated with multiple aggregate expressions             |
 | Grouped TopK (`GROUP BY` with a `LIMIT`)                                                                              | Interning group values              | Not recorded, because the path keeps values in a priority map instead of calling accumulators |
 
 The per-aggregate timers are named `agg_expr_{index}_{phase}_time`, where
@@ -109,9 +112,10 @@ and `phase` is one of the following:
 | `convert_to_state` | Converting raw aggregate inputs directly to partial state without normal accumulator updates. |
 | `evaluate`         | Evaluating an accumulator to its final result.                                                |
 
-For example, an operator for `SELECT SUM(a), SUM(b) FROM t` reports
-`agg_expr_0_arguments_time` and `agg_expr_0_update_time` for `SUM(a)`, and
-`agg_expr_1_arguments_time` and `agg_expr_1_update_time` for `SUM(b)`. The
+For example, when a partial stage is planned, the partial `AggregateExec` for
+`SELECT SUM(a), SUM(b) FROM t` reports `agg_expr_0_arguments_time` and
+`agg_expr_0_update_time` for `SUM(a)`,
+and `agg_expr_1_arguments_time` and `agg_expr_1_update_time` for `SUM(b)`. The
 index is positional and refers to the same position in the `aggr=[...]` list
 printed on the operator's plan line, which is how an indexed timer is mapped
 back to an aggregate expression. Because the index is part of the metric name,
@@ -141,11 +145,11 @@ hash-table grouped paths evaluate that filter inside the aggregate's
 `arguments` timer. The legacy grouped hash path evaluates filters outside the
 per-aggregate timers, so its `arguments` timers cover argument evaluation only.
 
-These detailed timers are additive observability metrics. They are `Dev`
-metrics, so they appear in `EXPLAIN ANALYZE` when its analyze level includes
-`Dev` (the default), but are omitted at the `Summary` level. The normal display
-combines partitions; use `EXPLAIN ANALYZE VERBOSE` to additionally show the
-per-partition values together with each metric's `aggregate` label. For a query
+Except for the `Summary` metric `reduction_factor`, these operator-level and
+per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
+`datafusion.explain.analyze_level` includes `Dev` (the default), but are omitted
+at the `Summary` level. The normal display combines partitions; use `EXPLAIN ANALYZE VERBOSE` to additionally show the per-partition values together with
+each metric's `aggregate` label. For a query
 such as the following, the per-expression metrics stay readable, and the
 operator's `aggr=[...]` list names the aggregate behind each timer index:
 
