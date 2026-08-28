@@ -90,10 +90,12 @@ of `>= 1.0` disables the feature.
 
 `time_calculating_group_ids` covers both grouping-expression evaluation and
 resolving the resulting rows to group IDs, including interning and ordering
-setup. `aggregation_time` covers only accumulator `update` and `merge` calls;
-`state` and `evaluate` are included in `emitting_time`. Partial aggregation that
-skips aggregation reports `convert_to_state` instead of `aggregation_time` for
-those rows.
+setup. `aggregation_time` covers only accumulator `update` and `merge` calls.
+For normal output paths, `state` and `evaluate` are included in `emitting_time`.
+When partial aggregation materializes state under memory pressure,
+`agg_expr_{index}_state_time` records that work without adding it to
+`emitting_time`. Partial aggregation that skips aggregation reports
+`convert_to_state` instead of `aggregation_time` for those rows.
 
 Grouped TopK (`GROUP BY` with a `LIMIT`) has no accumulators. Its group-key
 expression evaluation is included in `time_calculating_group_ids`, and its
