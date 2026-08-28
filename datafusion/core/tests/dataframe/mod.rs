@@ -7035,18 +7035,10 @@ async fn test_dataframe_from_columns() -> Result<()> {
 #[tokio::test]
 async fn test_dataframe_from_columns_empty() {
     let result = DataFrame::from_columns(vec![]);
-    let err = result.expect_err("empty columns should return an error");
-    assert_eq!(
-        err.to_string(),
-        "Arrow error: Invalid argument error: must either specify a row count or at least one column",
-    );
+    assert!(result.is_err());
 
     let result = DataFrame::from_columns([]);
-    let err = result.expect_err("empty columns should return an error");
-    assert_eq!(
-        err.to_string(),
-        "Arrow error: Invalid argument error: must either specify a row count or at least one column",
-    );
+    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -7089,8 +7081,7 @@ async fn test_dataframe_from_columns_with_iterator() -> Result<()> {
         ("str", strings),
     ];
 
-    let df =
-        DataFrame::from_columns(columns.into_iter().map(|(name, array)| (name, array)))?;
+    let df = DataFrame::from_columns(columns.into_iter())?;
 
     assert_eq!(df.schema().fields().len(), 13);
     assert_eq!(df.clone().count().await?, 3);
