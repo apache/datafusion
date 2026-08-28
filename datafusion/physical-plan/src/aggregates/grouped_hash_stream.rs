@@ -868,10 +868,12 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let is_stream_merging = self.spill_state.is_stream_merging;
+
         // Evaluate the grouping expressions; interning happens below in the
         // same group-key-preparation phase.
         let group_by_values = self.group_by_metrics.time_group_key_preparation(|| {
-            if self.spill_state.is_stream_merging {
+            if is_stream_merging {
                 evaluate_group_by(&self.spill_state.merging_group_by, batch)
             } else {
                 evaluate_group_by(&self.group_by, batch)
@@ -881,7 +883,7 @@ impl GroupedHashAggregateStream {
         // Evaluate aggregate arguments and filters together. Per-aggregate
         // argument timers remain limited to their argument expressions because
         // filters are evaluated collectively here.
-        let aggregate_arguments = if self.spill_state.is_stream_merging {
+        let aggregate_arguments = if is_stream_merging {
             &self.spill_state.merging_aggregate_arguments
         } else {
             &self.aggregate_arguments
@@ -896,7 +898,7 @@ impl GroupedHashAggregateStream {
                             .time(idx, || evaluate_expressions_to_arrays(expr, batch))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let filter_values = if self.spill_state.is_stream_merging {
+                let filter_values = if is_stream_merging {
                     let filter_expressions = vec![None; self.accumulators.len()];
                     evaluate_optional(&filter_expressions, batch)?
                 } else {
@@ -940,8 +942,7 @@ impl GroupedHashAggregateStream {
                     .zip(filters.iter());
 
                 for (idx, ((acc, values), opt_filter)) in t.enumerate() {
-                    if self.mode.input_mode() == AggregateInputMode::Raw
-                        && !self.spill_state.is_stream_merging
+                    if self.mode.input_mode() == AggregateInputMode::Raw && !is_stream_merging
                     {
                         self.aggregate_accumulator_metrics.time(
                             idx,
