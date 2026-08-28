@@ -2244,7 +2244,7 @@ mod tests {
             joiner.hashmap.size() - size_of_val(&joiner.hashmap);
         joiner.on = vec![Arc::new(Column::new("a", 0))];
         joiner.hashmap = PruningJoinHashMap::with_capacity(3);
-        joiner.hashes_buffer.reserve(3);
+        joiner.hashes_buffer.try_reserve(3).unwrap();
         assert!(joiner.on.capacity() > 0);
         assert!(joiner.hashmap.map.capacity() > 0);
         assert!(joiner.hashes_buffer.capacity() > 0);
