@@ -1807,7 +1807,7 @@ impl<'de> serde::Deserialize<'de> for AsOfJoinExecNode {
                             if projection__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projection"));
                             }
-                            projection__ =
+                            projection__ = 
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
