@@ -23,7 +23,7 @@
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::ScalarFunction;
@@ -163,9 +163,14 @@ fn bench_evaluate(c: &mut Criterion) {
     let expr =
         create_physical_expr(&expr, &df_schema, &props, &planning_context).unwrap();
 
-    c.bench_function("simplify_function_over_case/evaluate_8192_rows", |b| {
+    // Grouped so the result reads as rows per second; the benchmark id is
+    // unchanged.
+    let mut group = c.benchmark_group("simplify_function_over_case");
+    group.throughput(Throughput::Elements(rows as u64));
+    group.bench_function("evaluate_8192_rows", |b| {
         b.iter(|| black_box(expr.evaluate(&batch).unwrap()))
     });
+    group.finish();
 }
 
 criterion_group!(benches, bench_simplify, bench_evaluate);
