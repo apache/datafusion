@@ -244,22 +244,22 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         &self,
         batch: &RecordBatch,
     ) -> Result<EvaluatedAggregateBatch> {
-        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-        let grouping_set_args = evaluate_group_by(&self.buffer.group_by, batch)?;
-        drop(timer);
+        let grouping_set_args =
+            self.group_by_metrics.time_group_key_preparation(|| {
+                evaluate_group_by(&self.buffer.group_by, batch)
+            })?;
 
-        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
-        let accumulator_args = self
-            .buffer
-            .accumulators
-            .iter()
-            .enumerate()
-            .map(|(idx, acc)| {
-                self.aggregate_argument_metrics
-                    .time(idx, || acc.evaluate_acc_args(batch))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        drop(timer);
+        let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {
+            self.buffer
+                .accumulators
+                .iter()
+                .enumerate()
+                .map(|(idx, acc)| {
+                    self.aggregate_argument_metrics
+                        .time(idx, || acc.evaluate_acc_args(batch))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
 
         Ok(EvaluatedAggregateBatch {
             grouping_set_args,
@@ -326,14 +326,17 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         }
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        let mut output = self.buffer.group_values.emit(EmitTo::All)?;
-        for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
-            output.extend(accumulator_metrics.time(
-                idx,
-                AccumulatorPhase::State,
-                || acc.state(EmitTo::All),
-            )?);
-        }
+        let output = self.group_by_metrics.time_emitting(|| {
+            let mut output = self.buffer.group_values.emit(EmitTo::All)?;
+            for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
+                output.extend(accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::State,
+                    || acc.state(EmitTo::All),
+                )?);
+            }
+            Ok::<_, datafusion_common::DataFusionError>(output)
+        })?;
 
         let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
@@ -381,45 +384,43 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         accumulator_phase: AccumulatorPhase,
     ) -> Result<()> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let group_by_metrics = self.group_by_metrics.clone();
         for group_values in &evaluated_batch.grouping_set_args {
-            let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-            let starting_num_groups = self.buffer.group_values.len();
-            self.buffer
-                .group_values
-                .intern(group_values, &mut self.buffer.group_indices)?;
-            let total_num_groups = self.buffer.group_values.len();
-            if total_num_groups > starting_num_groups {
-                self.buffer.group_ordering.new_groups(
-                    group_values,
-                    &self.buffer.group_indices,
-                    total_num_groups,
-                )?;
-            }
-            drop(timer);
-
-            let timer = self
-                .group_by_metrics
-                .aggregation_time
-                .as_ref()
-                .expect("ordered hash aggregation invokes accumulators")
-                .timer();
-            for (idx, (acc, values)) in self
-                .buffer
-                .accumulators
-                .iter_mut()
-                .zip(evaluated_batch.accumulator_args.iter())
-                .enumerate()
-            {
-                accumulator_metrics.time(idx, accumulator_phase, || {
-                    aggregate_fn(
-                        acc,
-                        values,
+            let total_num_groups = group_by_metrics.time_group_key_preparation(|| {
+                let starting_num_groups = self.buffer.group_values.len();
+                self.buffer
+                    .group_values
+                    .intern(group_values, &mut self.buffer.group_indices)?;
+                let total_num_groups = self.buffer.group_values.len();
+                if total_num_groups > starting_num_groups {
+                    self.buffer.group_ordering.new_groups(
+                        group_values,
                         &self.buffer.group_indices,
                         total_num_groups,
-                    )
-                })?;
-            }
-            drop(timer);
+                    )?;
+                }
+                Ok::<_, datafusion_common::DataFusionError>(total_num_groups)
+            })?;
+
+            group_by_metrics.time_aggregation(|| {
+                for (idx, (acc, values)) in self
+                    .buffer
+                    .accumulators
+                    .iter_mut()
+                    .zip(evaluated_batch.accumulator_args.iter())
+                    .enumerate()
+                {
+                    accumulator_metrics.time(idx, accumulator_phase, || {
+                        aggregate_fn(
+                            acc,
+                            values,
+                            &self.buffer.group_indices,
+                            total_num_groups,
+                        )
+                    })?;
+                }
+                Ok::<(), datafusion_common::DataFusionError>(())
+            })?;
         }
 
         Ok(())
@@ -448,24 +449,27 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = self.buffer.group_values.emit(emit_to)?;
-        if should_remove_groups {
-            match emit_to {
-                EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
-                // `EmitTo::All` is only used after `input_done`, when all
-                // buffered groups are known complete and the ordering state is
-                // no longer needed.
-                EmitTo::All => {}
+        let output = self.group_by_metrics.time_emitting(|| {
+            let mut output = self.buffer.group_values.emit(emit_to)?;
+            if should_remove_groups {
+                match emit_to {
+                    EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
+                    // `EmitTo::All` is only used after `input_done`, when all
+                    // buffered groups are known complete and the ordering state is
+                    // no longer needed.
+                    EmitTo::All => {}
+                }
             }
-        }
 
-        for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
-            output.extend(accumulator_metrics.time(idx, accumulator_phase, || {
-                materialize_accumulator_fn(acc, emit_to)
-            })?);
-        }
-        drop(timer);
+            for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
+                output.extend(accumulator_metrics.time(
+                    idx,
+                    accumulator_phase,
+                    || materialize_accumulator_fn(acc, emit_to),
+                )?);
+            }
+            Ok::<_, datafusion_common::DataFusionError>(output)
+        })?;
 
         let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
         debug_assert!(batch.num_rows() > 0);

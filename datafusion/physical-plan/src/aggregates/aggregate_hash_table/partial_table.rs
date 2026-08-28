@@ -141,45 +141,47 @@ impl AggregateHashTable<PartialMarker> {
     /// see the same state they would see for an empty input, rather than a real
     /// null-valued row.
     fn init_empty_grouping_sets(&mut self) -> Result<()> {
+        let group_by_metrics = self.group_by_metrics.clone();
         let state = self.state.building_mut();
         if !state.group_by.has_grouping_set() || !state.group_values.is_empty() {
             return Ok(());
         }
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
-        let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
-        let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
-        let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let n_expr = state.group_by.expr().len();
-        let mut any_interned = false;
+        let any_interned = group_by_metrics.time_group_key_preparation(|| {
+            let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
+            let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
+            let group_schema = state.group_by.group_schema(&self.input_schema)?;
+            let n_expr = state.group_by.expr().len();
+            let mut any_interned = false;
 
-        for group in state.group_by.groups() {
-            let ordinal = {
-                let entry = ordinals.entry(group.as_slice()).or_insert(0);
-                let ordinal = *entry;
-                *entry += 1;
-                ordinal
-            };
+            for group in state.group_by.groups() {
+                let ordinal = {
+                    let entry = ordinals.entry(group.as_slice()).or_insert(0);
+                    let ordinal = *entry;
+                    *entry += 1;
+                    ordinal
+                };
 
-            if !group.iter().all(|&is_null| is_null) {
-                continue;
+                if !group.iter().all(|&is_null| is_null) {
+                    continue;
+                }
+
+                let mut cols: Vec<ArrayRef> = group_schema
+                    .fields()
+                    .iter()
+                    .take(n_expr)
+                    .map(|field| new_null_array(field.data_type(), 1))
+                    .collect();
+                cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
+
+                state
+                    .group_values
+                    .intern(&cols, &mut state.batch_group_indices)?;
+                any_interned = true;
             }
-
-            let mut cols: Vec<ArrayRef> = group_schema
-                .fields()
-                .iter()
-                .take(n_expr)
-                .map(|field| new_null_array(field.data_type(), 1))
-                .collect();
-            cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
-
-            state
-                .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
-            any_interned = true;
-        }
-        drop(timer);
+            Ok::<_, datafusion_common::DataFusionError>(any_interned)
+        })?;
 
         if any_interned {
             let total_groups = state.group_values.len();
@@ -194,20 +196,16 @@ impl AggregateHashTable<PartialMarker> {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let timer = self
-                .group_by_metrics
-                .aggregation_time
-                .as_ref()
-                .expect("partial hash aggregation invokes accumulators")
-                .timer();
-            for (idx, (acc, values)) in
-                state.accumulators.iter_mut().zip(values.iter()).enumerate()
-            {
-                accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
-                    acc.update_batch(values, &[0], total_groups)
-                })?;
-            }
-            drop(timer);
+            group_by_metrics.time_aggregation(|| {
+                for (idx, (acc, values)) in
+                    state.accumulators.iter_mut().zip(values.iter()).enumerate()
+                {
+                    accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
+                        acc.update_batch(values, &[0], total_groups)
+                    })?;
+                }
+                Ok::<(), datafusion_common::DataFusionError>(())
+            })?;
         }
 
         Ok(())
