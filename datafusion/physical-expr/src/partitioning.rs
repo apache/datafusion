@@ -536,19 +536,20 @@ impl Partitioning {
         &self,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<datafusion_proto_models::protobuf::Partitioning> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
 
+        let partition_count =
+            |count: usize| usize_to_wire::<u64>(count, "Partitioning", "partition_count");
         let partition_method = match self {
             Partitioning::RoundRobinBatch(n) => {
-                protobuf::partitioning::PartitionMethod::RoundRobin(wire_partition_count(
-                    *n,
-                )?)
+                protobuf::partitioning::PartitionMethod::RoundRobin(partition_count(*n)?)
             }
             Partitioning::Hash(exprs, n) => {
                 protobuf::partitioning::PartitionMethod::Hash(
                     protobuf::PhysicalHashRepartition {
                         hash_expr: ctx.encode_children_expressions(exprs)?,
-                        partition_count: wire_partition_count(*n)?,
+                        partition_count: partition_count(*n)?,
                     },
                 )
             }
@@ -574,9 +575,7 @@ impl Partitioning {
                 )
             }
             Partitioning::UnknownPartitioning(n) => {
-                protobuf::partitioning::PartitionMethod::Unknown(wire_partition_count(
-                    *n,
-                )?)
+                protobuf::partitioning::PartitionMethod::Unknown(partition_count(*n)?)
             }
         };
         Ok(protobuf::Partitioning {
@@ -593,9 +592,12 @@ impl Partitioning {
         node: &datafusion_proto_models::protobuf::Partitioning,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Option<Self>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_common::{ScalarValue, internal_datafusion_err, internal_err};
         use datafusion_proto_models::protobuf;
 
+        let partition_count =
+            |count: u64| usize_from_wire(count, "Partitioning", "partition_count");
         let Some(partition_method) = node.partition_method.as_ref() else {
             return Ok(None);
         };
@@ -644,29 +646,6 @@ impl Partitioning {
         };
         Ok(Some(partitioning))
     }
-}
-
-/// Narrow a wire partition count to `usize`.
-#[cfg(feature = "proto")]
-fn partition_count(count: u64) -> Result<usize> {
-    usize::try_from(count).map_err(|_| {
-        datafusion_common::internal_datafusion_err!(
-            "Partition count {count} exceeds usize::MAX"
-        )
-    })
-}
-
-/// Widen a partition count to its `u64` wire representation.
-///
-/// The mirror of [`partition_count`]: an out-of-range count is an error on both
-/// sides rather than a silent truncation on the way out.
-#[cfg(feature = "proto")]
-fn wire_partition_count(count: usize) -> Result<u64> {
-    u64::try_from(count).map_err(|_| {
-        datafusion_common::internal_datafusion_err!(
-            "Partition count {count} exceeds u64::MAX"
-        )
-    })
 }
 
 impl PartialEq for Partitioning {
@@ -1416,7 +1395,7 @@ mod partition_count_proto_tests {
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf;
 
-    use super::{Partitioning, partition_count, wire_partition_count};
+    use super::Partitioning;
     use crate::expressions::Column;
     use crate::proto_test_util::{StubDecoder, StubEncoder, column_node};
 
@@ -1445,36 +1424,6 @@ mod partition_count_proto_tests {
     }
 
     #[test]
-    fn partition_count_round_trips_at_the_usize_ceiling() {
-        // `usize::MAX` is the largest count that can exist in memory, so it has
-        // to widen onto the wire and narrow back unchanged.
-        let wire = wire_partition_count(usize::MAX).unwrap();
-        assert_eq!(wire, u64::try_from(usize::MAX).unwrap());
-        assert_eq!(partition_count(wire).unwrap(), usize::MAX);
-    }
-
-    #[test]
-    fn out_of_range_partition_count_is_reported_not_wrapped() {
-        // A count wider than the target's `usize` can only be reached by
-        // decoding on a narrower host than the one that encoded. That used to
-        // wrap (`as usize`) or panic (`unwrap`); it is an error now. On a
-        // 64-bit target every `u64` fits, so the same input has to decode
-        // losslessly instead of being rejected.
-        let narrowed = partition_count(u64::MAX);
-
-        #[cfg(target_pointer_width = "64")]
-        assert_eq!(narrowed.unwrap(), usize::MAX);
-
-        #[cfg(not(target_pointer_width = "64"))]
-        assert!(
-            narrowed
-                .unwrap_err()
-                .to_string()
-                .contains("Partition count 18446744073709551615 exceeds usize::MAX")
-        );
-    }
-
-    #[test]
     fn try_from_proto_narrows_every_counted_variant() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let decoder = StubDecoder::ok();
@@ -1492,7 +1441,7 @@ mod partition_count_proto_tests {
                 decoded
                     .unwrap_err()
                     .to_string()
-                    .contains("exceeds usize::MAX")
+                    .contains("is out of range for usize")
             );
         }
     }

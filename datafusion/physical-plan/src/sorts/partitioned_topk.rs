@@ -46,7 +46,7 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::metrics::ExecutionPlanMetricsSet;
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::topk::{
     PartitionedTopK, PartitionedTopKDenseRank, PartitionedTopKRank, build_sort_fields,
 };
@@ -462,6 +462,10 @@ impl ExecutionPlan for PartitionedTopKExec {
             self.input.schema(),
             stream,
         )))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics_set.clone_inner())
     }
 }
 
