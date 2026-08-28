@@ -38,7 +38,7 @@ fn table(rows: usize, value_column: &str, seed: u64) -> RecordBatch {
         state = state
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
-        (state >> 33) as u64
+        state >> 33
     };
     let schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int32, true),
