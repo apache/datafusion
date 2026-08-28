@@ -147,6 +147,7 @@ impl AggregateHashTable<PartialMarker> {
         }
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
         let max_ordinal = max_duplicate_ordinal(state.group_by.groups());
         let mut ordinals: HashMap<&[bool], usize> = HashMap::new();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
@@ -178,20 +179,35 @@ impl AggregateHashTable<PartialMarker> {
                 .intern(&cols, &mut state.batch_group_indices)?;
             any_interned = true;
         }
+        drop(timer);
 
         if any_interned {
             let total_groups = state.group_values.len();
             let false_filter = BooleanArray::from(vec![false]);
-            for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                let null_args = acc.null_arguments(&self.input_schema)?;
-                let values = EvaluatedAccumulatorArgs {
-                    arguments: null_args,
-                    filter: Some(Arc::new(false_filter.clone())),
-                };
+            let values = state
+                .accumulators
+                .iter()
+                .map(|acc| {
+                    Ok(EvaluatedAccumulatorArgs {
+                        arguments: acc.null_arguments(&self.input_schema)?,
+                        filter: Some(Arc::new(false_filter.clone())),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let timer = self
+                .group_by_metrics
+                .aggregation_time
+                .as_ref()
+                .expect("partial hash aggregation invokes accumulators")
+                .timer();
+            for (idx, (acc, values)) in
+                state.accumulators.iter_mut().zip(values.iter()).enumerate()
+            {
                 accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
-                    acc.update_batch(&values, &[0], total_groups)
+                    acc.update_batch(values, &[0], total_groups)
                 })?;
             }
+            drop(timer);
         }
 
         Ok(())

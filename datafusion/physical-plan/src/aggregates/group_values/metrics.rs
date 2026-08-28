@@ -143,28 +143,42 @@ impl AggregateAccumulatorMetrics {
 
 #[derive(Clone)]
 pub(crate) struct GroupByMetrics {
-    /// Time spent calculating the group IDs from the evaluated grouping columns.
+    /// Time spent evaluating grouping expressions and resolving their rows to group IDs.
     pub(crate) time_calculating_group_ids: Time,
-    /// Time spent evaluating the inputs to the aggregate functions.
+    /// Time spent evaluating aggregate arguments and filters.
     pub(crate) aggregate_arguments_time: Time,
-    /// Time spent evaluating the aggregate expressions themselves
-    /// (e.g. summing all elements and counting number of elements for `avg` aggregate).
-    pub(crate) aggregation_time: Time,
-    /// Time spent emitting the final results and constructing the record batch
-    /// which includes finalizing the grouping expressions
-    /// (e.g. emit from the hash table in case of hash aggregation) and the accumulators
+    /// Time spent invoking input-processing accumulator operations (`update` and `merge`).
+    pub(crate) aggregation_time: Option<Time>,
+    /// Time spent emitting group values and accumulator states or final values.
     pub(crate) emitting_time: Time,
 }
 
 impl GroupByMetrics {
     pub(crate) fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self::new_with_aggregation_time(metrics, partition, true)
+    }
+
+    /// Creates metrics for an aggregation path that does not invoke accumulators.
+    pub(crate) fn new_without_aggregation_time(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Self {
+        Self::new_with_aggregation_time(metrics, partition, false)
+    }
+
+    fn new_with_aggregation_time(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        include_aggregation_time: bool,
+    ) -> Self {
         Self {
             time_calculating_group_ids: MetricBuilder::new(metrics)
                 .subset_time("time_calculating_group_ids", partition),
             aggregate_arguments_time: MetricBuilder::new(metrics)
                 .subset_time("aggregate_arguments_time", partition),
-            aggregation_time: MetricBuilder::new(metrics)
-                .subset_time("aggregation_time", partition),
+            aggregation_time: include_aggregation_time.then(|| {
+                MetricBuilder::new(metrics).subset_time("aggregation_time", partition)
+            }),
             emitting_time: MetricBuilder::new(metrics)
                 .subset_time("emitting_time", partition),
         }

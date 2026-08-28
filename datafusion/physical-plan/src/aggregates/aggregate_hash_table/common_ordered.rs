@@ -382,6 +382,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     ) -> Result<()> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         for group_values in &evaluated_batch.grouping_set_args {
+            let timer = self.group_by_metrics.time_calculating_group_ids.timer();
             let starting_num_groups = self.buffer.group_values.len();
             self.buffer
                 .group_values
@@ -394,8 +395,14 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                     total_num_groups,
                 )?;
             }
+            drop(timer);
 
-            let timer = self.group_by_metrics.aggregation_time.timer();
+            let timer = self
+                .group_by_metrics
+                .aggregation_time
+                .as_ref()
+                .expect("ordered hash aggregation invokes accumulators")
+                .timer();
             for (idx, (acc, values)) in self
                 .buffer
                 .accumulators

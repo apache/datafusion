@@ -25,7 +25,7 @@ use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
     evaluate_group_by,
 };
-use crate::metrics::BaselineMetrics;
+use crate::metrics::{BaselineMetrics, MetricBuilder, Time};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
@@ -53,6 +53,8 @@ pub struct GroupedTopKAggregateStream {
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
     group_by_metrics: GroupByMetrics,
+    /// Time spent maintaining TopK values after their group keys are evaluated.
+    topk_maintenance_time: Time,
     // TopK directly maintains MIN/MAX values in its priority map, so it has no
     // accumulator update, merge, state, or evaluate phases to time.
     aggregate_argument_metrics: AggregateArgumentMetrics,
@@ -74,7 +76,10 @@ impl GroupedTopKAggregateStream {
         let group_by = Arc::clone(&aggr.group_by);
         let input = aggr.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
-        let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
+        let group_by_metrics =
+            GroupByMetrics::new_without_aggregation_time(&aggr.metrics, partition);
+        let topk_maintenance_time = MetricBuilder::new(&aggr.metrics)
+            .subset_time("topk_maintenance_time", partition);
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
             &aggr.metrics,
             partition,
@@ -130,6 +135,7 @@ impl GroupedTopKAggregateStream {
             input,
             baseline_metrics,
             group_by_metrics,
+            topk_maintenance_time,
             aggregate_argument_metrics,
             aggregate_arguments,
             group_by,
@@ -151,7 +157,7 @@ impl GroupedTopKAggregateStream {
     }
 
     fn intern(&mut self, ids: &ArrayRef, vals: &ArrayRef) -> Result<()> {
-        let _timer = self.group_by_metrics.time_calculating_group_ids.timer();
+        let _timer = self.topk_maintenance_time.timer();
 
         let len = ids.len();
         self.priority_map
@@ -247,7 +253,9 @@ impl Stream for GroupedTopKAggregateStream {
                         print_batches(std::slice::from_ref(&batch))?;
                     }
                     self.row_count += batch.num_rows();
+                    let timer = self.group_by_metrics.time_calculating_group_ids.timer();
                     let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
+                    drop(timer);
                     assert_eq!(
                         group_by_values.len(),
                         1,
@@ -397,6 +405,15 @@ mod tests {
         });
         assert!(argument_metric.is_some());
         assert!(argument_metric.unwrap().value().as_usize() > 0);
+
+        let topk_maintenance_time = metrics.sum_by_name("topk_maintenance_time");
+        assert!(topk_maintenance_time.is_some());
+        assert!(topk_maintenance_time.unwrap().as_usize() > 0);
+
+        let group_id_time = metrics.sum_by_name("time_calculating_group_ids");
+        assert!(group_id_time.is_some());
+        assert!(group_id_time.unwrap().as_usize() > 0);
+        assert!(metrics.sum_by_name("aggregation_time").is_none());
 
         Ok(())
     }

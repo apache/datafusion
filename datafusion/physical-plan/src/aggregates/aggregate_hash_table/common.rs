@@ -212,14 +212,21 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building_mut();
 
-        let _timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
+            let timer = self.group_by_metrics.time_calculating_group_ids.timer();
             state
                 .group_values
                 .intern(group_values, &mut state.batch_group_indices)?;
+            drop(timer);
+
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
-
+            let _timer = self
+                .group_by_metrics
+                .aggregation_time
+                .as_ref()
+                .expect("hash aggregation invokes accumulators")
+                .timer();
             for (idx, (acc, values)) in state
                 .accumulators
                 .iter_mut()

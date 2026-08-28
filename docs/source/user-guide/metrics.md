@@ -70,8 +70,9 @@ metrics below, and a timer per aggregate expression and execution phase.
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | time_calculating_group_ids | Time spent preparing group keys; see the note below for path-specific coverage.                                                       |
 | aggregate_arguments_time   | Total time spent evaluating the inputs to the aggregate functions. `agg_expr_{index}_arguments_time` breaks this down per expression. |
-| aggregation_time           | Time spent feeding the evaluated inputs into the accumulators.                                                                        |
-| emitting_time              | Time spent producing output batches, including finalizing the grouping expressions and the accumulators.                              |
+| aggregation_time           | Time spent invoking accumulator `update` and `merge` operations.                                                                      |
+| emitting_time              | Time spent producing output batches, including group-value emission and accumulator `state` or `evaluate` operations.                 |
+| topk_maintenance_time      | Time spent maintaining Grouped TopK's priority map, including batch setup, insertion, comparison, and NULL handling.                  |
 | skipped_aggregation_rows   | Number of input rows passed through without aggregating them, when partial aggregation is skipped.                                    |
 | reduction_factor           | Rows emitted per row consumed by a partial aggregation, displayed as `66.67% (2/3)`.                                                  |
 | spill_count                | Number of spill files written when the aggregation exceeds its memory budget.                                                         |
@@ -87,17 +88,17 @@ when partial-aggregation skipping is enabled for a single, non-grouping-sets
 `GROUP BY`; a `datafusion.execution.skip_partial_aggregation_probe_ratio_threshold`
 of `>= 1.0` disables the feature.
 
-`time_calculating_group_ids` and `aggregation_time` do not cover the same work
-in every grouped implementation, so their values are comparable only within one
-implementation. Three of the paths leave part of the group-key work untimed, so
-on those paths the individual timers do not add up to `elapsed_compute`.
+`time_calculating_group_ids` covers both grouping-expression evaluation and
+resolving the resulting rows to group IDs, including interning and ordering
+setup. `aggregation_time` covers only accumulator `update` and `merge` calls;
+`state` and `evaluate` are included in `emitting_time`. Partial aggregation that
+skips aggregation reports `convert_to_state` instead of `aggregation_time` for
+those rows.
 
-| Implementation                                                                                                        | `time_calculating_group_ids` covers                                                                          | `aggregation_time` covers                                                                                                                         |
-| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hash aggregation over unordered input                                                                                 | Evaluating the grouping expressions                                                                          | Interning group values, then the accumulator calls                                                                                                |
-| Hash aggregation over ordered input (`ordering_mode=Sorted` or `ordering_mode=PartiallySorted(...)` on the plan line) | Evaluating the grouping expressions                                                                          | The accumulator calls only; interning group values is not covered by any metric                                                                   |
-| Legacy grouped hash path (grouping sets and other cases not yet migrated)                                             | Interning group values                                                                                       | The accumulator calls only; skipped partial aggregation records `convert_to_state` instead; value is inflated with multiple aggregate expressions |
-| Grouped TopK (`GROUP BY` with a `LIMIT`)                                                                              | Priority-map batch setup and insertion, including null handling; grouping-expression evaluation is not timed | Not recorded, because the path keeps values in a priority map instead of calling accumulators                                                     |
+Grouped TopK (`GROUP BY` with a `LIMIT`) has no accumulators. Its group-key
+expression evaluation is included in `time_calculating_group_ids`, and its
+priority-map work is reported by `topk_maintenance_time`; it does not report
+accumulator phases.
 
 The per-aggregate timers are named `agg_expr_{index}_{phase}_time`, where
 `index` is the zero-based position of an aggregate expression in the operator
@@ -140,10 +141,11 @@ emission, including during spilling. The grouped TopK aggregate path records
 only the per-aggregate `arguments` timer, because it maintains values directly
 rather than using accumulators.
 
-Where an aggregate has a `FILTER` clause, non-grouped aggregation and the
-hash-table grouped paths evaluate that filter inside the aggregate's
-`arguments` timer. The legacy grouped hash path evaluates filters outside the
-per-aggregate timers, so its `arguments` timers cover argument evaluation only.
+Where an aggregate has a `FILTER` clause, its evaluation is included in
+`aggregate_arguments_time`. Per-aggregate `arguments` timers include the filter
+when it is evaluated per aggregate. The legacy grouped hash path evaluates
+filters collectively, so its per-aggregate `arguments` timers cover argument
+expressions only; their sum need not equal `aggregate_arguments_time`.
 
 Except for the `Summary` metric `reduction_factor`, these operator-level and
 per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
