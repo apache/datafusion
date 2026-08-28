@@ -169,16 +169,16 @@ pub(super) fn rewrite_cast_predicate_for_inlist(
 
 fn cast_input_and_type(cast_expr: Expr) -> Option<(Box<Expr>, DataType)> {
     match cast_expr {
-        Expr::TryCast(TryCast { expr, field, .. })
-        | Expr::Cast(Cast { expr, field, .. }) => Some((expr, field.data_type().clone())),
+        Expr::TryCast(TryCast { expr, field }) | Expr::Cast(Cast { expr, field }) => {
+            Some((expr, field.data_type().clone()))
+        }
         _ => None,
     }
 }
 
 fn cast_input_and_type_ref(cast_expr: &Expr) -> Option<(&Expr, &DataType)> {
     match cast_expr {
-        Expr::TryCast(TryCast { expr, field, .. })
-        | Expr::Cast(Cast { expr, field, .. }) => {
+        Expr::TryCast(TryCast { expr, field }) | Expr::Cast(Cast { expr, field }) => {
             Some((expr.as_ref(), field.data_type()))
         }
         _ => None,
