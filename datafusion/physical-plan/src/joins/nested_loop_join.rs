@@ -658,20 +658,23 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // Determine if memory-limited mode is possible.
         // Conditions:
         // 1. Disk manager supports temp files (needed for spilling).
-        // 2. FULL join with multiple right partitions is not yet supported
-        //    in the memory-limited path. FULL join needs to track BOTH left-side
-        //    matches (for unmatched left rows) AND right-side matches (for
-        //    unmatched right rows). That path builds a per-partition
-        //    `JoinLeftData` with `probe_threads_counter == 1`, so each
-        //    partition emits unmatched left rows based only on its own
-        //    right-side matches, producing incorrect duplicate output for
-        //    left rows that match in another partition. Other join types
-        //    that need only one-sided final emission (LEFT, LEFT SEMI,
-        //    LEFT ANTI, LEFT MARK) have a similar latent issue in that path.
-        let full_join_multi_partition =
-            matches!(self.join_type, JoinType::Full) && right_partition_count > 1;
+        // 2. Join types whose final emission reads the visited-left bitmap
+        //    (LEFT, LEFT SEMI, LEFT ANTI, LEFT MARK, FULL) need that bitmap
+        //    complete across every probe partition. The memory-limited path
+        //    builds a per-partition `JoinLeftData` with
+        //    `probe_threads_counter == 1`, so with more than one right
+        //    partition each partition emits from a bitmap that only saw its
+        //    own right rows: unmatched rows are emitted once per partition,
+        //    and rows matched only in another partition are emitted as
+        //    unmatched. Refusing the fallback turns those wrong results into
+        //    a plain ResourcesExhausted error. Right-side emission types are
+        //    safe because each partition owns its right rows exclusively.
+        //    Cross-partition coordination of the left bitmap is tracked in
+        //    https://github.com/apache/datafusion/issues/22038.
+        let left_emission_multi_partition =
+            need_produce_result_in_final(self.join_type) && right_partition_count > 1;
         let can_spill = context.runtime_env().disk_manager.tmp_files_enabled()
-            && !full_join_multi_partition;
+            && !left_emission_multi_partition;
 
         let build_side_data = self.build_side_data.try_once(|| {
             let stream = self.left.execute(0, Arc::clone(&context))?;
@@ -4000,12 +4003,10 @@ pub(crate) mod tests {
 
         // Join types that support memory-limited fallback should succeed
         // even under tight memory limits (they spill to disk instead of OOM).
+        // Right-side emission types are safe with multiple right partitions
+        // because each partition owns its right rows exclusively.
         let fallback_join_types = vec![
             JoinType::Inner,
-            JoinType::Left,
-            JoinType::LeftSemi,
-            JoinType::LeftAnti,
-            JoinType::LeftMark,
             JoinType::Right,
             JoinType::RightSemi,
             JoinType::RightAnti,
@@ -4030,24 +4031,34 @@ pub(crate) mod tests {
             .await?;
         }
 
-        // FULL JOIN with multiple right partitions is intentionally not
-        // supported in the fallback path yet (cross-partition left-bitmap
-        // coordination is missing). It should still OOM under tight memory.
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(100, 1.0)
-            .build_arc()?;
-        let task_ctx = TaskContext::default().with_runtime(runtime);
-        let task_ctx = Arc::new(task_ctx);
-        let err = multi_partitioned_join_collect(
-            Arc::clone(&left),
-            Arc::clone(&right),
-            &JoinType::Full,
-            Some(filter.clone()),
-            task_ctx,
-        )
-        .await
-        .unwrap_err();
-        assert_contains!(err.to_string(), "Resources exhausted");
+        // Join types whose final emission reads the visited-left bitmap are
+        // intentionally not supported in the fallback path with multiple right
+        // partitions (cross-partition left-bitmap coordination is missing;
+        // per-partition bitmaps emit wrong rows). They must OOM cleanly instead.
+        let gated_join_types = vec![
+            JoinType::Left,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::LeftMark,
+            JoinType::Full,
+        ];
+        for join_type in &gated_join_types {
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .build_arc()?;
+            let task_ctx = TaskContext::default().with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
+            let err = multi_partitioned_join_collect(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                join_type,
+                Some(filter.clone()),
+                task_ctx,
+            )
+            .await
+            .unwrap_err();
+            assert_contains!(err.to_string(), "Resources exhausted");
+        }
 
         Ok(())
     }
@@ -4156,6 +4167,96 @@ pub(crate) mod tests {
         | 5  | 5  | 50  | 2  | 2  | 80 |
         | 9  | 8  | 90  |    |    |    |
         +----+----+-----+----+----+----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_left_semi_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::LeftSemi, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Left semi: only left rows that matched at least one right row.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 5  | 5  | 50 |
+        +----+----+----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_left_anti_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::LeftAnti, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Left anti: left rows that did NOT match any right row.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+
+        | a1 | b1 | c1  |
+        +----+----+-----+
+        | 11 | 8  | 110 |
+        | 9  | 8  | 90  |
+        +----+----+-----+
+        "));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_left_mark_join() -> Result<()> {
+        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+        let left = build_left_table();
+        let right = build_right_table();
+        let filter = prepare_join_filter();
+
+        let (columns, batches, metrics) =
+            join_collect(left, right, &JoinType::LeftMark, Some(filter), task_ctx)
+                .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+
+        assert!(
+            metrics.spill_count().unwrap_or(0) > 0,
+            "Expected spilling to occur under tight memory limit"
+        );
+
+        // Left mark: all left rows with a bool column indicating match.
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+-------+
+        | a1 | b1 | c1  | mark  |
+        +----+----+-----+-------+
+        | 11 | 8  | 110 | false |
+        | 5  | 5  | 50  | true  |
+        | 9  | 8  | 90  | false |
+        +----+----+-----+-------+
         "));
         Ok(())
     }
