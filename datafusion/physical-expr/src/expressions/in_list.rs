@@ -3948,15 +3948,15 @@ mod proto_tests {
     }
 
     /// An `InListExpr` over a column with one literal value.
-    fn in_list_fixture() -> InListExpr {
+    fn in_list_fixture(negated: bool) -> InListExpr {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], false, &schema)
+        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], negated, &schema)
             .unwrap()
     }
 
     #[test]
     fn try_to_proto_encodes_in_list() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         let encoder = StubEncoder::ok();
         let ctx = PhysicalExprEncodeCtx::new(&encoder);
 
@@ -3974,11 +3974,20 @@ mod proto_tests {
         assert!(!in_list_node.negated);
         assert!(in_list_node.expr.is_some());
         assert_eq!(in_list_node.list.len(), 1);
+
+        assert!(matches!(
+            in_list_fixture(true)
+                .try_to_proto(&ctx)
+                .unwrap()
+                .unwrap()
+                .expr_type,
+            Some(physical_expr_node::ExprType::InList(node)) if node.negated
+        ));
     }
 
     #[test]
     fn try_to_proto_propagates_expr_encode_error() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         let encoder = StubEncoder::failing_on(1);
         let ctx = PhysicalExprEncodeCtx::new(&encoder);
         let err = in_list.try_to_proto(&ctx).unwrap_err();
@@ -3987,7 +3996,7 @@ mod proto_tests {
 
     #[test]
     fn try_to_proto_propagates_list_encode_error() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         // Call 1 is for `expr`, Call 2 is for the first element of `list`
         let encoder = StubEncoder::failing_on(2);
         let ctx = PhysicalExprEncodeCtx::new(&encoder);
