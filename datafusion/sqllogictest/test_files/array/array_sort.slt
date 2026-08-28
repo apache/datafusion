@@ -272,7 +272,18 @@ from values
   (make_array(10, 20, 30), 'desc') as t(arr, order);
 ----
 [2, 3, 5]
+[5, 3, 2]
+[30, 20, 10]
+
+query ?
+select array_sort(arr, order)
+from values
+  (make_array(5, 2, 3), 'asc'),
+  (make_array(5, NULL, 3), 'desc'),
+  (make_array(10, 20, 30), 'desc') as t(arr, order);
+----
 [2, 3, 5]
-[10, 20, 30]
+[NULL, 5, 3]
+[30, 20, 10]
 
 include ./cleanup.slt.part

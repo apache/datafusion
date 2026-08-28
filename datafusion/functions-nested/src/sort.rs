@@ -18,11 +18,11 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::BooleanBufferBuilder;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, GenericListArray, OffsetSizeTrait,
     PrimitiveArray, UInt32Array, UInt64Array, new_empty_array, new_null_array,
 };
+use arrow::array::{BooleanBufferBuilder, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
@@ -166,6 +166,12 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Ok(new_null_array(args[0].data_type(), args[0].len()));
     }
 
+    let sort_order = if args.len() > 1 {
+        Some(as_string_array(&args[1])?)
+    } else {
+        None
+    };
+
     let sort_options = if args.len() >= 2 {
         let order = as_string_array(&args[1])?.value(0);
         let descending = order_desc(order)?;
@@ -190,11 +196,11 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         DataType::List(field) => {
             let array = as_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, Arc::clone(field), sort_order, sort_options)
         }
         DataType::LargeList(field) => {
             let array = as_large_list_array(&args[0])?;
-            array_sort_generic(array, Arc::clone(field), sort_options)
+            array_sort_generic(array, Arc::clone(field), sort_order, sort_options)
         }
         // Signature should prevent this arm ever occurring
         _ => exec_err!("array_sort expects list for first argument"),
@@ -204,14 +210,15 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
+    sort_order: Option<&StringArray>,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
 
     if values.data_type().is_primitive() {
-        array_sort_primitive(list_array, field, sort_options)
+        array_sort_primitive(list_array, field, sort_order, sort_options)
     } else {
-        array_sort_non_primitive(list_array, field, sort_options)
+        array_sort_non_primitive(list_array, field, sort_order, sort_options)
     }
 }
 
@@ -220,11 +227,12 @@ fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
 fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
+    sort_order: Option<&StringArray>,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let values = list_array.values().as_ref();
     downcast_primitive_array! {
-        values => sort_primitive_list(values, list_array, field, sort_options),
+        values => sort_primitive_list(values, list_array, field, sort_order, sort_options),
         _ => exec_err!("array_sort: unsupported primitive type")
     }
 }
@@ -233,15 +241,16 @@ fn sort_primitive_list<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
     prim_values: &PrimitiveArray<T>,
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
+    sort_order: Option<&StringArray>,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef>
 where
     T::Native: ArrowNativeTypeOp,
 {
     if prim_values.null_count() > 0 {
-        sort_list_with_nulls(prim_values, list_array, field, sort_options)
+        sort_list_with_nulls(prim_values, list_array, field, sort_order, sort_options)
     } else {
-        sort_list_no_nulls(prim_values, list_array, field, sort_options)
+        sort_list_no_nulls(prim_values, list_array, field, sort_order)
     }
 }
 
@@ -251,7 +260,7 @@ fn sort_list_no_nulls<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
     prim_values: &PrimitiveArray<T>,
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
-    sort_options: Option<SortOptions>,
+    sort_order: Option<&StringArray>,
 ) -> Result<ArrayRef>
 where
     T::Native: ArrowNativeTypeOp,
@@ -260,8 +269,6 @@ where
     let offsets = list_array.offsets();
     let values_start = offsets[0].as_usize();
     let values_end = offsets[row_count].as_usize();
-
-    let descending = sort_options.is_some_and(|o| o.descending);
 
     // Copy all values into a mutable buffer
     let mut values: Vec<T::Native> =
@@ -274,6 +281,11 @@ where
         let start = window[0].as_usize() - values_start;
         let end = window[1].as_usize() - values_start;
         let slice = &mut values[start..end];
+        let descending = if let Some(sort_order) = sort_order {
+            order_desc(sort_order.value(row_index))?
+        } else {
+            false
+        };
         if descending {
             slice.sort_unstable_by(|a, b| b.compare(*a));
         } else {
@@ -300,6 +312,7 @@ fn sort_list_with_nulls<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
     prim_values: &PrimitiveArray<T>,
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
+    sort_order: Option<&StringArray>,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef>
 where
@@ -311,7 +324,6 @@ where
     let values_end = offsets[row_count].as_usize();
     let total_values = values_end - values_start;
 
-    let descending = sort_options.is_some_and(|o| o.descending);
     let nulls_first = sort_options.is_none_or(|o| o.nulls_first);
 
     let mut out_values: Vec<T::Native> = vec![T::Native::default(); total_values];
@@ -351,6 +363,11 @@ where
 
         let valid_slice = &mut out_values
             [out_start + valid_offset..out_start + valid_offset + valid_count];
+        let descending = if let Some(sort_order) = sort_order {
+            order_desc(sort_order.value(row_index))?
+        } else {
+            false
+        };
         if descending {
             valid_slice.sort_unstable_by(|a, b| b.compare(*a));
         } else {
@@ -390,6 +407,7 @@ where
 fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
+    _sort_order: Option<&StringArray>,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let row_count = list_array.len();
