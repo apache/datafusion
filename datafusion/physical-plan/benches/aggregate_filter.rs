@@ -27,7 +27,7 @@ use std::sync::Arc;
 use arrow::array::{BooleanArray, Float64Array, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_functions_aggregate::sum::sum_udaf;
@@ -39,12 +39,38 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::test::TestMemoryExec;
 use datafusion_physical_plan::{ExecutionPlan, collect};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use tokio::runtime::Runtime;
 
 const NUM_ROWS: usize = 65_536;
 const BATCH_SIZE: usize = 8_192;
 const NUM_GROUPS: usize = 1_024;
-const FILTER_PERCENTS: &[usize] = &[1, 10, 50, 90, 99, 100];
+const FILTER_CASES: &[Option<usize>] = &[
+    None,
+    Some(1),
+    Some(10),
+    Some(50),
+    Some(90),
+    Some(99),
+    Some(100),
+];
+
+#[derive(Clone, Copy)]
+enum ArgumentKind {
+    Column,
+    Multiply,
+}
+
+impl ArgumentKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Column => "column",
+            Self::Multiply => "multiply",
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum AggregateLayout {
@@ -79,15 +105,19 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn include_a(row: usize, filter_percent: usize) -> bool {
-    row % 100 < filter_percent
+fn make_filter_mask(filter_percent: usize, seed: u64) -> Vec<bool> {
+    let selected_rows = NUM_ROWS * filter_percent / 100;
+    let mut mask = vec![false; NUM_ROWS];
+    mask[..selected_rows].fill(true);
+    mask.shuffle(&mut StdRng::seed_from_u64(seed));
+    mask
 }
 
-fn include_b(row: usize, filter_percent: usize) -> bool {
-    (row * 37 + 17) % 100 < filter_percent
-}
-
-fn make_batches(filter_percent: usize) -> Vec<RecordBatch> {
+fn make_batches(filter_percent: Option<usize>) -> Vec<RecordBatch> {
+    let filter_percent = filter_percent.unwrap_or(100);
+    // Select different rows while keeping both filters' distributions comparable.
+    let include_a = make_filter_mask(filter_percent, 42);
+    let include_b = make_filter_mask(filter_percent, 43);
     (0..NUM_ROWS)
         .step_by(BATCH_SIZE)
         .map(|start| {
@@ -98,16 +128,8 @@ fn make_batches(filter_percent: usize) -> Vec<RecordBatch> {
             let value = Float64Array::from_iter_values(
                 (start..end).map(|row| (row % 1_000) as f64),
             );
-            let include_a = BooleanArray::from(
-                (start..end)
-                    .map(|row| include_a(row, filter_percent))
-                    .collect::<Vec<_>>(),
-            );
-            let include_b = BooleanArray::from(
-                (start..end)
-                    .map(|row| include_b(row, filter_percent))
-                    .collect::<Vec<_>>(),
-            );
+            let include_a = BooleanArray::from(include_a[start..end].to_vec());
+            let include_b = BooleanArray::from(include_b[start..end].to_vec());
 
             RecordBatch::try_new(
                 schema(),
@@ -123,18 +145,25 @@ fn make_batches(filter_percent: usize) -> Vec<RecordBatch> {
         .collect()
 }
 
-fn sum_squared(schema: &SchemaRef, aggregate_index: usize) -> Arc<AggregateFunctionExpr> {
+fn aggregate_expr(
+    schema: &SchemaRef,
+    aggregate_index: usize,
+    argument_kind: ArgumentKind,
+) -> Arc<AggregateFunctionExpr> {
     let value = col("value", schema).unwrap();
-    let argument = Arc::new(BinaryExpr::new(
-        Arc::clone(&value),
-        Operator::Multiply,
-        value,
-    )) as Arc<dyn PhysicalExpr>;
+    let argument: Arc<dyn PhysicalExpr> = match argument_kind {
+        ArgumentKind::Column => value,
+        ArgumentKind::Multiply => Arc::new(BinaryExpr::new(
+            Arc::clone(&value),
+            Operator::Multiply,
+            value,
+        )),
+    };
 
     Arc::new(
         AggregateExprBuilder::new(sum_udaf(), vec![argument])
             .schema(Arc::clone(schema))
-            .alias(format!("sum_squared_{aggregate_index}"))
+            .alias(format!("sum_{}_{aggregate_index}", argument_kind.name()))
             .build()
             .unwrap(),
     )
@@ -142,10 +171,11 @@ fn sum_squared(schema: &SchemaRef, aggregate_index: usize) -> Arc<AggregateFunct
 
 fn make_plan(
     layout: AggregateLayout,
+    argument_kind: ArgumentKind,
     filter_percent: Option<usize>,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = schema();
-    let batches = make_batches(filter_percent.unwrap_or(50));
+    let batches = make_batches(filter_percent);
     let input =
         TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None).unwrap();
     let group_by = PhysicalGroupBy::new_single(vec![(
@@ -153,7 +183,7 @@ fn make_plan(
         "group_key".to_string(),
     )]);
     let aggregates = (0..layout.aggregate_count())
-        .map(|index| sum_squared(&schema, index))
+        .map(|index| aggregate_expr(&schema, index, argument_kind))
         .collect::<Vec<_>>();
 
     let filters = match filter_percent {
@@ -186,49 +216,61 @@ fn make_plan(
 }
 
 fn benchmark_case(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    c: &mut Criterion,
     runtime: &Runtime,
     layout: AggregateLayout,
-    case_name: &str,
-    filter_percent: Option<usize>,
+    argument_kinds: &[ArgumentKind],
 ) {
-    let plan = make_plan(layout, filter_percent);
-    let task_ctx = Arc::new(TaskContext::default());
+    let mut group =
+        c.benchmark_group(format!("grouped_aggregate_filter/{}", layout.name()));
 
-    group.bench_function(case_name, |b| {
-        b.iter(|| {
-            let output = runtime
-                .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
-                .unwrap();
-            black_box(output);
-        });
-    });
+    for &argument_kind in argument_kinds {
+        for &filter_percent in FILTER_CASES {
+            let case_name = match filter_percent {
+                None => "unfiltered".to_string(),
+                Some(percent) => format!("{percent}_percent"),
+            };
+            let plan = make_plan(layout, argument_kind, filter_percent);
+            let task_ctx = Arc::new(TaskContext::default());
+
+            group.bench_function(
+                BenchmarkId::new(argument_kind.name(), case_name),
+                |b| {
+                    b.iter(|| {
+                        let output = runtime
+                            .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
+                            .unwrap();
+                        black_box(output);
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
 }
 
 fn aggregate_filter_benchmark(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
 
-    for layout in [
+    benchmark_case(
+        c,
+        &runtime,
         AggregateLayout::OneAggregate,
+        &[ArgumentKind::Column, ArgumentKind::Multiply],
+    );
+    benchmark_case(
+        c,
+        &runtime,
         AggregateLayout::TwoAggregatesSharedFilter,
+        &[ArgumentKind::Multiply],
+    );
+    benchmark_case(
+        c,
+        &runtime,
         AggregateLayout::TwoAggregatesDistinctFilters,
-    ] {
-        let mut group =
-            c.benchmark_group(format!("grouped_aggregate_filter/{}", layout.name()));
-
-        benchmark_case(&mut group, &runtime, layout, "unfiltered", None);
-        for &filter_percent in FILTER_PERCENTS {
-            benchmark_case(
-                &mut group,
-                &runtime,
-                layout,
-                &format!("{filter_percent}_percent"),
-                Some(filter_percent),
-            );
-        }
-
-        group.finish();
-    }
+        &[ArgumentKind::Multiply],
+    );
 }
 
 criterion_group!(benches, aggregate_filter_benchmark);
