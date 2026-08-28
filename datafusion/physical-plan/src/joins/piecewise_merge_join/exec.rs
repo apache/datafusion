@@ -680,6 +680,150 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            buffered,
+            streamed,
+            on,
+            operator,
+            join_type,
+            num_partitions,
+            // derived from the children's schemas by `try_new` on decode
+            schema: _,
+            // buffered side collected at execution time, not part of the plan
+            buffered_fut: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            left_child_plan_required_order: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            right_batch_required_orders: _,
+            // recomputed from `operator` and `join_type` by `try_new` on decode
+            sort_options: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let (on_buffered, on_streamed) = on;
+        let buffered = ctx.encode_child(buffered)?;
+        let streamed = ctx.encode_child(streamed)?;
+        let on_buffered = ctx.encode_expr(on_buffered)?;
+        let on_streamed = ctx.encode_expr(on_streamed)?;
+        let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::PiecewiseMergeJoin(
+                    Box::new(protobuf::PiecewiseMergeJoinExecNode {
+                        buffered: Some(Box::new(buffered)),
+                        streamed: Some(Box::new(streamed)),
+                        on_buffered: Some(on_buffered),
+                        on_streamed: Some(on_streamed),
+                        // Matches the `Operator` encoding used for `BinaryExpr`:
+                        // the `Debug` name of the variant.
+                        operator: format!("{operator:?}"),
+                        join_type: join_type.into(),
+                        num_partitions: *num_partitions as u64,
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl PiecewiseMergeJoinExec {
+    /// Reconstruct a [`PiecewiseMergeJoinExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Every other field of
+    /// the operator (schema, sort options, required orderings, plan properties) is
+    /// derived by [`PiecewiseMergeJoinExec::try_new`], so it is not on the wire.
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
+        use datafusion_proto_models::protobuf;
+
+        let join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::PiecewiseMergeJoin,
+            "PiecewiseMergeJoinExec",
+        );
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::PiecewiseMergeJoinExecNode {
+            buffered,
+            streamed,
+            on_buffered,
+            on_streamed,
+            operator,
+            join_type,
+            num_partitions,
+        } = &**join;
+
+        let buffered = ctx.decode_required_child(
+            buffered.as_deref(),
+            "PiecewiseMergeJoinExec",
+            "buffered",
+        )?;
+        let streamed = ctx.decode_required_child(
+            streamed.as_deref(),
+            "PiecewiseMergeJoinExec",
+            "streamed",
+        )?;
+        let on_buffered = ctx.decode_required_expr(
+            on_buffered.as_ref(),
+            buffered.schema().as_ref(),
+            "PiecewiseMergeJoinExec",
+            "on_buffered",
+        )?;
+        let on_streamed = ctx.decode_required_expr(
+            on_streamed.as_ref(),
+            streamed.schema().as_ref(),
+            "PiecewiseMergeJoinExec",
+            "on_streamed",
+        )?;
+
+        let operator = Operator::from_proto_name(operator).ok_or_else(|| {
+            internal_datafusion_err!(
+                "PiecewiseMergeJoinExec: unknown Operator '{operator}'"
+            )
+        })?;
+        let join_type = crate::joins::proto::join_type_from_proto(
+            *join_type,
+            "PiecewiseMergeJoinExec",
+        )?;
+
+        // Checked rather than `as usize`: a truncated partition count would not
+        // fail loudly, it would silently change how the buffered side is split.
+        let num_partitions =
+            usize::try_from(*num_partitions).map_err(|_| {
+                plan_datafusion_err!(
+                     "PiecewiseMergeJoinExec: num_partitions {num_partitions} cannot be represented as usize on this target"
+                )
+            })?;
+
+        Ok(Arc::new(Self::try_new(
+            buffered,
+            streamed,
+            (on_buffered, on_streamed),
+            operator,
+            join_type,
+            num_partitions,
+        )?))
+    }
 }
 
 impl DisplayAs for PiecewiseMergeJoinExec {
