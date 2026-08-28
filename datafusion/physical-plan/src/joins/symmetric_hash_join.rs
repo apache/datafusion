@@ -2238,6 +2238,29 @@ mod tests {
         assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
         assert_eq!(joiner.size() - empty_size, grown_allocation);
         assert!(grown_allocation > initial_allocation);
+
+        let size_with_visited_rows = joiner.size();
+        let initial_hashmap_allocation =
+            joiner.hashmap.size() - size_of_val(&joiner.hashmap);
+        joiner.on = vec![Arc::new(Column::new("a", 0))];
+        joiner.hashmap = PruningJoinHashMap::with_capacity(3);
+        joiner.hashes_buffer.reserve(3);
+        assert!(joiner.on.capacity() > 0);
+        assert!(joiner.hashmap.map.capacity() > 0);
+        assert!(joiner.hashes_buffer.capacity() > 0);
+
+        let owned_container_allocation_delta = joiner.on.capacity()
+            * size_of::<PhysicalExprRef>()
+            + (joiner.hashmap.size()
+                - size_of_val(&joiner.hashmap)
+                - initial_hashmap_allocation)
+            + joiner.hashes_buffer.capacity() * size_of::<u64>();
+        assert!(owned_container_allocation_delta > 0);
+        assert_eq!(joiner.size(), expected_one_side_hash_joiner_size(&joiner));
+        assert_eq!(
+            joiner.size() - size_with_visited_rows,
+            owned_container_allocation_delta
+        );
     }
 
     fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {
