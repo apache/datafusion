@@ -461,6 +461,73 @@ mod tests {
         ");
     }
 
+    // A planner that declines a relation must not cause the default planner to
+    // silently discard syntax that changes which rows the relation represents.
+    #[tokio::test]
+    async fn unsupported_table_modifiers_fail_closed_after_delegation() {
+        let contexts = [
+            (
+                "without an extension planner",
+                create_context_with_simple_table("real_table", vec![42]),
+            ),
+            (
+                "after a pass-through extension planner",
+                create_context_with_simple_table("real_table", vec![42])
+                    .with_planner(PassThroughPlanner),
+            ),
+        ];
+        let cases = [
+            (
+                "generic",
+                "SELECT * FROM real_table TABLESAMPLE SYSTEM (10 PERCENT)",
+                "TABLESAMPLE is not supported by the default relation planner",
+            ),
+            (
+                "snowflake",
+                "SELECT * FROM real_table VERSION AS OF 1",
+                "Table version qualifiers are not supported by the default relation planner",
+            ),
+            (
+                "generic",
+                "SELECT * FROM (SELECT * FROM real_table) TABLESAMPLE (1 ROWS)",
+                "TABLESAMPLE on derived tables is not supported by the default relation planner",
+            ),
+            (
+                "postgres",
+                "SELECT * FROM LATERAL generate_series(1, 2) WITH ORDINALITY",
+                "WITH ORDINALITY is not supported by the default relation planner for table functions",
+            ),
+            (
+                "clickhouse",
+                "SELECT * FROM executable('generate_random.py', TabSeparated, 'id UInt32', SETTINGS send_chunk_header = false)",
+                "Table function SETTINGS are not supported by the default relation planner",
+            ),
+        ];
+
+        for (context_description, ctx) in contexts {
+            for (dialect, sql, expected) in cases {
+                execute_sql(
+                    &ctx,
+                    &format!("SET datafusion.sql_parser.dialect = '{dialect}'"),
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{dialect} dialect should be enabled: {error}")
+                });
+                let error = match ctx.sql(sql).await {
+                    Ok(_) => {
+                        panic!("Expected `{sql}` to be rejected {context_description}")
+                    }
+                    Err(error) => error.to_string(),
+                };
+                assert!(
+                    error.contains(expected),
+                    "Expected `{sql}` to report `{expected}` {context_description}, got: {error}"
+                );
+            }
+        }
+    }
+
     // Catalog is used when no planner claims the relation.
     #[tokio::test]
     async fn catalog_fallback_when_no_planner() {
