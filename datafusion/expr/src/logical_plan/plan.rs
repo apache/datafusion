@@ -1572,6 +1572,7 @@ impl LogicalPlan {
                 | JoinType::LeftAnti
                 | JoinType::RightAnti => 0,
             },
+            LogicalPlan::AsOfJoin(AsOfJoin { left, .. }) => left.min_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs
                 .iter()
                 .fold(0, |rows, input| rows.saturating_add(input.min_rows())),
@@ -6171,6 +6172,15 @@ mod tests {
             .cross_join(one_row.clone())?
             .build()?;
         assert_eq!(cross_join.min_rows(), 2);
+
+        let asof_join = LogicalPlanBuilder::from(two_rows.clone())
+            .asof_join(
+                one_row.clone(),
+                vec![],
+                AsOfMatch::new(col("l.column1"), Operator::GtEq, col("r.column1")),
+            )?
+            .build()?;
+        assert_eq!(asof_join.min_rows(), 2);
 
         for (join_type, expected_min_rows) in [
             // An inner join with a join condition may filter out every row,
