@@ -89,7 +89,7 @@ of `>= 1.0` disables the feature.
 
 `time_calculating_group_ids` and `aggregation_time` do not cover the same work
 in every grouped implementation, so their values are comparable only within one
-implementation. Two of the paths leave part of the group-key work untimed, so
+implementation. Three of the paths leave part of the group-key work untimed, so
 on those paths the individual timers do not add up to `elapsed_compute`.
 
 | Implementation                                                                                                        | `time_calculating_group_ids` covers                             | `aggregation_time` covers                                                                                                                         |
@@ -97,7 +97,7 @@ on those paths the individual timers do not add up to `elapsed_compute`.
 | Hash aggregation over unordered input                                                                                 | Evaluating the grouping expressions                             | Interning group values, then the accumulator calls                                                                                                |
 | Hash aggregation over ordered input (`ordering_mode=Sorted` or `ordering_mode=PartiallySorted(...)` on the plan line) | Evaluating the grouping expressions                             | The accumulator calls only; interning group values is not covered by any metric                                                                   |
 | Legacy grouped hash path (grouping sets and other cases not yet migrated)                                             | Interning group values                                          | The accumulator calls only; skipped partial aggregation records `convert_to_state` instead; value is inflated with multiple aggregate expressions |
-| Grouped TopK (`GROUP BY` with a `LIMIT`)                                                                              | Priority-map batch setup and insertion, including null handling | Not recorded, because the path keeps values in a priority map instead of calling accumulators                                                     |
+| Grouped TopK (`GROUP BY` with a `LIMIT`)                                                                              | Priority-map batch setup and insertion, including null handling; grouping-expression evaluation is not timed | Not recorded, because the path keeps values in a priority map instead of calling accumulators                                                     |
 
 The per-aggregate timers are named `agg_expr_{index}_{phase}_time`, where
 `index` is the zero-based position of an aggregate expression in the operator
@@ -122,10 +122,10 @@ back to an aggregate expression. Because the index is part of the metric name,
 otherwise identical functions over different columns stay distinct when
 per-partition metrics are combined.
 
-Each metric additionally carries an `aggregate` label holding the rendered
-aggregate expression (for example, `sum(t.a)`). Combining metrics across
-partitions drops labels, so this label is only shown in the "Plan with Full
-Metrics" section of `EXPLAIN ANALYZE VERBOSE`, which reports metrics per
+Each per-aggregate timer additionally carries an `aggregate` label holding the
+rendered aggregate expression (for example, `sum(t.a)`). Combining metrics
+across partitions drops labels, so this label is only shown in the "Plan with
+Full Metrics" section of `EXPLAIN ANALYZE VERBOSE`, which reports metrics per
 partition.
 
 `arguments` is recorded in every mode. The accumulator phases that are present
@@ -149,7 +149,7 @@ Except for the `Summary` metric `reduction_factor`, these operator-level and
 per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
 `datafusion.explain.analyze_level` includes `Dev` (the default), but are omitted
 at the `Summary` level. The normal display combines partitions; use `EXPLAIN ANALYZE VERBOSE` to additionally show the per-partition values together with
-each metric's `aggregate` label. For a query
+each per-aggregate timer's `aggregate` label. For a query
 such as the following, the per-expression metrics stay readable, and the
 operator's `aggr=[...]` list names the aggregate behind each timer index:
 
