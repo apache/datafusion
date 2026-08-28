@@ -438,6 +438,11 @@ where
         arg_scale,      // output_scale
     )?;
 
+    if one_scaled.is_zero() {
+        // Avoid building zero-scale empty interval
+        return None;
+    }
+
     // Compute upper bound using checked addition
     // Before preimage stage, the internal i128/i256(value) is validated based on the precision and scale.
     // MAX_DECIMAL128_FOR_EACH_PRECISION and MAX_DECIMAL256_FOR_EACH_PRECISION are used to validate the internal i128/i256.

@@ -304,6 +304,16 @@ logical_plan
 statement ok
 RESET datafusion.explain.logical_plan_only;
 
+## Test zero-scale interval for negative scale
+query I rowsort
+SELECT id FROM (VALUES
+    (1, arrow_cast(5000, 'Decimal128(10,-3)')),
+    (2, arrow_cast(6000, 'Decimal128(10,-3)'))
+) AS t(id, val)
+WHERE floor(val) = arrow_cast(5000, 'Decimal128(10,-3)');
+----
+1
+
 ##########
 ## Cleanup
 ##########
