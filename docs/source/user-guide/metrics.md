@@ -82,13 +82,19 @@ These operator-level metrics are recorded by the grouped aggregation paths
 only: an `AggregateExec` without a `GROUP BY` reports just `BaselineMetrics`
 and the per-aggregate timers. `reduction_factor` and `skipped_aggregation_rows`
 are recorded in partial mode only, and `skipped_aggregation_rows` only when
-partial-aggregation skipping is enabled. The boundary between
-`time_calculating_group_ids` and `aggregation_time` differs between the grouped
-implementations: the hash-table paths time grouping-expression evaluation as
-`time_calculating_group_ids` and include interning group values in
-`aggregation_time`, while the legacy grouped hash path times interning as
-`time_calculating_group_ids` and limits `aggregation_time` to the accumulator
-calls.
+partial-aggregation skipping is enabled.
+
+`time_calculating_group_ids` and `aggregation_time` do not cover the same work
+in every grouped implementation, so their values are comparable only within one
+implementation. Two of the paths leave part of the group-key work untimed, so
+on those paths the individual timers do not add up to `elapsed_compute`.
+
+| Implementation                                                                                                        | `time_calculating_group_ids` covers | `aggregation_time` covers                                                                     |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+| Hash aggregation over unordered input                                                                                 | Evaluating the grouping expressions | Interning group values, then the accumulator calls                                            |
+| Hash aggregation over ordered input (`ordering_mode=Sorted` or `ordering_mode=PartiallySorted(...)` on the plan line) | Evaluating the grouping expressions | The accumulator calls only; interning group values is not covered by any metric               |
+| Legacy grouped hash path (grouping sets and other cases not yet migrated)                                             | Interning group values              | The accumulator calls only; evaluating the grouping expressions is not covered by any metric  |
+| Grouped TopK (`GROUP BY` with a `LIMIT`)                                                                              | Interning group values              | Not recorded, because the path keeps values in a priority map instead of calling accumulators |
 
 The per-aggregate timers are named `agg_expr_{index}_{phase}_time`, where
 `index` is the zero-based position of an aggregate expression in the operator
