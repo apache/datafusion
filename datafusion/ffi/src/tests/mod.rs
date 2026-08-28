@@ -27,10 +27,13 @@ use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, SplitPoint, exec_err};
 use datafusion_expr::{Expr, TableType, col, lit};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    LexOrdering, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
+};
+use datafusion_physical_plan::{ExecutionPlan, Partitioning};
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
@@ -119,6 +122,8 @@ pub struct ForeignLibraryModule {
     pub create_exec_with_dynamic_expressions: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
+
+    pub create_exec_with_range_partitioning: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_table_with_statistics:
         extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
@@ -229,6 +234,23 @@ pub fn make_test_statistics() -> Statistics {
 pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     let schema = create_test_schema();
     let plan = Arc::new(EmptyExec::new(schema).with_statistics(make_test_statistics()));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+pub(crate) extern "C" fn create_exec_with_range_partitioning() -> FFI_ExecutionPlan {
+    let schema = create_test_schema();
+    let ordering =
+        LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))])
+            .expect("non-empty ordering");
+    let samples = [10, 20, 30, 40, 50]
+        .into_iter()
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+        .collect();
+    let partitioning = Partitioning::Range(
+        RangePartitioning::try_new_with_samples(ordering, samples, 3)
+            .expect("valid sampled range partitioning"),
+    );
+    let plan = Arc::new(EmptyExec::new(schema).with_partitioning(partitioning));
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -362,6 +384,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_exec_with_expressions,
         create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
+        create_exec_with_range_partitioning,
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
