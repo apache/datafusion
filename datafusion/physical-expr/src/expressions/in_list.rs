@@ -38,6 +38,7 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod branchless_filter;
+mod dictionary_filter;
 mod fixed_size_binary_filter;
 mod primitive_filter;
 mod result;
@@ -216,7 +217,7 @@ impl InListExpr {
             expr,
             list,
             negated,
-            Some(instantiate_static_filter(array)?),
+            Some(instantiate_static_filter(array, &expr_data_type)?),
         ))
     }
 
@@ -243,7 +244,7 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
             None => None, // Non-constant expressions, fall back to dynamic evaluation
         };
 
@@ -1260,6 +1261,31 @@ mod tests {
             vec![None, None, None],
             expr,
             &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_nested_dictionary_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![0, 0, 0]))],
+        )?;
+        let needle = lit(ScalarValue::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(2))),
+            )),
+        ));
+
+        let expr = in_list(needle, vec![lit(1_i32), lit(2_i32)], &false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(vec![true, true, true])
         );
 
         Ok(())
