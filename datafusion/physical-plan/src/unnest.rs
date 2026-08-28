@@ -23,10 +23,10 @@ use std::task::{Poll, ready};
 
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
-    MetricsSet, RecordOutput, SplitMetrics,
+    MetricsSet, SplitMetrics,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::stream::{BatchSplitStream, EmptyRecordBatchStream};
+use crate::stream::{BatchSplitStream, EmptyRecordBatchStream, ObservedStream};
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan,
     RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
@@ -296,6 +296,7 @@ impl ExecutionPlan for UnnestExec {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let metrics = UnnestMetrics::new(partition, &self.metrics);
+        let baseline_metrics = metrics.baseline_metrics.clone();
 
         let stream = Box::pin(UnnestStream {
             input,
@@ -311,10 +312,15 @@ impl ExecutionPlan for UnnestExec {
         // Chunking the input bounds each build to roughly `batch_size` rows, but two cases
         // can still produce an oversized batch (see `predict_output_lens`), so the output
         // goes through the shared splitter to make the bound unconditional.
-        Ok(Box::pin(BatchSplitStream::new(
+        let stream = Box::pin(BatchSplitStream::new(
             stream,
             batch_size,
             SplitMetrics::new(&self.metrics, partition),
+        ));
+        Ok(Box::pin(ObservedStream::new(
+            stream,
+            baseline_metrics,
+            None,
         )))
     }
 
@@ -408,6 +414,7 @@ impl UnnestExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
 
         let unnest = crate::expect_plan_variant!(
@@ -443,8 +450,8 @@ impl UnnestExec {
             .collect();
         let struct_column_indices = struct_type_columns
             .iter()
-            .map(|index| *index as _)
-            .collect();
+            .map(|index| usize_from_wire(*index, "UnnestExec", "struct_type_columns"))
+            .collect::<Result<Vec<_>>>()?;
         let options = options.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "UnnestExec is missing required field 'options'"
@@ -651,7 +658,6 @@ impl UnnestStream {
                 // that with `None` rather than an empty batch.
                 if let Some(batch) = result? {
                     debug_assert!(batch.num_rows() > 0);
-                    (&batch).record_output(&self.metrics.baseline_metrics);
                     return Poll::Ready(Some(Ok(batch)));
                 }
                 continue;
@@ -1435,6 +1441,7 @@ mod tests {
     use arrow::datatypes::{Field, Int32Type};
     use datafusion_common::NullHandling;
     use datafusion_common::test_util::batches_to_string;
+    use datafusion_physical_expr_common::metrics::MetricValue;
     use insta::assert_snapshot;
 
     // Create a GenericListArray with the following list values:
@@ -2213,6 +2220,19 @@ mod tests {
         options: UnnestOptions,
         depth: usize,
     ) -> Result<Vec<RecordBatch>> {
+        Ok(
+            unnest_at_depth_with_metrics(input, batch_size, options, depth)
+                .await?
+                .0,
+        )
+    }
+
+    async fn unnest_at_depth_with_metrics(
+        input: Vec<RecordBatch>,
+        batch_size: usize,
+        options: UnnestOptions,
+        depth: usize,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
         let input_schema = input[0].schema();
         let output_schema =
             Arc::new(Schema::new(vec![Field::new("l", DataType::Int32, true)]));
@@ -2234,7 +2254,9 @@ mod tests {
                     .with_batch_size(batch_size),
             ),
         );
-        crate::common::collect(unnest.execute(0, task_ctx)?).await
+        let batches = crate::common::collect(unnest.execute(0, task_ctx)?).await?;
+        let metrics = unnest.metrics().expect("UnnestExec exposes metrics");
+        Ok((batches, metrics))
     }
 
     /// The values an unnest produces, flattened across all output batches.
@@ -2326,6 +2348,40 @@ mod tests {
                 case.batch_size
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_unnest_stream_output_metrics_after_split() -> Result<()> {
+        let (batches, metrics) = unnest_at_depth_with_metrics(
+            vec![list_batch(&[Some(25)])],
+            10,
+            UnnestOptions::default(),
+            1,
+        )
+        .await?;
+
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![10, 10, 5]
+        );
+        let output_batches = metrics
+            .sum(|metric| matches!(metric.value(), MetricValue::OutputBatches(_)))
+            .expect("output_batches metric exists")
+            .as_usize();
+        assert_eq!(output_batches, batches.len());
+        let output_rows = metrics
+            .sum(|metric| matches!(metric.value(), MetricValue::OutputRows(_)))
+            .expect("output_rows metric exists")
+            .as_usize();
+        assert_eq!(
+            output_rows,
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>()
+        );
+
         Ok(())
     }
 

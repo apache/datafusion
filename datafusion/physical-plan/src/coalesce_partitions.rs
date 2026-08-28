@@ -383,14 +383,29 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CoalescePartitionsExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            fetch,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let fetch = fetch
+            .map(|fetch| usize_to_wire(fetch, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
                     protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch().map(|f| f as u32),
+                        fetch,
                     },
                 )),
             ),
@@ -411,20 +426,27 @@ impl CoalescePartitionsExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let merge = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Merge,
             "CoalescePartitionsExec",
         );
+        // Destructure exhaustively so that a new field on
+        // `CoalescePartitionsExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::CoalescePartitionsExecNode { input, fetch } = &**merge;
         let input = ctx.decode_required_child(
-            merge.input.as_deref(),
+            input.as_deref(),
             "CoalescePartitionsExec",
             "input",
         )?;
+        let fetch = fetch
+            .map(|f| usize_from_wire(f, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Arc::new(
-            CoalescePartitionsExec::new(input)
-                .with_fetch(merge.fetch.map(|f| f as usize)),
+            CoalescePartitionsExec::new(input).with_fetch(fetch),
         ))
     }
 }

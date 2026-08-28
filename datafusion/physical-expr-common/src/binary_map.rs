@@ -798,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "byte array")]
     fn test_mismatched_sizes() {
         // inserting large strings into a set that expects small should panic
         let values: ArrayRef = Arc::new(LargeBinaryArray::from_opt_vec(vec![Some(b"a")]));

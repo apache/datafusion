@@ -89,9 +89,8 @@ impl ScalarUDFImpl for UnionTagFunc {
 
                 let keys = Int8Array::try_new(union_array.type_ids().clone(), None)?;
 
-                let fields = match union_array.data_type() {
-                    DataType::Union(fields, _) => fields,
-                    _ => unreachable!(),
+                let DataType::Union(fields, _) = union_array.data_type() else {
+                    unreachable!()
                 };
 
                 // Union fields type IDs only constraints are being unique and in the 0..128 range:

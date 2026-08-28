@@ -118,7 +118,9 @@ fn try_create_array_map(
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
 ) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
-    if on_left.len() != 1 {
+    // `bounds` are also collected for dynamic filters, on any key type, so the
+    // key type cannot be inferred from their presence.
+    if !is_perfect_hash_join_candidate(on_left, schema)? {
         return Ok(None);
     }
 
@@ -999,11 +1001,34 @@ impl HashJoinExec {
 
     /// Set the dynamic filter on this hash join.
     ///
+    /// Setting a dynamic filter is what makes the join compute and publish
+    /// build-side bounds during execution. [`Self::handle_child_pushdown_result`]
+    /// sets one after finding a consumer for it in the probe side. Callers wiring a
+    /// filter up by hand take on that check themselves.
+    ///
     /// Resets any internal state that depends on any existing dynamic filter.
     ///
     /// Validates that the filter's children reference valid columns in
     /// the probe (right) side's schema.
+    #[deprecated(
+        since = "56.0.0",
+        note = "unused by DataFusion; `HashJoinExec` restores its dynamic filter in `HashJoinExec::try_from_proto`, which sets the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn with_dynamic_filter_expr(
+        self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        self.set_dynamic_filter(filter)
+    }
+
+    /// Set the dynamic filter on this hash join, resetting any internal state
+    /// that depends on an existing one and validating that the filter's
+    /// children reference valid columns in the probe (right) side's schema.
+    ///
+    /// Only used to restore the filter when decoding a serialized plan: every
+    /// other code path installs the filter in
+    /// [`ExecutionPlan::handle_child_pushdown_result`].
+    fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -1449,20 +1474,9 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        // Only compute a dynamic filter when the probe subtree contains a consumer.
-        // Searching from `self` would always find the producer expression owned by this join.
-        let enable_dynamic_filter_pushdown = if self
+        let enable_dynamic_filter_pushdown = self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
-        {
-            self.dynamic_filter
-                .as_ref()
-                .and_then(|df| df.filter.expression_id())
-                .map(|id| plan_contains_expression_id(&self.right, id))
-                .transpose()?
-                .unwrap_or(false)
-        } else {
-            false
-        };
+            && self.dynamic_filter.is_some();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -1814,21 +1828,40 @@ impl ExecutionPlan for HashJoinExec {
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
-            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
-            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
             if let Ok(dynamic_filter) =
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = self
-                    .builder()
-                    .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        build_accumulator: OnceLock::new(),
-                    }))
-                    .build_exec()?;
-                result = result.with_updated_node(new_node);
+                // Note that we don't check `PushedDownPredicate::discriminant`: a node
+                // that replies `PushedDown::No` may still retain the filter for
+                // statistics pruning, so the reply does not tell us whether anyone will
+                // actually read the filter. Instead we look for a consumer holding the
+                // expression in the probe subtree.
+                //
+                // `self` here is the join with its post-pushdown children, so anything
+                // that accepted the filter is already wired into `self.right`. Searching
+                // from `self` would always find the producer expression pushed by this
+                // join. This is the last chance to make the decision: the Post-phase
+                // `FilterPushdown` rule is the final rule that mutates the plan.
+                let has_consumer = dynamic_filter
+                    .expression_id()
+                    .map(|id| plan_contains_expression_id(&self.right, id))
+                    .transpose()?
+                    .unwrap_or(false);
+                if has_consumer {
+                    // Our self filter reached a consumer: rebuild the node holding onto
+                    // the dynamic filter so that `execute` populates it from the build
+                    // side. If it did not, we leave `dynamic_filter` as `None` and skip
+                    // the (not cheap) bounds accumulation entirely.
+                    let new_node = self
+                        .builder()
+                        .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
+                            filter: dynamic_filter,
+                            build_accumulator: OnceLock::new(),
+                        }))
+                        .build_exec()?;
+                    result = result.with_updated_node(new_node);
+                }
             }
         }
         Ok(result)
@@ -1859,11 +1892,39 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            mode,
+            projection,
+            null_equality,
+            null_aware,
+            dynamic_filter,
+            fetch,
+            // derived from the children's schemas by the builder on decode
+            join_schema: _,
+            // runtime build-side state, not part of the plan
+            left_fut: _,
+            // the fixed `HASH_JOIN_SEED` constant, set identically by the
+            // builder on decode
+            random_state: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed by the builder on decode
+            column_indices: _,
+            // recomputed by the builder on decode
+            cache: _,
+        } = self;
 
-        let on = self
-            .on()
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+
+        let on = on
             .iter()
             .map(|(l, r)| -> Result<protobuf::JoinOn> {
                 Ok(protobuf::JoinOn {
@@ -1873,27 +1934,28 @@ impl ExecutionPlan for HashJoinExec {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
-        let null_equality =
-            crate::joins::proto::null_equality_to_proto(self.null_equality());
+        let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+        let null_equality = crate::joins::proto::null_equality_to_proto(*null_equality);
         // `PartitionMode` is specific to `HashJoinExec`, so its conversion stays
         // inline (by-name on purpose: the enums are numbered differently).
-        let partition_mode = match self.partition_mode() {
+        let partition_mode = match mode {
             PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
             PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
 
-        let filter = self
-            .filter()
+        let filter = filter
+            .as_ref()
             .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
             .transpose()?;
 
-        let dynamic_filter = self
-            .dynamic_expressions_produced()
-            .into_iter()
-            .next()
-            .map(|expr| ctx.encode_expr(&expr))
+        let dynamic_filter = dynamic_filter
+            .as_ref()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> =
+                    Arc::clone(&df.filter) as Arc<dyn PhysicalExpr>;
+                ctx.encode_expr(&df_expr)
+            })
             .transpose()?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
@@ -1914,14 +1976,14 @@ impl ExecutionPlan for HashJoinExec {
                         // single-element sentinel `[u32::MAX]` (never a valid column
                         // index); every other state is sent as-is. See
                         // `try_from_proto` for the matching decoder.
-                        projection: match self.projection.as_ref() {
+                        projection: match projection.as_ref() {
                             None => Vec::new(),
                             Some(v) if v.is_empty() => vec![u32::MAX],
                             Some(v) => v.iter().map(|x| *x as u32).collect(),
                         },
-                        null_aware: self.null_aware,
+                        null_aware: *null_aware,
                         dynamic_filter,
-                        fetch: self.fetch.map(|f| f as u64),
+                        fetch: fetch.map(|f| f as u64),
                     },
                 )),
             ),
@@ -1936,7 +1998,7 @@ impl HashJoinExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
+        use datafusion_common::{internal_datafusion_err, utils::usize_from_wire};
         use datafusion_proto_models::protobuf;
         use std::any::Any;
 
@@ -1946,18 +2008,29 @@ impl HashJoinExec {
             "HashJoinExec",
         );
 
-        let left =
-            ctx.decode_required_child(hashjoin.left.as_deref(), "HashJoinExec", "left")?;
-        let right = ctx.decode_required_child(
-            hashjoin.right.as_deref(),
-            "HashJoinExec",
-            "right",
-        )?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::HashJoinExecNode {
+            left,
+            right,
+            on,
+            join_type,
+            partition_mode,
+            null_equality,
+            filter,
+            projection,
+            null_aware,
+            dynamic_filter,
+            fetch,
+        } = &**hashjoin;
+
+        let left = ctx.decode_required_child(left.as_deref(), "HashJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "HashJoinExec", "right")?;
         let left_schema = left.schema();
         let right_schema = right.schema();
 
-        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
-            .on
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = on
             .iter()
             .map(|col| {
                 let l = ctx.decode_required_expr(
@@ -1976,38 +2049,32 @@ impl HashJoinExec {
             })
             .collect::<Result<_>>()?;
 
-        let join_type = crate::joins::proto::join_type_from_proto(
-            hashjoin.join_type,
-            "HashJoinExec",
-        )?;
+        let join_type =
+            crate::joins::proto::join_type_from_proto(*join_type, "HashJoinExec")?;
         let null_equality = crate::joins::proto::null_equality_from_proto(
-            hashjoin.null_equality,
+            *null_equality,
             "HashJoinExec",
         )?;
         // `PartitionMode` is specific to `HashJoinExec`, so its conversion stays
         // inline (by-name on purpose: the enums are numbered differently).
-        let partition_mode = match protobuf::PartitionMode::try_from(
-            hashjoin.partition_mode,
-        )
-        .map_err(|_| {
-            internal_datafusion_err!(
-                "HashJoinExec: unknown PartitionMode {}",
-                hashjoin.partition_mode
-            )
-        })? {
+        let partition_mode = match protobuf::PartitionMode::try_from(*partition_mode)
+            .map_err(|_| {
+                internal_datafusion_err!(
+                    "HashJoinExec: unknown PartitionMode {partition_mode}"
+                )
+            })? {
             protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
         };
 
-        let filter = hashjoin
-            .filter
+        let filter = filter
             .as_ref()
             .map(|f| crate::joins::proto::join_filter_from_proto(f, ctx, "HashJoinExec"))
             .transpose()?;
 
         // Preserve the empty-projection sentinel written by `try_to_proto`.
-        let projection = match hashjoin.projection.as_slice() {
+        let projection = match projection.as_slice() {
             [] => None,
             [u32::MAX] => Some(Vec::new()),
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
@@ -2016,22 +2083,8 @@ impl HashJoinExec {
         // Restore the row limit that `limit_pushdown` may have pushed into the
         // join. The field is presence-tracked, so a message written before it
         // existed decodes to `None` (no limit) rather than to `Some(0)`.
-        //
-        // The conversion is checked, not `as usize`: `fetch` is a `u64` on the
-        // wire but a `usize` in the plan, and on a 32-bit target `as usize`
-        // truncates. A fetch of `1 << 32` would become `0` -- not merely a
-        // wrong limit but the worst one, silently turning the query into an
-        // empty result. Report the out-of-range value instead. Please do not
-        // "simplify" this back to `as usize`.
-        let fetch = hashjoin
-            .fetch
-            .map(|f| {
-                usize::try_from(f).map_err(|_| {
-                    plan_datafusion_err!(
-                        "HashJoinExec: fetch value {f} cannot be represented as usize on this target"
-                    )
-                })
-            })
+        let fetch = fetch
+            .map(|fetch| usize_from_wire(fetch, "HashJoinExec", "fetch"))
             .transpose()?;
 
         let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
@@ -2039,11 +2092,11 @@ impl HashJoinExec {
             .with_projection(projection)
             .with_partition_mode(partition_mode)
             .with_null_equality(null_equality)
-            .with_null_aware(hashjoin.null_aware)
+            .with_null_aware(*null_aware)
             .with_fetch(fetch)
             .build()?;
 
-        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+        if let Some(dynamic_filter_proto) = dynamic_filter {
             // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
             // (right) side; decode against the right schema then downcast.
             let dynamic_filter_expr =
@@ -2055,10 +2108,301 @@ impl HashJoinExec {
                         "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
                     )
                 })?;
-            hash_join = hash_join.with_dynamic_filter_expr(df)?;
+            hash_join = hash_join.set_dynamic_filter(df)?;
         }
 
         Ok(Arc::new(hash_join))
+    }
+}
+
+/// Field-level tests for the `try_to_proto` / `try_from_proto` hooks.
+///
+/// These cover the three states of `projection` that proto3 cannot express
+/// directly (the `[u32::MAX]` sentinel), `fetch` presence semantics — the field
+/// dropped in #24165, which the central `Debug`-comparing round-trip tests
+/// could not see — and the by-name `PartitionMode` mapping, whose discriminants
+/// deliberately differ between the plan and the wire.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{
+        StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, column_node,
+        encoded_child_node, stub_child,
+    };
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_proto_models::protobuf;
+
+    /// An inner hash join on `a = a` between two stub children.
+    fn join_builder() -> HashJoinExecBuilder {
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> =
+            vec![(Arc::new(Column::new("a", 0)), Arc::new(Column::new("a", 0)))];
+        HashJoinExecBuilder::new(stub_child(), stub_child(), on, JoinType::Inner)
+    }
+
+    /// Encode `plan` with a stub encoder, returning the `HashJoinExecNode`.
+    fn encode(
+        plan: &HashJoinExec,
+        encoder: &StubPlanEncoder,
+    ) -> protobuf::HashJoinExecNode {
+        let ctx = ExecutionPlanEncodeCtx::new(encoder);
+        let node = plan
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("HashJoinExec should encode to Some(node)");
+        match node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::HashJoin(join)) => *join,
+            other => panic!("expected a HashJoin node, got {other:?}"),
+        }
+    }
+
+    /// Encode a join whose only non-default state is its projection.
+    fn encode_projection(projection: Option<Vec<usize>>) -> Vec<u32> {
+        let plan = join_builder().with_projection(projection).build().unwrap();
+        encode(&plan, &StubPlanEncoder::ok()).projection
+    }
+
+    /// A hand-built `HashJoinExecNode` wrapped in its `PhysicalPlanNode`.
+    fn join_node(node: protobuf::HashJoinExecNode) -> protobuf::PhysicalPlanNode {
+        protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::HashJoin(Box::new(node)),
+            ),
+        }
+    }
+
+    /// A decodable `HashJoinExecNode`: two children, one join key, no filter.
+    fn decodable_node() -> protobuf::HashJoinExecNode {
+        protobuf::HashJoinExecNode {
+            left: Some(Box::new(encoded_child_node())),
+            right: Some(Box::new(encoded_child_node())),
+            on: vec![protobuf::JoinOn {
+                left: Some(column_node("a", 0)),
+                right: Some(column_node("a", 0)),
+            }],
+            join_type: protobuf::JoinType::Inner.into(),
+            partition_mode: protobuf::PartitionMode::Partitioned.into(),
+            null_equality: protobuf::NullEquality::NullEqualsNothing.into(),
+            filter: None,
+            projection: vec![],
+            null_aware: false,
+            dynamic_filter: None,
+            fetch: None,
+        }
+    }
+
+    /// Decode `node` with a stub decoder.
+    fn decode(node: protobuf::HashJoinExecNode) -> Arc<dyn ExecutionPlan> {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap()
+    }
+
+    /// View a decoded plan as the `HashJoinExec` it must be.
+    fn as_join(plan: &Arc<dyn ExecutionPlan>) -> &HashJoinExec {
+        plan.downcast_ref::<HashJoinExec>()
+            .expect("decoded plan should be a HashJoinExec")
+    }
+
+    /// "No projection" is the empty repeated field.
+    #[test]
+    fn try_to_proto_encodes_an_absent_projection_as_empty() {
+        assert_eq!(encode_projection(None), Vec::<u32>::new());
+    }
+
+    /// An *empty* projection changes the output schema, so it cannot share the
+    /// "absent" encoding: it goes out as the `[u32::MAX]` sentinel.
+    #[test]
+    fn try_to_proto_encodes_an_empty_projection_as_the_sentinel() {
+        assert_eq!(encode_projection(Some(vec![])), vec![u32::MAX]);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_a_non_empty_projection_as_is() {
+        assert_eq!(encode_projection(Some(vec![0, 2])), vec![0, 2]);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_an_empty_projection_field_as_absent() {
+        let plan = decode(decodable_node());
+
+        assert!(as_join(&plan).projection.is_none());
+    }
+
+    #[test]
+    fn try_from_proto_decodes_the_sentinel_as_an_empty_projection() {
+        let mut node = decodable_node();
+        node.projection = vec![u32::MAX];
+
+        let plan = decode(node);
+        let projection = as_join(&plan)
+            .projection
+            .as_ref()
+            .expect("the sentinel decodes to Some(empty)");
+        assert!(projection.is_empty());
+    }
+
+    #[test]
+    fn try_from_proto_decodes_a_non_empty_projection_as_is() {
+        let mut node = decodable_node();
+        node.projection = vec![0, 2];
+
+        let plan = decode(node);
+        assert_eq!(
+            as_join(&plan).projection.as_deref(),
+            Some([0, 2].as_slice())
+        );
+    }
+
+    /// The regression guard for #24165: an unlimited join must not encode as
+    /// `Some(0)`, and a limited one must keep its limit.
+    #[test]
+    fn try_to_proto_encodes_fetch_by_presence() {
+        let unlimited = join_builder().build().unwrap();
+        assert_eq!(encode(&unlimited, &StubPlanEncoder::ok()).fetch, None);
+
+        let limited = join_builder().with_fetch(Some(10)).build().unwrap();
+        assert_eq!(encode(&limited, &StubPlanEncoder::ok()).fetch, Some(10));
+
+        let empty = join_builder().with_fetch(Some(0)).build().unwrap();
+        assert_eq!(encode(&empty, &StubPlanEncoder::ok()).fetch, Some(0));
+    }
+
+    /// A message written before `fetch` existed has no value on the wire, and
+    /// must decode to "no limit" rather than to `Some(0)` ("no rows").
+    #[test]
+    fn try_from_proto_decodes_an_absent_fetch_as_no_limit() {
+        assert_eq!(as_join(&decode(decodable_node())).fetch, None);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_a_present_fetch() {
+        let mut node = decodable_node();
+        node.fetch = Some(10);
+        assert_eq!(as_join(&decode(node)).fetch, Some(10));
+
+        let mut node = decodable_node();
+        node.fetch = Some(0);
+        assert_eq!(as_join(&decode(node)).fetch, Some(0));
+    }
+
+    /// `fetch` is a `u64` on the wire and a `usize` in the plan. The conversion
+    /// is checked rather than `as usize`, so a value too large for the target
+    /// is reported instead of truncated — on a 64-bit target every `u64` fits,
+    /// and the largest one must come back intact rather than wrapping.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_from_proto_decodes_the_largest_fetch_without_truncating() {
+        let plan = decode({
+            let mut node = decodable_node();
+            node.fetch = Some(u64::MAX);
+            node
+        });
+
+        assert_eq!(as_join(&plan).fetch, Some(usize::MAX));
+    }
+
+    /// The plan-side and wire-side `PartitionMode` discriminants differ, so the
+    /// mapping has to be by name in both directions.
+    #[test]
+    fn partition_mode_round_trips_by_name() {
+        for (mode, wire) in [
+            (
+                PartitionMode::CollectLeft,
+                protobuf::PartitionMode::CollectLeft,
+            ),
+            (
+                PartitionMode::Partitioned,
+                protobuf::PartitionMode::Partitioned,
+            ),
+            (PartitionMode::Auto, protobuf::PartitionMode::Auto),
+        ] {
+            let plan = join_builder().with_partition_mode(mode).build().unwrap();
+            let node = encode(&plan, &StubPlanEncoder::ok());
+            assert_eq!(node.partition_mode, i32::from(wire), "encoding {mode:?}");
+
+            let mut decodable = decodable_node();
+            decodable.partition_mode = node.partition_mode;
+            assert_eq!(*as_join(&decode(decodable)).partition_mode(), mode);
+        }
+    }
+
+    #[test]
+    fn try_from_proto_rejects_an_unknown_partition_mode() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node();
+        node.partition_mode = 42;
+
+        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HashJoinExec: unknown PartitionMode 42")
+        );
+    }
+
+    /// `null_aware` is only legal on a `LeftAnti` join, so the round trip has
+    /// to carry the join type with it.
+    #[test]
+    fn null_aware_round_trips() {
+        let plan = join_builder()
+            .with_type(JoinType::LeftAnti)
+            .with_null_aware(true)
+            .build()
+            .unwrap();
+        assert!(encode(&plan, &StubPlanEncoder::ok()).null_aware);
+
+        let mut node = decodable_node();
+        node.join_type = protobuf::JoinType::Leftanti.into();
+        node.null_aware = true;
+        assert!(as_join(&decode(node)).null_aware);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_both_children_and_both_key_sides() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&join_builder().build().unwrap(), &encoder);
+
+        assert_eq!(encoder.plan_calls(), 2);
+        assert_eq!(encoder.expr_calls(), 2);
+        assert_eq!(node.left, Some(Box::new(encoded_child_node())));
+        assert_eq!(node.right, Some(Box::new(encoded_child_node())));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let plan = join_builder().build().unwrap();
+        let encoder = StubPlanEncoder::failing_on_plan(2);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        let err = plan.try_to_proto(&ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("stub plan encode failure on call 2")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_different_plan_variant() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err = HashJoinExec::try_from_proto(&encoded_child_node(), &ctx).unwrap_err();
+        assert!(err.to_string().contains("not a HashJoinExec"));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_missing_child() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node();
+        node.left = None;
+
+        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HashJoinExec is missing required field 'left'")
+        );
     }
 }
 
@@ -2200,7 +2544,12 @@ impl BuildSideState {
     }
 }
 
-fn should_collect_min_max_for_perfect_hash(
+/// Returns whether the build side could be joined with an [`ArrayMap`]
+/// (perfect hash join): a single join key of a supported integer type.
+///
+/// Only a candidate: the final decision also depends on the observed key
+/// range and density, see [`try_create_array_map`].
+fn is_perfect_hash_join_candidate(
     on_left: &[PhysicalExprRef],
     schema: &SchemaRef,
 ) -> Result<bool> {
@@ -2258,15 +2607,14 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
-    let should_collect_min_max_for_phj =
-        should_collect_min_max_for_perfect_hash(&on_left, &schema)?;
+    let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
     let initial = BuildSideState::try_new(
         metrics,
         reservation,
         on_left.clone(),
         &schema,
-        should_compute_dynamic_filters || should_collect_min_max_for_phj,
+        should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
     let state = left_stream
@@ -2426,7 +2774,7 @@ async fn collect_left_input(
         }
     };
 
-    if should_collect_min_max_for_phj && !should_compute_dynamic_filters {
+    if is_phj_candidate && !should_compute_dynamic_filters {
         bounds = None;
     }
 
@@ -7193,6 +7541,232 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test for a `NullEqualsNull` join whose build-side join key is
+    /// a dictionary with NULL stored in the dictionary *values*.
+    ///
+    /// Such a key is only logically NULL: `null_count() == 0` because the key
+    /// bitmap has no physical nulls, but `logical_null_count() > 0`. The hash
+    /// join must still treat it as a NULL key in two places:
+    ///
+    /// 1. The build side must not be turned into an `ArrayMap` (perfect hash
+    ///    join), which only supports plain integer keys. Bounds are collected
+    ///    for the dynamic filter regardless of key type, so the `ArrayMap`
+    ///    path must check the key type itself instead of inferring it from
+    ///    the presence of bounds; otherwise the build fails with
+    ///    `Unsupported type for ArrayMap`.
+    /// 2. The dynamic filter pushed to the probe side must be widened with
+    ///    `c2 IS NULL OR ...`, so the probe row with a NULL key still reaches
+    ///    the join and null-matches the build NULL. Without it the filter
+    ///    `c2 >= 1 AND c2 <= 2 AND c2 IN (...)` evaluates to NULL for that
+    ///    row and silently drops it.
+    ///
+    /// Setup: build keys `[1, NULL, 2]`, probe keys `[1, NULL, 4]`, inner join
+    /// with a `FilterExec` consuming the join's dynamic filter on the probe side.
+    /// Expected output: the `1 = 1` row and the `NULL = NULL` row.
+    #[tokio::test]
+    async fn test_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
+    -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Dictionary values: [1, NULL, 2]; keys: [0, 1, 2] => logical [1, NULL, 2]
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "d1",
+            vec![Some(100), Some(200), Some(300)],
+        );
+        let left_key = left
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(left_key.column(0).null_count(), 0);
+        assert_eq!(left_key.column(0).logical_null_count(), 1);
+
+        // Dictionary values: [1, NULL, 4]; keys: [0, 1, 2] => logical [1, NULL, 4]
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "d2",
+            vec![Some(10), Some(20), Some(40)],
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        // Wire the join's dynamic filter into a FilterExec over the probe side so
+        // that the filter is actually built (bounds are only collected when the
+        // probe subtree contains a consumer) and applied to the probe rows.
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right = Arc::new(FilterExecBuilder::new(consumer, right).build()?);
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        // (1) Building the hash table must not fail on the dictionary key.
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // (2) The build-side logical NULL must widen the pushed filter with
+        // `IS NULL`, because the join is NullEqualsNull.
+        dynamic_filter.wait_complete().await;
+        let filter = dynamic_filter.current()?.to_string();
+        assert!(
+            filter.contains("c2@0 IS NULL OR"),
+            "expected an IS NULL disjunct in the pushed filter, got: {filter}"
+        );
+
+        // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
+        // NULL survived the pushed filter.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+----+----+
+            | c1 | d1  | c2 | d2 |
+            +----+-----+----+----+
+            |    | 200 |    | 20 |
+            | 1  | 100 | 1  | 10 |
+            +----+-----+----+----+
+            ");
+        }
+        Ok(())
+    }
+
+    /// The [`PartitionMode::Partitioned`] counterpart of
+    /// [`test_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null`].
+    ///
+    /// Here the build-side logical NULL lives in exactly one build partition, so
+    /// the `keys_have_null` flag has to survive the per-partition aggregation in
+    /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
+    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
+    /// that one branch would still drop it for every other route.
+    #[tokio::test]
+    async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
+    -> Result<()> {
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_dynamic_filter_pushdown = true;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let partition_count = 4;
+
+        // Dictionary values: [1, NULL, 2]; keys: [0, 1, 2] => logical [1, NULL, 2]
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "d1",
+            vec![Some(100), Some(200), Some(300)],
+        );
+        // Dictionary values: [1, NULL, 4]; keys: [0, 1, 2] => logical [1, NULL, 4]
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "d2",
+            vec![Some(10), Some(20), Some(40)],
+        );
+
+        let left_key =
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as PhysicalExprRef;
+        let right_key =
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as PhysicalExprRef;
+        let on = vec![(Arc::clone(&left_key), Arc::clone(&right_key))];
+
+        // Hash-repartition both sides so the join runs with real partition routing:
+        // the build NULL and the probe NULL land in the same partition, and every
+        // other partition reports a NULL-free build.
+        let left_repartitioned: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(
+                left,
+                Partitioning::Hash(vec![left_key], partition_count),
+            )?);
+        let right_repartitioned: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(
+                right,
+                Partitioning::Hash(vec![Arc::clone(&right_key)], partition_count),
+            )?);
+
+        // The FilterExec sits above the repartition so each probe partition is only
+        // read after the join has waited for every partition's build report, which
+        // makes the finalized (routed and widened) filter the one actually applied.
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right_filtered: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExecBuilder::new(consumer, right_repartitioned).build()?);
+
+        let mut join = HashJoinExec::try_new(
+            left_repartitioned,
+            right_filtered,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        let batches = crate::execution_plan::collect(Arc::new(join), task_ctx).await?;
+
+        dynamic_filter.wait_complete().await;
+        let filter = dynamic_filter.current()?.to_string();
+        // The aggregated build-side NULL must widen the routed filter once, at the
+        // top: `c2 IS NULL OR CASE hash(c2) % 4 WHEN ... END`.
+        //
+        // Under `force_hash_collisions` every key hashes to the same value, so the
+        // repartition routes all build rows to a single partition and
+        // `build_partitioned_filter` collapses to that partition's filter with no
+        // routing `CASE`. The NULL widening this test guards is asserted either way.
+        if cfg!(not(feature = "force_hash_collisions")) {
+            assert!(
+                filter.contains("CASE"),
+                "expected a routed partitioned filter, got: {filter}"
+            );
+        }
+        assert!(
+            filter.starts_with("c2@0 IS NULL OR"),
+            "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
+        );
+
+        // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
+        // NULL survived the pushed filter on its route.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+----+----+
+            | c1 | d1  | c2 | d2 |
+            +----+-----+----+----+
+            |    | 200 |    | 20 |
+            | 1  | 100 | 1  | 10 |
+            +----+-----+----+----+
+            ");
+        }
+        Ok(())
+    }
+
     /// Null-aware RightAnti must drop outer rows whose dictionary key is only
     /// logically NULL (key points at a null dictionary value).
     #[apply(hash_join_exec_configs)]
@@ -7514,7 +8088,7 @@ mod tests {
             vec![Arc::new(Column::new("b1", 1)) as _],
             lit(true),
         ));
-        let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
+        let join = join.set_dynamic_filter(Arc::clone(&df))?;
 
         let produced = join.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
@@ -7557,7 +8131,7 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?
-        .with_dynamic_filter_expr(dynamic_filter)?;
+        .set_dynamic_filter(dynamic_filter)?;
 
         let err = join.swap_inputs(PartitionMode::CollectLeft).unwrap_err();
         assert_contains!(
@@ -7806,7 +8380,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(join.with_dynamic_filter_expr(df).is_err());
+        assert!(join.set_dynamic_filter(df).is_err());
         Ok(())
     }
 }
