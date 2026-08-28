@@ -485,144 +485,6 @@ fn compile_filters(
         .collect()
 }
 
-/// Delete the rows of `state` that its filters match, and return the number of
-/// rows deleted.
-async fn apply_delete(state: &MemDmlState) -> Result<u64> {
-    let mut total_deleted: u64 = 0;
-
-    for partition_data in &state.partitions {
-        let mut partition = partition_data.write().await;
-        let mut new_batches = Vec::with_capacity(partition.len());
-
-        for batch in partition.iter() {
-            if batch.num_rows() == 0 {
-                continue;
-            }
-
-            // Evaluate filters - None means "match all rows"
-            let filter_mask = evaluate_filters_to_mask(&state.filters, batch)?;
-
-            let (delete_count, keep_mask) = match filter_mask {
-                Some(mask) => {
-                    // Count rows where mask is true (will be deleted)
-                    let count = mask.iter().filter(|v| v == &Some(true)).count();
-                    // Keep rows where predicate is false or NULL (SQL three-valued logic)
-                    let keep: BooleanArray =
-                        mask.iter().map(|v| Some(v != Some(true))).collect();
-                    (count, keep)
-                }
-                None => {
-                    // No filters = delete all rows
-                    (
-                        batch.num_rows(),
-                        BooleanArray::from(vec![false; batch.num_rows()]),
-                    )
-                }
-            };
-
-            total_deleted += delete_count as u64;
-
-            let filtered_batch = filter_record_batch(batch, &keep_mask)?;
-            if filtered_batch.num_rows() > 0 {
-                new_batches.push(filtered_batch);
-            }
-        }
-
-        *partition = new_batches;
-    }
-
-    Ok(total_deleted)
-}
-
-/// Assign a new value to each row of `state` that its filters match, and return
-/// the number of rows updated.
-async fn apply_update(
-    state: &MemDmlState,
-    physical_assignments: &HashMap<String, Arc<dyn PhysicalExpr>>,
-) -> Result<u64> {
-    let mut total_updated: u64 = 0;
-
-    for partition_data in &state.partitions {
-        let mut partition = partition_data.write().await;
-        let mut new_batches = Vec::with_capacity(partition.len());
-
-        for batch in partition.iter() {
-            if batch.num_rows() == 0 {
-                continue;
-            }
-
-            // Evaluate filters - None means "match all rows"
-            let filter_mask = evaluate_filters_to_mask(&state.filters, batch)?;
-
-            let (update_count, update_mask) = match filter_mask {
-                Some(mask) => {
-                    // Count rows where mask is true (will be updated)
-                    let count = mask.iter().filter(|v| v == &Some(true)).count();
-                    // Normalize mask: only true (not NULL) triggers update
-                    let normalized: BooleanArray =
-                        mask.iter().map(|v| Some(v == Some(true))).collect();
-                    (count, normalized)
-                }
-                None => {
-                    // No filters = update all rows
-                    (
-                        batch.num_rows(),
-                        BooleanArray::from(vec![true; batch.num_rows()]),
-                    )
-                }
-            };
-
-            total_updated += update_count as u64;
-
-            if update_count == 0 {
-                new_batches.push(batch.clone());
-                continue;
-            }
-
-            let mut new_columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
-
-            for field in state.table_schema.fields() {
-                let column_name = field.name();
-                let original_column =
-                    batch.column_by_name(column_name).ok_or_else(|| {
-                        datafusion_common::DataFusionError::Internal(format!(
-                            "Column '{column_name}' not found in batch"
-                        ))
-                    })?;
-
-                let new_column = if let Some(physical_expr) =
-                    physical_assignments.get(column_name.as_str())
-                {
-                    // Use evaluate_selection to only evaluate on matching rows.
-                    // This avoids errors (e.g., divide-by-zero) on rows that won't
-                    // be updated. The result is scattered back with nulls for
-                    // non-matching rows, which zip() will replace with originals.
-                    let new_values =
-                        physical_expr.evaluate_selection(batch, &update_mask)?;
-                    let new_array = new_values.into_array(batch.num_rows())?;
-
-                    // Convert to &dyn Array which implements Datum
-                    let new_arr: &dyn Array = new_array.as_ref();
-                    let orig_arr: &dyn Array = original_column.as_ref();
-                    zip(&update_mask, &new_arr, &orig_arr)?
-                } else {
-                    Arc::clone(original_column)
-                };
-
-                new_columns.push(new_column);
-            }
-
-            let updated_batch =
-                ArrowRecordBatch::try_new(Arc::clone(&state.table_schema), new_columns)?;
-            new_batches.push(updated_batch);
-        }
-
-        *partition = new_batches;
-    }
-
-    Ok(total_updated)
-}
-
 /// Evaluate filter expressions against a batch and return a combined boolean mask.
 /// Returns None if filters is empty (meaning "match all rows").
 /// The returned mask has true for rows that match the filter predicates.
@@ -689,6 +551,149 @@ struct MemDmlState {
     /// An empty list means "match all rows".
     filters: Vec<Arc<dyn PhysicalExpr>>,
     op: MemDmlOp,
+}
+
+impl MemDmlState {
+    /// Delete the rows that the filters match, and return the number of rows
+    /// deleted.
+    async fn apply_delete(&self) -> Result<u64> {
+        let mut total_deleted: u64 = 0;
+
+        for partition_data in &self.partitions {
+            let mut partition = partition_data.write().await;
+            let mut new_batches = Vec::with_capacity(partition.len());
+
+            for batch in partition.iter() {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+
+                // Evaluate filters - None means "match all rows"
+                let filter_mask = evaluate_filters_to_mask(&self.filters, batch)?;
+
+                let (delete_count, keep_mask) = match filter_mask {
+                    Some(mask) => {
+                        // Count rows where mask is true (will be deleted)
+                        let count = mask.iter().filter(|v| v == &Some(true)).count();
+                        // Keep rows where predicate is false or NULL (SQL three-valued logic)
+                        let keep: BooleanArray =
+                            mask.iter().map(|v| Some(v != Some(true))).collect();
+                        (count, keep)
+                    }
+                    None => {
+                        // No filters = delete all rows
+                        (
+                            batch.num_rows(),
+                            BooleanArray::from(vec![false; batch.num_rows()]),
+                        )
+                    }
+                };
+
+                total_deleted += delete_count as u64;
+
+                let filtered_batch = filter_record_batch(batch, &keep_mask)?;
+                if filtered_batch.num_rows() > 0 {
+                    new_batches.push(filtered_batch);
+                }
+            }
+
+            *partition = new_batches;
+        }
+
+        Ok(total_deleted)
+    }
+
+    /// Assign a new value to each row that the filters match, and return the
+    /// number of rows updated.
+    async fn apply_update(
+        &self,
+        physical_assignments: &HashMap<String, Arc<dyn PhysicalExpr>>,
+    ) -> Result<u64> {
+        let mut total_updated: u64 = 0;
+
+        for partition_data in &self.partitions {
+            let mut partition = partition_data.write().await;
+            let mut new_batches = Vec::with_capacity(partition.len());
+
+            for batch in partition.iter() {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+
+                // Evaluate filters - None means "match all rows"
+                let filter_mask = evaluate_filters_to_mask(&self.filters, batch)?;
+
+                let (update_count, update_mask) = match filter_mask {
+                    Some(mask) => {
+                        // Count rows where mask is true (will be updated)
+                        let count = mask.iter().filter(|v| v == &Some(true)).count();
+                        // Normalize mask: only true (not NULL) triggers update
+                        let normalized: BooleanArray =
+                            mask.iter().map(|v| Some(v == Some(true))).collect();
+                        (count, normalized)
+                    }
+                    None => {
+                        // No filters = update all rows
+                        (
+                            batch.num_rows(),
+                            BooleanArray::from(vec![true; batch.num_rows()]),
+                        )
+                    }
+                };
+
+                total_updated += update_count as u64;
+
+                if update_count == 0 {
+                    new_batches.push(batch.clone());
+                    continue;
+                }
+
+                let mut new_columns: Vec<ArrayRef> =
+                    Vec::with_capacity(batch.num_columns());
+
+                for field in self.table_schema.fields() {
+                    let column_name = field.name();
+                    let original_column =
+                        batch.column_by_name(column_name).ok_or_else(|| {
+                            datafusion_common::DataFusionError::Internal(format!(
+                                "Column '{column_name}' not found in batch"
+                            ))
+                        })?;
+
+                    let new_column = if let Some(physical_expr) =
+                        physical_assignments.get(column_name.as_str())
+                    {
+                        // Use evaluate_selection to only evaluate on matching rows.
+                        // This avoids errors (e.g., divide-by-zero) on rows that won't
+                        // be updated. The result is scattered back with nulls for
+                        // non-matching rows, which zip() will replace with originals.
+                        let new_values =
+                            physical_expr.evaluate_selection(batch, &update_mask)?;
+                        let new_array = new_values.into_array(batch.num_rows())?;
+
+                        // Convert to &dyn Array which implements Datum
+                        let new_arr: &dyn Array = new_array.as_ref();
+                        let orig_arr: &dyn Array = original_column.as_ref();
+                        zip(&update_mask, &new_arr, &orig_arr)?
+                    } else {
+                        Arc::clone(original_column)
+                    };
+
+                    new_columns.push(new_column);
+                }
+
+                let updated_batch = ArrowRecordBatch::try_new(
+                    Arc::clone(&self.table_schema),
+                    new_columns,
+                )?;
+                new_batches.push(updated_batch);
+            }
+
+            *partition = new_batches;
+        }
+
+        Ok(total_updated)
+    }
 }
 
 /// Applies a DELETE or an UPDATE to a [`MemTable`], and returns a single row
@@ -799,10 +804,8 @@ impl ExecutionPlan for MemDmlExec {
             *state.sort_order.lock() = vec![];
 
             let rows_affected = match &state.op {
-                MemDmlOp::Delete => apply_delete(&state).await?,
-                MemDmlOp::Update(assignments) => {
-                    apply_update(&state, assignments).await?
-                }
+                MemDmlOp::Delete => state.apply_delete().await?,
+                MemDmlOp::Update(assignments) => state.apply_update(assignments).await?,
             };
 
             let count_array = UInt64Array::from(vec![rows_affected]);
