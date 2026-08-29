@@ -3436,6 +3436,26 @@ mod proto_tests {
     }
 
     #[test]
+    fn try_to_proto_distinguishes_optional_case_exprs() {
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        for (expr, else_expr) in [(None, Some(lit(0_i32))), (Some(lit(true)), None)] {
+            let case = CaseExpr::try_new(expr, vec![(lit(true), lit(1_i32))], else_expr)
+                .unwrap();
+            let node = case.try_to_proto(&ctx).unwrap().unwrap();
+            let Some(protobuf::physical_expr_node::ExprType::Case(case_node)) =
+                node.expr_type
+            else {
+                panic!("expected a CaseExpr node");
+            };
+
+            assert_eq!(case_node.expr.is_some(), case.expr().is_some());
+            assert_eq!(case_node.else_expr.is_some(), case.else_expr().is_some());
+        }
+    }
+
+    #[test]
     fn try_to_proto_propagates_child_encode_error() {
         let case = proto_case_fixture();
         // Call 1 is the optional CASE expr, call 2 is the WHEN expr.
