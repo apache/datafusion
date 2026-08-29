@@ -145,46 +145,62 @@ fn roundtrip_analyze_metric_types() -> Result<()> {
         let node: PhysicalPlanNode =
             serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
         let roundtripped = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
-        let mut node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
-        {
-            let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
-                node.physical_plan_type.as_ref()
-            else {
-                unreachable!("expected AnalyzeExecNode")
-            };
-            assert!(analyze.has_metric_types);
-            assert_eq!(analyze.metric_types, expected);
-        }
-        if expected == [ProtoMetricType::Summary as i32] {
-            let mut invalid_schema_node = node.clone();
-            let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
-                invalid_schema_node.physical_plan_type.as_mut()
-            else {
-                unreachable!("expected AnalyzeExecNode")
-            };
-            analyze
-                .schema
-                .as_mut()
-                .unwrap()
-                .columns
-                .push(protobuf::Field::default());
-            let error = invalid_schema_node
-                .try_into_physical_plan(&ctx.task_ctx(), &codec)
-                .unwrap_err();
-            assert!(error.strip_backtrace().contains("arrow_type"));
-
-            let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
-                node.physical_plan_type.as_mut()
-            else {
-                unreachable!("expected AnalyzeExecNode")
-            };
-            analyze.metric_types = vec![i32::MAX];
-            let error = node
-                .try_into_physical_plan(&ctx.task_ctx(), &codec)
-                .unwrap_err();
-            assert!(error.strip_backtrace().contains("unknown MetricType"));
-        }
+        let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+            node.physical_plan_type.as_ref()
+        else {
+            unreachable!("expected AnalyzeExecNode")
+        };
+        assert!(analyze.has_metric_types);
+        assert_eq!(analyze.metric_types, expected);
     }
+    Ok(())
+}
+
+#[test]
+fn decode_malformed_analyze_exec_node() -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+    let analyze = Arc::new(
+        AnalyzeExec::builder(false, false, input, schema)
+            .with_metric_types(vec![MetricType::Summary])
+            .build(),
+    );
+    let mut node = PhysicalPlanNode::try_from_physical_plan(analyze, &codec)?;
+
+    let mut invalid_schema_node = node.clone();
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+        invalid_schema_node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected AnalyzeExecNode")
+    };
+    analyze
+        .schema
+        .as_mut()
+        .unwrap()
+        .columns
+        .push(protobuf::Field::default());
+    let error = invalid_schema_node
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .unwrap_err();
+    assert!(error.strip_backtrace().contains("arrow_type"));
+
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+        node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected AnalyzeExecNode")
+    };
+    analyze.metric_types = vec![i32::MAX];
+    let error = node
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .unwrap_err();
+    assert!(error.strip_backtrace().contains("unknown MetricType"));
+
     Ok(())
 }
 
