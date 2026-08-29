@@ -1337,6 +1337,17 @@ enum NLJState {
     /// has to guard against decrementing twice.
     ProbeEnd,
     EmitLeftUnmatched,
+    /// Drives the final chunk's `release_chunk` future to completion.
+    ///
+    /// Non-final chunks get released on the way back through
+    /// `BufferingLeft`, but after the last chunk the stream goes straight to
+    /// `Done` or `EmitGlobalRightUnmatched`, and neither polls
+    /// `chunk_release_in_flight`. Since the coordinator hangs off the exec
+    /// rather than off this stream, leaving that future unpolled keeps the
+    /// final chunk's batch, bitmap and reservation accounted for as long as
+    /// the plan is alive. This state exists to poll it exactly once, then
+    /// continue to whichever state would have followed.
+    ReleasingFinalChunk,
     /// Emit unmatched right rows using the global bitmap accumulated across
     /// all left chunks. Only used in memory-limited mode for join types that
     /// require tracking right-side matches in the final output (RIGHT, FULL,
@@ -1464,6 +1475,16 @@ impl FallbackCoordinator {
         {
             inner.current = None;
             inner.next_chunk_index = released_chunk_index + 1;
+            // Give the chunk's bytes back now rather than waiting for the next
+            // `load_one_chunk` to `resize(0)`: after the final chunk there is no
+            // next load, and the coordinator outlives the streams because it
+            // hangs off the exec, so anything still reserved here would stay
+            // accounted against the pool for the life of the plan.
+            if inner.left_exhausted
+                && let Some(reservation) = inner.reservation.as_mut()
+            {
+                reservation.resize(0);
+            }
         }
         // Always notify: waiters may be blocked because they couldn't
         // become leader while a previous chunk was current.
@@ -2137,6 +2158,16 @@ impl Stream for NestedLoopJoinStream {
                     }
                 }
 
+                // Release the final chunk before finishing the stream.
+                NLJState::ReleasingFinalChunk => {
+                    match self.handle_releasing_final_chunk(cx) {
+                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Break(poll) => {
+                            return self.metrics.join_metrics.baseline.record_poll(poll);
+                        }
+                    }
+                }
+
                 // Replay all right batches from spill and emit unmatched
                 // right rows using the global bitmap accumulated across all
                 // left chunks. Only entered in memory-limited mode for join
@@ -2682,7 +2713,18 @@ impl NestedLoopJoinStream {
                         // does not need to be reset here.
                     }
 
-                    if !self.left_exhausted && self.is_memory_limited() {
+                    if self.is_memory_limited()
+                        && self.left_exhausted
+                        && matches!(
+                            &self.spill_state,
+                            SpillState::Active(active)
+                                if active.chunk_release_in_flight.is_some()
+                        )
+                    {
+                        // Final chunk: hand off to `ReleasingFinalChunk`, which
+                        // drives the release future before moving on.
+                        self.state = NLJState::ReleasingFinalChunk;
+                    } else if !self.left_exhausted && self.is_memory_limited() {
                         // More left data to process — go back to
                         // BufferingLeft for the next chunk.
                         self.left_probe_idx = 0;
@@ -2706,6 +2748,39 @@ impl NestedLoopJoinStream {
             },
             Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
         }
+    }
+
+    /// Handle ReleasingFinalChunk state.
+    ///
+    /// Polls the final chunk's `release_chunk` future to completion, then
+    /// moves on to whichever state would have followed `EmitLeftUnmatched`.
+    /// Releasing the slot drops the coordinator's `Arc<JoinLeftData>` and lets
+    /// the coordinator reservation be reclaimed, which otherwise would not
+    /// happen until the whole plan is dropped.
+    fn handle_releasing_final_chunk(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        if let SpillState::Active(active) = &mut self.spill_state
+            && let Some(fut) = active.chunk_release_in_flight.as_mut()
+        {
+            match fut.poll_unpin(cx) {
+                Poll::Ready(()) => {
+                    active.chunk_release_in_flight = None;
+                }
+                Poll::Pending => return ControlFlow::Break(Poll::Pending),
+            }
+        }
+
+        self.state = if self.should_track_unmatched_right {
+            // Drop the exhausted right stream so that
+            // EmitGlobalRightUnmatched opens a fresh replay pass.
+            self.right_data = None;
+            NLJState::EmitGlobalRightUnmatched
+        } else {
+            NLJState::Done
+        };
+        ControlFlow::Continue(())
     }
 
     /// Handle EmitGlobalRightUnmatched state.
@@ -5513,6 +5588,79 @@ pub(crate) mod tests {
     /// until the current one is released. Collecting partitions
     /// sequentially would therefore deadlock; concurrent collection mirrors
     /// how partitions actually run under the runtime.
+    /// The final chunk must be released before the stream finishes.
+    ///
+    /// `release_chunk` is what drops the coordinator's `Arc<JoinLeftData>` and
+    /// lets the next load `resize(0)` the coordinator reservation. For every
+    /// non-final chunk that happens on the way back to `BufferingLeft`, but the
+    /// final chunk used to create the release future and then transition
+    /// straight to `Done` (LEFT) or `EmitGlobalRightUnmatched` (FULL), neither
+    /// of which polls it. Because the coordinator hangs off the *plan*, not the
+    /// stream, the final chunk's batch, bitmap and reservation stayed accounted
+    /// against the pool for as long as the plan was alive.
+    async fn assert_final_chunk_released(join_type: JoinType) -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(50, 1.0)
+            .build_arc()?;
+        let pool = Arc::clone(&runtime.memory_pool);
+        let cfg = TaskContext::default()
+            .session_config()
+            .clone()
+            .with_batch_size(16);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(cfg),
+        );
+
+        let partition_count = 4;
+        let right = Arc::new(RepartitionExec::try_new(
+            build_right_table_one_batch_per_row(),
+            Partitioning::RoundRobinBatch(partition_count),
+        )?) as Arc<dyn ExecutionPlan>;
+        // Held for the whole test, exactly as a cached or still-referenced
+        // physical plan would be after its query finished.
+        let nested_loop_join = Arc::new(NestedLoopJoinExec::try_new(
+            build_left_table(),
+            right,
+            Some(prepare_join_filter()),
+            &join_type,
+            None,
+        )?);
+
+        for i in 0..partition_count {
+            let stream = nested_loop_join.execute(i, Arc::clone(&task_ctx))?;
+            let _ = common::collect(stream).await?;
+        }
+        assert!(
+            nested_loop_join
+                .metrics()
+                .unwrap()
+                .spill_count()
+                .unwrap_or(0)
+                > 0,
+            "{join_type}: expected spilling under a tight memory limit"
+        );
+
+        assert_eq!(
+            pool.reserved(),
+            0,
+            "{join_type}: the coordinator still holds the final chunk's memory \
+             while the plan is alive"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_releases_final_chunk_left_join() -> Result<()> {
+        assert_final_chunk_released(JoinType::Left).await
+    }
+
+    #[tokio::test]
+    async fn test_nlj_memory_limited_releases_final_chunk_full_join() -> Result<()> {
+        assert_final_chunk_released(JoinType::Full).await
+    }
+
     async fn multi_partition_memory_limited_join_collect_concurrent(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -5764,6 +5912,39 @@ pub(crate) mod tests {
         .await
         .unwrap_err();
         assert_contains!(err.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
+    /// The opt-out is scoped to *left-emitting* joins. A RIGHT join over a
+    /// multi-partition right side is unaffected by the missing coordination —
+    /// each partition owns its right rows exclusively — so disabling the
+    /// coordinated fallback must still leave it spilling rather than failing.
+    /// This pins the scope of the guard so a future change cannot quietly turn
+    /// off the spill fallback for join types that never needed coordination.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_fallback_disabled_right_join_still_spills()
+    -> Result<()> {
+        for join_type in [JoinType::Right, JoinType::Inner] {
+            let task_ctx = task_ctx_with_memory_limit_no_coordinated_fallback(50, 16)?;
+            // Must drain the partitions concurrently: the coordinator seeds
+            // every chunk's probe counter with `right_partition_count`
+            // regardless of join type, so a multi-chunk left side cannot
+            // advance if the partitions are collected one after another.
+            let (_columns, _batches, metrics) =
+                multi_partition_memory_limited_join_collect_concurrent(
+                    build_left_table_multi_chunk(),
+                    build_right_table_one_batch_per_row(),
+                    &join_type,
+                    Some(prepare_join_filter()),
+                    task_ctx,
+                )
+                .await?;
+            assert!(
+                metrics.spill_count().unwrap_or(0) > 0,
+                "{join_type}: the opt-out must not disable the spill fallback for \
+                 a join type that does not need left-bitmap coordination"
+            );
+        }
         Ok(())
     }
 }
