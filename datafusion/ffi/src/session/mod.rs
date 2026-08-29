@@ -37,6 +37,7 @@ use std::sync::{Arc, OnceLock};
 
 use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
+use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigFileType, ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError, not_impl_err};
@@ -73,6 +74,7 @@ use tokio::runtime::Handle;
 use crate::arrow_wrappers::WrappedSchema;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::execution::FFI_TaskContext;
+use crate::execution_plan::FFI_ExecutionPlan;
 use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
@@ -83,7 +85,7 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udwf::FFI_WindowUDF;
 use crate::util::FFI_Result;
-use crate::{df_result, sresult_return};
+use crate::{df_result, sresult, sresult_return};
 
 pub mod config;
 
@@ -114,6 +116,14 @@ pub(crate) struct FFI_SessionRef {
         &Self,
         logical_plan_serialized: SVec<u8>,
     ) -> FFI_Result<SVec<u8>>,
+
+    /// Retained at its original position for ABI compatibility with consumers
+    /// compiled against DataFusion 55. Direct session planning is unsupported.
+    create_physical_plan:
+        unsafe extern "C" fn(
+            &Self,
+            logical_plan_serialized: SVec<u8>,
+        ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>>,
 
     create_physical_expr: unsafe extern "C" fn(
         &Self,
@@ -228,6 +238,18 @@ unsafe extern "C" fn optimize_fn_wrapper(
     ));
 
     FFI_Result::Ok(SVec::from(optimized_plan.as_ref()))
+}
+
+unsafe extern "C" fn create_physical_plan_fn_wrapper(
+    _session: &FFI_SessionRef,
+    _logical_plan_serialized: SVec<u8>,
+) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
+    async move {
+        sresult!(not_impl_err!(
+            "FFI_SessionRef::create_physical_plan is unsupported; export and invoke an FFI_QueryPlanner captured before installing a foreign planner"
+        ))
+    }
+    .into_ffi()
 }
 
 unsafe extern "C" fn create_physical_expr_fn_wrapper(
@@ -371,6 +393,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
             catalog_list: catalog_list_fn_wrapper,
             query_planner: query_planner_fn_wrapper,
             optimize: optimize_fn_wrapper,
+            create_physical_plan: create_physical_plan_fn_wrapper,
             create_physical_expr: create_physical_expr_fn_wrapper,
             scalar_functions: scalar_functions_fn_wrapper,
             aggregate_functions: aggregate_functions_fn_wrapper,
@@ -462,6 +485,7 @@ impl FFI_SessionRef {
             catalog_list: catalog_list_fn_wrapper,
             query_planner: query_planner_fn_wrapper,
             optimize: optimize_fn_wrapper,
+            create_physical_plan: create_physical_plan_fn_wrapper,
             create_physical_expr: create_physical_expr_fn_wrapper,
             scalar_functions: scalar_functions_fn_wrapper,
             aggregate_functions: aggregate_functions_fn_wrapper,
@@ -1000,6 +1024,21 @@ mod tests {
         assert!(
             error
                 .to_string()
+                .contains("export and invoke an FFI_QueryPlanner captured before")
+        );
+
+        // An already-compiled DataFusion 55 consumer calls this retained slot
+        // directly. It must receive the same safe failure without re-entering
+        // the installed planner.
+        let callback_error = unsafe {
+            (local_session.create_physical_plan)(&local_session, SVec::new())
+                .await
+                .unwrap_err()
+        };
+        assert_eq!(REENTERING_PLANNER_CALLS.load(Ordering::Relaxed), 0);
+        assert!(
+            callback_error
+                .as_str()
                 .contains("export and invoke an FFI_QueryPlanner captured before")
         );
     }
