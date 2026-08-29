@@ -1612,3 +1612,114 @@ async fn fuzz_pwmj_matches_nested_loop() {
         }
     }
 }
+
+/// A named, deterministic companion to [`fuzz_pwmj_matches_nested_loop`] for the two join
+/// types that read the `min_marked` watermark, with the expected output spelled out by hand.
+///
+/// The fuzz test covers these dimensions already, but only through seeds -- when it fails it
+/// hands back a seed and a pair of generated key vectors to reconstruct from. These cases pin
+/// the input instead: NULL keys on both sides, duplicate keys, a streamed side split across 3
+/// partitions racing to run the final pass, and `batch_size = 3` to force the mid-scan resume
+/// path. A regression in the watermark path therefore names itself.
+///
+/// Both branches of the encoding get a case. In the first, buffered `k` is `[1, 1, 2, NULL, 3]`
+/// against streamed `[2, NULL, 3, 2, 5]`: buffered row 3 is the only unmatched left row and
+/// streamed row 1 the only unmatched right row, both because a NULL key matches nothing.
+/// Sorted descending for `<`, the buffered side is `[NULL, 3, 2, 1, 1]`, so the matched suffix
+/// is `[1, 5)` and the unmatched prefix the single NULL row -- what `min_marked` has to encode.
+/// The second case has no match at all, so `min_marked` is never lowered and stays
+/// `usize::MAX`; the clamp against the buffered row count is what keeps the final pass from
+/// slicing past the end.
+#[tokio::test(flavor = "multi_thread")]
+async fn pwmj_watermark_nulls_duplicates_multi_partition() {
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(3)),
+    );
+    let left_ids: Vec<i32> = vec![0, 1, 2, 3, 4];
+    let left_keys = vec![Some(1), Some(1), Some(2), None, Some(3)];
+    let nparts = 3;
+
+    // The matched pairs are enumerated by hand from `left.k < right.k`; `Left` adds the
+    // unmatched buffered rows and `Full` those plus the unmatched streamed ones.
+    struct Case {
+        name: &'static str,
+        streamed_ids: Vec<i32>,
+        streamed_keys: Vec<Option<i32>>,
+        /// `(left id, right id)` pairs the predicate matches.
+        matched: Vec<(i32, i32)>,
+        unmatched_streamed: Vec<i32>,
+    }
+
+    let cases = vec![
+        Case {
+            name: "partial match",
+            streamed_ids: vec![0, 1, 2, 3, 4],
+            streamed_keys: vec![Some(2), None, Some(3), Some(2), Some(5)],
+            matched: vec![
+                // streamed 0 (k=2) and streamed 3 (k=2): buffered 0 and 1 (k=1)
+                (0, 0),
+                (1, 0),
+                (0, 3),
+                (1, 3),
+                // streamed 2 (k=3): buffered 0, 1 (k=1) and buffered 2 (k=2)
+                (0, 2),
+                (1, 2),
+                (2, 2),
+                // streamed 4 (k=5): every non-NULL buffered row
+                (0, 4),
+                (1, 4),
+                (2, 4),
+                (4, 4),
+            ],
+            // streamed 1 (k=NULL) matches nothing
+            unmatched_streamed: vec![1],
+        },
+        Case {
+            // Nothing is below the smallest buffered key, so no buffered row is ever marked.
+            name: "no match",
+            streamed_ids: vec![0, 1, 2],
+            streamed_keys: vec![Some(0), None, Some(1)],
+            matched: vec![],
+            unmatched_streamed: vec![0, 1, 2],
+        },
+    ];
+
+    for case in cases {
+        let matched_left: Vec<i32> = case.matched.iter().map(|&(l, _)| l).collect();
+        let mut pairs: Vec<(Option<i32>, Option<i32>)> = case
+            .matched
+            .iter()
+            .map(|&(l, r)| (Some(l), Some(r)))
+            .collect();
+        // The unmatched buffered rows are the ones no streamed row paired with.
+        pairs.extend(
+            left_ids
+                .iter()
+                .filter(|id| !matched_left.contains(id))
+                .map(|&id| (Some(id), None)),
+        );
+
+        for join_type in [JoinType::Left, JoinType::Full] {
+            let mut want = pairs.clone();
+            if join_type == JoinType::Full {
+                want.extend(case.unmatched_streamed.iter().map(|&id| (None, Some(id))));
+            }
+            want.sort_unstable();
+
+            let got = pwmj_collect_id_pairs(
+                pwmj_plan(
+                    pwmj_single_exec(&left_ids, &left_keys),
+                    pwmj_parts_exec(&case.streamed_ids, &case.streamed_keys, nparts),
+                    Operator::Lt,
+                    join_type,
+                ),
+                Arc::clone(&task_ctx),
+            )
+            .await;
+
+            let name = case.name;
+            assert_eq!(got, want, "mismatch case={name} join_type={join_type:?}");
+        }
+    }
+}
