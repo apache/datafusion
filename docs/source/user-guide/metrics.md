@@ -71,7 +71,7 @@ metrics below, and a timer per aggregate expression and execution phase.
 | time_calculating_group_ids | Time spent preparing group keys; see the note below for path-specific coverage.                                                       |
 | aggregate_arguments_time   | Total time spent evaluating the inputs to the aggregate functions. `agg_expr_{index}_arguments_time` breaks this down per expression. |
 | aggregation_time           | Time spent invoking accumulator `update` and `merge` operations.                                                                      |
-| emitting_time              | Time spent producing output batches, including group-value emission and accumulator `state` or `evaluate` operations.                 |
+| emitting_time              | Time spent materializing group values and accumulator `state` or `evaluate` results.                                                  |
 | topk_maintenance_time      | Time spent maintaining Grouped TopK's priority map, including batch setup, insertion, comparison, and NULL handling.                  |
 | skipped_aggregation_rows   | Number of input rows passed through without aggregating them, when partial aggregation is skipped.                                    |
 | reduction_factor           | Rows emitted per row consumed by a partial aggregation, displayed as `66.67% (2/3)`.                                                  |
