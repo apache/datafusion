@@ -25,13 +25,23 @@ concurrency:
 on:
   push:
     paths:
+      - ".gitattributes"
       - "docs/**"
+      - ".github/workflows/docs.yaml"
+      - ".github/workflows/docs_pr.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
     branches:
       - main
       - branch-*
   pull_request:
     paths:
+      - ".gitattributes"
       - "docs/**"
+      - ".github/workflows/docs.yaml"
+      - ".github/workflows/docs_pr.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
@@ -45,12 +55,12 @@ jobs:
     name: Test doc build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
       - name: Install Graphviz
@@ -59,7 +69,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y graphviz
       - name: Install cargo-depgraph
-        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
         with:
           tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings
@@ -67,3 +77,24 @@ jobs:
           set -x
           cd docs
           uv run --package datafusion-docs ./build.sh # fails on errors
+      - name: Fetch exact release tag
+        run: git fetch --depth=1 origin tag 55.0.0
+      - name: Test versioned documentation tooling
+        run: uv run --package datafusion-docs python -m unittest discover -s docs/tests
+      - name: Validate current site
+        run: >-
+          uv run --package datafusion-docs python docs/scripts/validate_site.py
+          --site-root docs/build/html
+      - name: Build exact release snapshot
+        run: |
+          uv run --package datafusion-docs python docs/scripts/snapshot_site.py \
+            55.0.0 55.0.0 /tmp/datafusion-release-site
+      - name: Validate release deployment
+        run: |
+          uv run --package datafusion-docs python docs/scripts/assemble_site.py \
+            --current-site docs/build/html \
+            --published-site /tmp/datafusion-release-site \
+            --output-site docs/build/validation-site
+          uv run --package datafusion-docs python docs/scripts/validate_site.py \
+            --site-root docs/build/validation-site \
+            --require-snapshots

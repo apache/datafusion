@@ -301,6 +301,29 @@ git tag 50.3.0
 git push apache 50.3.0
 ```
 
+#### Publish the versioned documentation
+
+For the initial `55.0.0` proof of concept, make the final exact tag available
+locally and build its complete documentation site into a temporary publication
+package:
+
+```shell
+uv run --package datafusion-docs python docs/scripts/snapshot_site.py 55.0.0 55.0.0 /tmp/datafusion-release-site
+```
+
+The command verifies the tag's peeled commit and creates the one immutable
+publication unit `versions/55.0.0/`. Manually copy that directory to the same
+location on the `asf-site` branch, then review, commit, and push the branch. The
+command never commits or pushes and refuses to replace an existing release.
+
+Do not simply publish the snapshot before merging the feature PR: the old docs
+deployment can erase it with `rsync --delete`. Keep the feature PR in draft until
+maintainers choose either a preliminary retention-only merge before publication,
+or a coordinated window that confirms no old docs deployment is running or
+queued, publishes the snapshot, merges the retention and picker change, and
+verifies `asf-site/versions/55.0.0/` after the new deployment. Automating future
+release publication and backfilling older releases remain follow-up work.
+
 ### 10. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
