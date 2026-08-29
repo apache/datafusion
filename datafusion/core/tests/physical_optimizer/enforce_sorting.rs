@@ -244,6 +244,40 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_propagate_in_right_mark_join() -> Result<()> {
+    let left_schema = create_test_schema2()?;
+    let right_schema = create_test_schema3()?;
+    let left_input = memory_exec(&left_schema);
+    let parquet_ordering = [sort_expr("a", &right_schema)].into();
+    let right_input =
+        parquet_exec_with_sort(right_schema.clone(), vec![parquet_ordering]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
+        Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
+    )];
+    let join = hash_join_exec(left_input, right_input, on, None, &JoinType::RightMark)?;
+    let physical_plan = sort_exec([sort_expr("a", &join.schema())].into(), join);
+
+    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+      HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(col_a@0, c@2)]
+        DataSourceExec: partitions=1, partition_sizes=[0]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+
+    Optimized Plan:
+    SortPreservingMergeExec: [a@0 ASC]
+      HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(col_a@0, c@2)]
+        RepartitionExec: partitioning=Hash([col_a@0], 10), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0]
+        RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_hash_join_interleaved_projection_preserves_parent_sort() -> Result<()> {
     let left_schema = create_test_schema()?;
     let right_schema = create_test_schema2()?;
