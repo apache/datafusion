@@ -133,9 +133,9 @@ impl RandomNativeData for IntervalMonthDayNanoType {
     }
 }
 
-// Restrict Duration(Seconds) to i64::MIN / 1000 to i64::MAX / 1000 to
-// avoid panics on pretty printing. See
-// https://github.com/apache/arrow-rs/issues/7533
+// Restrict Duration(Seconds) to values that pretty-print as distinct durations.
+// Out-of-range values print as `<invalid>`, which could make unequal batches
+// compare equal after pretty-printing.
 impl RandomNativeData for DurationSecondType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         rng.random::<i64>() / 1000
