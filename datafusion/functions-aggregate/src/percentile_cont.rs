@@ -34,6 +34,7 @@ use arrow::{
 use num_traits::AsPrimitive;
 
 use arrow::array::ArrowNativeTypeOp;
+use arrow::compute::DecimalCast;
 use arrow::datatypes::{
     ArrowNativeType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
     DecimalType,
@@ -952,32 +953,38 @@ where
 #[derive(Debug)]
 struct DecimalInterpolator;
 
-/// Precision multiplier for decimal linear interpolation calculations.
-fn deduce_interpolation_precision<T: DecimalType>() -> usize {
-    if T::BYTE_LENGTH == 4 {
-        // Avoid overflow in `scale_by_num` with 32-bit Decimal32
-        10_000
-    } else {
-        INTERPOLATION_PRECISION
-    }
-}
-
-/// Compute a scaled value for interpolation using a formula `trunc(x * num / precision)`
-/// The numerical method is separating `q * num + r * num / den`
-/// where `q = x / precision` and `r = x % precision`
-fn scale_by_num<T>(x: T::Native, num: T::Native, den: T::Native) -> Result<T::Native>
+/// Compute a scaled value for interpolation using a formula `trunc(x * num / den)`
+/// where den is a precisely chosen interpolation precision.
+/// The numerical method is separating `q * num + trunc(r * num / den)`
+/// where `q = x / den` and `r = x % den`
+fn scale_by_num<T>(x: T::Native, num: i64) -> Result<T::Native>
 where
     T: DecimalType,
+    T::Native: DecimalCast,
 {
-    debug_assert!(num >= T::Native::ZERO);
+    let den = INTERPOLATION_PRECISION as i64;
+
+    debug_assert!(num >= 0);
     debug_assert!(num <= den);
+    debug_assert!(den <= i32::MAX as i64);
 
-    let q = x.div_wrapping(den);
-    let r = x.mod_wrapping(den);
-    // `q * num` cannot exceed `x`; `r * num` cannot exceed `(den - 1)^2`
+    let num_native = T::Native::usize_as(num as usize);
+    let den_native = T::Native::usize_as(den as usize);
 
-    let a = q.mul_checked(num)?;
-    let b = r.mul_checked(num)?.div_wrapping(den);
+    // q and r fit `den` and thus i32 (smallest Decimal32's native type)
+    let q = x.div_wrapping(den_native);
+    let r = x.mod_wrapping(den_native);
+    let r_wide = ArrowNativeType::to_i64(r)
+        .ok_or_else(|| exec_datafusion_err!("Arithmetic overflow in percentile_cont"))?;
+
+    // `a = q * num` cannot exceed `x` and thus i32
+    let a = q.mul_checked(num_native)?;
+
+    // `r * num` cannot exceed `den^2`, and `r * num / den` cannot exceed `den`, fits i32
+    let b_wide = r_wide.mul_checked(num)?.div_wrapping(den);
+    let b = T::Native::from_decimal(b_wide)
+        .ok_or_else(|| exec_datafusion_err!("Arithmetic overflow in percentile_cont"))?;
+
     a.add_checked(b)
         .map_err(|e| exec_datafusion_err!("Arithmetic overflow in percentile_cont: {e}"))
 }
@@ -985,6 +992,7 @@ where
 impl<T> PercentileInterpolator<T> for DecimalInterpolator
 where
     T: DecimalType,
+    T::Native: DecimalCast,
 {
     fn interpolate(
         lower: T::Native,
@@ -994,18 +1002,15 @@ where
         debug_assert!((0.0..=1.0).contains(&fraction));
         debug_assert!(lower <= upper);
 
-        let interpolation_precision = deduce_interpolation_precision::<T>();
-
-        let num =
-            T::Native::usize_as((fraction * interpolation_precision as f64) as usize);
-        let den = T::Native::usize_as(interpolation_precision);
+        let num = (fraction * INTERPOLATION_PRECISION as f64) as i64;
+        let den = INTERPOLATION_PRECISION as i64;
 
         // Happy path: `upper - lower` does not overflow
         // (could be a case for Decimal128 with max precision)
         if let Ok(delta) = upper.sub_checked(lower) {
             // Calculate the interpolation weight with the formula, where den is the precision:
             // `lower + (upper - lower) * num / den`
-            let scaled: T::Native = scale_by_num::<T>(delta, num, den)?;
+            let scaled: T::Native = scale_by_num::<T>(delta, num)?;
             lower.add_checked(scaled).map_err(|e| {
                 exec_datafusion_err!("Arithmetic overflow in percentile_cont: {e}")
             })
@@ -1016,9 +1021,9 @@ where
             // The weights sum to 1, so the result is bounded by max(|lower|, |upper|)
             // and never overflows, at the cost of a second truncation (2 ULP not 1).
             let num_a = den.sub_wrapping(num);
-            let a: T::Native = scale_by_num::<T>(lower, num_a, den)?;
+            let a: T::Native = scale_by_num::<T>(lower, num_a)?;
 
-            let b: T::Native = scale_by_num::<T>(upper, num, den)?;
+            let b: T::Native = scale_by_num::<T>(upper, num)?;
 
             a.add_checked(b).map_err(|e| {
                 exec_datafusion_err!("Arithmetic overflow in percentile_cont: {e}")
@@ -1098,7 +1103,7 @@ fn calculate_percentile<T: ArrowPrimitiveType, I: PercentileInterpolator<T>>(
 mod tests {
     use super::*;
     use arrow::array::Float64Array;
-    use arrow::datatypes::{Decimal64Type, Float16Type, Float64Type};
+    use arrow::datatypes::{Decimal64Type, Decimal128Type, Float16Type, Float64Type};
     use half::f16;
 
     #[test]
@@ -1228,6 +1233,33 @@ mod tests {
         assert_eq!(
             result, 30000i64,
             "100th percentile should be maximum value 300.00"
+        );
+    }
+
+    #[test]
+    fn percentile_cont_decimal128_subtraction_overflow() {
+        // Case for interpolation overflow (upper - lower cannot fit i128),
+        // where `interpolate` takes the second branch
+        let boundary = 100_000_000_000_000_000_000_000_000_000_000_000_000i128;
+        let lower = -boundary;
+        let upper = boundary;
+        assert!(
+            upper.checked_sub(lower).is_none(),
+            "test premise: must overflow"
+        );
+
+        let mut values = vec![lower, upper];
+        let result = calculate_percentile::<Decimal128Type, DecimalInterpolator>(
+            &mut values,
+            0.25,
+        )
+        .expect("evaluate failed")
+        .expect("expected Some value");
+
+        assert_eq!(
+            result,
+            -boundary / 2,
+            "interpolation should split into two additive parts without overflowing"
         );
     }
 }
