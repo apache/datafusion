@@ -1961,9 +1961,23 @@ impl NestedLoopJoinStream {
         }
 
         if active.pending_batches.is_empty() {
-            // No data at all — go directly to Done
             self.left_exhausted = true;
-            self.state = NLJState::Done;
+            // Reached both when the left side was empty from the start and when
+            // the previous chunk consumed the last of it, so this load finds
+            // nothing left. In the latter case earlier chunks have already
+            // merged their per-batch bitmaps into `global_right_bitmaps`, and
+            // those unmatched probe-side rows are still waiting to be emitted.
+            // Going straight to `Done` would discard them, silently dropping
+            // rows. `EmitGlobalRightUnmatched` replays the spilled right side
+            // and emits them; with no bitmaps accumulated it reports nothing
+            // unmatched and finishes immediately, so a genuinely empty left
+            // side behaves as before.
+            self.state = if self.should_track_unmatched_right {
+                self.right_data = None;
+                NLJState::EmitGlobalRightUnmatched
+            } else {
+                NLJState::Done
+            };
             return ControlFlow::Continue(());
         }
 
