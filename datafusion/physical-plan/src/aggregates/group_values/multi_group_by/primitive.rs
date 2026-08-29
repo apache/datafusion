@@ -285,7 +285,11 @@ where
             .iter()
             .map(|index| self.group_values[index])
             .collect();
-        let nulls = self.nulls.build_preserving(selection)?;
+        let nulls = if NULLABLE {
+            self.nulls.build_preserving(selection)?
+        } else {
+            None
+        };
         Ok(Arc::new(
             PrimitiveArray::<T>::new(ScalarBuffer::from(values), nulls)
                 .with_data_type(self.data_type.clone()),

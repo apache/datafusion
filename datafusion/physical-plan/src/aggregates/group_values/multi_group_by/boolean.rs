@@ -186,7 +186,11 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         for index in selection.iter() {
             values.append(self.buffer.get_bit(index));
         }
-        let nulls = self.nulls.build_preserving(selection)?;
+        let nulls = if NULLABLE {
+            self.nulls.build_preserving(selection)?
+        } else {
+            None
+        };
         Ok(Arc::new(BooleanArray::new(values.finish(), nulls)))
     }
 

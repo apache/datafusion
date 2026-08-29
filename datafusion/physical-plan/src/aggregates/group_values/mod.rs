@@ -240,7 +240,9 @@ pub fn new_group_values(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, AsArray, Int32Array, StringArray, StringViewArray};
+    use arrow::array::{
+        ArrayRef, AsArray, BooleanArray, Int32Array, StringArray, StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_expr::{EmitTo, GroupSelection};
 
@@ -303,6 +305,34 @@ mod tests {
 
         let actual = group_values.emit(EmitTo::All).unwrap();
         assert_eq!(actual[0].as_primitive::<Int32Type>(), &expected);
+    }
+
+    #[test]
+    fn preserving_non_nullable_primitive_and_boolean_values() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("primitive", DataType::Int32, false),
+            Field::new("boolean", DataType::Boolean, false),
+        ]));
+        let mut group_values = new_group_values(schema, &GroupOrdering::None).unwrap();
+        let input = vec![
+            Arc::new(Int32Array::from(vec![10, 20, 10])) as ArrayRef,
+            Arc::new(BooleanArray::from(vec![true, false, true])) as ArrayRef,
+        ];
+        let mut groups = vec![];
+        group_values.intern(&input, &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 0]);
+
+        let selection =
+            GroupSelection::try_from_indices(&[1, 0, 1], group_values.len()).unwrap();
+        let actual = group_values.values_preserving(selection).unwrap();
+        assert_eq!(
+            actual[0].as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![20, 10, 20])
+        );
+        assert_eq!(
+            actual[1].as_boolean(),
+            &BooleanArray::from(vec![false, true, false])
+        );
     }
 
     #[test]
