@@ -58,8 +58,9 @@ use datafusion_common::{
     ColumnStatistics, HashSet, Result, ScalarValue, Statistics, exec_err, internal_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -460,6 +461,11 @@ struct PreparedParquetOpen {
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
+    /// True when the (original) predicate references a column that
+    /// `constant_columns_from_stats` proved constant for this file, so a
+    /// predicate that later simplifies to a constant did so on the
+    /// strength of file statistics — see `prune_row_groups`.
+    stats_constants_in_predicate: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
@@ -794,10 +800,17 @@ impl ParquetMorselizer {
         // Note that if there are statistics for partition columns there will be overlap,
         // but since we use a HashMap, we'll just overwrite the partition values with the
         // constant values from statistics (which should be the same).
-        literal_columns.extend(constant_columns_from_stats(
+        let stats_constants = constant_columns_from_stats(
             partitioned_file.statistics.as_deref(),
             &logical_file_schema,
-        ));
+        );
+        let stats_constants_in_predicate = !stats_constants.is_empty()
+            && self.predicate.as_ref().is_some_and(|p| {
+                collect_columns(p)
+                    .iter()
+                    .any(|c| stats_constants.contains_key(c.name()))
+            });
+        literal_columns.extend(stats_constants);
 
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
@@ -867,6 +880,7 @@ impl ParquetMorselizer {
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            stats_constants_in_predicate,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
@@ -1126,6 +1140,44 @@ impl FiltersPreparedParquetOpen {
         // If there is a range restricting what parts of the file to read
         if let Some(range) = prepared.file_range.as_ref() {
             row_groups.prune_by_range(rg_metadata, range);
+        }
+
+        // If constant-column substitution (`constant_columns_from_stats`)
+        // plus simplification collapsed the predicate to a constant that can
+        // never be true (`false`, or NULL — filters treat NULL as false),
+        // the file's own statistics have proven that no row can match: skip
+        // every remaining row group, credited to statistics pruning. Without
+        // this, the substitution is strictly counterproductive for such
+        // files: it *removes* the column references the pruning predicate
+        // would need (`build_pruning_predicates` returns `None` for a bare
+        // literal), so a file that was previously pruned via its
+        // `null_count` statistics is instead scanned in full.
+        //
+        // Deliberately narrowed by `stats_constants_in_predicate`: a
+        // predicate can also collapse via the missing-column adapter or
+        // partition-value folding, and those paths keep their existing
+        // behaviour (files pruned by partition values are `FilePruner`'s
+        // job). Only a collapse the file's own statistics contributed to
+        // is treated as proof here.
+        if prepared.enable_row_group_stats_pruning
+            && prepared.stats_constants_in_predicate
+            && prepared
+                .predicate
+                .as_ref()
+                .and_then(|p| p.downcast_ref::<Literal>())
+                .is_some_and(|l| {
+                    l.value().is_null() || l.value() == &ScalarValue::Boolean(Some(false))
+                })
+        {
+            prepared
+                .file_metrics
+                .row_groups_pruned_statistics
+                .add_pruned(row_groups.remaining_row_group_count());
+            row_groups.skip_all();
+            return Ok(RowGroupsPrunedParquetOpen {
+                prepared: self,
+                row_groups,
+            });
         }
 
         // If there is a predicate that can be evaluated against the metadata
@@ -3021,6 +3073,100 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_prune_all_null_column_equality_from_file_statistics() {
+        // Regression: a column whose file statistics say every value is
+        // NULL cannot satisfy `col = <literal>`, so the file's row groups
+        // must be pruned. Constant-column substitution folds the all-NULL
+        // column to a NULL literal, collapsing the predicate to a
+        // constant; the opener has to recognise that and skip the row
+        // groups, rather than lose the pruning because the substituted
+        // predicate no longer references any column.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(3)]),
+            ("b", Utf8, vec![None::<&str>, None, None])
+        )
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "file.parquet", batch.clone()).await;
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        // Statistics as a collecting `ListingTable` would supply them: the
+        // `b` column's null count equals the row count, i.e. every value is
+        // NULL. (`new_unknown` pre-fills one entry per field, so overwrite
+        // rather than append.)
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(3);
+        statistics.column_statistics[1].null_count = Precision::Exact(3);
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema).build();
+        // The row count alone cannot tell "pruned" from "scanned, then
+        // row-filtered" — both yield zero rows here — so assert on the
+        // pruning metric, which is the behaviour under test.
+        use datafusion_physical_plan::metrics::MetricValue;
+        let pruned_row_groups = |metrics: &ExecutionPlanMetricsSet| {
+            metrics
+                .clone_inner()
+                .iter()
+                .find_map(|m| match m.value() {
+                    MetricValue::PruningMetrics {
+                        name,
+                        pruning_metrics,
+                    } if name == "row_groups_pruned_statistics" => {
+                        Some(pruning_metrics.pruned())
+                    }
+                    _ => None,
+                })
+                .expect("row_groups_pruned_statistics metric is emitted")
+        };
+        let make_opener = |predicate, metrics: ExecutionPlanMetricsSet| {
+            ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema_for_opener.clone())
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .with_metrics(metrics)
+                .build()
+        };
+
+        // `b = 'x'` cannot match: every `b` is NULL, so the file's one row
+        // group is pruned from statistics rather than read and filtered.
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("b").eq(lit("x"));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate, metrics.clone());
+        let stream = open_file(&opener, file.clone()).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups(&metrics),
+            1,
+            "an all-NULL column cannot satisfy equality: the row group must be pruned"
+        );
+
+        // A predicate the statistics cannot disprove still reads the file,
+        // so the skip above is not simply "prune everything".
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(2));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate, metrics.clone());
+        let stream = open_file(&opener, file).await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+        assert_eq!(pruned_row_groups(&metrics), 0);
     }
 
     #[tokio::test]
