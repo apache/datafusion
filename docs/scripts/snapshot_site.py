@@ -90,6 +90,8 @@ def validate_package_root(package_root: Path) -> Path:
 
 def adapt_generated_output(site: Path, version: str, tag: str) -> None:
     """Pin published links without changing tagged sources or ``_sources``."""
+    shutil.rmtree(site / ".doctrees", ignore_errors=True)
+    (site / ".buildinfo").unlink(missing_ok=True)
     prefix = f"https://datafusion.apache.org/versions/{version}/".encode()
     tag_bytes = tag.encode()
     paths = [*site.rglob("*.html"), site / "llms.txt"]
@@ -243,6 +245,8 @@ def build_snapshot(version: str, tag: str, package_root: Path) -> Path:
                 "-W",
                 "-b",
                 "html",
+                "-d",
+                str(temporary_parent / "doctrees"),
                 "-c",
                 str(config_dir),
                 str(docs_dir / "source"),

@@ -132,6 +132,8 @@ class VersionedDocsTest(unittest.TestCase):
         )
         write(site / "index.html", original)
         write(site / "_sources" / "index.rst.txt", original)
+        write(site / ".buildinfo", "environment-specific metadata")
+        write(site / ".doctrees" / "environment.pickle", "temporary paths")
         write(
             site / "llms.txt",
             original + "https://github.com/apache/datafusion/tree/main\n",
@@ -153,6 +155,8 @@ class VersionedDocsTest(unittest.TestCase):
         self.assertIn("/versions/55.0.0/contributor-guide/", llms)
         self.assertIn("/tree/55.0.0", llms)
         self.assertNotIn("/tree/main", llms)
+        self.assertFalse((site / ".buildinfo").exists())
+        self.assertFalse((site / ".doctrees").exists())
 
     def test_publication_is_one_directory_and_refuses_overwrite(self) -> None:
         staged = self.root / "staged"
@@ -253,7 +257,7 @@ class VersionedDocsTest(unittest.TestCase):
             assemble_site.assemble(current, published, output_link)
         self.assertTrue((external / "secret.txt").is_file())
 
-    def test_assembly_restores_previous_output_on_final_rename_failure(self) -> None:
+    def test_assembly_refuses_to_replace_existing_output(self) -> None:
         current = self.root / "current"
         published = self.root / "published"
         output = self.root / "output"
@@ -261,18 +265,31 @@ class VersionedDocsTest(unittest.TestCase):
         write(current / "sitemap.xml", "<urlset/>")
         published.mkdir()
         write(output / "sentinel.txt", "previous")
-        real_rename = Path.rename
-
-        def fail_staged(source: Path, destination: Path) -> Path:
-            if source.name == "site" and destination == output:
-                raise OSError("simulated failure")
-            return real_rename(source, destination)
-
-        with mock.patch.object(Path, "rename", fail_staged):
-            with self.assertRaisesRegex(OSError, "simulated failure"):
-                assemble_site.assemble(current, published, output)
+        with self.assertRaisesRegex(RuntimeError, "output site already exists"):
+            assemble_site.assemble(current, published, output)
         self.assertEqual(
             (output / "sentinel.txt").read_text(encoding="utf-8"), "previous"
+        )
+
+    def test_assembly_refuses_output_created_while_staging(self) -> None:
+        current = self.root / "current"
+        published = self.root / "published"
+        output = self.root / "output"
+        write(current / "index.html")
+        write(current / "sitemap.xml", "<urlset/>")
+        published.mkdir()
+        real_copytree = shutil.copytree
+
+        def create_output(source: Path, destination: Path) -> Path:
+            copied = real_copytree(source, destination)
+            write(output / "sentinel.txt", "concurrent")
+            return copied
+
+        with mock.patch.object(assemble_site.shutil, "copytree", create_output):
+            with self.assertRaisesRegex(RuntimeError, "output site already exists"):
+                assemble_site.assemble(current, published, output)
+        self.assertEqual(
+            (output / "sentinel.txt").read_text(encoding="utf-8"), "concurrent"
         )
 
     def test_picker_equivalent_paths_and_fallback(self) -> None:

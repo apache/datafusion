@@ -57,6 +57,8 @@ def validate_paths(current_site: Path, published_site: Path, output_site: Path) 
             raise RuntimeError(
                 "output site and input sites must not contain one another"
             )
+    if output_site.exists():
+        raise RuntimeError(f"output site already exists: {output_site}")
 
 
 def archived_versions(published_site: Path) -> list[str]:
@@ -109,33 +111,16 @@ def assemble(current_site: Path, published_site: Path, output_site: Path) -> Non
         tempfile.mkdtemp(prefix=f".{output_site.name}-", dir=output_site.parent)
     )
     staged_site = temporary_root / "site"
-    previous_site = temporary_root / "previous-site"
-    recovery_failed = False
     try:
         shutil.copytree(current_site, staged_site)
         if versions:
             shutil.copytree(published_site / "versions", staged_site / "versions")
             write_sitemap_index(staged_site, versions)
-        if output_site.exists():
-            if not output_site.is_dir():
-                raise RuntimeError(f"output site is not a directory: {output_site}")
-            output_site.rename(previous_site)
-        try:
-            staged_site.rename(output_site)
-        except BaseException as error:
-            if previous_site.exists():
-                try:
-                    previous_site.rename(output_site)
-                except OSError as recovery_error:
-                    recovery_failed = True
-                    raise RuntimeError(
-                        f"could not restore {output_site}; previous output remains at "
-                        f"{previous_site}: {recovery_error}"
-                    ) from error
-            raise
+        if output_site.exists() or is_link(output_site):
+            raise RuntimeError(f"output site already exists: {output_site}")
+        staged_site.rename(output_site)
     finally:
-        if not recovery_failed:
-            shutil.rmtree(temporary_root, ignore_errors=True)
+        shutil.rmtree(temporary_root, ignore_errors=True)
 
 
 if __name__ == "__main__":
