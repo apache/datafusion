@@ -1352,3 +1352,20 @@ from (
 ) t(d);
 ----
 1.5 Decimal64(11, 6)
+
+# GROUP BY selects the groups accumulator, which must produce the same widened
+# Decimal64 output type for each group.
+query IRT
+select g, avg(d), arrow_typeof(avg(d))
+from (
+    values
+        (1, arrow_cast(1.00, 'Decimal32(7, 2)')),
+        (1, arrow_cast(2.00, 'Decimal32(7, 2)')),
+        (2, arrow_cast(3.00, 'Decimal32(7, 2)')),
+        (2, arrow_cast(4.00, 'Decimal32(7, 2)'))
+) t(g, d)
+group by g
+order by g;
+----
+1 1.5 Decimal64(11, 6)
+2 3.5 Decimal64(11, 6)
