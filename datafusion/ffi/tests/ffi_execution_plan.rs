@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn test_ffi_range_partitioning_cross_library() -> Result<(), DataFusionError> {
         let module = get_module()?;
-        let plan = (module.create_exec_with_range_partitioning)();
+        let plan = (module.create_exec_with_statistics)();
         let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
         let Partitioning::Range(range) = plan.properties().output_partitioning() else {
             panic!("expected range partitioning");

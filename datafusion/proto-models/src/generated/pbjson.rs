@@ -9532,7 +9532,7 @@ impl<'de> serde::Deserialize<'de> for HashRepartition {
                             if partition_count__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("partitionCount"));
                             }
-                            partition_count__ =
+                            partition_count__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -19459,7 +19459,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashRepartition {
                             if partition_count__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("partitionCount"));
                             }
-                            partition_count__ =
+                            partition_count__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -21310,7 +21310,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalRangePartitioning {
                             if partition_count__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("partitionCount"));
                             }
-                            partition_count__ =
+                            partition_count__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

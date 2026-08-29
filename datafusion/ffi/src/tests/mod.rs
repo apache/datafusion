@@ -123,8 +123,6 @@ pub struct ForeignLibraryModule {
 
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
-    pub create_exec_with_range_partitioning: extern "C" fn() -> FFI_ExecutionPlan,
-
     pub create_table_with_statistics:
         extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 
@@ -233,12 +231,6 @@ pub fn make_test_statistics() -> Statistics {
 
 pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     let schema = create_test_schema();
-    let plan = Arc::new(EmptyExec::new(schema).with_statistics(make_test_statistics()));
-    FFI_ExecutionPlan::new(plan, None)
-}
-
-pub(crate) extern "C" fn create_exec_with_range_partitioning() -> FFI_ExecutionPlan {
-    let schema = create_test_schema();
     let ordering =
         LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))])
             .expect("non-empty ordering");
@@ -250,7 +242,11 @@ pub(crate) extern "C" fn create_exec_with_range_partitioning() -> FFI_ExecutionP
         RangePartitioning::try_new_with_samples(ordering, samples, 3)
             .expect("valid sampled range partitioning"),
     );
-    let plan = Arc::new(EmptyExec::new(schema).with_partitioning(partitioning));
+    let plan = Arc::new(
+        EmptyExec::new(schema)
+            .with_statistics(make_test_statistics())
+            .with_partitioning(partitioning),
+    );
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -384,7 +380,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_exec_with_expressions,
         create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
-        create_exec_with_range_partitioning,
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
