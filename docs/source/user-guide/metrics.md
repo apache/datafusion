@@ -91,15 +91,20 @@ of `>= 1.0` disables the feature.
 `time_calculating_group_ids` covers both grouping-expression evaluation and
 resolving the resulting rows to group IDs, including interning and ordering
 setup. `aggregation_time` covers only accumulator `update` and `merge` calls.
-`state` and `evaluate` are included in `emitting_time`, including when partial
-aggregation materializes state under memory pressure. Partial aggregation that
-skips aggregation reports `convert_to_state` instead of `aggregation_time` for
-those rows.
+On accumulator-backed grouped aggregation paths, `state` and `evaluate` are
+included in `emitting_time`, including when partial aggregation materializes
+state under memory pressure. For an `AggregateExec` without a `GROUP BY`, the
+per-aggregate `state` and `evaluate` timers are recorded during
+`elapsed_compute`; it does not report grouped operator metrics such as
+`emitting_time`. Partial aggregation that skips aggregation reports
+`convert_to_state` instead of `aggregation_time` for those rows.
 
-Grouped TopK (`GROUP BY` with a `LIMIT`) has no accumulators. Its group-key
-expression evaluation is included in `time_calculating_group_ids`, and its
-priority-map work is reported by `topk_maintenance_time`; it does not report
-accumulator phases.
+When the specialized Grouped TopK path is selected for a limited grouped
+aggregate, it has no accumulators. Its group-key expression evaluation is
+included in `time_calculating_group_ids`, and its priority-map work is reported
+by `topk_maintenance_time`; it does not report accumulator phases. Planner
+selection is query-shape dependent: a limited `DISTINCT` query without
+ordering requirements uses the regular aggregate path instead.
 
 The per-aggregate timers are named `agg_expr_{index}_{phase}_time`, where
 `index` is the zero-based position of an aggregate expression in the operator
@@ -125,7 +130,7 @@ otherwise identical functions over different columns stay distinct when
 per-partition metrics are combined.
 
 Each per-aggregate timer additionally carries an `aggregate` label holding the
-rendered aggregate expression (for example, `SUM(a)`). Combining metrics
+rendered aggregate expression (for example, `sum(t.a)`). Combining metrics
 across partitions drops labels, so this label is only shown in the "Plan with
 Full Metrics" section of `EXPLAIN ANALYZE VERBOSE`, which reports metrics per
 partition.

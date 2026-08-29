@@ -696,6 +696,7 @@ mod tests {
         }
         assert!(aggregate_metrics(&metrics, "merge").is_empty());
         assert!(aggregate_metrics(&metrics, "state").is_empty());
+        assert!(metrics.sum_by_name("emitting_time").is_none());
 
         Ok(())
     }
