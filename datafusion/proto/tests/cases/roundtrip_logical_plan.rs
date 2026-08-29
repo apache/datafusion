@@ -3559,6 +3559,50 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn logical_values_reject_nonempty_rows_with_zero_columns() {
+    let node = protobuf::LogicalPlanNode {
+        logical_plan_type: Some(protobuf::logical_plan_node::LogicalPlanType::Values(
+            protobuf::ValuesNode {
+                n_cols: 0,
+                values_list: vec![protobuf::LogicalExprNode::default()],
+            },
+        )),
+    };
+    let ctx = SessionContext::new();
+    let err =
+        logical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("ValuesNode n_cols must be greater than 0")
+    );
+}
+
+#[test]
+fn roundtrip_logical_limit_without_fetch() -> Result<()> {
+    let plan = LogicalPlanBuilder::empty(false).limit(7, None)?.build()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let ctx = SessionContext::new();
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(plan, round_trip);
+    Ok(())
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn roundtrip_logical_limit_at_i64_max() -> Result<()> {
+    let plan = LogicalPlanBuilder::empty(false)
+        .limit(0, Some(i64::MAX as usize))?
+        .build()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let ctx = SessionContext::new();
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(plan, round_trip);
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Result<()> {
     let ctx = SessionContext::new();

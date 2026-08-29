@@ -567,14 +567,99 @@ impl ParquetAccessPlan {
 
     /// Prepare this plan and resolve to the final `PreparedAccessPlan`
     pub(crate) fn prepare(
-        self,
+        mut self,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<PreparedAccessPlan> {
         let row_group_indexes = self.row_group_indexes();
+        // `fully_matched` is indexed by absolute row-group index; take it out
+        // before `into_overall_row_selection` consumes `self`.
+        let fully_matched_by_index = std::mem::take(&mut self.fully_matched);
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
 
-        PreparedAccessPlan::new(row_group_indexes, row_selection)
+        let (row_group_indexes, row_selection) =
+            strip_empty_row_groups(row_group_indexes, row_selection, row_group_meta_data);
+
+        // Carry `fully_matched` flags in the same order as the *surviving*
+        // `row_group_indexes` so downstream code (per-RG `RowFilter` skip) can
+        // look them up positionally. Mapping after the strip keeps
+        // `strip_empty_row_groups` generic (no `fully_matched` parameter).
+        let fully_matched: Vec<bool> = row_group_indexes
+            .iter()
+            .map(|&idx| fully_matched_by_index[idx])
+            .collect();
+
+        PreparedAccessPlan::new(row_group_indexes, fully_matched, row_selection)
     }
+}
+
+/// Drop row groups whose post-pruning `RowSelection` selects zero rows, so the
+/// prepared plan stays well-formed: `with_row_groups(...)` never names a row
+/// group the decoder would immediately skip.
+///
+/// arrow-rs's push decoder silently advances past an all-skipped row group
+/// inside `try_next_reader` without handing back a reader, so keeping such a
+/// row group in the plan would leave its row-group list one entry longer than
+/// the readers the decoder produces. An empty selection is reachable today via
+/// [`ParquetAccessPlan::scan_selection`], which intersects an existing
+/// `Selection` with a new one and can leave a row group selecting nothing.
+/// A well-formed plan here is also a precondition for re-enabling runtime
+/// pruning under a live selection (#24358) and for #23696.
+///
+/// Walks the flat `RowSelection` once with [`OverallRowSelectionCursor`],
+/// rather than a per-row-group [`RowSelection::split_off`] (which reallocates
+/// the selector tail on every call, i.e. O(row groups × selectors)), keeping
+/// only the row groups that still select at least one row. `row_group_meta_data`
+/// is the **full file** metadata, indexed absolutely by row-group index, while
+/// `row_selection` covers only the scanned row groups — matching
+/// `into_overall_row_selection`, which emits nothing for a skipped row group.
+/// When `row_selection` is `None` no row group can be empty and the inputs are
+/// returned unchanged.
+fn strip_empty_row_groups(
+    row_group_indexes: Vec<usize>,
+    row_selection: Option<RowSelection>,
+    row_group_meta_data: &[RowGroupMetaData],
+) -> (Vec<usize>, Option<RowSelection>) {
+    let Some(selection) = row_selection else {
+        return (row_group_indexes, None);
+    };
+
+    let mut cursor = OverallRowSelectionCursor::new(selection);
+    let mut kept_indexes = Vec::with_capacity(row_group_indexes.len());
+    let mut kept_selectors: Vec<RowSelector> = Vec::new();
+
+    for &rg_idx in row_group_indexes.iter() {
+        let rg_row_count = row_group_meta_data[rg_idx].num_rows() as usize;
+        // Pull this row group's fragments off the shared cursor in a single
+        // pass (no `split_off` tail reallocation).
+        let start = kept_selectors.len();
+        let mut selected = 0usize;
+        let mut taken = 0usize;
+        while taken < rg_row_count {
+            let Some(fragment) = cursor.take(rg_row_count - taken) else {
+                break;
+            };
+            taken += fragment.row_count;
+            if !fragment.skip {
+                selected += fragment.row_count;
+            }
+            kept_selectors.push(fragment);
+        }
+        if selected > 0 {
+            kept_indexes.push(rg_idx);
+        } else {
+            // Empty row group: arrow-rs would silently skip it. Drop it and its
+            // fragments so the plan stays 1:1 with the readers.
+            kept_selectors.truncate(start);
+        }
+    }
+
+    let result_selection = if kept_selectors.is_empty() {
+        None
+    } else {
+        Some(RowSelection::from(kept_selectors))
+    };
+
+    (kept_indexes, result_selection)
 }
 
 /// Represents a prepared, fully resolved [`ParquetAccessPlan`]
@@ -587,6 +672,11 @@ impl ParquetAccessPlan {
 pub(crate) struct PreparedAccessPlan {
     /// Row group indexes to read
     pub(crate) row_group_indexes: Vec<usize>,
+    /// Per-RG `fully_matched` flag, positionally aligned with
+    /// [`Self::row_group_indexes`]. A `true` entry means stats already
+    /// proved every row of this RG passes the predicate, so the per-row
+    /// `RowFilter` can be skipped for it.
+    pub(crate) fully_matched: Vec<bool>,
     /// Optional row selection for filtering within row groups
     pub(crate) row_selection: Option<RowSelection>,
 }
@@ -595,10 +685,13 @@ impl PreparedAccessPlan {
     /// Create a new prepared access plan
     fn new(
         row_group_indexes: Vec<usize>,
+        fully_matched: Vec<bool>,
         row_selection: Option<RowSelection>,
     ) -> Result<Self> {
+        debug_assert_eq!(row_group_indexes.len(), fully_matched.len());
         Ok(Self {
             row_group_indexes,
+            fully_matched,
             row_selection,
         })
     }
@@ -752,13 +845,18 @@ impl PreparedAccessPlan {
             }
         };
 
-        // Apply the reordering
+        // Apply the reordering — `fully_matched` must be permuted alongside
+        // `row_group_indexes` so the two stay positionally aligned for the
+        // per-RG `RowFilter` skip path.
         let original_indexes = self.row_group_indexes.clone();
-        self.row_group_indexes = sorted_indices
+        let original_fully_matched = self.fully_matched.clone();
+        let order: Vec<usize> = sorted_indices
             .values()
             .iter()
-            .map(|&i| original_indexes[i as usize])
+            .map(|&i| i as usize)
             .collect();
+        self.row_group_indexes = order.iter().map(|&i| original_indexes[i]).collect();
+        self.fully_matched = order.iter().map(|&i| original_fully_matched[i]).collect();
 
         Ok(self)
     }
@@ -768,8 +866,9 @@ impl PreparedAccessPlan {
         // Get the row group indexes before reversing
         let row_groups_to_scan = self.row_group_indexes.clone();
 
-        // Reverse the row group indexes
+        // Reverse the row group indexes (and the parallel `fully_matched`)
         self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+        self.fully_matched = self.fully_matched.into_iter().rev().collect();
 
         // If we have a row selection, reverse it to match the new row group order
         if let Some(row_selection) = self.row_selection {
@@ -1160,7 +1259,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_sorts_row_groups_asc_by_min() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10, 100]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1179,7 +1278,8 @@ mod test {
     fn reorder_by_statistics_skips_when_row_selection_present() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
         let selection = RowSelection::from(vec![RowSelector::select(100)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], Some(selection)).unwrap();
+        let plan =
+            PreparedAccessPlan::new(vec![0, 1], vec![false; 2], Some(selection)).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1196,7 +1296,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_at_most_one_row_group() {
         let metadata = parquet_metadata_with_int_mins(&[50]);
-        let plan = PreparedAccessPlan::new(vec![0], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0], vec![false; 1], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1215,7 +1315,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_for_non_column_sort_expr() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(BinaryExpr::new(
@@ -1244,7 +1344,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_column_not_in_arrow_schema() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         // Arrow schema only has "a"; the sort references "b".
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
@@ -1347,7 +1447,7 @@ mod test {
     fn reorder_by_statistics_breaks_leading_ties_with_secondary_column() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 300), (1, 100), (1, 200)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, false)])
                 .unwrap();
@@ -1366,7 +1466,7 @@ mod test {
     fn reorder_by_statistics_honors_secondary_direction() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 100), (1, 300), (0, 500)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, true)])
                 .unwrap();
@@ -1386,7 +1486,7 @@ mod test {
     fn reorder_by_statistics_normalizes_desc_desc_for_reverse() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 300), (2, 100), (1, 100)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, true), sort_expr("b", 1, true)])
                 .unwrap();
@@ -1406,7 +1506,7 @@ mod test {
     fn reorder_by_statistics_keeps_leading_prefix_on_non_column_secondary() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(5, 300), (3, 100), (4, 200)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order = LexOrdering::new(vec![
             sort_expr("a", 0, false),
             PhysicalSortExpr {
@@ -1429,5 +1529,92 @@ mod test {
 
         // Ordered by min(a) ASC only: 3, 4, 5.
         assert_eq!(result.row_group_indexes, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_drops_only_empties() {
+        // 4 row groups of [10, 20, 30, 40] rows. RG 1 and RG 3 select nothing
+        // after pruning, so they must be dropped; RG 0 and RG 2 survive with
+        // their re-concatenated selections intact.
+        let selection = RowSelection::from(vec![
+            RowSelector::select(10), // RG 0: keep all 10
+            RowSelector::skip(30),   // RG 1 (20) fully skipped + RG 2's leading 10
+            RowSelector::select(20), // RG 2: keep 20
+            RowSelector::skip(40),   // RG 3: skip all 40
+        ]);
+
+        let (indexes, result) = strip_empty_row_groups(
+            vec![0, 1, 2, 3],
+            Some(selection),
+            &ROW_GROUP_METADATA,
+        );
+
+        // RG 1 and RG 3 are dropped; the surviving indexes stay in order.
+        assert_eq!(indexes, vec![0, 2]);
+        let result = result.expect("survivors keep a selection");
+        assert_eq!(result.row_count(), 30); // 10 from RG 0 + 20 from RG 2
+        assert_eq!(result.skipped_row_count(), 10); // RG 2's leading skip
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_non_contiguous_indexes() {
+        // Only RG 1 (20 rows) and RG 3 (40 rows) are scanned — RG 0 and RG 2
+        // are whole-group skips, so the selection covers 20 + 40 = 60 rows.
+        // This pins down that `strip` indexes `row_group_meta_data`
+        // *absolutely* (meta[1]=20, meta[3]=40): a relative reading would take
+        // 10 then 20 rows and misalign the split.
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(20),   // RG 1: skip all 20 -> dropped
+            RowSelector::select(40), // RG 3: keep all 40
+        ]);
+
+        let (indexes, result) =
+            strip_empty_row_groups(vec![1, 3], Some(selection), &ROW_GROUP_METADATA);
+
+        assert_eq!(indexes, vec![3]);
+        let result = result.expect("RG 3 survives");
+        assert_eq!(result.row_count(), 40);
+        assert_eq!(result.skipped_row_count(), 0);
+    }
+
+    #[test]
+    fn test_strip_empty_row_groups_none_selection_unchanged() {
+        // With no row selection no row group can be empty, so the inputs pass
+        // through unchanged.
+        let (indexes, result) =
+            strip_empty_row_groups(vec![0, 1, 2, 3], None, &ROW_GROUP_METADATA);
+        assert_eq!(indexes, vec![0, 1, 2, 3]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_prepare_strips_row_group_emptied_by_intersecting_selections() {
+        // The reachable producer: `scan_selection` intersects two disjoint
+        // selections within RG 1 to nothing, leaving an empty `Selection` in
+        // the plan (its own `rows_selected > 0` guard checks the incoming
+        // selection, not the intersection). `prepare` must strip that row
+        // group so the prepared plan never names a row group the decoder would
+        // silently skip.
+        let mut plan = ParquetAccessPlan::new_all(4); // RGs [10, 20, 30, 40]
+
+        // RG 1 (20 rows): select rows 0..10, then intersect with rows 10..20.
+        plan.scan_selection(
+            1,
+            RowSelection::from(vec![RowSelector::select(10), RowSelector::skip(10)]),
+        );
+        plan.scan_selection(
+            1,
+            RowSelection::from(vec![RowSelector::skip(10), RowSelector::select(10)]),
+        );
+        // RG 2 keeps a genuine partial selection so a flat selection is emitted.
+        plan.scan_selection(
+            2,
+            RowSelection::from(vec![RowSelector::skip(10), RowSelector::select(20)]),
+        );
+
+        let prepared = plan.prepare(&ROW_GROUP_METADATA).expect("prepare");
+
+        // RG 1 (emptied by the intersection) is stripped; RG 0/2/3 remain.
+        assert_eq!(prepared.row_group_indexes, vec![0, 2, 3]);
     }
 }

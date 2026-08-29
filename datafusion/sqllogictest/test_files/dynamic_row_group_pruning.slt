@@ -98,7 +98,49 @@ explain analyze select v from t order by v desc limit 3;
 ----
 Plan with Metrics
 01)SortExec: TopK(fetch=3), expr=[v@0 DESC], preserve_partitioning=[false], filter=[v@0 IS NULL OR v@0 > 12], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/data.parquet]]}, projection=[v], file_type=parquet, predicate=DynamicFilter [ v@0 IS NULL OR v@0 > 12 ], sort_order_for_reorder=[v@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=v_null_count@0 > 0 OR v_null_count@0 != row_count@2 AND v_max@1 > 12, required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=5 total → 5 matched, row_groups_pruned_bloom_filter=5 total → 5 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, row_groups_pruned_dynamic_filter=4, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/data.parquet]]}, projection=[v], file_type=parquet, predicate=DynamicFilter [ v@0 IS NULL OR v@0 > 12 ], sort_order_for_reorder=[v@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=v_null_count@0 > 0 OR v_null_count@0 != row_count@2 AND v_max@1 > 12, required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=5 total → 5 matched, row_groups_pruned_bloom_filter=5 total → 5 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, row_groups_pruned_dynamic_filter=4, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+
+# `EXPLAIN ANALYZE` with a *static* predicate must surface the
+# `row_filter_skipped_fully_matched` metric with a non-zero value — this
+# is the only way to see the fully-matched RowFilter-skip optimization
+# fire from SQL (otherwise it is only exercised by the Rust integration
+# test `fully_matched_rgs_skip_row_filter`).
+#
+# With `pushdown_filters=true` the predicate `v >= 4` is pushed into the
+# parquet decoder as a per-row `RowFilter`. Against the five row groups:
+#   RG 0 (0,1,2)   → max=2 < 4, dropped by row-group statistics
+#   RG 1 (3,4,5)   → straddles the threshold, keeps the row filter
+#   RG 2 (6,7,8)   → every row matches by statistics → fully matched
+#   RG 3 (9,10,11) → fully matched
+#   RG 4 (12,13,14)→ fully matched
+# Entering the RG 1 → RG 2 boundary the decoder rebuilds with an empty
+# row filter and leaves it off across the consecutive fully-matched run
+# RGs 2..=4. That single toggle is one *suppression event*, so
+# `row_filter_skipped_fully_matched=1` — the metric counts toggles, not
+# row groups (see `metrics.rs`), which is why a run of three
+# fully-matched RGs still reads `=1`. Time- and size-keyed fields are
+# masked with `<slt:ignore>`.
+query I
+SELECT v FROM t WHERE v >= 4 ORDER BY v;
+----
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+
+query TT
+explain analyze select v from t where v >= 4 order by v;
+----
+Plan with Metrics
+01)SortExec: expr=[v@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=11, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/data.parquet]]}, projection=[v], file_type=parquet, predicate=v@0 >= 4, sort_order_for_reorder=[v@0 ASC NULLS LAST], pruning_predicate=v_null_count@1 != row_count@2 AND v_max@0 >= 4, required_guarantees=[], metrics=[output_rows=11, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=5 total → 4 matched -> 3 fully matched, row_groups_pruned_bloom_filter=4 total → 4 matched, page_index_pages_pruned=1 total → 1 matched, page_index_pages_skipped_by_fully_matched=3, limit_pruned_row_groups=0 total → 0 matched, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, row_filter_skipped_fully_matched=1, row_groups_pruned_dynamic_filter=0, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
 
 statement ok
 drop table t;
@@ -194,3 +236,96 @@ RESET datafusion.optimizer.enable_dynamic_filter_pushdown;
 
 statement ok
 RESET datafusion.optimizer.enable_topk_dynamic_filter_pushdown;
+
+# Regression test for a scan where two pruning mechanisms are live at once:
+# page-index pruning leaves an intra-row-group `RowSelection`, and a TopK
+# dynamic filter prunes row groups at runtime. The property under test is that
+# a `WHERE a >= 50 ORDER BY b ASC LIMIT 5` query returns the correct top-5 by
+# `b` while the dynamic predicate prunes a row group during the application of
+# multiple predicates. Layout (RG size 100):
+#   RG 0: b=1000..1099, a=100..199  (a>=50 keeps all)
+#   RG 1: b=2000..2099, a=0..99     (a>=50 keeps rows 50..99 — page-index prunes
+#                                     the first 5 pages, leaving `skip 50, select 50`)
+#   RG 2: b=3000..3099, a=100..199  (keeps all)
+#   RG 3: b=0..99,      a=100..199  (keeps all)
+# The correct top-5 by `b` (0..4) lives entirely in RG 3.
+# `data_page_row_count_limit`/`write_batch_size` force multiple pages per RG so
+# page-index pruning can produce the intra-RG selection.
+# Tracking issue for the behavior change (keeping both mechanisms):
+# https://github.com/apache/arrow-rs/issues/10624 /
+# https://github.com/apache/datafusion/issues/24358
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+CREATE TABLE rgsel_src AS
+SELECT
+  CAST(CASE WHEN i / 100 = 1 THEN i % 100 ELSE 100 + (i % 100) END AS BIGINT) AS a,
+  CAST(CASE
+    WHEN i < 100 THEN 1000 + i
+    WHEN i < 200 THEN 2000 + (i - 100)
+    WHEN i < 300 THEN 3000 + (i - 200)
+    ELSE (i - 300)
+  END AS BIGINT) AS b
+FROM generate_series(0, 399) AS t(i);
+
+statement ok
+COPY (SELECT * FROM rgsel_src)
+TO 'test_files/scratch/dynamic_row_group_pruning/rgsel.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '100',
+  'format.data_page_row_count_limit' '10',
+  'format.write_batch_size' '10'
+);
+
+statement ok
+drop table rgsel_src;
+
+statement ok
+CREATE EXTERNAL TABLE rgsel (a BIGINT NOT NULL, b BIGINT NOT NULL)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_row_group_pruning/rgsel.parquet';
+
+# The correct top-5 by `b` among rows with `a >= 50` is b = 0..4 (they live in
+# RG 3, all of whose rows satisfy `a >= 50`).
+query I
+SELECT b FROM rgsel WHERE a >= 50 ORDER BY b ASC LIMIT 5;
+----
+0
+1
+2
+3
+4
+
+# The same query without filter pushdown never engages the runtime pruner, so
+# its answer is the ground truth the pushdown path above must match.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+query I
+SELECT b FROM rgsel WHERE a >= 50 ORDER BY b ASC LIMIT 5;
+----
+0
+1
+2
+3
+4
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+drop table rgsel;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# restore it explicitly rather than RESET (which would revert to the system
+# default = num_cpus and leak modified config out of this file).
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;

@@ -31,14 +31,15 @@ use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
+use std::sync::atomic::Ordering as AtomicOrdering;
 use std::{cmp::Ordering, task::ready};
 use std::{sync::Arc, task::Poll};
 
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
+use crate::joins::utils::JoinKeyComparator;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
-use crate::joins::utils::{JoinKeyComparator, get_final_indices_from_shared_bitmap};
 use crate::stream::EmptyRecordBatchStream;
 
 pub(super) enum PiecewiseMergeJoinStreamState {
@@ -277,6 +278,18 @@ impl ClassicPWMJStream {
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
+        // A finished scan can leave several completed batches queued; emit
+        // them one per poll and transition only once the queue is empty, so
+        // no output is lost.
+        if !self.batch_process_state.continue_process {
+            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
+                return Ok(StatefulStreamResult::Ready(Some(batch)));
+            }
+
+            self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+            return Ok(StatefulStreamResult::Continue);
+        }
+
         // Produce more work
         let batch = resolve_classic_join(
             buffered_side,
@@ -289,25 +302,8 @@ impl ClassicPWMJStream {
         )?;
 
         if !self.batch_process_state.continue_process {
-            // We finished scanning this stream batch.
-            self.batch_process_state
-                .output_batches
-                .finish_buffered_batch()?;
-            if let Some(b) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-                return Ok(StatefulStreamResult::Ready(Some(b)));
-            }
-
-            // Nothing pending; hand back whatever `resolve` returned (often empty) and move on.
-            if self.batch_process_state.output_batches.is_empty() {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-
-                return Ok(StatefulStreamResult::Ready(Some(batch)));
-            }
+            // Scan finished; re-enter through the drain guard above.
+            return Ok(StatefulStreamResult::Continue);
         }
 
         Ok(StatefulStreamResult::Ready(Some(batch)))
@@ -324,38 +320,28 @@ impl ClassicPWMJStream {
         }
 
         if !self.batch_process_state.continue_process {
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
+            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
 
-            self.batch_process_state
-                .output_batches
-                .finish_buffered_batch()?;
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
-                self.state = PiecewiseMergeJoinStreamState::Completed;
-                return Ok(StatefulStreamResult::Ready(Some(batch)));
-            }
+            // Fully drained; finish instead of re-running the pass.
+            self.state = PiecewiseMergeJoinStreamState::Completed;
+            return Ok(StatefulStreamResult::Continue);
         }
 
-        let buffered_data =
-            Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
+        let buffered_data = Arc::clone(&self.buffered_side.try_as_ready()?.buffered_data);
+        let buffered_batch = buffered_data.batch();
 
-        let (buffered_indices, _streamed_indices) = get_final_indices_from_shared_bitmap(
-            &buffered_data.visited_indices_bitmap,
-            self.join_type,
-            true,
-        );
-
-        let new_buffered_batch =
-            take_record_batch(buffered_data.batch(), &buffered_indices)?;
+        // Every match marks the suffix `[k, buffered_len)`, so the buffered rows that were
+        // never matched are exactly the complementary prefix `[0, min_marked)` -- which
+        // includes the null-keyed rows, since nulls sort first and the scan starts past
+        // them. That makes the final pass a zero-copy slice instead of building an index
+        // array and running `take` over it.
+        let min_marked = buffered_data
+            .min_marked
+            .load(AtomicOrdering::SeqCst)
+            .min(buffered_batch.num_rows());
+        let new_buffered_batch = buffered_batch.slice(0, min_marked);
         let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
         let streamed_columns: Vec<ArrayRef> = self
@@ -372,29 +358,8 @@ impl ClassicPWMJStream {
         self.batch_process_state.output_batches.push_batch(batch)?;
 
         self.batch_process_state.continue_process = false;
-        if let Some(batch) = self
-            .batch_process_state
-            .output_batches
-            .next_completed_batch()
-        {
-            return Ok(StatefulStreamResult::Ready(Some(batch)));
-        }
-
-        self.batch_process_state
-            .output_batches
-            .finish_buffered_batch()?;
-        if let Some(batch) = self
-            .batch_process_state
-            .output_batches
-            .next_completed_batch()
-        {
-            self.state = PiecewiseMergeJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Ready(Some(batch)));
-        }
-
-        self.state = PiecewiseMergeJoinStreamState::Completed;
-        self.batch_process_state.reset();
-        Ok(StatefulStreamResult::Ready(None))
+        // Re-enter through the drain guard above.
+        Ok(StatefulStreamResult::Continue)
     }
 }
 
@@ -415,6 +380,10 @@ struct BatchProcessState {
     continue_process: bool,
     // Skip nulls
     processed_null_count: bool,
+    // Smallest buffered index marked while scanning the current stream batch, or
+    // `usize::MAX` if nothing has been marked yet. Because `buffer_idx` only moves forward
+    // within a batch, this lets all but the batch's first match skip the shared atomic.
+    batch_min_marked: usize,
 }
 
 impl BatchProcessState {
@@ -427,6 +396,7 @@ impl BatchProcessState {
             found: false,
             continue_process: true,
             processed_null_count: false,
+            batch_min_marked: usize::MAX,
         }
     }
 
@@ -437,6 +407,14 @@ impl BatchProcessState {
         self.found = false;
         self.continue_process = true;
         self.processed_null_count = false;
+        self.batch_min_marked = usize::MAX;
+    }
+
+    // `None` guarantees the coalescer holds no pending rows, so the caller
+    // may safely transition state without losing output.
+    fn next_drained_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.output_batches.finish_buffered_batch()?;
+        Ok(self.output_batches.next_completed_batch())
     }
 }
 
@@ -506,13 +484,14 @@ fn resolve_classic_join(
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
 
-                        let batch = build_matched_indices_and_set_buffered_bitmap(
+                        let batch = build_matched_indices_and_mark_buffered(
                             (buffer_idx, count),
                             (row_idx, count),
                             buffered_side,
                             stream_batch,
                             join_type,
                             join_schema,
+                            &mut batch_process_state.batch_min_marked,
                         )?;
 
                         batch_process_state.output_batches.push_batch(batch)?;
@@ -534,13 +513,14 @@ fn resolve_classic_join(
                     if matches!(compare, Ordering::Equal | Ordering::Less) {
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
-                        let batch = build_matched_indices_and_set_buffered_bitmap(
+                        let batch = build_matched_indices_and_mark_buffered(
                             (buffer_idx, count),
                             (row_idx, count),
                             buffered_side,
                             stream_batch,
                             join_type,
                             join_schema,
+                            &mut batch_process_state.batch_min_marked,
                         )?;
 
                         // Flush batch and update pointers if we have a completed batch
@@ -601,20 +581,31 @@ fn resolve_classic_join(
 //
 // The two ranges are: buffered_range: (start index, count) and streamed_range: (start index, count) due
 // to batch.slice(start, count).
-fn build_matched_indices_and_set_buffered_bitmap(
+fn build_matched_indices_and_mark_buffered(
     buffered_range: (usize, usize),
     streamed_range: (usize, usize),
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
     join_type: JoinType,
     join_schema: &SchemaRef,
+    batch_min_marked: &mut usize,
 ) -> Result<RecordBatch> {
-    // Mark the buffered indices as visited
-    if need_produce_result_in_final(join_type) {
-        let mut bitmap = buffered_side.buffered_data.visited_indices_bitmap.lock();
-        for i in buffered_range.0..buffered_range.0 + buffered_range.1 {
-            bitmap.set_bit(i, true);
-        }
+    // Mark the matched buffered rows. `buffered_range` is always the suffix
+    // `[start, buffered_len)` -- a match emits every buffered row from the first match on --
+    // so the union of everything marked is `[min over matches, buffered_len)` and lowering a
+    // single watermark records it exactly. That replaces a mutex plus one `set_bit` per
+    // matched row, which was `O(buffered_len)` work for *every* matched streamed row.
+    //
+    // `buffer_idx` is monotone non-decreasing across a stream batch, so only the batch's
+    // first match can lower the watermark; `batch_min_marked` keeps the atomic off the hot
+    // path for all the others. It survives the early returns that hand back a completed
+    // output batch mid-scan, and `reset()` clears it for the next stream batch.
+    if need_produce_result_in_final(join_type) && buffered_range.0 < *batch_min_marked {
+        *batch_min_marked = buffered_range.0;
+        buffered_side
+            .buffered_data
+            .min_marked
+            .fetch_min(buffered_range.0, AtomicOrdering::SeqCst);
     }
 
     let new_buffered_batch = buffered_side
@@ -674,7 +665,9 @@ mod tests {
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
+    use futures::TryStreamExt;
     use insta::assert_snapshot;
     use std::sync::Arc;
 
@@ -964,12 +957,8 @@ mod tests {
         );
         let (_, batches) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
-        assert_snapshot!(batches_to_string(&batches), @r"
-        +----+----+----+----+----+----+
-        | a1 | b1 | c1 | a2 | b1 | c2 |
-        +----+----+----+----+----+----+
-        +----+----+----+----+----+----+
-        ");
+        // An empty join result produces no batches at all, not an empty batch.
+        assert!(batches.is_empty());
         Ok(())
     }
 
@@ -1298,8 +1287,16 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
-            join_collect(left, right, on, Operator::LtEq, JoinType::Left).await?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1)),
+        );
+        // Bound collection so the old duplicate loop becomes a snapshot mismatch.
+        let batches = join(left, right, on, Operator::LtEq, JoinType::Left)?
+            .execute(0, task_ctx)?
+            .take(6)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
@@ -1344,8 +1341,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
-            join_collect(left, right, on, Operator::GtEq, JoinType::Right).await?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1)),
+        );
+        let join = join(left, right, on, Operator::GtEq, JoinType::Right)?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
@@ -1408,12 +1409,8 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r"
-        +----+----+----+----+----+----+
-        | a1 | b1 | c1 | a2 | b1 | c2 |
-        +----+----+----+----+----+----+
-        +----+----+----+----+----+----+
-        ");
+        // An empty join result produces no batches at all, not an empty batch.
+        assert!(batches.is_empty());
         Ok(())
     }
 

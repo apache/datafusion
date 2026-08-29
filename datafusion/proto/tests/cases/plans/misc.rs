@@ -343,12 +343,9 @@ fn parse_hash_partitioning_delegates_to_shared_decoder() -> Result<()> {
     }
 
     #[cfg(not(target_pointer_width = "64"))]
-    assert!(
-        decoded
-            .unwrap_err()
-            .to_string()
-            .contains("Partition count 18446744073709551615 exceeds usize::MAX")
-    );
+    assert!(decoded.unwrap_err().to_string().contains(
+        "Partitioning: partition_count wire value 18446744073709551615 is out of range for usize"
+    ));
 
     Ok(())
 }

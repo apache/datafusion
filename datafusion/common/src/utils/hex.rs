@@ -161,6 +161,8 @@ pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Res
 
 /// Returns the hex encoding of `bytes` as an owned `String`.
 ///
+/// Prefer [`encode_bytes_into`] when you already have a reusable output buffer.
+///
 /// # Example
 ///
 /// ```
