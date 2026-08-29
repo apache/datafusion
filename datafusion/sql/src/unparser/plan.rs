@@ -1441,6 +1441,9 @@ impl Unparser<'_> {
                             select.projection(projection);
                         }
                     }
+                    JoinType::LeftSingle | JoinType::RightSingle => {
+                        return not_impl_err!("Unparsing of Single join type");
+                    }
                     JoinType::Inner
                     | JoinType::Left
                     | JoinType::Right
@@ -2412,6 +2415,9 @@ impl Unparser<'_> {
             JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
             JoinType::LeftMark | JoinType::RightMark => {
                 unimplemented!("Unparsing of Mark join type")
+            }
+            JoinType::LeftSingle | JoinType::RightSingle => {
+                return not_impl_err!("Unparsing of Single join type");
             }
         })
     }

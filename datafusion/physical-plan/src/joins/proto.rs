@@ -45,6 +45,8 @@ pub(crate) fn join_type_to_proto(join_type: JoinType) -> protobuf::JoinType {
         JoinType::RightAnti => protobuf::JoinType::Rightanti,
         JoinType::LeftMark => protobuf::JoinType::Leftmark,
         JoinType::RightMark => protobuf::JoinType::Rightmark,
+        JoinType::LeftSingle => protobuf::JoinType::Leftsingle,
+        JoinType::RightSingle => protobuf::JoinType::Rightsingle,
     }
 }
 
@@ -62,6 +64,8 @@ pub(crate) fn join_type_from_proto(value: i32, plan_name: &str) -> Result<JoinTy
         protobuf::JoinType::Rightanti => JoinType::RightAnti,
         protobuf::JoinType::Leftmark => JoinType::LeftMark,
         protobuf::JoinType::Rightmark => JoinType::RightMark,
+        protobuf::JoinType::Leftsingle => JoinType::LeftSingle,
+        protobuf::JoinType::Rightsingle => JoinType::RightSingle,
     })
 }
 

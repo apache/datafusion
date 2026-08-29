@@ -172,6 +172,8 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::RightAnti => protobuf::JoinType::Rightanti,
             JoinType::LeftMark => protobuf::JoinType::Leftmark,
             JoinType::RightMark => protobuf::JoinType::Rightmark,
+            JoinType::LeftSingle => protobuf::JoinType::Leftsingle,
+            JoinType::RightSingle => protobuf::JoinType::Rightsingle,
         }
     }
 }
@@ -266,6 +268,8 @@ mod tests {
             JoinType::RightAnti,
             JoinType::LeftMark,
             JoinType::RightMark,
+            JoinType::LeftSingle,
+            JoinType::RightSingle,
         ] {
             assert_eq!(
                 JoinType::from(protobuf::JoinType::from(join_type)),

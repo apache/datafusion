@@ -34,7 +34,10 @@ use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, pla
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
+use datafusion_expr::{
+    Expr, LogicalPlan, LogicalPlanBuilder, correlated_scalar_subquery_yields_single_row,
+    lit, not, when,
+};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
 /// additional projection on top of the filter to preserve the original schema.
@@ -386,8 +389,22 @@ fn build_join(
     // columns.
     let join_filter = join_filter_opt.or_else(|| Some(lit(true)));
 
+    // A subquery whose shape already guarantees at most one row per set of
+    // outer values joins with a plain `LEFT JOIN`; the rest need a single
+    // join, which raises an error at runtime when a second row matches. Only
+    // correlated subqueries can be ambiguous here -- an uncorrelated one is
+    // checked by `ScalarSubqueryExec` or, when this rule rewrites it, joined
+    // on `Boolean(true)` against a plan that already returns a single row.
+    let join_type = if subquery.outer_ref_columns.is_empty()
+        || correlated_scalar_subquery_yields_single_row(subquery_plan)?
+    {
+        JoinType::Left
+    } else {
+        JoinType::LeftSingle
+    };
+
     let new_plan = LogicalPlanBuilder::from(outer_input.clone())
-        .join_on(aliased_subquery, JoinType::Left, join_filter)?
+        .join_on(aliased_subquery, join_type, join_filter)?
         .build()?;
 
     // Add count-bug compensation for each of the subquery's projected

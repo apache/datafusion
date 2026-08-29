@@ -43,7 +43,8 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        need_produce_result_in_final,
+        check_single_join_probe_indices, need_produce_result_in_final,
+        single_join_too_many_rows_err,
     },
 };
 
@@ -888,12 +889,30 @@ impl HashJoinStream {
             (left_indices, right_indices)
         };
 
+        // A probe-driven single join must not match a probe row twice.
+        if self.join_type == JoinType::RightSingle {
+            check_single_join_probe_indices(&right_indices, state.joined_probe_idx)?;
+        }
+
         // mark joined left-side indices as visited, if required by join type
         if need_produce_result_in_final(self.join_type) {
             let mut bitmap = build_side.left_data.visited_indices_bitmap().lock();
-            left_indices.iter().flatten().for_each(|x| {
-                bitmap.set_bit(x as usize, true);
-            });
+            if self.join_type == JoinType::LeftSingle {
+                // A build-driven single join must not match a build row twice.
+                // The visited bitmap doubles as the duplicate detector, so this
+                // also catches matches spread over several probe batches and,
+                // under `PartitionMode::CollectLeft`, over several partitions.
+                for index in left_indices.iter().flatten() {
+                    if bitmap.get_bit(index as usize) {
+                        return single_join_too_many_rows_err();
+                    }
+                    bitmap.set_bit(index as usize, true);
+                }
+            } else {
+                left_indices.iter().flatten().for_each(|x| {
+                    bitmap.set_bit(x as usize, true);
+                });
+            }
         }
 
         // The goals of index alignment for different join types are:

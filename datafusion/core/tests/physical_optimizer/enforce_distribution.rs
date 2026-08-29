@@ -1493,11 +1493,13 @@ fn multi_hash_joins() -> Result<()> {
                 assert_plan!(plan_distrib, plan_sort);
             }
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {}
+            JoinType::LeftSingle | JoinType::RightSingle => {}
         }
 
 
 
         match join_type {
+            JoinType::LeftSingle | JoinType::RightSingle => {}
             JoinType::Inner
             | JoinType::Left
             | JoinType::Right

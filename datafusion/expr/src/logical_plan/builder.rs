@@ -1703,7 +1703,7 @@ pub fn build_join_schema(
                 .collect::<Vec<_>>();
             left_fields.into_iter().chain(right_fields).collect()
         }
-        JoinType::Left => {
+        JoinType::Left | JoinType::LeftSingle => {
             // left then right, right set to nullable in case of not matched scenario
             let left_fields = left_fields
                 .map(|(q, f)| (q.cloned(), Arc::clone(f)))
@@ -1713,7 +1713,7 @@ pub fn build_join_schema(
                 .chain(nullify_fields(right_fields))
                 .collect()
         }
-        JoinType::Right => {
+        JoinType::Right | JoinType::RightSingle => {
             // left then right, left set to nullable in case of not matched scenario
             let right_fields = right_fields
                 .map(|(q, f)| (q.cloned(), Arc::clone(f)))

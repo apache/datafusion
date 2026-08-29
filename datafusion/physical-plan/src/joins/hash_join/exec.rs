@@ -1056,6 +1056,7 @@ impl HashJoinExec {
                     | JoinType::RightAnti
                     | JoinType::RightSemi
                     | JoinType::RightMark
+                    | JoinType::RightSingle
             ),
         ]
     }
@@ -1125,12 +1126,14 @@ impl HashJoinExec {
                 | JoinType::RightSemi
                 | JoinType::Right
                 | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
+                | JoinType::RightMark
+                | JoinType::RightSingle => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
+                | JoinType::LeftSingle
                 | JoinType::Full => EmissionType::Both,
             }
         } else {
@@ -2414,8 +2417,8 @@ mod proto_tests {
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
-        JoinType::Left => (true, false),
-        JoinType::Right => (false, true),
+        JoinType::Left | JoinType::LeftSingle => (true, false),
+        JoinType::Right | JoinType::RightSingle => (false, true),
         JoinType::Full => (false, false),
         // Callers restrict the non-output side of semi joins to join-key columns.
         JoinType::LeftSemi | JoinType::RightSemi => (true, true),
@@ -4224,6 +4227,9 @@ mod tests {
                 JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
                     let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
                     assert_eq!(num_rows, 0, "unexpected rows for {join_type}");
+                }
+                JoinType::LeftSingle | JoinType::RightSingle => {
+                    unreachable!("single joins are not part of this test's join types")
                 }
                 JoinType::Left => {
                     allow_duplicates! {

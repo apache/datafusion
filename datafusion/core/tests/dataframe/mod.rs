@@ -2601,6 +2601,9 @@ async fn verify_join_output_partitioning() -> Result<()> {
         let join_schema = physical_plan.schema();
 
         match join_type {
+            JoinType::LeftSingle | JoinType::RightSingle => {
+                unreachable!("single joins are not part of this test's join types")
+            }
             JoinType::Left
             | JoinType::LeftSemi
             | JoinType::LeftAnti

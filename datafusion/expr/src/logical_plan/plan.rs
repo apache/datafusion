@@ -554,7 +554,12 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                JoinType::Inner
+                | JoinType::Left
+                | JoinType::Right
+                | JoinType::Full
+                | JoinType::LeftSingle
+                | JoinType::RightSingle => {
                     if left.schema().fields().is_empty() {
                         right.head_output_expr()
                     } else {
@@ -1412,12 +1417,16 @@ impl LogicalPlan {
                         (left_max, right_max, _) => Some(left_max * right_max),
                     }
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-                    left.max_rows()
-                }
-                JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
-                    right.max_rows()
-                }
+                // A single join emits exactly one output row per row of the
+                // preserved side, so it preserves that side's row count.
+                JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::LeftSingle => left.max_rows(),
+                JoinType::RightSemi
+                | JoinType::RightAnti
+                | JoinType::RightMark
+                | JoinType::RightSingle => right.max_rows(),
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => {
@@ -1485,8 +1494,12 @@ impl LogicalPlan {
                 JoinType::Inner if on.is_empty() && filter.is_none() => {
                     left.min_rows().saturating_mul(right.min_rows())
                 }
-                JoinType::Left | JoinType::LeftMark => left.min_rows(),
-                JoinType::Right | JoinType::RightMark => right.min_rows(),
+                JoinType::Left | JoinType::LeftMark | JoinType::LeftSingle => {
+                    left.min_rows()
+                }
+                JoinType::Right | JoinType::RightMark | JoinType::RightSingle => {
+                    right.min_rows()
+                }
                 JoinType::Full => left.min_rows().max(right.min_rows()),
                 JoinType::Inner
                 | JoinType::LeftSemi

@@ -936,6 +936,9 @@ impl StatisticsProvider for JoinStatisticsProvider {
             }
             JoinType::LeftMark => left_rows,
             JoinType::RightMark => right_rows,
+            // A single join emits exactly one row per preserved-side row.
+            JoinType::LeftSingle => left_rows,
+            JoinType::RightSingle => right_rows,
         };
 
         // NL join inner with exact inputs is an exact Cartesian product;

@@ -18,14 +18,14 @@
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::fmt::Formatter;
-use std::ops::{BitOr, ControlFlow};
+use std::ops::{BitAnd, BitOr, ControlFlow};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use super::utils::{
     asymmetric_join_output_partitioning, need_produce_result_in_final,
-    reorder_output_after_swap, swap_join_projection,
+    reorder_output_after_swap, single_join_too_many_rows_err, swap_join_projection,
 };
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
@@ -386,12 +386,14 @@ impl NestedLoopJoinExec {
                 | JoinType::RightSemi
                 | JoinType::Right
                 | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
+                | JoinType::RightMark
+                | JoinType::RightSingle => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
+                | JoinType::LeftSingle
                 | JoinType::Full => EmissionType::Both,
             }
         } else {
@@ -2590,6 +2592,17 @@ impl NestedLoopJoinStream {
             None
         };
 
+        // A single join must not match a row of its preserved side twice. The
+        // matched bitmaps double as the duplicate detectors: a bit that is
+        // already set means an earlier pair matched the same row, whether in
+        // this left range, an earlier one, or -- for the left bitmap, which is
+        // shared -- another partition.
+        let single_side = match self.join_type {
+            JoinType::LeftSingle => Some(JoinSide::Left),
+            JoinType::RightSingle => Some(JoinSide::Right),
+            _ => None,
+        };
+
         // Set the matched bit for left and right side bitmap
         for (i, is_matched) in bitmap_combined.iter().enumerate() {
             let is_matched = is_matched.ok_or_else(|| {
@@ -2602,6 +2615,9 @@ impl NestedLoopJoinStream {
             if let Some(bitmap) = left_bitmap.as_mut()
                 && is_matched
             {
+                if single_side == Some(JoinSide::Left) && bitmap.get_bit(l_index) {
+                    return single_join_too_many_rows_err();
+                }
                 // Map local index back to absolute left index within the batch
                 bitmap.set_bit(l_index, true);
             }
@@ -2609,6 +2625,9 @@ impl NestedLoopJoinStream {
             if let Some(bitmap) = local_right_bitmap.as_mut()
                 && is_matched
             {
+                if single_side == Some(JoinSide::Right) && bitmap.get_bit(r_index) {
+                    return single_join_too_many_rows_err();
+                }
                 bitmap.set_bit(r_index, true);
             }
         }
@@ -2630,6 +2649,13 @@ impl NestedLoopJoinStream {
                     )
                 })?
                 .finish();
+            // A right row already matched by an earlier left range must not
+            // match again in this one.
+            if single_side == Some(JoinSide::Right)
+                && buf.bitand(&current_right_bitmap).count_set_bits() > 0
+            {
+                return single_join_too_many_rows_err();
+            }
             let updated_global_right_bitmap = buf.bitor(&current_right_bitmap);
 
             self.current_right_batch_matched =
@@ -3153,10 +3179,12 @@ fn build_unmatched_batch_empty_schema(
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftAnti
-        | JoinType::RightAnti => batch_bitmap.false_count(),
+        | JoinType::RightAnti
+        | JoinType::LeftSingle
+        | JoinType::RightSingle => batch_bitmap.false_count(),
         JoinType::LeftSemi | JoinType::RightSemi => batch_bitmap.true_count(),
         JoinType::LeftMark | JoinType::RightMark => batch_bitmap.len(),
-        _ => unreachable!(),
+        JoinType::Inner => unreachable!("inner joins have no unmatched rows"),
     };
 
     if output_schema.fields().is_empty() {
@@ -3242,11 +3270,15 @@ fn build_unmatched_batch(
     }
 
     match join_type {
-        JoinType::Full | JoinType::Right | JoinType::Left => {
-            if join_type == JoinType::Right {
+        JoinType::Full
+        | JoinType::Right
+        | JoinType::Left
+        | JoinType::LeftSingle
+        | JoinType::RightSingle => {
+            if matches!(join_type, JoinType::Right | JoinType::RightSingle) {
                 debug_assert_eq!(batch_side, JoinSide::Right);
             }
-            if join_type == JoinType::Left {
+            if matches!(join_type, JoinType::Left | JoinType::LeftSingle) {
                 debug_assert_eq!(batch_side, JoinSide::Left);
             }
 
