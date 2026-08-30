@@ -42,13 +42,15 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
-use datafusion_physical_expr::{LexOrdering, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{
-    sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+    optional_ordering_try_from_proto, sort_exprs_try_to_proto,
 };
 use datafusion_physical_plan::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
-use datafusion_proto_models::datafusion_common::CompressionTypeVariant as ProtoCompressionTypeVariant;
+use datafusion_proto_models::datafusion_common::{
+    CompressionTypeVariant as ProtoCompressionTypeVariant, Schema as ProtoSchema,
+};
 use datafusion_proto_models::protobuf;
 
 use crate::file::FileSource;
@@ -68,42 +70,67 @@ impl FileScanConfig {
         &self,
         ctx: &ExecutionPlanEncodeCtx<'_>,
     ) -> Result<protobuf::FileScanExecConf> {
-        let file_groups = self
-            .file_groups
+        // Exhaustive destructure: adding a field to `FileScanConfig` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            object_store_url,
+            file_groups,
+            constraints,
+            limit,
+            preserve_order,
+            output_ordering,
+            file_compression_type,
+            file_source,
+            batch_size,
+            expr_adapter_factory,
+            // Serialized through `statistics()` so its pushed-filter policy
+            // remains centralized.
+            statistics: _,
+            output_partitioning,
+        } = self;
+
+        // Non-default factories are executable behavior with no protobuf
+        // representation; silently replacing one can change scan results.
+        if expr_adapter_factory
+            .as_ref()
+            .is_some_and(|factory| !factory.is_equivalent_to_default())
+        {
+            return datafusion_common::not_impl_err!(
+                "FileScanConfig with a non-default expr_adapter_factory cannot be serialized"
+            );
+        }
+
+        let proto_file_groups = file_groups
             .iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;
 
-        let mut output_ordering = vec![];
-        for order in &self.output_ordering {
+        let mut proto_output_ordering = vec![];
+        for order in output_ordering {
             let nodes = sort_exprs_try_to_proto(order.iter(), &ctx.expr_ctx())?;
-            output_ordering.push(protobuf::PhysicalSortExprNodeCollection {
+            proto_output_ordering.push(protobuf::PhysicalSortExprNodeCollection {
                 physical_sort_expr_nodes: nodes,
             });
         }
 
-        let output_partitioning = self
-            .output_partitioning
+        let proto_output_partitioning = output_partitioning
             .as_ref()
             .map(|partitioning| partitioning.try_to_proto(&ctx.expr_ctx()))
             .transpose()?;
 
-        // Fields must be added to the schema so that they can persist in the
-        // protobuf, and then removed from the schema in `try_from_proto`.
-        let mut fields = self
-            .file_schema()
-            .fields()
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        fields.extend(self.table_partition_cols().iter().cloned());
-        let schema =
-            Schema::new(fields).with_metadata(self.file_schema().metadata.clone());
+        let table_schema = file_source.table_schema();
+        let file_schema = table_schema.file_schema();
+        let table_partition_cols = table_schema.table_partition_cols();
 
-        let projection_exprs = self
-            .file_source()
+        // Partition fields must be added to the schema so they can persist in
+        // protobuf and then be removed again in `parse_table_schema_from_proto`.
+        let mut fields = file_schema.fields().iter().cloned().collect::<Vec<_>>();
+        fields.extend(table_partition_cols.iter().cloned());
+        let schema = Schema::new(fields).with_metadata(file_schema.metadata.clone());
+
+        let projection_exprs = file_source
             .projection()
-            .as_ref()
             .map(|projection_exprs| {
                 Ok::<_, DataFusionError>(protobuf::ProjectionExprs {
                     projections: projection_exprs
@@ -119,35 +146,36 @@ impl FileScanConfig {
             })
             .transpose()?;
 
-        let file_compression_type =
-            self.file_compression_type.is_compressed().then(|| {
+        let proto_file_compression_type =
+            file_compression_type.is_compressed().then(|| {
                 let compression: ProtoCompressionTypeVariant =
-                    (*self.file_compression_type.get_variant()).into();
+                    (*file_compression_type.get_variant()).into();
                 compression as i32
             });
+        let statistics = self.statistics();
 
         Ok(protobuf::FileScanExecConf {
-            file_groups,
-            statistics: Some((&self.statistics()).into()),
-            limit: self
-                .limit
+            file_groups: proto_file_groups,
+            statistics: Some((&statistics).into()),
+            limit: limit
                 .map(|limit| usize_to_wire::<u32>(limit, "FileScanConfig", "limit"))
                 .transpose()?
                 .map(|limit| protobuf::ScanLimit { limit }),
+            // Superseded by `projection_exprs`; kept empty for wire compatibility.
             projection: vec![],
             schema: Some((&schema).try_into()?),
-            table_partition_cols: self
-                .table_partition_cols()
+            table_partition_cols: table_partition_cols
                 .iter()
                 .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),
-            object_store_url: self.object_store_url.to_string(),
-            output_ordering,
-            constraints: Some(self.constraints.clone().into()),
-            batch_size: self.batch_size.map(|s| s as u64),
+            object_store_url: object_store_url.to_string(),
+            output_ordering: proto_output_ordering,
+            constraints: Some(constraints.clone().into()),
+            batch_size: batch_size.map(|size| size as u64),
             projection_exprs,
-            output_partitioning,
-            file_compression_type,
+            output_partitioning: proto_output_partitioning,
+            file_compression_type: proto_file_compression_type,
+            preserve_order: Some(*preserve_order),
         })
     }
 
@@ -162,10 +190,32 @@ impl FileScanConfig {
         ctx: &ExecutionPlanDecodeCtx<'_>,
         file_source: Arc<dyn FileSource>,
     ) -> Result<FileScanConfig> {
-        let schema = parse_file_scan_schema(conf)?;
+        // Destructure exhaustively so a newly added protobuf field must be
+        // handled here instead of being silently ignored.
+        let protobuf::FileScanExecConf {
+            file_groups,
+            schema: proto_schema,
+            // Superseded by `projection_exprs`; current encoders leave this
+            // legacy column-index projection empty.
+            projection: _,
+            limit,
+            statistics,
+            // Used to construct `file_source` via `parse_table_schema_from_proto`
+            // before this hook is called.
+            table_partition_cols: _,
+            object_store_url,
+            output_ordering,
+            constraints,
+            batch_size,
+            projection_exprs,
+            output_partitioning,
+            file_compression_type,
+            preserve_order,
+        } = conf;
 
-        let constraints = conf
-            .constraints
+        let expression_schema = parse_file_scan_schema(proto_schema)?;
+
+        let decoded_constraints = constraints
             .as_ref()
             .ok_or_else(|| {
                 internal_datafusion_err!(
@@ -173,8 +223,7 @@ impl FileScanConfig {
                 )
             })?
             .try_into()?;
-        let statistics = conf
-            .statistics
+        let decoded_statistics = statistics
             .as_ref()
             .ok_or_else(|| {
                 internal_datafusion_err!(
@@ -183,37 +232,41 @@ impl FileScanConfig {
             })?
             .try_into()?;
 
-        let file_groups = conf
-            .file_groups
+        let decoded_file_groups = file_groups
             .iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;
 
-        let object_store_url = match conf.object_store_url.is_empty() {
-            false => ObjectStoreUrl::parse(&conf.object_store_url)?,
+        let decoded_object_store_url = match object_store_url.is_empty() {
+            false => ObjectStoreUrl::parse(object_store_url)?,
             true => ObjectStoreUrl::local_filesystem(),
         };
 
-        let mut output_ordering = vec![];
-        for node_collection in &conf.output_ordering {
-            let sort_exprs = sort_exprs_try_from_proto(
-                &node_collection.physical_sort_expr_nodes,
-                &ctx.expr_ctx(&schema),
-            )?;
-            output_ordering.extend(LexOrdering::new(sort_exprs));
+        let mut decoded_output_ordering = vec![];
+        for node_collection in output_ordering {
+            let protobuf::PhysicalSortExprNodeCollection {
+                physical_sort_expr_nodes,
+            } = node_collection;
+            if let Some(ordering) = optional_ordering_try_from_proto(
+                physical_sort_expr_nodes,
+                &ctx.expr_ctx(&expression_schema),
+            )? {
+                decoded_output_ordering.push(ordering);
+            }
         }
 
-        let output_partitioning = conf
-            .output_partitioning
+        let decoded_output_partitioning = output_partitioning
             .as_ref()
             .map(|partitioning| {
-                Partitioning::try_from_proto(partitioning, &ctx.expr_ctx(&schema))
+                Partitioning::try_from_proto(
+                    partitioning,
+                    &ctx.expr_ctx(&expression_schema),
+                )
             })
             .transpose()?
             .flatten();
 
-        let file_compression_type = conf
-            .file_compression_type
+        let decoded_file_compression_type = file_compression_type
             .map(|value| {
                 let compression =
                     ProtoCompressionTypeVariant::try_from(value).map_err(|_| {
@@ -226,54 +279,64 @@ impl FileScanConfig {
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
         // Parse projection expressions if present and apply to the file source.
-        let file_source = if let Some(proto_projection_exprs) = &conf.projection_exprs {
-            let projection_exprs: Vec<ProjectionExpr> = proto_projection_exprs
-                .projections
+        let decoded_file_source = if let Some(proto_projection_exprs) = projection_exprs {
+            let protobuf::ProjectionExprs { projections } = proto_projection_exprs;
+            let decoded_projection_exprs: Vec<ProjectionExpr> = projections
                 .iter()
                 .map(|proto_expr| {
+                    let protobuf::ProjectionExpr { alias, expr } = proto_expr;
                     let expr = ctx.decode_expr(
-                        proto_expr.expr.as_ref().ok_or_else(|| {
+                        expr.as_ref().ok_or_else(|| {
                             internal_datafusion_err!("ProjectionExpr missing expr field")
                         })?,
-                        &schema,
+                        &expression_schema,
                     )?;
-                    Ok(ProjectionExpr::new(expr, proto_expr.alias.clone()))
+                    Ok(ProjectionExpr::new(expr, alias.clone()))
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let projection_exprs = ProjectionExprs::new(projection_exprs);
+            let projection = ProjectionExprs::new(decoded_projection_exprs);
 
             file_source
-                .try_pushdown_projection(&projection_exprs)?
+                .try_pushdown_projection(&projection)?
                 .unwrap_or(file_source)
         } else {
             file_source
         };
 
-        let limit = conf
-            .limit
+        let decoded_limit = limit
             .as_ref()
-            .map(|limit| usize_from_wire(limit.limit, "FileScanConfig", "limit"))
+            .map(|limit| {
+                let protobuf::ScanLimit { limit } = limit;
+                usize_from_wire(*limit, "FileScanConfig", "limit")
+            })
             .transpose()?;
-        let batch_size = conf
-            .batch_size
+        let decoded_batch_size = batch_size
             .map(|size| usize_from_wire(size, "FileScanConfig", "batch_size"))
             .transpose()?;
-        if batch_size == Some(0) {
+        if decoded_batch_size == Some(0) {
             return datafusion_common::plan_err!(
                 "FileScanConfig: batch_size must be greater than 0"
             );
         }
-        let config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
-            .with_file_groups(file_groups)
-            .with_constraints(constraints)
-            .with_statistics(statistics)
-            .with_limit(limit)
-            .with_output_ordering(output_ordering)
-            .with_output_partitioning(output_partitioning)
-            .with_batch_size(batch_size)
-            .with_file_compression_type(file_compression_type);
-        Ok(config_builder.build())
+        let mut config =
+            FileScanConfigBuilder::new(decoded_object_store_url, decoded_file_source)
+                .with_file_groups(decoded_file_groups)
+                .with_constraints(decoded_constraints)
+                .with_statistics(decoded_statistics)
+                .with_limit(decoded_limit)
+                .with_output_ordering(decoded_output_ordering)
+                .with_output_partitioning(decoded_output_partitioning)
+                .with_batch_size(decoded_batch_size)
+                .with_file_compression_type(decoded_file_compression_type)
+                .build();
+
+        // Presence distinguishes a new explicit `false` from a legacy payload,
+        // which must retain the builder's ordering-derived behavior.
+        if let Some(preserve_order) = preserve_order {
+            config.preserve_order = *preserve_order;
+        }
+        Ok(config)
     }
 
     /// Parse a [`TableSchema`] (file schema + partition columns) from a
@@ -284,7 +347,7 @@ impl FileScanConfig {
     pub fn parse_table_schema_from_proto(
         conf: &protobuf::FileScanExecConf,
     ) -> Result<TableSchema> {
-        let schema = parse_file_scan_schema(conf)?;
+        let schema = parse_file_scan_schema(&conf.schema)?;
 
         // Reacquire the partition column types from the schema before removing
         // them below.
@@ -317,15 +380,9 @@ impl FileScanConfig {
 }
 
 /// Parse the full (file + partition columns) schema off the base conf.
-fn parse_file_scan_schema(conf: &protobuf::FileScanExecConf) -> Result<Arc<Schema>> {
-    let schema: Schema = conf
-        .schema
-        .as_ref()
-        .ok_or_else(|| {
-            internal_datafusion_err!(
-                "FileScanExecConf is missing required field 'schema'"
-            )
-        })?
-        .try_into()?;
-    Ok(Arc::new(schema))
+fn parse_file_scan_schema(schema: &Option<ProtoSchema>) -> Result<Arc<Schema>> {
+    let proto_schema = schema.as_ref().ok_or_else(|| {
+        internal_datafusion_err!("FileScanExecConf is missing required field 'schema'")
+    })?;
+    Ok(Arc::new(proto_schema.try_into()?))
 }
