@@ -4487,6 +4487,11 @@ pub struct AsOfJoin {
 
 impl AsOfJoin {
     /// Creates an ASOF join and validates its logical contract.
+    ///
+    /// This is the pre-coercion boundary. The physical ASOF constructor repeats
+    /// the shared operator, side-ownership, and determinism checks for direct
+    /// physical-plan callers and adds execution-only constraints. Keep the
+    /// shared checks aligned across both entry points.
     pub fn try_new(
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
