@@ -133,9 +133,7 @@ impl RandomNativeData for IntervalMonthDayNanoType {
     }
 }
 
-// Restrict Duration(Seconds) to values that pretty-print as distinct durations.
-// Out-of-range values print as `<invalid>`, which could make unequal batches
-// compare equal after pretty-printing.
+// Keep values in the pretty-print range; all others render as `<invalid>`.
 impl RandomNativeData for DurationSecondType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         rng.random::<i64>() / 1000
