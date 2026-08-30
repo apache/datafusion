@@ -51,10 +51,10 @@ use datafusion_expr::{
 /// - Unmappable characters — raises `MALFORMED_CHARACTER_CODING`.
 ///   Controlled by `spark.sql.legacy.codingErrorAction`.
 ///
-/// TODO: wire both configs so Spark 4.0 behavior can be selected at runtime.
-/// See: <https://spark.apache.org/docs/4.0.0/sql-migration-guide.html>
 ///
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#encode>
+// TODO: wire both configs so Spark 4.0 behavior can be selected at runtime.
+// See: <https://spark.apache.org/docs/4.0.0/sql-migration-guide.html>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkEncode {
     signature: Signature,
