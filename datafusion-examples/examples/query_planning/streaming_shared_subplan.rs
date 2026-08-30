@@ -17,7 +17,7 @@
 
 //! See `main.rs` for how to run this example.
 //!
-//! # Streaming one shared subplan to multiple consumers
+//! # Streaming one shared subplan through a fan-out exchange
 //!
 //! Reusing a [`LogicalPlan`] subplan in several branches does not make their
 //! physical executions share work. This example starts with one expensive join
@@ -27,26 +27,25 @@
 //! It defines two custom [`ExecutionPlan`] nodes using DataFusion's extension
 //! APIs. They are part of this example, not built-in DataFusion operators:
 //!
-//! - `StreamingFanoutExec` owns the expensive input and executes it once. Shared
-//!   state sends each [`RecordBatch`] to one bounded receiver stream per
-//!   consumer, built with [`RecordBatchReceiverStreamBuilder`].
-//! - `StreamingFanoutReaderExec` is a leaf node that reads an additional
-//!   consumer's queue from the same shared state.
+//! - `StreamingFanoutExec` executes the expensive input once, owns the bounded
+//!   buffering, and exposes one output lane per consumer and input partition.
+//! - Each `StreamingFanoutReaderExec` selects one consumer's lanes. The first
+//!   reader keeps the fan-out visible in the physical plan; later readers
+//!   reference the same fan-out through a shared [`Arc`].
 //!
 //! ```text
-//! expensive join (executed once)
-//!              |
-//!     StreamingFanoutExec
-//!          +---> east aggregate ------------------------+
-//!          |                                             |
-//!          +---> StreamingFanoutReaderExec               +---> UNION ALL
-//!                         +---> west aggregate -----------+
+//! expensive join
+//!       |
+//! StreamingFanoutExec
+//!       |
+//! StreamingFanoutReaderExec (consumer 0) ---> east aggregate ---+
+//!       :                                                        +-> UNION ALL
+//!       +...> StreamingFanoutReaderExec (consumer 1) -> west ----+
 //! ```
 //!
-//! The reader is connected to the fan-out through shared Rust state, so it has
-//! no physical child. The queues hold at most one batch per consumer and
-//! partition. The physical rewrite counts consumers first and creates all
-//! queues before execution. The shared output is not collected into a
+//! The dotted connection is not a physical child edge. Both readers select
+//! output lanes from the same fan-out. Its queues hold at most one batch per
+//! consumer and input partition. The shared output is not collected into a
 //! `MemTable` or registered as a table.
 //!
 //! ## Where this example does not work
@@ -87,7 +86,7 @@ use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::stream::{
     RecordBatchReceiverStreamBuilder, RecordBatchStreamAdapter,
@@ -170,7 +169,7 @@ pub async fn streaming_shared_subplan() -> Result<()> {
 
     assert_eq!(shared_text.matches("HashJoinExec").count(), 1);
     assert_eq!(shared_text.matches("StreamingFanoutExec").count(), 1);
-    assert_eq!(shared_text.matches("StreamingFanoutReaderExec").count(), 1);
+    assert_eq!(shared_text.matches("StreamingFanoutReaderExec").count(), 2);
 
     let results = collect(shared_plan, ctx.task_ctx()).await?;
     print_batches(&results)?;
@@ -399,7 +398,7 @@ impl ExecutionPlan for StreamingShareMarkerExec {
 }
 
 // ---------------------------------------------------------------------------
-// Physical rewrite: one producer plus reader leaves
+// Physical rewrite: one exchange plus one reader per consumer
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
@@ -421,7 +420,7 @@ impl PhysicalOptimizerRule for RewriteStreamingShares {
             Ok(TreeNodeRecursion::Continue)
         })?;
 
-        let mut shares: HashMap<usize, Arc<StreamingFanoutState>> = HashMap::new();
+        let mut fanouts: HashMap<usize, Arc<StreamingFanoutExec>> = HashMap::new();
         let mut next_consumers = HashMap::<usize, usize>::new();
 
         plan.transform_up(|plan| {
@@ -437,22 +436,30 @@ impl PhysicalOptimizerRule for RewriteStreamingShares {
             let consumer = *next_consumer;
             *next_consumer += 1;
 
-            let replacement: Arc<dyn ExecutionPlan> = if let Some(state) = shares.get(&id)
-            {
+            let (fanout, visible_child) = if let Some(fanout) = fanouts.get(&id) {
+                (Arc::clone(fanout), false)
+            } else {
+                let fanout = Arc::new(StreamingFanoutExec::try_new(
+                    id,
+                    input,
+                    consumer_count,
+                    Arc::clone(&self.metrics),
+                )?);
+                fanouts.insert(id, Arc::clone(&fanout));
+                (fanout, true)
+            };
+            let properties = Arc::clone(fanout.input.properties());
+            let input_partition_count = fanout.input_partition_count;
+            let fanout: Arc<dyn ExecutionPlan> = fanout;
+            let replacement: Arc<dyn ExecutionPlan> =
                 Arc::new(StreamingFanoutReaderExec::new(
                     id,
                     consumer,
-                    Arc::clone(state),
-                ))
-            } else {
-                let state = Arc::new(StreamingFanoutState::new(
-                    Arc::clone(&input),
-                    consumer_count,
-                    Arc::clone(&self.metrics),
+                    input_partition_count,
+                    fanout,
+                    visible_child,
+                    properties,
                 ));
-                shares.insert(id, Arc::clone(&state));
-                Arc::new(StreamingFanoutExec::new(id, consumer, input, state))
-            };
             Ok(Transformed::yes(replacement))
         })
         .data()
@@ -467,30 +474,58 @@ impl PhysicalOptimizerRule for RewriteStreamingShares {
     }
 }
 
-/// Example-defined node that owns the input and starts the streaming fan-out.
+/// Fan-out exchange with one output lane per consumer and input partition.
 #[derive(Debug)]
 struct StreamingFanoutExec {
     id: usize,
-    consumer: usize,
     input: Arc<dyn ExecutionPlan>,
     state: Arc<StreamingFanoutState>,
+    consumer_count: usize,
+    input_partition_count: usize,
     properties: Arc<PlanProperties>,
 }
 
 impl StreamingFanoutExec {
-    fn new(
+    fn try_new(
         id: usize,
-        consumer: usize,
         input: Arc<dyn ExecutionPlan>,
+        consumer_count: usize,
+        metrics: Arc<FanoutMetrics>,
+    ) -> Result<Self> {
+        let state = Arc::new(StreamingFanoutState::new(
+            Arc::clone(&input),
+            consumer_count,
+            metrics,
+        ));
+        Self::with_state(id, input, consumer_count, state)
+    }
+
+    fn with_state(
+        id: usize,
+        input: Arc<dyn ExecutionPlan>,
+        consumer_count: usize,
         state: Arc<StreamingFanoutState>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let input_partition_count = input.output_partitioning().partition_count();
+        let Some(output_partition_count) =
+            input_partition_count.checked_mul(consumer_count)
+        else {
+            return plan_err!("Streaming fan-out output partition count overflow");
+        };
+        if output_partition_count == 0 {
+            return plan_err!("Streaming fan-out requires input and consumer partitions");
+        }
+        let properties = Arc::new(input.properties().as_ref().clone().with_partitioning(
+            Partitioning::UnknownPartitioning(output_partition_count),
+        ));
+        Ok(Self {
             id,
-            consumer,
-            properties: Arc::clone(input.properties()),
             input,
             state,
-        }
+            consumer_count,
+            input_partition_count,
+            properties,
+        })
     }
 }
 
@@ -498,8 +533,8 @@ impl DisplayAs for StreamingFanoutExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "StreamingFanoutExec: id={}, consumer={}, capacity={}",
-            self.id, self.consumer, CHANNEL_CAPACITY
+            "StreamingFanoutExec: id={}, consumers={}, input_partitions={}, capacity={}",
+            self.id, self.consumer_count, self.input_partition_count, CHANNEL_CAPACITY
         )
     }
 }
@@ -536,13 +571,18 @@ impl ExecutionPlan for StreamingFanoutExec {
             return plan_err!("StreamingFanoutExec requires one child");
         }
         let input = children.swap_remove(0);
+        if input.output_partitioning().partition_count() != self.input_partition_count {
+            return plan_err!(
+                "StreamingFanoutExec cannot change its input partition count"
+            );
+        }
         self.state.replace_input(Arc::clone(&input));
-        Ok(Arc::new(Self::new(
+        Ok(Arc::new(Self::with_state(
             self.id,
-            self.consumer,
             input,
+            self.consumer_count,
             Arc::clone(&self.state),
-        )))
+        )?))
     }
 
     fn execute(
@@ -550,26 +590,43 @@ impl ExecutionPlan for StreamingFanoutExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.state.stream(self.consumer, partition, context)
+        let output_partition_count = self.input_partition_count * self.consumer_count;
+        if partition >= output_partition_count {
+            return exec_err!("Streaming fan-out output partition {partition} not found");
+        }
+        let consumer = partition / self.input_partition_count;
+        let input_partition = partition % self.input_partition_count;
+        self.state.stream(consumer, input_partition, context)
     }
 }
 
-/// Example-defined leaf that reads the fan-out through shared Rust state.
+/// Selects one consumer's partition lanes from the fan-out exchange.
 #[derive(Debug)]
 struct StreamingFanoutReaderExec {
     id: usize,
     consumer: usize,
-    state: Arc<StreamingFanoutState>,
+    input_partition_count: usize,
+    fanout: Arc<dyn ExecutionPlan>,
+    // Only one reader exposes the shared fan-out as a child, keeping the plan a tree.
+    visible_child: bool,
     properties: Arc<PlanProperties>,
 }
 
 impl StreamingFanoutReaderExec {
-    fn new(id: usize, consumer: usize, state: Arc<StreamingFanoutState>) -> Self {
-        let properties = Arc::clone(state.input.read().unwrap().properties());
+    fn new(
+        id: usize,
+        consumer: usize,
+        input_partition_count: usize,
+        fanout: Arc<dyn ExecutionPlan>,
+        visible_child: bool,
+        properties: Arc<PlanProperties>,
+    ) -> Self {
         Self {
             id,
             consumer,
-            state,
+            input_partition_count,
+            fanout,
+            visible_child,
             properties,
         }
     }
@@ -594,8 +651,20 @@ impl ExecutionPlan for StreamingFanoutReaderExec {
         &self.properties
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        if self.visible_child {
+            vec![true]
+        } else {
+            vec![]
+        }
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
+        if self.visible_child {
+            vec![&self.fanout]
+        } else {
+            vec![]
+        }
     }
 
     fn apply_expressions(
@@ -607,10 +676,27 @@ impl ExecutionPlan for StreamingFanoutReaderExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if self.visible_child {
+            if children.len() != 1 {
+                return plan_err!(
+                    "The first StreamingFanoutReaderExec requires one child"
+                );
+            }
+            return Ok(Arc::new(Self::new(
+                self.id,
+                self.consumer,
+                self.input_partition_count,
+                children.swap_remove(0),
+                true,
+                Arc::clone(&self.properties),
+            )));
+        }
         if !children.is_empty() {
-            return plan_err!("StreamingFanoutReaderExec cannot have children");
+            return plan_err!(
+                "Additional StreamingFanoutReaderExec nodes cannot have children"
+            );
         }
         Ok(self)
     }
@@ -620,7 +706,17 @@ impl ExecutionPlan for StreamingFanoutReaderExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.state.stream(self.consumer, partition, context)
+        if partition >= self.input_partition_count {
+            return exec_err!("Streaming fan-out reader partition {partition} not found");
+        }
+        let Some(fanout_partition) = self
+            .consumer
+            .checked_mul(self.input_partition_count)
+            .and_then(|base| base.checked_add(partition))
+        else {
+            return exec_err!("Streaming fan-out reader partition overflow");
+        };
+        self.fanout.execute(fanout_partition, context)
     }
 }
 
