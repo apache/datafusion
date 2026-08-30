@@ -575,7 +575,11 @@ impl FileScanConfigBuilder {
 fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistics) {
     let num_rows = statistics.num_rows;
     for constraint in constraints.iter() {
-        let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
+        // A foreign key says nothing about how many distinct values are here.
+        let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint
+        else {
+            continue;
+        };
         let [index] = indices[..] else {
             continue;
         };

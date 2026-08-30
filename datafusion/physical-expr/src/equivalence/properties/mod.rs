@@ -779,6 +779,8 @@ impl EquivalenceProperties {
         normal_exprs: &[PhysicalSortExpr],
     ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
+            // A foreign key says nothing about uniqueness or ordering here.
+            Constraint::ForeignKey { .. } => false,
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
                 let check_null = matches!(constraint, Constraint::Unique(_));
                 let normalized_size = normal_exprs.len();
@@ -823,6 +825,8 @@ impl EquivalenceProperties {
     /// unique constraints, also verifies nullable columns.
     fn satisfied_by_constraints(&self, normal_reqs: &[PhysicalSortRequirement]) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
+            // A foreign key says nothing about uniqueness or ordering here.
+            Constraint::ForeignKey { .. } => false,
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
                 let check_null = matches!(constraint, Constraint::Unique(_));
                 let normalized_size = normal_reqs.len();

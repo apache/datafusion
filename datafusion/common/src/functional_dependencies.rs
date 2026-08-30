@@ -23,7 +23,7 @@ use std::ops::Deref;
 use std::vec::IntoIter;
 
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, HashSet, JoinType};
+use crate::{DFSchema, HashSet, JoinType, TableReference};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -33,6 +33,17 @@ pub enum Constraint {
     PrimaryKey(Vec<usize>),
     /// Columns with the given indices form a composite unique key:
     Unique(Vec<usize>),
+    /// Columns with the given indices reference `referenced_columns` of
+    /// `referenced_table`: every non-NULL tuple of values here also occurs
+    /// there. Like the other constraints, this is taken on trust.
+    ForeignKey {
+        /// Indices of the referencing columns in this table's schema.
+        columns: Vec<usize>,
+        /// The table the columns reference.
+        referenced_table: TableReference,
+        /// Names of the referenced columns, which form a key of that table.
+        referenced_columns: Vec<String>,
+    },
 }
 
 /// This object encapsulates a list of functional constraints:
@@ -80,6 +91,22 @@ impl Constraints {
                         // Only keep the constraint if all columns are preserved:
                         (new_indices.len() == indices.len())
                             .then_some(Constraint::Unique(new_indices))
+                    }
+                    Constraint::ForeignKey {
+                        columns,
+                        referenced_table,
+                        referenced_columns,
+                    } => {
+                        let new_indices =
+                            update_elements_with_matching_indices(columns, proj_indices);
+                        // Only keep the constraint if all columns are preserved:
+                        (new_indices.len() == columns.len()).then_some(
+                            Constraint::ForeignKey {
+                                columns: new_indices,
+                                referenced_table: referenced_table.clone(),
+                                referenced_columns: referenced_columns.clone(),
+                            },
+                        )
                     }
                 }
             })
@@ -206,7 +233,7 @@ impl FunctionalDependencies {
             // Construct dependency objects based on each individual constraint:
             let dependencies = constraints
                 .iter()
-                .map(|constraint| {
+                .filter_map(|constraint| {
                     // All the field indices are associated with the whole table
                     // since we are dealing with table level constraints:
                     let dependency = match constraint {
@@ -220,10 +247,13 @@ impl FunctionalDependencies {
                             (0..n_field).collect::<Vec<_>>(),
                             true,
                         ),
+                        // A foreign key says where the values also occur, not
+                        // that they determine anything in this table.
+                        Constraint::ForeignKey { .. } => return None,
                     };
                     // As primary keys are guaranteed to be unique, set the
                     // functional dependency mode to `Dependency::Single`:
-                    dependency.with_mode(Dependency::Single)
+                    Some(dependency.with_mode(Dependency::Single))
                 })
                 .collect::<Vec<_>>();
             Self::new(dependencies)

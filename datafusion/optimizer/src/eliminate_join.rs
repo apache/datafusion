@@ -71,12 +71,14 @@
 //! duplicate-sensitivity (projection, aggregate, sort, ...) adjust it first.
 use crate::utils::for_each_referenced_index;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    DFSchema, Dependency, HashSet, NullEquality, Result, ScalarValue,
+    Constraint, DFSchema, Dependency, HashSet, NullEquality, Result, ScalarValue,
+    TableReference,
 };
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    Expr, JoinType,
+    Expr, JoinType, LogicalPlanBuilder, TableSource,
     logical_plan::{
         Aggregate, Distinct, DistinctOn, EmptyRelation, Filter, Join, Limit, LogicalPlan,
         Partitioning, Projection, Repartition, Sort, SubqueryAlias,
@@ -431,6 +433,18 @@ fn rewrite_join(
             )?;
             return Ok(Transformed::yes(right.data));
         }
+        JoinRewrite::ReplaceWithLeftWhereNotNull(predicate) => {
+            let left = rewrite_subtree(
+                Arc::unwrap_or_clone(join.left),
+                visible_left,
+                duplicate_insensitive,
+            )?;
+            return Ok(Transformed::yes(
+                LogicalPlanBuilder::from(left.data)
+                    .filter(predicate)?
+                    .build()?,
+            ));
+        }
         JoinRewrite::Join(join_type) => join_type,
     };
 
@@ -522,6 +536,10 @@ enum JoinRewrite {
     ReplaceWithLeft,
     /// The join has no observable effect; replace it with its right input.
     ReplaceWithRight,
+    /// A foreign key guarantees every left row matches, so the join only tests
+    /// that the referencing columns are non-NULL. Replace it with its left
+    /// input under this filter.
+    ReplaceWithLeftWhereNotNull(Expr),
 }
 
 /// Chooses a cheaper form for a join: removes an outer join whose non-preserved
@@ -570,6 +588,11 @@ fn rewritten_join_type(
     }
 
     if can_remove_right {
+        // A foreign key from the left to the right's table means every left row
+        // already has a match, so the join only filters out NULL keys.
+        if let Some(predicate) = foreign_key_makes_join_redundant(join) {
+            return JoinRewrite::ReplaceWithLeftWhereNotNull(predicate);
+        }
         return JoinRewrite::Join(JoinType::LeftSemi);
     }
     if can_remove_left {
@@ -613,6 +636,151 @@ fn split_join_output_columns(
             (LiveColumns::new(), live.clone())
         }
     }
+}
+
+/// When the left side declares a foreign key to the right side's table on
+/// exactly the join keys, every left row already matches, so an inner join only
+/// filters out rows whose foreign key is NULL. Returns that filter.
+///
+/// The right side has to be an unfiltered scan of the referenced table: a
+/// foreign key promises the value occurs somewhere in that table, not that it
+/// survives a predicate. The NULL filter is emitted even for columns declared
+/// NOT NULL, because an outer join below the left side could have padded them.
+fn foreign_key_makes_join_redundant(join: &Join) -> Option<Expr> {
+    if join.filter.is_some() || join.on.is_empty() {
+        return None;
+    }
+    let referenced_table = unfiltered_scan(&join.right)?;
+
+    // The pairs this join equates, as (referencing column, referenced column).
+    let mut referencing = Vec::with_capacity(join.on.len());
+    let mut joined_pairs = Vec::with_capacity(join.on.len());
+    for (left, right) in &join.on {
+        let left = left.try_as_col()?;
+        let right = right.try_as_col()?;
+        referencing.push(left.clone());
+        joined_pairs.push((left.name.clone(), right.name.clone()));
+    }
+
+    // They must all come from the one table that declares the foreign key.
+    let relation = referencing.first()?.relation.as_ref()?;
+    if referencing
+        .iter()
+        .any(|column| column.relation.as_ref() != Some(relation))
+    {
+        return None;
+    }
+    let source = scan_source(&join.left, relation)?;
+    let schema = source.schema();
+    joined_pairs.sort();
+
+    let declared = source.constraints()?.iter().any(|constraint| {
+        let Constraint::ForeignKey {
+            columns,
+            referenced_table: table,
+            referenced_columns,
+        } = constraint
+        else {
+            return false;
+        };
+        if table.table() != referenced_table.table()
+            || columns.len() != joined_pairs.len()
+            || columns.len() != referenced_columns.len()
+        {
+            return false;
+        }
+        let mut declared_pairs = columns
+            .iter()
+            .zip(referenced_columns)
+            .map(|(&index, referenced)| {
+                schema
+                    .fields()
+                    .get(index)
+                    .map(|field| (field.name().clone(), referenced.clone()))
+            })
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_default();
+        declared_pairs.sort();
+        declared_pairs == joined_pairs
+    });
+    if !declared {
+        return None;
+    }
+
+    conjunction(
+        referencing
+            .into_iter()
+            .map(|column| Expr::Column(column).is_not_null()),
+    )
+}
+
+/// The table a plan scans, when it is a bare scan of a single table: only
+/// projections and aliases may sit above it, so every row of the table reaches
+/// the join.
+fn unfiltered_scan(plan: &LogicalPlan) -> Option<TableReference> {
+    match plan {
+        LogicalPlan::TableScan(scan)
+            if scan.filters.is_empty() && scan.fetch.is_none() =>
+        {
+            Some(scan.table_name.clone())
+        }
+        LogicalPlan::Projection(Projection { input, .. })
+        | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
+            unfiltered_scan(input)
+        }
+        _ => None,
+    }
+}
+
+/// Finds the source of the relation the join keys are qualified with, anywhere
+/// below `plan`. The qualifier is either a table name or an alias introduced by
+/// a `SubqueryAlias`, so both are matched.
+fn scan_source(
+    plan: &LogicalPlan,
+    relation: &TableReference,
+) -> Option<Arc<dyn TableSource>> {
+    let mut found = None;
+    plan.apply(|node| {
+        match node {
+            LogicalPlan::TableScan(scan)
+                if scan.table_name.table() == relation.table() =>
+            {
+                found = Some(Arc::clone(&scan.source));
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            LogicalPlan::SubqueryAlias(alias)
+                if alias.alias.table() == relation.table() =>
+            {
+                // The alias renames whatever it wraps, so look inside it for
+                // the scan the columns actually come from.
+                found = only_scan_source(&alias.input);
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .ok()?;
+    found
+}
+
+/// The source of the single table a plan scans, or `None` when it scans none or
+/// several.
+fn only_scan_source(plan: &LogicalPlan) -> Option<Arc<dyn TableSource>> {
+    let mut found = None;
+    let mut several = false;
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node {
+            if found.is_some() {
+                several = true;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            found = Some(Arc::clone(&scan.source));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .ok()?;
+    (!several).then_some(found).flatten()
 }
 
 fn side_unique_on_join<'a>(

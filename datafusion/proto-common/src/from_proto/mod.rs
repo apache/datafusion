@@ -761,6 +761,13 @@ impl From<protobuf::Constraint> for Constraint {
             protobuf::constraint::ConstraintMode::Unique(elem) => Constraint::Unique(
                 elem.indices.into_iter().map(|item| item as usize).collect(),
             ),
+            protobuf::constraint::ConstraintMode::ForeignKey(elem) => {
+                Constraint::ForeignKey {
+                    columns: elem.indices.into_iter().map(|item| item as usize).collect(),
+                    referenced_table: TableReference::from(elem.referenced_table),
+                    referenced_columns: elem.referenced_columns,
+                }
+            }
         }
     }
 }
@@ -896,6 +903,13 @@ impl From<&protobuf::Constraint> for Constraint {
                 Constraint::Unique(
                     elem.indices.iter().map(|&item| item as usize).collect(),
                 )
+            }
+            Some(protobuf::constraint::ConstraintMode::ForeignKey(elem)) => {
+                Constraint::ForeignKey {
+                    columns: elem.indices.iter().map(|&item| item as usize).collect(),
+                    referenced_table: TableReference::from(elem.referenced_table.clone()),
+                    referenced_columns: elem.referenced_columns.clone(),
+                }
             }
             None => panic!("constraint_mode not set"),
         }

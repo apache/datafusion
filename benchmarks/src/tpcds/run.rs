@@ -35,7 +35,9 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{Constraint, Constraints, DEFAULT_PARQUET_EXTENSION, plan_err};
+use datafusion_common::{
+    Constraint, Constraints, DEFAULT_PARQUET_EXTENSION, TableReference, plan_err,
+};
 
 use clap::Args;
 use log::info;
@@ -102,8 +104,213 @@ static TPCDS_PRIMARY_KEYS: &[(&str, &[&str])] = &[
     ("web_site", &["web_site_sk"]),
 ];
 
-/// Get the constraints for a TPC-DS table. Only primary keys are returned;
-/// TPC-DS also defines foreign keys, but those are currently unsupported.
+/// The foreign keys TPC-DS defines, as (table, columns, referenced table,
+/// referenced columns). Only the single-column surrogate key references are
+/// listed; the composite fact-to-fact references are not foreign keys.
+static TPCDS_FOREIGN_KEYS: &[(&str, &[&str], &str, &[&str])] = &[
+    (
+        "catalog_returns",
+        &["cr_returned_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    ("catalog_returns", &["cr_item_sk"], "item", &["i_item_sk"]),
+    (
+        "catalog_returns",
+        &["cr_reason_sk"],
+        "reason",
+        &["r_reason_sk"],
+    ),
+    (
+        "catalog_returns",
+        &["cr_ship_mode_sk"],
+        "ship_mode",
+        &["sm_ship_mode_sk"],
+    ),
+    (
+        "catalog_returns",
+        &["cr_warehouse_sk"],
+        "warehouse",
+        &["w_warehouse_sk"],
+    ),
+    (
+        "catalog_sales",
+        &["cs_sold_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    (
+        "catalog_sales",
+        &["cs_ship_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    ("catalog_sales", &["cs_item_sk"], "item", &["i_item_sk"]),
+    (
+        "catalog_sales",
+        &["cs_promo_sk"],
+        "promotion",
+        &["p_promo_sk"],
+    ),
+    (
+        "catalog_sales",
+        &["cs_ship_mode_sk"],
+        "ship_mode",
+        &["sm_ship_mode_sk"],
+    ),
+    (
+        "catalog_sales",
+        &["cs_warehouse_sk"],
+        "warehouse",
+        &["w_warehouse_sk"],
+    ),
+    (
+        "catalog_sales",
+        &["cs_call_center_sk"],
+        "call_center",
+        &["cc_call_center_sk"],
+    ),
+    (
+        "catalog_sales",
+        &["cs_catalog_page_sk"],
+        "catalog_page",
+        &["cp_catalog_page_sk"],
+    ),
+    (
+        "customer",
+        &["c_current_addr_sk"],
+        "customer_address",
+        &["ca_address_sk"],
+    ),
+    (
+        "customer",
+        &["c_current_cdemo_sk"],
+        "customer_demographics",
+        &["cd_demo_sk"],
+    ),
+    (
+        "customer",
+        &["c_current_hdemo_sk"],
+        "household_demographics",
+        &["hd_demo_sk"],
+    ),
+    (
+        "customer",
+        &["c_first_sales_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    (
+        "customer",
+        &["c_first_shipto_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    (
+        "household_demographics",
+        &["hd_income_band_sk"],
+        "income_band",
+        &["ib_income_band_sk"],
+    ),
+    ("inventory", &["inv_date_sk"], "date_dim", &["d_date_sk"]),
+    ("inventory", &["inv_item_sk"], "item", &["i_item_sk"]),
+    (
+        "inventory",
+        &["inv_warehouse_sk"],
+        "warehouse",
+        &["w_warehouse_sk"],
+    ),
+    ("promotion", &["p_item_sk"], "item", &["i_item_sk"]),
+    (
+        "store_returns",
+        &["sr_returned_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    ("store_returns", &["sr_item_sk"], "item", &["i_item_sk"]),
+    (
+        "store_returns",
+        &["sr_reason_sk"],
+        "reason",
+        &["r_reason_sk"],
+    ),
+    ("store_returns", &["sr_store_sk"], "store", &["s_store_sk"]),
+    (
+        "store_sales",
+        &["ss_sold_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    ("store_sales", &["ss_item_sk"], "item", &["i_item_sk"]),
+    (
+        "store_sales",
+        &["ss_promo_sk"],
+        "promotion",
+        &["p_promo_sk"],
+    ),
+    ("store_sales", &["ss_store_sk"], "store", &["s_store_sk"]),
+    (
+        "web_returns",
+        &["wr_returned_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    ("web_returns", &["wr_item_sk"], "item", &["i_item_sk"]),
+    ("web_returns", &["wr_reason_sk"], "reason", &["r_reason_sk"]),
+    (
+        "web_sales",
+        &["ws_sold_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    (
+        "web_sales",
+        &["ws_ship_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    ("web_sales", &["ws_item_sk"], "item", &["i_item_sk"]),
+    ("web_sales", &["ws_promo_sk"], "promotion", &["p_promo_sk"]),
+    (
+        "web_sales",
+        &["ws_ship_mode_sk"],
+        "ship_mode",
+        &["sm_ship_mode_sk"],
+    ),
+    (
+        "web_sales",
+        &["ws_warehouse_sk"],
+        "warehouse",
+        &["w_warehouse_sk"],
+    ),
+    (
+        "web_sales",
+        &["ws_web_page_sk"],
+        "web_page",
+        &["wp_web_page_sk"],
+    ),
+    (
+        "web_sales",
+        &["ws_web_site_sk"],
+        "web_site",
+        &["web_site_sk"],
+    ),
+    (
+        "web_site",
+        &["web_open_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+    (
+        "web_site",
+        &["web_close_date_sk"],
+        "date_dim",
+        &["d_date_sk"],
+    ),
+];
+
+/// Get the constraints for a TPC-DS table: its primary key and its foreign
+/// keys.
 fn table_constraints(table: &str, schema: &Schema) -> Constraints {
     let columns = TPCDS_PRIMARY_KEYS
         .iter()
@@ -111,7 +318,35 @@ fn table_constraints(table: &str, schema: &Schema) -> Constraints {
         .map(|(_, columns)| *columns)
         .unwrap_or_else(|| unimplemented!("unknown TPC-DS table: {table}"));
 
-    Constraints::new_unverified(vec![primary_key(schema, columns)])
+    let mut constraints = vec![primary_key(schema, columns)];
+    constraints.extend(
+        TPCDS_FOREIGN_KEYS
+            .iter()
+            .filter(|(name, ..)| *name == table)
+            .filter_map(|(_, columns, referenced_table, referenced_columns)| {
+                foreign_key(schema, columns, referenced_table, referenced_columns)
+            }),
+    );
+    Constraints::new_unverified(constraints)
+}
+
+/// Builds a foreign key constraint, or `None` when the referencing columns are
+/// not in the schema (some generators omit columns).
+fn foreign_key(
+    schema: &Schema,
+    column_names: &[&str],
+    referenced_table: &str,
+    referenced_columns: &[&str],
+) -> Option<Constraint> {
+    let columns = column_names
+        .iter()
+        .map(|column_name| schema.index_of(column_name).ok())
+        .collect::<Option<Vec<_>>>()?;
+    Some(Constraint::ForeignKey {
+        columns,
+        referenced_table: TableReference::bare(referenced_table.to_string()),
+        referenced_columns: referenced_columns.iter().map(|c| c.to_string()).collect(),
+    })
 }
 
 fn primary_key(schema: &Schema, column_names: &[&str]) -> Constraint {

@@ -66,10 +66,17 @@ message UniqueConstraint{
   repeated uint64 indices = 1;
 }
 
+message ForeignKeyConstraint{
+  repeated uint64 indices = 1;
+  string referenced_table = 2;
+  repeated string referenced_columns = 3;
+}
+
 message Constraint{
   oneof constraint_mode{
     PrimaryKeyConstraint primary_key = 1;
     UniqueConstraint unique = 2;
+    ForeignKeyConstraint foreign_key = 3;
   }
 }
 

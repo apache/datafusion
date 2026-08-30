@@ -58,8 +58,17 @@ pub struct UniqueConstraint {
     pub indices: ::prost::alloc::vec::Vec<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ForeignKeyConstraint {
+    #[prost(uint64, repeated, tag = "1")]
+    pub indices: ::prost::alloc::vec::Vec<u64>,
+    #[prost(string, tag = "2")]
+    pub referenced_table: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "3")]
+    pub referenced_columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Constraint {
-    #[prost(oneof = "constraint::ConstraintMode", tags = "1, 2")]
+    #[prost(oneof = "constraint::ConstraintMode", tags = "1, 2, 3")]
     pub constraint_mode: ::core::option::Option<constraint::ConstraintMode>,
 }
 /// Nested message and enum types in `Constraint`.
@@ -70,6 +79,8 @@ pub mod constraint {
         PrimaryKey(super::PrimaryKeyConstraint),
         #[prost(message, tag = "2")]
         Unique(super::UniqueConstraint),
+        #[prost(message, tag = "3")]
+        ForeignKey(super::ForeignKeyConstraint),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
