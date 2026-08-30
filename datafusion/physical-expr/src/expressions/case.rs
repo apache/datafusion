@@ -1419,16 +1419,26 @@ impl PhysicalExpr for CaseExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            body,
+            // Derived from `body` by `try_new` on decode.
+            eval_method: _,
+        } = self;
+        let CaseBody {
+            expr,
+            when_then_expr,
+            else_expr,
+        } = body;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Case(Box::new(
                 protobuf::PhysicalCaseNode {
-                    expr: self
-                        .expr()
+                    expr: expr
+                        .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
-                    when_then_expr: self
-                        .when_then_expr()
+                    when_then_expr: when_then_expr
                         .iter()
                         .map(|(when_expr, then_expr)| {
                             Ok(protobuf::PhysicalWhenThen {
@@ -1437,8 +1447,8 @@ impl PhysicalExpr for CaseExpr {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?,
-                    else_expr: self
-                        .else_expr()
+                    else_expr: else_expr
+                        .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
                 },
@@ -1462,30 +1472,36 @@ impl CaseExpr {
             protobuf::physical_expr_node::ExprType::Case,
             "CaseExpr",
         );
+        let protobuf::PhysicalCaseNode {
+            expr,
+            when_then_expr,
+            else_expr,
+        } = &**case;
 
         Ok(Arc::new(CaseExpr::try_new(
-            case.expr
-                .as_deref()
-                .map(|expr| ctx.decode(expr))
-                .transpose()?,
-            case.when_then_expr
+            expr.as_deref().map(|expr| ctx.decode(expr)).transpose()?,
+            when_then_expr
                 .iter()
                 .map(|when_then| {
+                    let protobuf::PhysicalWhenThen {
+                        when_expr,
+                        then_expr,
+                    } = when_then;
                     Ok((
                         ctx.decode_required_expression(
-                            when_then.when_expr.as_ref(),
+                            when_expr.as_ref(),
                             "CaseExpr",
                             "when_expr",
                         )?,
                         ctx.decode_required_expression(
-                            when_then.then_expr.as_ref(),
+                            then_expr.as_ref(),
                             "CaseExpr",
                             "then_expr",
                         )?,
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?,
-            case.else_expr
+            else_expr
                 .as_deref()
                 .map(|expr| ctx.decode(expr))
                 .transpose()?,
@@ -3417,6 +3433,26 @@ mod proto_tests {
         assert!(case_node.when_then_expr[0].when_expr.is_some());
         assert!(case_node.when_then_expr[0].then_expr.is_some());
         assert!(case_node.else_expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_distinguishes_optional_case_exprs() {
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        for (expr, else_expr) in [(None, Some(lit(0_i32))), (Some(lit(true)), None)] {
+            let case = CaseExpr::try_new(expr, vec![(lit(true), lit(1_i32))], else_expr)
+                .unwrap();
+            let node = case.try_to_proto(&ctx).unwrap().unwrap();
+            let Some(protobuf::physical_expr_node::ExprType::Case(case_node)) =
+                node.expr_type
+            else {
+                panic!("expected a CaseExpr node");
+            };
+
+            assert_eq!(case_node.expr.is_some(), case.expr().is_some());
+            assert_eq!(case_node.else_expr.is_some(), case.else_expr().is_some());
+        }
     }
 
     #[test]
