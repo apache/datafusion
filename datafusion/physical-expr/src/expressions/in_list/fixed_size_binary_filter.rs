@@ -108,6 +108,7 @@ impl StaticFilter for FixedSizeBinaryFilter {
             )
         })?;
         let primitive = reinterpret(array)?.ok_or_else(|| {
+            // Instantiation code rejects unsupported widths, so this is unexpected
             internal_datafusion_err!(
                 "FixedSizeBinary filter: unsupported width {}",
                 array.value_size()
@@ -146,6 +147,7 @@ pub(super) fn instantiate_fixed_size_binary_filter(
         return Ok(None);
     };
     let inner = instantiate_primitive_filter(&primitive)?.ok_or_else(|| {
+        // reinterpret should have returned None for unsupported widths, so this is unexpected
         internal_datafusion_err!(
             "FixedSizeBinary filter: no primitive filter for {}",
             primitive.data_type()
