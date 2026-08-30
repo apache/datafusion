@@ -4896,8 +4896,15 @@ impl Unnest {
 
         let metadata = input_schema.metadata().clone();
         let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
-        // We can use the existing functional dependencies:
-        let deps = input_schema.functional_dependencies().clone();
+        // Unnesting a list turns one input row into several, so a determinant
+        // that occurred once in the input can now occur many times. It still
+        // determines the same columns, so downgrade the dependency instead of
+        // dropping it. Unnesting a struct keeps one row per input row, and so
+        // keeps the dependencies as they are.
+        let mut deps = input_schema.functional_dependencies().clone();
+        if !list_columns.is_empty() {
+            deps = deps.with_dependency(Dependency::Multi);
+        }
         let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
         Ok(Unnest {
