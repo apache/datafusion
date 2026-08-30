@@ -24,14 +24,30 @@
 //! subplan, derives two filtered aggregates from it, and combines them with
 //! `UNION ALL`.
 //!
-//! It defines two custom [`ExecutionPlan`] nodes using DataFusion's extension
-//! APIs. They are part of this example, not built-in DataFusion operators:
+//! The final physical plan uses two custom [`ExecutionPlan`] nodes. They are
+//! part of this example, not built-in DataFusion operators:
 //!
 //! - `StreamingFanoutExec` executes the expensive input once, owns the bounded
 //!   buffering, and exposes one output lane per consumer and input partition.
 //! - Each `StreamingFanoutReaderExec` selects one consumer's lanes. The first
 //!   reader keeps the fan-out visible in the physical plan; later readers
 //!   reference the same fan-out through a shared [`Arc`].
+//!
+//! ## Extension points used
+//!
+//! The example also defines the planning and runtime glue:
+//!
+//! - `StreamingShareNode` implements [`UserDefinedLogicalNodeCore`] and marks a
+//!   logical subplan with a stable sharing ID.
+//! - `StreamingShareQueryPlanner` implements [`QueryPlanner`] and installs
+//!   `StreamingShareExtensionPlanner`, an [`ExtensionPlanner`] that converts the
+//!   logical marker into a temporary `StreamingShareMarkerExec`.
+//! - `RewriteStreamingShares` implements [`PhysicalOptimizerRule`]. It counts
+//!   consumers and replaces the temporary markers with one fan-out and one
+//!   reader per consumer.
+//! - `StreamingFanoutState` and `FanoutPartition` are example-only runtime
+//!   helpers. They use [`RecordBatchReceiverStreamBuilder`] for bounded streams
+//!   and [`SpawnedTask`] to run each input partition once.
 //!
 //! ```text
 //! expensive join
