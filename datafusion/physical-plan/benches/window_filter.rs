@@ -50,6 +50,7 @@ use rand::seq::SliceRandom;
 const BATCH_SIZE: usize = 8192;
 const NUM_BATCHES: usize = 4;
 const NUM_ROWS: usize = BATCH_SIZE * NUM_BATCHES;
+const FILTER_CASES: &[Option<usize>] = &[None, Some(10), Some(30), Some(50)];
 
 #[derive(Clone, Copy)]
 enum ArgumentKind {
@@ -201,38 +202,22 @@ fn benchmark_window_case(
     name: &str,
     window_frame: &WindowFrame,
     argument_kinds: &[ArgumentKind],
-    filter_percents: &[usize],
     sample_size: usize,
 ) {
     let mut group = c.benchmark_group(format!("window_aggregate_filter/{name}"));
     group.sample_size(sample_size);
 
     for &argument_kind in argument_kinds {
-        let plan = make_window_plan(None, argument_kind, window_frame.clone());
-        let task_ctx = Arc::new(TaskContext::default());
-        group.bench_function(BenchmarkId::new(argument_kind.name(), "no_filter"), |b| {
-            b.iter(|| {
-                let batches = runtime
-                    .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
-                    .unwrap();
-                black_box(batches);
-            })
-        });
-    }
-
-    for &filter_percent in filter_percents {
-        for &argument_kind in argument_kinds {
-            let plan = make_window_plan(
-                Some(filter_percent),
-                argument_kind,
-                window_frame.clone(),
-            );
+        for &filter_percent in FILTER_CASES {
+            let case_name = match filter_percent {
+                None => "no_filter".to_string(),
+                Some(percent) => format!("{percent}_percent"),
+            };
+            let plan =
+                make_window_plan(filter_percent, argument_kind, window_frame.clone());
             let task_ctx = Arc::new(TaskContext::default());
             group.bench_function(
-                BenchmarkId::new(
-                    argument_kind.name(),
-                    format!("{filter_percent}_percent"),
-                ),
+                BenchmarkId::new(argument_kind.name(), case_name),
                 |b| {
                     b.iter(|| {
                         let batches = runtime
@@ -260,7 +245,6 @@ fn window_filter_benchmark(c: &mut Criterion) {
             ArgumentKind::Divide,
             ArgumentKind::Power,
         ],
-        &[10, 30, 50],
         10,
     );
     benchmark_window_case(
@@ -273,7 +257,6 @@ fn window_filter_benchmark(c: &mut Criterion) {
             ArgumentKind::Divide,
             ArgumentKind::Power,
         ],
-        &[10, 30, 50],
         10,
     );
     benchmark_window_case(
@@ -286,7 +269,6 @@ fn window_filter_benchmark(c: &mut Criterion) {
             ArgumentKind::Divide,
             ArgumentKind::Power,
         ],
-        &[10, 30, 50],
         100,
     );
 }
