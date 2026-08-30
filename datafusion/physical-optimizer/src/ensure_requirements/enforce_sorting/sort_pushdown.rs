@@ -781,7 +781,9 @@ fn expr_source_side(
         | JoinType::Right
         | JoinType::Full
         | JoinType::LeftMark
-        | JoinType::RightMark => {
+        | JoinType::RightMark
+        | JoinType::LeftSingle
+        | JoinType::RightSingle => {
             let eq_group = eqp.eq_group();
             let mut right_ordering = ordering.clone();
             let (mut valid_left, mut valid_right) = (true, true);
@@ -1039,7 +1041,7 @@ fn build_join_column_index(plan: &HashJoinExec) -> Vec<ColumnIndex> {
     };
 
     match plan.join_type() {
-        JoinType::Inner | JoinType::Right => {
+        JoinType::Inner | JoinType::Right | JoinType::RightSingle => {
             map_fields(plan.left().schema(), JoinSide::Left)
                 .into_iter()
                 .chain(map_fields(plan.right().schema(), JoinSide::Right))

@@ -1053,6 +1053,8 @@ pub enum JoinType {
     Rightanti = 7,
     Leftmark = 8,
     Rightmark = 9,
+    Leftsingle = 10,
+    Rightsingle = 11,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1071,6 +1073,8 @@ impl JoinType {
             Self::Rightanti => "RIGHTANTI",
             Self::Leftmark => "LEFTMARK",
             Self::Rightmark => "RIGHTMARK",
+            Self::Leftsingle => "LEFTSINGLE",
+            Self::Rightsingle => "RIGHTSINGLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1086,6 +1090,8 @@ impl JoinType {
             "RIGHTANTI" => Some(Self::Rightanti),
             "LEFTMARK" => Some(Self::Leftmark),
             "RIGHTMARK" => Some(Self::Rightmark),
+            "LEFTSINGLE" => Some(Self::Leftsingle),
+            "RIGHTSINGLE" => Some(Self::Rightsingle),
             _ => None,
         }
     }

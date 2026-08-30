@@ -166,6 +166,8 @@ impl From<protobuf::JoinType> for JoinType {
             protobuf::JoinType::Rightanti => JoinType::RightAnti,
             protobuf::JoinType::Leftmark => JoinType::LeftMark,
             protobuf::JoinType::Rightmark => JoinType::RightMark,
+            protobuf::JoinType::Leftsingle => JoinType::LeftSingle,
+            protobuf::JoinType::Rightsingle => JoinType::RightSingle,
         }
     }
 }

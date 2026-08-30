@@ -1610,6 +1610,10 @@ impl DefaultPhysicalPlanner {
                                 | JoinType::RightAnti
                                 | JoinType::LeftMark
                                 | JoinType::RightMark
+                                // Single joins are only implemented by hash and
+                                // nested loop joins.
+                                | JoinType::LeftSingle
+                                | JoinType::RightSingle
                         )
                         && session_state
                             .config_options()

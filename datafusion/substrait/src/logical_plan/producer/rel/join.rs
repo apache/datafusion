@@ -36,7 +36,7 @@ pub fn from_join(
 
     let left = producer.handle_plan(join.left.as_ref())?;
     let right = producer.handle_plan(join.right.as_ref())?;
-    let join_type = to_substrait_jointype(join.join_type);
+    let join_type = to_substrait_jointype(join.join_type)?;
 
     let join_expr =
         to_substrait_join_expr(join.on.clone(), join.null_equality, join.filter.clone());
@@ -79,8 +79,10 @@ fn to_substrait_join_expr(
     conjunction(all_conditions)
 }
 
-fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
-    match join_type {
+fn to_substrait_jointype(
+    join_type: JoinType,
+) -> datafusion::common::Result<join_rel::JoinType> {
+    Ok(match join_type {
         JoinType::Inner => join_rel::JoinType::Inner,
         JoinType::Left => join_rel::JoinType::Left,
         JoinType::Right => join_rel::JoinType::Right,
@@ -91,7 +93,12 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
         JoinType::RightMark => join_rel::JoinType::RightMark,
         JoinType::RightAnti => join_rel::JoinType::RightAnti,
         JoinType::RightSemi => join_rel::JoinType::RightSemi,
-    }
+        // Substrait has no equivalent of the single join, which fails at
+        // runtime when more than one row matches.
+        JoinType::LeftSingle | JoinType::RightSingle => {
+            return not_impl_err!("join type: `{join_type}`");
+        }
+    })
 }
 
 #[cfg(test)]

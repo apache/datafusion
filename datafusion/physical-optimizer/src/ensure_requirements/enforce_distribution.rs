@@ -169,11 +169,13 @@ pub fn adjust_input_keys_ordering(
             PartitionMode::CollectLeft => {
                 // Push down requirements to the right side
                 requirements.children[1].data = match join_type {
-                    JoinType::Inner | JoinType::Right => shift_right_required(
-                        &requirements.data,
-                        left.schema().fields().len(),
-                    )
-                    .unwrap_or_default(),
+                    JoinType::Inner | JoinType::Right | JoinType::RightSingle => {
+                        shift_right_required(
+                            &requirements.data,
+                            left.schema().fields().len(),
+                        )
+                        .unwrap_or_default()
+                    }
                     JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         requirements.data.clone()
                     }
@@ -181,7 +183,8 @@ pub fn adjust_input_keys_ordering(
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
                     | JoinType::Full
-                    | JoinType::LeftMark => vec![],
+                    | JoinType::LeftMark
+                    | JoinType::LeftSingle => vec![],
                 };
             }
             PartitionMode::Auto => {

@@ -510,7 +510,11 @@ fn child_duplicate_insensitivity(
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
             (true, duplicate_insensitive)
         }
-        JoinType::Left | JoinType::Right | JoinType::Full => (false, false),
+        JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftSingle
+        | JoinType::RightSingle => (false, false),
     }
 }
 
@@ -601,9 +605,12 @@ fn split_join_output_columns(
 ) -> (LiveColumns, LiveColumns) {
     let left_len = join.left.schema().fields().len();
     match join.join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            live.split_at(left_len)
-        }
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftSingle
+        | JoinType::RightSingle => live.split_at(left_len),
         // A semi/anti/mark join outputs only the surviving side's columns, with
         // the same index space, so `live` passes straight through to that side.
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {

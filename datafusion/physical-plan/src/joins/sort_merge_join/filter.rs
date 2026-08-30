@@ -290,6 +290,9 @@ pub fn get_corrected_filter_mask(
         | JoinType::RightAnti => {
             unreachable!("Semi/anti/mark joins are handled by BitwiseSortMergeJoinStream")
         }
+        JoinType::LeftSingle | JoinType::RightSingle => {
+            unreachable!("Single joins are rejected by SortMergeJoinExec::try_new")
+        }
         JoinType::Inner => None,
     }
 }
@@ -383,6 +386,9 @@ pub fn filter_record_batch_by_join_type(
         | JoinType::RightMark => unreachable!(
             "Semi/anti/mark joins are handled by SemiAntiMarkSortMergeJoinStream"
         ),
+        JoinType::LeftSingle | JoinType::RightSingle => {
+            unreachable!("Single joins are rejected by SortMergeJoinExec::try_new")
+        }
         JoinType::Inner => Ok(filter_record_batch(record_batch, corrected_mask)?),
     }
 }

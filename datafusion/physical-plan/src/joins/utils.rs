@@ -67,7 +67,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
-    DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult, exec_err,
     internal_datafusion_err, not_impl_err, plan_err,
 };
 use datafusion_expr::interval_arithmetic::Interval;
@@ -253,6 +253,8 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
         JoinType::RightAnti => false, // doesn't introduce nulls (or can it??)
         JoinType::LeftMark => false,
         JoinType::RightMark => false,
+        JoinType::LeftSingle => !is_left, // right input is padded with nulls
+        JoinType::RightSingle => is_left, // left input is padded with nulls
     };
 
     if force_nullable {
@@ -303,7 +305,12 @@ pub fn build_join_schema(
     };
 
     let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Full
+        | JoinType::Right
+        | JoinType::LeftSingle
+        | JoinType::RightSingle => {
             // left then right
             left_fields().chain(right_fields()).unzip()
         }
@@ -516,7 +523,12 @@ fn estimate_join_cardinality(
         .unzip::<_, _, Vec<_>, Vec<_>>();
 
     match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftSingle
+        | JoinType::RightSingle => {
             let ij_cardinality = estimate_inner_join_cardinality(
                 Statistics {
                     num_rows: left_stats.num_rows,
@@ -538,6 +550,9 @@ fn estimate_join_cardinality(
                 JoinType::Inner => ij_cardinality,
                 JoinType::Left => ij_cardinality.max(&left_stats.num_rows),
                 JoinType::Right => ij_cardinality.max(&right_stats.num_rows),
+                // A single join emits exactly one row per preserved-side row.
+                JoinType::LeftSingle => left_stats.num_rows,
+                JoinType::RightSingle => right_stats.num_rows,
                 JoinType::Full => ij_cardinality
                     .max(&left_stats.num_rows)
                     .add(&ij_cardinality.max(&right_stats.num_rows))
@@ -1171,6 +1186,7 @@ pub(crate) fn need_produce_right_in_final(join_type: JoinType) -> bool {
             | JoinType::RightAnti
             | JoinType::RightMark
             | JoinType::RightSemi
+            | JoinType::RightSingle
     )
 }
 
@@ -1179,6 +1195,46 @@ pub(crate) fn need_produce_right_in_final(join_type: JoinType) -> bool {
 ///
 /// For example of the `Left` join, in each iteration of right side, can get the matched result, but need
 /// to maintain the matched indices bit map to get the unmatched row for the left side.
+/// The error a "single" join raises when a row of its preserved side matches more
+/// than one row of the other side.
+///
+/// Single joins exist to evaluate scalar subqueries, so this matches the error
+/// [`ScalarSubqueryExec`] raises for the uncorrelated case.
+///
+/// [`ScalarSubqueryExec`]: crate::scalar_subquery::ScalarSubqueryExec
+pub(crate) fn single_join_too_many_rows_err<T>() -> Result<T> {
+    exec_err!("Scalar subquery returned more than one row")
+}
+
+/// Checks that a probe-driven single join (`RightSingle`) matched each probe row
+/// at most once.
+///
+/// `probe_indices` holds the matched probe-side indices of one chunk of a probe
+/// batch, in ascending order. A second match for a probe row is therefore either
+/// adjacent to the first, or, if the matches for a probe row span two chunks,
+/// equal to `last_joined_probe_idx`, the last probe index joined by the previous
+/// chunk of the same batch.
+pub(crate) fn check_single_join_probe_indices(
+    probe_indices: &UInt32Array,
+    last_joined_probe_idx: Option<usize>,
+) -> Result<()> {
+    debug_assert_eq!(
+        probe_indices.null_count(),
+        0,
+        "expected matched probe indices to have no nulls"
+    );
+    let indices = probe_indices.values();
+    if let (Some(first), Some(last)) = (indices.first(), last_joined_probe_idx)
+        && *first as usize == last
+    {
+        return single_join_too_many_rows_err();
+    }
+    if indices.windows(2).any(|pair| pair[0] == pair[1]) {
+        return single_join_too_many_rows_err();
+    }
+    Ok(())
+}
+
 pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(
         join_type,
@@ -1186,6 +1242,7 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
             | JoinType::LeftAnti
             | JoinType::LeftSemi
             | JoinType::LeftMark
+            | JoinType::LeftSingle
             | JoinType::Full
     )
 }
@@ -1442,12 +1499,12 @@ pub(crate) fn adjust_indices_by_join_type(
             // matched
             Ok((left_indices, right_indices))
         }
-        JoinType::Left => {
+        JoinType::Left | JoinType::LeftSingle => {
             // matched
             Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
-        JoinType::Right => {
+        JoinType::Right | JoinType::RightSingle => {
             // combine the matched and unmatched right result together
             append_right_indices(
                 left_indices,
@@ -1904,11 +1961,16 @@ pub(crate) fn symmetric_join_output_partitioning(
     let left_partitioning = left.output_partitioning();
     let right_partitioning = right.output_partitioning();
     let result = match join_type {
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-            left_partitioning.clone()
-        }
+        JoinType::Left
+        | JoinType::LeftSemi
+        | JoinType::LeftAnti
+        | JoinType::LeftMark
+        | JoinType::LeftSingle => left_partitioning.clone(),
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
             right_partitioning.clone()
+        }
+        JoinType::RightSingle => {
+            adjust_right_output_partitioning(right_partitioning, left_columns_len)?
         }
         JoinType::Inner | JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)?
@@ -1938,9 +2000,14 @@ pub(crate) fn asymmetric_join_output_partitioning(
         | JoinType::LeftSemi
         | JoinType::LeftAnti
         | JoinType::Full
-        | JoinType::LeftMark => Partitioning::UnknownPartitioning(
+        | JoinType::LeftMark
+        | JoinType::LeftSingle => Partitioning::UnknownPartitioning(
             right.output_partitioning().partition_count(),
         ),
+        JoinType::RightSingle => adjust_right_output_partitioning(
+            right.output_partitioning(),
+            left.schema().fields().len(),
+        )?,
     };
     Ok(result)
 }
