@@ -187,7 +187,6 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryLimit;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -1281,12 +1280,7 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_partial_reduce_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::PartialReduce
             && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
@@ -3217,6 +3211,7 @@ mod tests {
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
+    use datafusion_common::cast::{as_float64_array, as_uint32_array};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
@@ -4398,6 +4393,15 @@ mod tests {
     }
 
     fn partial_reduce_test_aggregate() -> Result<AggregateExec> {
+        partial_reduce_test_aggregate_with_batches(1)
+    }
+
+    /// Partial-reduce aggregate over `num_input_batches` identical input batches
+    /// of partial states, each reducing to groups `1, 2, 3` with sums
+    /// `50, 20, 30`.
+    fn partial_reduce_test_aggregate_with_batches(
+        num_input_batches: usize,
+    ) -> Result<AggregateExec> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
@@ -4430,7 +4434,7 @@ mod tests {
             ],
         )?;
         let partial_reduce_input = TestMemoryExec::try_new_exec(
-            &[vec![partial_state_batch]],
+            &[vec![partial_state_batch; num_input_batches]],
             Arc::clone(&partial_schema),
             None,
         )?;
@@ -4466,26 +4470,50 @@ mod tests {
         Ok(())
     }
 
-    /// Spilling behavior is not implemented for partial-reduce stream yet, so fall
-    /// back to the existing `GroupedHashAggregateStream`
+    /// Partial-reduce hash aggregation emits its accumulated partial states early
+    /// under memory pressure instead of failing, and the early-emitted states
+    /// still merge into the correct result.
     #[tokio::test]
-    async fn partial_reduce_aggregate_with_memory_limit_planning() -> Result<()> {
-        let partial_reduce = partial_reduce_test_aggregate()?;
+    async fn partial_reduce_aggregate_with_memory_limit_emits_early() -> Result<()> {
+        let num_input_batches = 3;
+        let partial_reduce =
+            partial_reduce_test_aggregate_with_batches(num_input_batches)?;
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(1, 1.0)
             .build_arc()?;
-        let task_ctx =
-            Arc::new(
-                TaskContext::default()
-                    .with_session_config(SessionConfig::new().set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        true,
-                    ))
-                    .with_runtime(runtime),
-            );
+        // A batch size smaller than the number of flushed groups also covers
+        // splitting one flush across several output batches.
+        let batch_size = 2;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_runtime(runtime),
+        );
 
         let stream = partial_reduce.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::PartialReduceHash(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+
+        // The table is flushed after every input batch, so each of the three
+        // groups is emitted once per input batch instead of being merged into a
+        // single row. Each flush is emitted as batches of 2 and 1 rows.
+        let total_rows: usize = output.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(total_rows, 3 * num_input_batches);
+        assert_eq!(output.len(), 2 * num_input_batches);
+
+        // The repeated partial states still merge into the expected sums.
+        let mut sums: HashMap<u32, f64> = HashMap::new();
+        for batch in &output {
+            let groups = as_uint32_array(batch.column(0))?;
+            let states = as_float64_array(batch.column(1))?;
+            for row in 0..batch.num_rows() {
+                *sums.entry(groups.value(row)).or_default() += states.value(row);
+            }
+        }
+        let mut sums = sums.into_iter().collect::<Vec<_>>();
+        sums.sort_by_key(|(group, _)| *group);
+        assert_eq!(sums, vec![(1, 150.0), (2, 60.0), (3, 90.0)]);
 
         Ok(())
     }
