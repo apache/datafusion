@@ -173,7 +173,18 @@ pub fn check_subquery_expr(
         // outer values. Subqueries whose shape does not guarantee that are
         // still valid: `ScalarSubqueryToJoin` decorrelates them with a single
         // join, which raises an error at runtime if a second row shows up.
+        //
+        // Decorrelation works by pulling the correlated predicate above the
+        // subquery, which a row-limiting operator in between makes unsound.
+        // Such a subquery is only usable when it returns a single row anyway.
         if !subquery.outer_ref_columns.is_empty() {
+            if correlation_is_below_limit(inner_plan)
+                && inner_plan.max_rows().is_none_or(|rows| rows > 1)
+            {
+                return plan_err!(
+                    "Correlated scalar subquery with a LIMIT must be limited to a single row"
+                );
+            }
             match outer_plan {
                 LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
                 LogicalPlan::Aggregate(Aggregate {
@@ -338,6 +349,31 @@ fn check_no_outer_references(inner_plan: &LogicalPlan) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Returns true when a `LIMIT` sits above an outer reference in the subquery,
+/// which stops [`PullUpCorrelatedExpr`] from pulling the correlated predicate
+/// above the subquery.
+///
+/// [`PullUpCorrelatedExpr`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/decorrelate/struct.PullUpCorrelatedExpr.html
+fn correlation_is_below_limit(inner_plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    inner_plan
+        .apply(|plan| {
+            Ok(
+                if matches!(plan, LogicalPlan::Limit(_))
+                    && !plan.all_out_ref_exprs().is_empty()
+                {
+                    found = true;
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                },
+            )
+        })
+        // the closure always returns Ok
+        .expect("infallible");
+    found
 }
 
 /// Returns true when the shape of a correlated scalar subquery already

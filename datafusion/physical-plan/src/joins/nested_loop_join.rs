@@ -2946,6 +2946,14 @@ impl NestedLoopJoinStream {
         // 1. Maybe update the left bitmap
         if need_produce_result_in_final(self.join_type) && r_matched_bitmap.has_true() {
             let mut bitmap = left_data.bitmap().lock();
+            // A single join must not match a left row twice, whether inside this
+            // right batch or against an earlier one -- and, since the bitmap is
+            // shared, whether in this partition or another.
+            if self.join_type == JoinType::LeftSingle
+                && (r_matched_bitmap.true_count() > 1 || bitmap.get_bit(l_index))
+            {
+                return single_join_too_many_rows_err();
+            }
             bitmap.set_bit(l_index, true);
         }
 
@@ -2959,6 +2967,14 @@ impl NestedLoopJoinStream {
                 })?;
             let (buf, nulls) = right_bitmap.into_parts();
             debug_assert!(nulls.is_none());
+            // Likewise, a bit already set means an earlier left row matched the
+            // same right row.
+            if self.join_type == JoinType::RightSingle
+                && buf.bitand(r_matched_bitmap.values()).count_set_bits() > 0
+            {
+                self.current_right_batch_matched = Some(BooleanArray::new(buf, None));
+                return single_join_too_many_rows_err();
+            }
             let updated_right_bitmap = buf.bitor(r_matched_bitmap.values());
 
             self.current_right_batch_matched =
@@ -3739,6 +3755,81 @@ pub(crate) mod tests {
         "));
 
         assert_join_metrics!(metrics, 3);
+
+        Ok(())
+    }
+
+    /// A single join emits one row per row of its preserved side; the filter
+    /// here leaves at most one match for each, so nothing is rejected.
+    #[rstest]
+    #[tokio::test]
+    async fn join_single_with_filter(
+        #[values(JoinType::LeftSingle, JoinType::RightSingle)] join_type: JoinType,
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
+        let left = build_left_table();
+        let right = build_right_table();
+
+        let filter = prepare_join_filter();
+        let (columns, batches, _) = multi_partitioned_join_collect(
+            left,
+            right,
+            &join_type,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        if join_type == JoinType::LeftSingle {
+            allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+-----+----+----+----+
+            | a1 | b1 | c1  | a2 | b2 | c2 |
+            +----+----+-----+----+----+----+
+            | 11 | 8  | 110 |    |    |    |
+            | 5  | 5  | 50  | 2  | 2  | 80 |
+            | 9  | 8  | 90  |    |    |    |
+            +----+----+-----+----+----+----+
+            "));
+        } else {
+            allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+----+----+-----+
+            | a1 | b1 | c1 | a2 | b2 | c2  |
+            +----+----+----+----+----+-----+
+            |    |    |    | 10 | 10 | 100 |
+            |    |    |    | 12 | 10 | 40  |
+            | 5  | 5  | 50 | 2  | 2  | 80  |
+            +----+----+----+----+----+-----+
+            "));
+        }
+
+        Ok(())
+    }
+
+    /// Without a filter every row of one side matches every row of the other,
+    /// so a single join rejects the second match.
+    #[rstest]
+    #[tokio::test]
+    async fn join_single_rejects_second_match(
+        #[values(JoinType::LeftSingle, JoinType::RightSingle)] join_type: JoinType,
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
+        let err = multi_partitioned_join_collect(
+            build_left_table(),
+            build_right_table(),
+            &join_type,
+            None,
+            task_ctx,
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "Scalar subquery returned more than one row"
+        );
 
         Ok(())
     }

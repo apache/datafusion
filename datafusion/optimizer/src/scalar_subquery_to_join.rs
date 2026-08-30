@@ -395,6 +395,11 @@ fn build_join(
     // correlated subqueries can be ambiguous here -- an uncorrelated one is
     // checked by `ScalarSubqueryExec` or, when this rule rewrites it, joined
     // on `Boolean(true)` against a plan that already returns a single row.
+    //
+    // The single join only sees the outer rows that reach it, so an outer row
+    // a pushed-down filter removed cannot raise the error. Whether a
+    // more-than-one-row subquery is reported therefore depends on the plan,
+    // the same way it does in other engines.
     let join_type = if subquery.outer_ref_columns.is_empty()
         || correlated_scalar_subquery_yields_single_row(subquery_plan)?
     {
