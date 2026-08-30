@@ -132,10 +132,6 @@ SELECT pmod(NULL::int, NULL::int) as pmod_null_3;
 ----
 NULL
 
-# An untyped NULL matches the decimal signature and is passed through
-# uncoerced (apache/datafusion#19458), so these types are decided explicitly
-# rather than by coercion. `mod` answers Float64 for two untyped nulls and
-# keeps the other side's type when only one is null; pmod matches it.
 query T
 SELECT arrow_typeof(pmod(NULL, NULL));
 ----

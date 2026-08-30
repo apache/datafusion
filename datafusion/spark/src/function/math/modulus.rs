@@ -147,8 +147,6 @@ pub fn spark_pmod(
         if args[0].data_type() == args[1].data_type() {
             (Arc::clone(&args[0]), Arc::clone(&args[1]))
         } else {
-            // Only a decimal pair reaches here: `Numeric(2)` already gives
-            // the other types a common type.
             let Some(computation_type) =
                 decimal_coercion(args[0].data_type(), args[1].data_type())
             else {
