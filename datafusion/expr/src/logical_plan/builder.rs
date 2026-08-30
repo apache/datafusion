@@ -1843,7 +1843,12 @@ pub fn build_join_schema(
 /// Both `ON` and `USING` preserve all qualified input fields. SQL wildcard
 /// expansion handles the unqualified `USING` key as a single column.
 pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSchema> {
-    build_join_schema(left, right, &JoinType::Left)
+    // ASOF emits exactly one output row for each left row. Unlike a general
+    // left join, it cannot duplicate left rows, so left dependencies retain
+    // their modes. Right dependencies do not hold because one right row may
+    // match multiple left rows.
+    build_join_schema(left, right, &JoinType::Left)?
+        .with_functional_dependencies(left.functional_dependencies().clone())
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -2381,7 +2386,8 @@ mod tests {
 
     use crate::test::function_stub::sum;
     use datafusion_common::{
-        Constraint, DataFusionError, RecursionUnnestOption, SchemaError,
+        Constraint, DataFusionError, Dependency, FunctionalDependence,
+        FunctionalDependencies, RecursionUnnestOption, SchemaError,
     };
     use insta::assert_snapshot;
 
@@ -3036,6 +3042,40 @@ mod tests {
             &HashMap::from([("key".to_string(), "right".to_string())])
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn asof_join_schema_preserves_only_left_dependencies() -> Result<()> {
+        let left = DFSchema::try_from_qualified_schema(
+            "left",
+            &Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, false),
+            ]),
+        )?
+        .with_functional_dependencies(FunctionalDependencies::new(vec![
+            FunctionalDependence::new(vec![0], vec![0, 1], false)
+                .with_mode(Dependency::Single),
+        ]))?;
+        let right = DFSchema::try_from_qualified_schema(
+            "right",
+            &Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, false),
+            ]),
+        )?
+        .with_functional_dependencies(FunctionalDependencies::new(vec![
+            FunctionalDependence::new(vec![0], vec![0, 1], false)
+                .with_mode(Dependency::Single),
+        ]))?;
+
+        let schema = build_asof_join_schema(&left, &right)?;
+
+        assert_eq!(
+            schema.functional_dependencies(),
+            left.functional_dependencies()
+        );
         Ok(())
     }
 
