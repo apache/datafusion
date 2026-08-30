@@ -34,6 +34,7 @@ use datafusion_common::{
     Result, ScalarValue, assert_eq_or_internal_err, exec_err, not_impl_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -795,12 +796,6 @@ pub mod proto_decode {
     }
 }
 
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `datafusion_expr_common::dyn_eq` instead"
-)]
-pub use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
-
 impl dyn PhysicalExpr {
     /// Returns `true` if the expression is of type `T`.
     ///
@@ -907,7 +902,7 @@ where
 /// # use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 /// # use datafusion_common::Result;
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
-/// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, DynEq, PhysicalExpr};
+/// # use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
 /// # #[derive(Debug, PartialEq, Eq, Hash)]
 /// # struct MyExpr {}
 /// # impl PhysicalExpr for MyExpr {

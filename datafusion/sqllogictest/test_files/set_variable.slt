@@ -511,6 +511,17 @@ SHOW datafusion.format.duration_format
 ----
 datafusion.format.duration_format pretty
 
+# Invalid values are now rejected at SET time, rather than being silently
+# accepted and only failing later when the value is actually used to format
+# output.
+statement error
+SET datafusion.format.duration_format = milliseconds
+----
+DataFusion error: Error setting config datafusion.format.duration_format
+caused by
+Invalid or Unsupported Configuration: Invalid duration format: milliseconds. Valid values are pretty or iso8601
+
+
 # null display string
 statement ok
 SET datafusion.format.null = 'NuLL'
@@ -776,6 +787,43 @@ SET datafusion.execution.max_buffered_batches_per_output_file = 1
 DataFusion error: Error setting config datafusion.execution.max_buffered_batches_per_output_file
 caused by
 Invalid or Unsupported Configuration: value must be at least 2
+
+
+# default_filter_selectivity is a percentage (0..=100); previously an
+# out-of-range value like 200 was silently accepted here and only rejected
+# later, when FilterExec was built.
+statement error
+SET datafusion.optimizer.default_filter_selectivity = -1
+----
+DataFusion error: Error setting config datafusion.optimizer.default_filter_selectivity
+caused by
+Invalid or Unsupported Configuration: value must be between 0 and 100, got -1
+
+
+statement error
+SET datafusion.optimizer.default_filter_selectivity = 256
+----
+DataFusion error: Error setting config datafusion.optimizer.default_filter_selectivity
+caused by
+Invalid or Unsupported Configuration: value must be between 0 and 100, got 256
+
+
+statement error
+SET datafusion.optimizer.default_filter_selectivity = 200
+----
+DataFusion error: Error setting config datafusion.optimizer.default_filter_selectivity
+caused by
+Invalid or Unsupported Configuration: value must be between 0 and 100, got 200
+
+
+statement ok
+SET datafusion.optimizer.default_filter_selectivity = 100
+
+statement ok
+SET datafusion.optimizer.default_filter_selectivity = 0
+
+statement ok
+SET datafusion.optimizer.default_filter_selectivity = 20
 
 
 # Config reset
