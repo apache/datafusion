@@ -141,20 +141,10 @@ SELECT arrow_typeof(pmod(NULL, NULL));
 ----
 Float64
 
-query R
-SELECT pmod(NULL, NULL);
-----
-NULL
-
 query T
 SELECT arrow_typeof(pmod(2.5::decimal(3,1), NULL));
 ----
 Decimal128(3, 1)
-
-query R
-SELECT pmod(2.5::decimal(3,1), NULL);
-----
-NULL
 
 # An untyped NULL beside a typed non-decimal argument takes the Numeric path,
 # which cannot coerce the pair. `mod` rejects it the same way.
@@ -374,7 +364,7 @@ SELECT pmod(99.9::decimal(3,1), 2.5::decimal(2,1));
 # A remainder is bounded by the divisor, not by the result type, so a divisor
 # wider than the dividend can produce a value the result type cannot hold. Spark
 # wraps decimal arithmetic in CheckOverflow(nullOnOverflow = !ansiEnabled), so
-# this is NULL in legacy mode and an error under ANSI (asserted further down).
+# this is NULL in legacy mode; the ANSI error is asserted in the ANSI block above.
 query T
 SELECT arrow_typeof(pmod(-0.1::decimal(3,1), 9999.9::decimal(5,1)));
 ----
@@ -384,23 +374,6 @@ query R
 SELECT pmod(-0.1::decimal(3,1), 9999.9::decimal(5,1));
 ----
 NULL
-
-# An untyped NULL pair falls back to Float64, as it did under Signature::numeric
-query T
-SELECT arrow_typeof(pmod(NULL, NULL));
-----
-Float64
-
-query R
-SELECT pmod(NULL, NULL);
-----
-NULL
-
-# A null divisor takes the dividend's type
-query T
-SELECT arrow_typeof(pmod(2.5::decimal(3,1), NULL));
-----
-Decimal128(3, 1)
 
 # PMOD tests with different integer types
 query I

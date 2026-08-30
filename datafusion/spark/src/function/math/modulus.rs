@@ -31,7 +31,7 @@ use arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility, binary::binary_numeric_coercion,
+    TypeSignatureClass, Volatility, binary::decimal_coercion,
 };
 
 /// Returns a one element array holding negative zero, for the floating point
@@ -113,29 +113,13 @@ pub fn spark_mod(
 /// precision = min(p1 - s1, p2 - s2) + scale
 /// ```
 ///
-/// The rule is applied to the *declared* argument types. Collapsing both
-/// arguments to a common decimal first would make the two precisions equal and
-/// the rule would degenerate to the input precision, which is why
-/// [`SparkPmod::coerce_types`] leaves decimal arguments intact.
+/// The rule is applied to the input argument types.
 fn pmod_decimal_result_type(p1: u8, s1: i8, p2: u8, s2: i8) -> DataType {
     let scale = s1.max(s2);
     let whole_digits = (i32::from(p1) - i32::from(s1)).min(i32::from(p2) - i32::from(s2));
     let precision =
         (whole_digits + i32::from(scale)).clamp(1, i32::from(DECIMAL128_MAX_PRECISION));
     DataType::Decimal128(precision as u8, scale)
-}
-
-/// The type `pmod` computes in, which is not always the type it returns.
-///
-/// Spark's result type is narrower than the dividend, so the operands cannot be
-/// cast to it before the remainder is taken without overflowing the dividend.
-/// The computation therefore runs in a common type wide enough for both, and
-/// the result is narrowed afterwards.
-fn pmod_computation_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
-    match binary_numeric_coercion(lhs, rhs) {
-        Some(computation_type) => Ok(computation_type),
-        None => exec_err!("pmod does not support ({lhs}, {rhs})"),
-    }
 }
 
 /// Spark-compatible `pmod` function
@@ -152,22 +136,28 @@ pub fn spark_pmod(
     // A null argument is passed through uncoerced by `Coercible` (#19458), so
     // it still carries `DataType::Null` here. Every operation below needs a
     // concrete numeric type, and the answer is null regardless.
+    // Need to handle nulls separately as they are pass through by the signature
     if args.iter().any(|arg| arg.data_type() == &DataType::Null) {
-        return Ok(ColumnarValue::Array(new_null_array(
+        return Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
             result_type,
-            args[0].len(),
-        )));
+        )?));
     }
 
     let (left, right): (ArrayRef, ArrayRef) =
         if args[0].data_type() == args[1].data_type() {
             (Arc::clone(&args[0]), Arc::clone(&args[1]))
         } else {
-            let computation_type =
-                pmod_computation_type(args[0].data_type(), args[1].data_type())?;
-            // The computation type is wide enough for both operands by
-            // construction, so widening must not silently null on overflow the
-            // way arrow's default (`safe: true`) cast would.
+            // Only a decimal pair reaches here: `Numeric(2)` already gives
+            // the other types a common type.
+            let Some(computation_type) =
+                decimal_coercion(args[0].data_type(), args[1].data_type())
+            else {
+                return exec_err!(
+                    "pmod does not support ({}, {})",
+                    args[0].data_type(),
+                    args[1].data_type()
+                );
+            };
             let widen = CastOptions {
                 safe: false,
                 ..Default::default()
@@ -302,21 +292,15 @@ impl ScalarUDFImpl for SparkPmod {
             (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
                 Ok(pmod_decimal_result_type(*p1, *s1, *p2, *s2))
             }
-            // `Coercible` matches a null argument and passes it through
-            // uncoerced (#19458), so an untyped NULL reaches here rather than
-            // being folded by `Numeric(2)`. `mod` answers `Float64` for two
-            // untyped nulls and the other side's type when only one is null;
-            // `pmod` did too, so that behaviour is kept explicitly here.
+            // Need to handle nulls explicitly, see: https://github.com/apache/datafusion/issues/19458
+            // We align with the behaviour of `mod`
             (DataType::Null, DataType::Null) => Ok(DataType::Float64),
             (DataType::Null, other) | (other, DataType::Null) => Ok(other.clone()),
-            // Arrow's rem function handles type promotion for the rest
             _ => Ok(arg_types[0].clone()),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // The Spark result type was already derived in `return_type`, so it is
-        // read back here rather than recomputed from the argument arrays.
         spark_pmod(
             &args.args,
             args.config_options.execution.enable_ansi_mode,
