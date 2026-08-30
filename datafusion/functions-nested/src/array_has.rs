@@ -439,12 +439,28 @@ fn array_has_array_primitive<T: ArrowPrimitiveType>(
 where
     T::Native: ArrowNativeTypeOp,
 {
-    let needle = needle.as_primitive::<T>();
-    let num_rows = offsets.len() - 1;
-    let value_slice = values.values();
-    let needle_slice = needle.values();
+    // The scan itself only compares native values, so it is generic over the
+    // native type alone: `Int32`, `Date32` and `Time32` share one instantiation
+    // instead of getting one each. This shim just peels off the Arrow type.
+    array_has_array_native(
+        values.values(),
+        values.nulls(),
+        needle.as_primitive::<T>().values(),
+        offsets,
+        combined_nulls,
+    )
+}
 
-    let Some(element_nulls) = values.nulls() else {
+fn array_has_array_native<N: ArrowNativeTypeOp>(
+    value_slice: &[N],
+    element_nulls: Option<&NullBuffer>,
+    needle_slice: &[N],
+    offsets: &[usize],
+    combined_nulls: Option<&NullBuffer>,
+) -> BooleanBuffer {
+    let num_rows = offsets.len() - 1;
+
+    let Some(element_nulls) = element_nulls else {
         return BooleanBuffer::collect_bool(num_rows, |i| {
             if combined_nulls.is_some_and(|n| n.is_null(i)) {
                 return false;
@@ -461,7 +477,7 @@ where
 
     // Case 2 (see fn doc), chunked like the all/any kernels.
     let mut result = BooleanBufferBuilder::new(num_rows);
-    let mut needle_expanded: Vec<T::Native> = Vec::new();
+    let mut needle_expanded: Vec<N> = Vec::new();
     for chunk_start in (0..num_rows).step_by(ROW_CONVERSION_CHUNK_SIZE) {
         let chunk_end = (chunk_start + ROW_CONVERSION_CHUNK_SIZE).min(num_rows);
         let elem_start = offsets[chunk_start];

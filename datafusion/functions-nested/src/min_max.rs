@@ -19,8 +19,9 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, GenericListArray,
-    OffsetSizeTrait, PrimitiveBuilder, downcast_primitive,
+    OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, downcast_primitive,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List};
 use datafusion_common::Result;
@@ -224,9 +225,23 @@ fn try_primitive_array_min_max<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     is_min: bool,
 ) -> Option<Result<ArrayRef>> {
+    // Widen the offsets once so the kernel below takes `&[usize]` instead of
+    // being generic over `O`: it is then compiled once per element type rather
+    // than once per (element type, offset width) pair. Non-primitive element
+    // types waste this buffer, but their fallback path allocates a `ScalarValue`
+    // per row anyway.
+    let offsets: Vec<usize> = list_array.offsets().iter().map(|o| o.as_usize()).collect();
+    let values = list_array.values();
+    let list_nulls = list_array.nulls();
+
     macro_rules! helper {
         ($t:ty) => {
-            return Some(primitive_array_min_max::<O, $t>(list_array, is_min))
+            return Some(primitive_array_min_max(
+                values.as_primitive::<$t>(),
+                &offsets,
+                list_nulls,
+                is_min,
+            ))
         };
     }
     downcast_primitive! {
@@ -242,28 +257,30 @@ fn try_primitive_array_min_max<O: OffsetSizeTrait>(
 const ARROW_COMPUTE_THRESHOLD: usize = 32;
 
 /// Computes min or max for each row of a primitive ListArray.
-fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
-    list_array: &GenericListArray<O>,
+fn primitive_array_min_max<T: ArrowPrimitiveType>(
+    values_array: &PrimitiveArray<T>,
+    offsets: &[usize],
+    list_nulls: Option<&NullBuffer>,
     is_min: bool,
 ) -> Result<ArrayRef> {
-    let values_array = list_array.values().as_primitive::<T>();
     let values_slice = values_array.values();
     let values_nulls = values_array.nulls();
-    let mut result_builder = PrimitiveBuilder::<T>::with_capacity(list_array.len())
+    let num_rows = offsets.len() - 1;
+    let mut result_builder = PrimitiveBuilder::<T>::with_capacity(num_rows)
         .with_data_type(values_array.data_type().clone());
 
-    for (row, w) in list_array.offsets().windows(2).enumerate() {
-        let row_result = if list_array.is_null(row) {
+    for (row, w) in offsets.windows(2).enumerate() {
+        let row_result = if list_nulls.is_some_and(|n| n.is_null(row)) {
             None
         } else {
-            let start = w[0].as_usize();
-            let end = w[1].as_usize();
+            let start = w[0];
+            let end = w[1];
             let len = end - start;
 
             match len {
                 0 => None,
                 _ if len < ARROW_COMPUTE_THRESHOLD => {
-                    scalar_min_max::<T>(values_slice, values_nulls, start, end, is_min)
+                    scalar_min_max(values_slice, values_nulls, start, end, is_min)
                 }
                 _ => {
                     let slice = values_array.slice(start, len);
@@ -285,14 +302,14 @@ fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
 /// Computes min or max for a single list row by directly scanning a slice of
 /// the flat values buffer.
 #[inline]
-fn scalar_min_max<T: ArrowPrimitiveType>(
-    values_slice: &[T::Native],
-    values_nulls: Option<&arrow::buffer::NullBuffer>,
+fn scalar_min_max<N: ArrowNativeTypeOp>(
+    values_slice: &[N],
+    values_nulls: Option<&NullBuffer>,
     start: usize,
     end: usize,
     is_min: bool,
-) -> Option<T::Native> {
-    let mut best: Option<T::Native> = None;
+) -> Option<N> {
+    let mut best: Option<N> = None;
     for (i, &val) in values_slice[start..end].iter().enumerate() {
         if let Some(nulls) = values_nulls
             && !nulls.is_valid(start + i)
