@@ -152,14 +152,6 @@ impl Charsets<'_> {
     }
 }
 
-fn null_binary_array(len: usize) -> ArrayRef {
-    let mut builder = BinaryBuilder::new();
-    for _ in 0..len {
-        builder.append_null();
-    }
-    Arc::new(builder.finish())
-}
-
 /// Encodes each row to binary. A row is null if its value or charset is null;
 /// otherwise it is `encode_string(decode(i), charset)`. `decode` yields the row's
 /// value as text — a borrow for string input, or lossy UTF-8 for binary input
