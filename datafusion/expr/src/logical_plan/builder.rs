@@ -1843,8 +1843,7 @@ pub fn build_join_schema(
 /// Both `ON` and `USING` preserve all qualified input fields. SQL wildcard
 /// expansion handles the unqualified `USING` key as a single column.
 pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSchema> {
-    build_join_schema(left, right, &JoinType::Left)?
-        .with_functional_dependencies(left.functional_dependencies().clone())
+    build_join_schema(left, right, &JoinType::Left)
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
