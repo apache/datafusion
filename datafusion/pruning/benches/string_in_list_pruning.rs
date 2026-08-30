@@ -17,12 +17,16 @@
 
 //! Compare compact string IN-list pruning with per-value min/max expansion.
 //!
-//! Both cases raise `max_in_list_size` to the domain size. On a baseline
-//! without compact pruning, `in_list` measures the ordinary raised-cap path.
-//! The explicit `expanded_or` is a balanced tree of equalities, which produces
-//! the same per-value statistics checks without making the baseline depend on
-//! a deeply nested expression. Half of the statistics intervals hit a domain
-//! member and half fall in a sparse gap. Bloom filters are not involved.
+//! Every case raises `max_in_list_size` to the domain size. On a baseline
+//! without compact pruning, `in_list` and `not_in_list` measure the ordinary
+//! raised-cap path. The explicit `expanded_or` and `expanded_and` are balanced
+//! trees of (in)equalities, which produce the same per-value statistics checks
+//! without making the baseline depend on a deeply nested expression.
+//!
+//! Half of the statistics intervals are pinned to a domain member and half span
+//! a sparse gap, so `IN` keeps the first half and `NOT IN` keeps the second.
+//! Both directions therefore prune real containers rather than measuring an
+//! always-true fallback. Bloom filters are not involved.
 //!
 //! Run with `cargo bench -p datafusion-pruning --bench string_in_list_pruning`.
 //! The construction benchmarks reuse their input physical expressions; the
@@ -48,16 +52,33 @@ fn value(index: usize) -> String {
     format!("key{index:08}")
 }
 
-fn balanced_or(expressions: &[PhysicalExprRef]) -> PhysicalExprRef {
+fn balanced(expressions: &[PhysicalExprRef], op: Operator) -> PhysicalExprRef {
     if expressions.len() == 1 {
         return Arc::clone(&expressions[0]);
     }
     let middle = expressions.len() / 2;
     Arc::new(BinaryExpr::new(
-        balanced_or(&expressions[..middle]),
-        Operator::Or,
-        balanced_or(&expressions[middle..]),
+        balanced(&expressions[..middle], op),
+        op,
+        balanced(&expressions[middle..], op),
     ))
+}
+
+/// A balanced tree of `column <op> value`, one branch per domain member.
+fn expanded(
+    column: &PhysicalExprRef,
+    values: &[PhysicalExprRef],
+    op: Operator,
+    combine: Operator,
+) -> PhysicalExprRef {
+    let comparisons = values
+        .iter()
+        .map(|value| {
+            Arc::new(BinaryExpr::new(Arc::clone(column), op, Arc::clone(value)))
+                as PhysicalExprRef
+        })
+        .collect::<Vec<_>>();
+    balanced(&comparisons, combine)
 }
 
 fn build_predicate(
@@ -133,8 +154,12 @@ struct BenchmarkCase {
     schema: SchemaRef,
     in_list: PhysicalExprRef,
     expanded_or: PhysicalExprRef,
+    not_in_list: PhysicalExprRef,
+    expanded_and: PhysicalExprRef,
     in_list_predicate: PruningPredicate,
     expanded_or_predicate: PruningPredicate,
+    not_in_list_predicate: PruningPredicate,
+    expanded_and_predicate: PruningPredicate,
     statistics: IntervalStatistics,
 }
 
@@ -149,42 +174,57 @@ impl BenchmarkCase {
         let values = (0..size)
             .map(|index| lit(ScalarValue::new_utf8view(value(index * 10))))
             .collect::<Vec<_>>();
+        let not_in_list =
+            in_list(Arc::clone(&column), values.clone(), &true, &schema).unwrap();
         let in_list =
             in_list(Arc::clone(&column), values.clone(), &false, &schema).unwrap();
-        let equalities = values
-            .into_iter()
-            .map(|value| {
-                Arc::new(BinaryExpr::new(Arc::clone(&column), Operator::Eq, value))
-                    as PhysicalExprRef
-            })
-            .collect::<Vec<_>>();
-        let expanded_or = balanced_or(&equalities);
+        let expanded_or = expanded(&column, &values, Operator::Eq, Operator::Or);
+        let expanded_and = expanded(&column, &values, Operator::NotEq, Operator::And);
         let in_list_predicate = build_predicate(&in_list, &schema, size);
         let expanded_or_predicate = build_predicate(&expanded_or, &schema, size);
+        let not_in_list_predicate = build_predicate(&not_in_list, &schema, size);
+        let expanded_and_predicate = build_predicate(&expanded_and, &schema, size);
         eprintln!(
-            "string_in_list_pruning: {size} values, compact={}",
+            "string_in_list_pruning: {size} values, compact in={}, compact not in={}",
             in_list_predicate
                 .predicate_expr()
                 .to_string()
-                .contains("IN_SET_INTERSECTS")
+                .contains("IN_SET_INTERSECTS"),
+            not_in_list_predicate
+                .predicate_expr()
+                .to_string()
+                .contains("NOT_IN_SET_MAY_MATCH")
         );
         let statistics = IntervalStatistics::new(size);
 
-        // Check that both benchmark paths do the same useful work, rather
+        // Check that every benchmark path does the same useful work, rather
         // than comparing compact pruning with an always-true fallback.
-        let expected = (0..CONTAINERS)
+        let kept = (0..CONTAINERS)
             .map(|index| index % 2 == 0)
             .collect::<Vec<_>>();
-        assert_eq!(in_list_predicate.prune(&statistics).unwrap(), expected);
-        assert_eq!(expanded_or_predicate.prune(&statistics).unwrap(), expected);
+        let negated_kept = kept.iter().map(|keep| !keep).collect::<Vec<_>>();
+        assert_eq!(in_list_predicate.prune(&statistics).unwrap(), kept);
+        assert_eq!(expanded_or_predicate.prune(&statistics).unwrap(), kept);
+        assert_eq!(
+            not_in_list_predicate.prune(&statistics).unwrap(),
+            negated_kept
+        );
+        assert_eq!(
+            expanded_and_predicate.prune(&statistics).unwrap(),
+            negated_kept
+        );
 
         Self {
             size,
             schema,
             in_list,
             expanded_or,
+            not_in_list,
+            expanded_and,
             in_list_predicate,
             expanded_or_predicate,
+            not_in_list_predicate,
+            expanded_and_predicate,
             statistics,
         }
     }
@@ -198,6 +238,8 @@ fn criterion_benchmark(criterion: &mut Criterion) {
         for (name, expression) in [
             ("in_list", &case.in_list),
             ("expanded_or", &case.expanded_or),
+            ("not_in_list", &case.not_in_list),
+            ("expanded_and", &case.expanded_and),
         ] {
             construction.bench_with_input(
                 BenchmarkId::new(name, case.size),
@@ -222,6 +264,8 @@ fn criterion_benchmark(criterion: &mut Criterion) {
         for (name, predicate) in [
             ("in_list", &case.in_list_predicate),
             ("expanded_or", &case.expanded_or_predicate),
+            ("not_in_list", &case.not_in_list_predicate),
+            ("expanded_and", &case.expanded_and_predicate),
         ] {
             evaluation.bench_with_input(
                 BenchmarkId::new(name, case.size),
