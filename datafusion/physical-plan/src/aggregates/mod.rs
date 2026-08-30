@@ -3211,7 +3211,6 @@ mod tests {
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
-    use datafusion_common::cast::{as_float64_array, as_uint32_array};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
@@ -4497,23 +4496,23 @@ mod tests {
 
         // The table is flushed after every input batch, so each of the three
         // groups is emitted once per input batch instead of being merged into a
-        // single row. Each flush is emitted as batches of 2 and 1 rows.
-        let total_rows: usize = output.iter().map(RecordBatch::num_rows).sum();
-        assert_eq!(total_rows, 3 * num_input_batches);
+        // single row. Each flush is sliced into batches of 2 and 1 rows.
         assert_eq!(output.len(), 2 * num_input_batches);
-
-        // The repeated partial states still merge into the expected sums.
-        let mut sums: HashMap<u32, f64> = HashMap::new();
-        for batch in &output {
-            let groups = as_uint32_array(batch.column(0))?;
-            let states = as_float64_array(batch.column(1))?;
-            for row in 0..batch.num_rows() {
-                *sums.entry(groups.value(row)).or_default() += states.value(row);
-            }
-        }
-        let mut sums = sums.into_iter().collect::<Vec<_>>();
-        sums.sort_by_key(|(group, _)| *group);
-        assert_eq!(sums, vec![(1, 150.0), (2, 60.0), (3, 90.0)]);
+        assert_snapshot!(batches_to_string(&output), @r"
+        +---+-------------+
+        | a | SUM(b)[sum] |
+        +---+-------------+
+        | 1 | 50.0        |
+        | 2 | 20.0        |
+        | 3 | 30.0        |
+        | 1 | 50.0        |
+        | 2 | 20.0        |
+        | 3 | 30.0        |
+        | 1 | 50.0        |
+        | 2 | 20.0        |
+        | 3 | 30.0        |
+        +---+-------------+
+        ");
 
         Ok(())
     }
