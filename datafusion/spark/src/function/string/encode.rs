@@ -310,7 +310,9 @@ impl ScalarUDFImpl for SparkEncode {
                 Some(charset) => {
                     encode_dispatch(&value_arr, &Charsets::Constant(&charset))?
                 }
-                None => null_binary_array(value_arr.len()),
+                None => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)));
+                }
             },
             ColumnarValue::Array(charset_array) => encode_dispatch(
                 &value_arr,
