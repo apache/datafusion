@@ -1743,18 +1743,24 @@ impl ScalarValue {
 
             // Struct types
             DataType::Struct(fields) => {
-                let values = fields
-                    .iter()
-                    .map(|f| ScalarValue::new_default(f.data_type()))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(ScalarValue::Struct(Arc::new(StructArray::new(
-                    fields.clone(),
-                    values
-                        .into_iter()
-                        .map(|v| v.to_array())
-                        .collect::<Result<_>>()?,
-                    None,
-                ))))
+                if fields.is_empty() {
+                    Ok(ScalarValue::Struct(Arc::new(
+                        StructArray::new_empty_fields(1, None),
+                    )))
+                } else {
+                    let values = fields
+                        .iter()
+                        .map(|f| ScalarValue::new_default(f.data_type()))
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(ScalarValue::Struct(Arc::new(StructArray::new(
+                        fields.clone(),
+                        values
+                            .into_iter()
+                            .map(|v| v.to_array())
+                            .collect::<Result<_>>()?,
+                        None,
+                    ))))
+                }
             }
 
             // Dictionary types
@@ -5035,16 +5041,22 @@ impl ScalarValue {
             DataType::BinaryView => Arc::new(array.as_binary_view().gc()),
             DataType::Struct(_) => {
                 let s = array.as_struct();
-                let columns = s
-                    .columns()
-                    .iter()
-                    .map(|c| ScalarValue::compact_view_buffers(Arc::clone(c)))
-                    .collect();
-                Arc::new(StructArray::new(
-                    s.fields().clone(),
-                    columns,
-                    s.nulls().cloned(),
-                ))
+                if s.fields().is_empty() {
+                    // Zero-field structs carry no child buffers to compact, so
+                    // return the input array unchanged.
+                    array
+                } else {
+                    let columns = s
+                        .columns()
+                        .iter()
+                        .map(|c| ScalarValue::compact_view_buffers(Arc::clone(c)))
+                        .collect();
+                    Arc::new(StructArray::new(
+                        s.fields().clone(),
+                        columns,
+                        s.nulls().cloned(),
+                    ))
+                }
             }
             DataType::List(field) => gc_list!(field, i32, ListArray),
             DataType::LargeList(field) => gc_list!(field, i64, LargeListArray),
@@ -11609,5 +11621,86 @@ mod tests {
             )))
         );
         assert_eq!(&large_list.value(0), &expected_array);
+    }
+
+    #[test]
+    fn test_compact_empty_struct() {
+        // A struct scalar wraps a single-row StructArray; use a null row to also
+        // exercise null-buffer preservation.
+        let nulls = NullBuffer::from(vec![false]);
+        let empty_struct = Arc::new(StructArray::new_empty_fields(1, Some(nulls)));
+        let mut scalar = ScalarValue::Struct(empty_struct);
+
+        // Before fix: panics inside compact_view_buffers calling StructArray::new on 0 fields
+        scalar.compact();
+
+        let ScalarValue::Struct(arr) = &scalar else {
+            panic!("expected Struct")
+        };
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr.num_columns(), 0);
+        assert_eq!(arr.null_count(), 1);
+        assert!(arr.is_null(0));
+    }
+
+    #[test]
+    fn test_compact_nested_empty_struct() {
+        // 1. List of empty structs
+        let inner_struct_field =
+            Arc::new(Field::new("item", DataType::Struct(Fields::empty()), true));
+        let inner_struct_arr =
+            Arc::new(StructArray::new_empty_fields(2, None)) as ArrayRef;
+        let list_arr = ListArray::new(
+            inner_struct_field,
+            OffsetBuffer::new(vec![0i32, 2].into()),
+            inner_struct_arr,
+            None,
+        );
+        let mut list_scalar = ScalarValue::List(Arc::new(list_arr));
+        list_scalar.compact();
+
+        let ScalarValue::List(res_list) = &list_scalar else {
+            panic!("expected List")
+        };
+        assert_eq!(res_list.len(), 1);
+        assert_eq!(res_list.values().len(), 2);
+
+        // 2. Struct containing an empty struct field
+        let empty_field = Arc::new(Field::new(
+            "empty_child",
+            DataType::Struct(Fields::empty()),
+            true,
+        ));
+        let int_field = Arc::new(Field::new("int_child", DataType::Int32, true));
+        let outer_struct = StructArray::new(
+            Fields::from(vec![Arc::clone(&empty_field), Arc::clone(&int_field)]),
+            vec![
+                Arc::new(StructArray::new_empty_fields(2, None)) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+            ],
+            None,
+        );
+        let mut outer_scalar = ScalarValue::Struct(Arc::new(outer_struct));
+        outer_scalar.compact();
+
+        let ScalarValue::Struct(res_outer) = &outer_scalar else {
+            panic!("expected Struct")
+        };
+        assert_eq!(res_outer.len(), 2);
+        let child_empty = res_outer.column(0).as_struct();
+        assert_eq!(child_empty.len(), 2);
+    }
+
+    #[test]
+    fn test_new_default_empty_struct() {
+        let empty_struct_type = DataType::Struct(Fields::empty());
+        let scalar = ScalarValue::new_default(&empty_struct_type).unwrap();
+
+        let ScalarValue::Struct(arr) = &scalar else {
+            panic!("expected Struct")
+        };
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr.null_count(), 0);
+        assert_eq!(arr.num_columns(), 0);
     }
 }
