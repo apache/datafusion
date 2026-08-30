@@ -222,9 +222,15 @@ fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
     field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
+    // Widen the offsets once, ahead of the per-element-type dispatch below, so
+    // the kernels take `&[usize]` instead of being generic over `OffsetSize`:
+    // they are then compiled once per native value type rather than once per
+    // (value type, offset width) pair.
+    let row_offsets: Vec<usize> =
+        list_array.offsets().iter().map(|o| o.as_usize()).collect();
     let values = list_array.values().as_ref();
     downcast_primitive_array! {
-        values => sort_primitive_list(values, list_array, field, sort_options),
+        values => sort_primitive_list(values, list_array, &row_offsets, field, sort_options),
         _ => exec_err!("array_sort: unsupported primitive type")
     }
 }
@@ -232,18 +238,13 @@ fn array_sort_primitive<OffsetSize: OffsetSizeTrait>(
 fn sort_primitive_list<T: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
     prim_values: &PrimitiveArray<T>,
     list_array: &GenericListArray<OffsetSize>,
+    row_offsets: &[usize],
     field: FieldRef,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef>
 where
     T::Native: ArrowNativeTypeOp,
 {
-    let offsets = list_array.offsets();
-    // Widen the offsets once so the kernels below take `&[usize]` instead of
-    // being generic over `OffsetSize`: they are then compiled once per native
-    // value type rather than once per (value type, offset width) pair.
-    let row_offsets: Vec<usize> = offsets.iter().map(|o| o.as_usize()).collect();
-
     let descending = sort_options.is_some_and(|o| o.descending);
     let nulls_first = sort_options.is_none_or(|o| o.nulls_first);
     let list_nulls = list_array.nulls();
@@ -253,7 +254,7 @@ where
             let (values, validity) = sort_rows_with_nulls(
                 prim_values.values(),
                 element_nulls,
-                &row_offsets,
+                row_offsets,
                 list_nulls,
                 descending,
                 nulls_first,
@@ -261,12 +262,7 @@ where
             (values, Some(validity))
         }
         _ => (
-            sort_rows_no_nulls(
-                prim_values.values(),
-                &row_offsets,
-                list_nulls,
-                descending,
-            ),
+            sort_rows_no_nulls(prim_values.values(), row_offsets, list_nulls, descending),
             None,
         ),
     };
@@ -278,7 +274,7 @@ where
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
         field,
-        rebase_offsets(offsets),
+        rebase_offsets(list_array.offsets()),
         sorted_values,
         list_nulls.cloned(),
     )?))
