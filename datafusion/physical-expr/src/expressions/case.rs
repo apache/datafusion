@@ -18,10 +18,10 @@
 mod literal_lookup_table;
 
 use super::{Column, Literal};
-use crate::{PhysicalExpr, ScalarFunctionExpr};
 use crate::expressions::{
     CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
 };
+use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -1220,16 +1220,14 @@ impl CaseExpr {
                     )?))
                 }
             }
+        } else if let Some(projection) = projected.projection_for(batch) {
+            // The case expressions do not use all the columns of the input batch.
+            // Project first to reduce time spent filtering.
+            let projected_batch = batch.project(&projection)?;
+            projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
-            if let Some(projection) = projected.projection_for(batch) {
-                // The case expressions do not use all the columns of the input batch.
-                // Project first to reduce time spent filtering.
-                let projected_batch = batch.project(&projection)?;
-                projected.body.expr_or_expr(&projected_batch, when_value)
-            } else {
-                // All columns are used in the case expressions, so there is no need to project.
-                self.body.expr_or_expr(batch, when_value)
-            }
+            // All columns are used in the case expressions, so there is no need to project.
+            self.body.expr_or_expr(batch, when_value)
         }
     }
 
@@ -2005,7 +2003,7 @@ mod tests {
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result)?;
-        let expected = Int32Array::from(vec![Some(1), Some(20), Some(30), Some(4)]);
+        let expected = Int32Array::from(vec![Some(1), Some(20), Some(30), Some(40)]);
 
         assert_eq!(&expected, result);
         Ok(())
@@ -2037,7 +2035,7 @@ mod tests {
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result)?;
-        let expected = Int32Array::from(vec![Some(1), Some(20), Some(30), Some(4)]);
+        let expected = Int32Array::from(vec![Some(1), Some(20), Some(30), Some(40)]);
 
         assert_eq!(&expected, result);
         Ok(())
