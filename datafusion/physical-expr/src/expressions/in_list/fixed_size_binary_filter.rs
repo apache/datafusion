@@ -109,25 +109,29 @@ impl StaticFilter for FixedSizeBinaryFilter {
                 self.data_type
             )
         })?;
-        let primitive = reinterpret(array)?;
+        let primitive = reinterpret(array)?.ok_or_else(|| {
+             internal_datafusion_err!(
+                 "FixedSizeBinary filter: unsupported width {}",
+                 array.value_size()
+             )
+         })?;
         self.inner.contains(primitive.as_ref(), negated)
     }
 }
 
-/// Reinterprets a supported-width array as its same-width primitive array.
-fn reinterpret(array: &FixedSizeBinaryArray) -> Result<ArrayRef> {
-    Ok(match array.value_size() {
-        1 => Arc::new(reinterpret_as_primitive::<UInt8Type>(array)?) as ArrayRef,
-        2 => Arc::new(reinterpret_as_primitive::<UInt16Type>(array)?),
-        4 => Arc::new(reinterpret_as_primitive::<UInt32Type>(array)?),
-        8 => Arc::new(reinterpret_as_primitive::<UInt64Type>(array)?),
-        16 => Arc::new(reinterpret_as_primitive::<Decimal128Type>(array)?),
-        width => {
-            return Err(internal_datafusion_err!(
-                "FixedSizeBinary filter: unsupported width {width}"
-            ));
-        }
-    })
+/// Reinterprets a supported-width array as its same-width primitive array, or
+/// `None` if the width has no primitive representation.
+fn reinterpret(array: &FixedSizeBinaryArray) -> Result<Option<ArrayRef>> {
+    Ok(Some(match array.value_size() {
+         1 => Arc::new(reinterpret_as_primitive::<UInt8Type>(array)?) as ArrayRef,
+         2 => Arc::new(reinterpret_as_primitive::<UInt16Type>(array)?),
+         4 => Arc::new(reinterpret_as_primitive::<UInt32Type>(array)?),
+         8 => Arc::new(reinterpret_as_primitive::<UInt64Type>(array)?),
+         16 => Arc::new(reinterpret_as_primitive::<Decimal128Type>(array)?),
+
+        _ => return Ok(None),
+    }))
+ }
 }
 
 /// Creates an optimized filter for supported concrete `FixedSizeBinary` arrays.
