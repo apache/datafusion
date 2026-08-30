@@ -46,7 +46,7 @@ use tokio::runtime::Runtime;
 
 const NUM_ROWS: usize = 65_536;
 const BATCH_SIZE: usize = 8_192;
-const NUM_GROUPS: usize = 1_024;
+const GROUP_COUNTS: &[usize] = &[16, 1_024, NUM_ROWS];
 const FILTER_CASES: &[Option<usize>] = &[
     None,
     Some(1),
@@ -113,7 +113,7 @@ fn make_filter_mask(filter_percent: usize, seed: u64) -> Vec<bool> {
     mask
 }
 
-fn make_batches(filter_percent: Option<usize>) -> Vec<RecordBatch> {
+fn make_batches(filter_percent: Option<usize>, num_groups: usize) -> Vec<RecordBatch> {
     let filter_percent = filter_percent.unwrap_or(100);
     // Select different rows while keeping both filters' distributions comparable.
     let include_a = make_filter_mask(filter_percent, 42);
@@ -123,7 +123,7 @@ fn make_batches(filter_percent: Option<usize>) -> Vec<RecordBatch> {
         .map(|start| {
             let end = start + BATCH_SIZE;
             let group_key = UInt32Array::from_iter_values(
-                (start..end).map(|row| (row % NUM_GROUPS) as u32),
+                (start..end).map(|row| (row % num_groups) as u32),
             );
             let value = Float64Array::from_iter_values(
                 (start..end).map(|row| (row % 1_000) as f64),
@@ -173,9 +173,10 @@ fn make_plan(
     layout: AggregateLayout,
     argument_kind: ArgumentKind,
     filter_percent: Option<usize>,
+    num_groups: usize,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = schema();
-    let batches = make_batches(filter_percent);
+    let batches = make_batches(filter_percent, num_groups);
     let input =
         TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None).unwrap();
     let group_by = PhysicalGroupBy::new_single(vec![(
@@ -221,33 +222,41 @@ fn benchmark_case(
     layout: AggregateLayout,
     argument_kinds: &[ArgumentKind],
 ) {
-    let mut group =
-        c.benchmark_group(format!("grouped_aggregate_filter/{}", layout.name()));
+    for &num_groups in GROUP_COUNTS {
+        let mut group = c.benchmark_group(format!(
+            "grouped_aggregate_filter/{}/{}_groups",
+            layout.name(),
+            num_groups
+        ));
 
-    for &argument_kind in argument_kinds {
-        for &filter_percent in FILTER_CASES {
-            let case_name = match filter_percent {
-                None => "unfiltered".to_string(),
-                Some(percent) => format!("{percent}_percent"),
-            };
-            let plan = make_plan(layout, argument_kind, filter_percent);
-            let task_ctx = Arc::new(TaskContext::default());
+        for &argument_kind in argument_kinds {
+            for &filter_percent in FILTER_CASES {
+                let case_name = match filter_percent {
+                    None => "unfiltered".to_string(),
+                    Some(percent) => format!("{percent}_percent"),
+                };
+                let plan = make_plan(layout, argument_kind, filter_percent, num_groups);
+                let task_ctx = Arc::new(TaskContext::default());
 
-            group.bench_function(
-                BenchmarkId::new(argument_kind.name(), case_name),
-                |b| {
-                    b.iter(|| {
-                        let output = runtime
-                            .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
-                            .unwrap();
-                        black_box(output);
-                    });
-                },
-            );
+                group.bench_function(
+                    BenchmarkId::new(argument_kind.name(), case_name),
+                    |b| {
+                        b.iter(|| {
+                            let output = runtime
+                                .block_on(collect(
+                                    Arc::clone(&plan),
+                                    Arc::clone(&task_ctx),
+                                ))
+                                .unwrap();
+                            black_box(output);
+                        });
+                    },
+                );
+            }
         }
-    }
 
-    group.finish();
+        group.finish();
+    }
 }
 
 fn aggregate_filter_benchmark(c: &mut Criterion) {
