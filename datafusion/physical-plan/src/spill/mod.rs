@@ -21,16 +21,14 @@ pub(crate) mod in_progress_spill_file;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
-
+use datafusion_execution::spill_file::SpillWriter;
 // Moved for refactor, re-export to keep the public API stable
 pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 // Re-export SpillManager for doctests only (hidden from public docs)
 #[doc(hidden)]
 pub use spill_manager::SpillManager;
 
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -39,195 +37,316 @@ use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
     layout, make_array,
 };
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{ByteViewType, Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
-    reader::StreamReader,
+    reader::StreamDecoder,
     writer::{IpcWriteOptions, StreamWriter},
 };
 use arrow::record_batch::RecordBatch;
 use arrow_data::ArrayDataBuilder;
-use arrow_ipc::CompressionType;
+use arrow_ipc::{CompressionType, root_as_message};
 
+use datafusion_common::Result;
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};
-use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::RecordBatchStream;
-use datafusion_execution::disk_manager::RefCountedTempFile;
-use futures::{FutureExt as _, Stream};
+use datafusion_execution::spill_file::SpillFile;
+use futures::Stream;
 use log::debug;
 
-/// Stream that reads spill files from disk where each batch is read in a spawned blocking task
-/// It will read one batch at a time and will not do any buffering, to buffer data use [`crate::common::spawn_buffered`]
-///
-/// A simpler solution would be spawning a long-running blocking task for each
-/// file read (instead of each batch). This approach does not work because when
-/// the number of concurrent reads exceeds the Tokio thread pool limit,
-/// deadlocks can occur and block progress.
+/// Stream that reads spill files from a [`SpillFile`] backend as a stream of [`RecordBatch`]es.
+/// Uses [`StreamDecoder`] to decode IPC bytes received from the backend's async byte stream.
+/// Backends handle their own threading concerns internally - OS files use
+/// `tokio::fs::File` which performs blocking IO per-syscall without holding a thread
+/// for the file's lifetime, avoiding deadlocks when concurrent reads exceed thread pool limits.
 struct SpillReaderStream {
     schema: SchemaRef,
-    state: SpillReaderStreamState,
+    decoder: StreamDecoder,
+    byte_stream: Pin<Box<dyn Stream<Item = Result<bytes::Bytes>> + Send>>,
+    is_done: bool,
+
     /// Maximum memory size observed among spilling sorted record batches.
     /// This is used for validation purposes during reading each RecordBatch from spill.
     /// For context on why this value is recorded and validated,
     /// see `physical_plan/sort/multi_level_merge.rs`.
     max_record_batch_memory: Option<usize>,
+
+    /// Holds leftover bytes from a chunk not yet consumed by `framer`
+    current_buffer: Buffer,
+
+    /// Assembles the chunks of `byte_stream` into exactly sized messages
+    framer: MessageFramer,
+
+    /// Framed message buffers not yet consumed by `decoder`
+    pending: VecDeque<Buffer>,
+
+    /// Keeps the file alive until the stream is dropped
+    _spill_file: Arc<dyn SpillFile>,
+
+    schema_validated: bool,
 }
 
 // Small margin allowed to accommodate slight memory accounting variation
 const SPILL_BATCH_MEMORY_MARGIN: usize = 4096;
 
-/// When we poll for the next batch, we will get back both the batch and the reader,
-/// so we can call `next` again.
-type NextRecordBatchResult = Result<(StreamReader<BufReader<File>>, Option<RecordBatch>)>;
-
-enum SpillReaderStreamState {
-    /// Initial state: the stream was not initialized yet
-    /// and the file was not opened
-    Uninitialized(RefCountedTempFile),
-
-    /// A read is in progress in a spawned blocking task for which we hold the handle.
-    ReadInProgress(SpawnedTask<NextRecordBatchResult>),
-
-    /// A read has finished and we wait for being polled again in order to start reading the next batch.
-    Waiting(StreamReader<BufReader<File>>),
-
-    /// The stream has finished, successfully or not.
-    Done,
+/// Reassembles an IPC stream read in arbitrary chunks into one exactly sized
+/// allocation per message, so that the zero-copy [`StreamDecoder`] produces
+/// batches whose buffers pin only their own message.
+///
+/// # Why
+///
+/// The decoder builds arrays on slices of whatever [`Buffer`] it is given,
+/// and a slice keeps its whole backing allocation alive. Fed with the raw
+/// chunks of the byte stream (128 KB for a file backed spill) that goes
+/// wrong in two ways.
+///
+/// A message that fits inside a chunk pins the entire chunk. With ~5 KB
+/// batches, one chunk holds ~27 of them, and each decoded batch retains, and
+/// is accounted for, 128 KB:
+///
+/// ```text
+/// chunk (128 KB allocation)
+/// ┌──────┬──────┬──────┬─────┬───────┐
+/// │ msg1 │ msg2 │ msg3 │ ... │ msg27 │
+/// └──────┴──────┴──────┴─────┴───────┘
+///    ▲
+///    batch1's buffers slice here, yet keep all 128 KB alive
+/// ```
+///
+/// A message that spans two chunks cannot be sliced, so the decoder gathers
+/// it into a `Vec` grown by doubling, and the batch keeps the spare
+/// capacity: a 256 KB body typically lands in a 512 KB allocation.
+///
+/// ```text
+/// chunk N                      chunk N+1
+/// ┌──────┬────────────────────┬──────────────┬────────┐
+/// │ ...  │ msgK (first part)  │ msgK (rest)  │ msgK+1 │
+/// └──────┴────────────────────┴──────────────┴────────┘
+/// ```
+///
+/// Either way a batch uses several times the memory recorded for it at
+/// spill time, breaking the `max_record_batch_memory` budgeting that the
+/// multi-level merge relies on.
+///
+/// # How
+///
+/// Each message is copied out of the chunks into allocations sized from its
+/// own headers: a head buffer (the length prefix and flatbuffer metadata,
+/// whose `bodyLength` gives the body size) and, when non-empty, a body
+/// buffer of exactly that size. The decoder then zero-copies from the body
+/// buffer, so a batch pins exactly its own message:
+///
+/// ```text
+/// body for msg1 (5 KB)      body for msgK (256 KB)
+/// ┌──────┐                  ┌────────────────────┐
+/// │ msg1 │ ◀── batch1       │ msgK               │ ◀── batchK
+/// └──────┘                  └────────────────────┘
+/// ```
+///
+/// This costs one copy per message, which the decoder already paid for
+/// spanning messages, without the doubling reallocation. Measured on the
+/// `spill_io` benchmark, the copy is not visible end to end for batches at
+/// or above the 128 KB read chunk, where skipping the doubling gather makes
+/// framing the faster of the two, and costs a few percent for batches small
+/// enough that several share a chunk, which are exactly the batches whose
+/// accounting it fixes.
+struct MessageFramer {
+    state: FramerState,
 }
+
+enum FramerState {
+    /// Reading the 4 byte continuation marker or metadata length.
+    Prefix {
+        head: Vec<u8>,
+        read: usize,
+        continuation: bool,
+    },
+    /// Reading the flatbuffer metadata into `head`, which already holds the
+    /// prefix and is allocated for `head_len` bytes.
+    Metadata {
+        head: Vec<u8>,
+        metadata_start: usize,
+        head_len: usize,
+    },
+    /// Reading the body into `body`, which is allocated for `body_len` bytes.
+    Body {
+        head: Vec<u8>,
+        body: Vec<u8>,
+        body_len: usize,
+    },
+    /// The end-of-stream marker was read.
+    Finished,
+}
+
+impl MessageFramer {
+    fn new() -> Self {
+        Self {
+            state: FramerState::prefix(),
+        }
+    }
+
+    /// Consumes bytes from `input` until a message is complete or `input` is
+    /// exhausted, returning the buffers of a completed message.
+    fn push(&mut self, input: &mut Buffer) -> Result<Option<Vec<Buffer>>> {
+        while !input.is_empty() {
+            match &mut self.state {
+                FramerState::Prefix {
+                    head,
+                    read,
+                    continuation,
+                } => {
+                    let to_read = input.len().min(4 - *read);
+                    head.extend_from_slice(&input[..to_read]);
+                    input.advance(to_read);
+                    *read += to_read;
+                    if *read < 4 {
+                        continue;
+                    }
+                    let word: [u8; 4] = head[head.len() - 4..].try_into().unwrap();
+                    if !*continuation && word == CONTINUATION_MARKER {
+                        *continuation = true;
+                        *read = 0;
+                        continue;
+                    }
+                    let metadata_len = u32::from_le_bytes(word) as usize;
+                    let head = std::mem::take(head);
+                    if metadata_len == 0 {
+                        self.state = FramerState::Finished;
+                        return Ok(Some(vec![Buffer::from_vec(head)]));
+                    }
+                    let metadata_start = head.len();
+                    let head_len = metadata_start + metadata_len;
+                    let mut sized = Vec::with_capacity(head_len);
+                    sized.extend_from_slice(&head);
+                    self.state = FramerState::Metadata {
+                        head: sized,
+                        metadata_start,
+                        head_len,
+                    };
+                }
+                FramerState::Metadata {
+                    head,
+                    metadata_start,
+                    head_len,
+                } => {
+                    let to_read = input.len().min(*head_len - head.len());
+                    head.extend_from_slice(&input[..to_read]);
+                    input.advance(to_read);
+                    if head.len() < *head_len {
+                        continue;
+                    }
+                    let message =
+                        root_as_message(&head[*metadata_start..]).map_err(|e| {
+                            datafusion_common::exec_datafusion_err!(
+                                "Invalid IPC message in spill file: {e}"
+                            )
+                        })?;
+                    let body_len =
+                        usize::try_from(message.bodyLength()).map_err(|_| {
+                            datafusion_common::exec_datafusion_err!(
+                                "Invalid IPC message body length in spill file: {}",
+                                message.bodyLength()
+                            )
+                        })?;
+                    let head = std::mem::take(head);
+                    if body_len == 0 {
+                        self.state = FramerState::prefix();
+                        return Ok(Some(vec![Buffer::from_vec(head)]));
+                    }
+                    self.state = FramerState::Body {
+                        head,
+                        body: Vec::with_capacity(body_len),
+                        body_len,
+                    };
+                }
+                FramerState::Body {
+                    head,
+                    body,
+                    body_len,
+                } => {
+                    let to_read = input.len().min(*body_len - body.len());
+                    body.extend_from_slice(&input[..to_read]);
+                    input.advance(to_read);
+                    if body.len() < *body_len {
+                        continue;
+                    }
+                    let (head, body) = (std::mem::take(head), std::mem::take(body));
+                    self.state = FramerState::prefix();
+                    return Ok(Some(vec![
+                        Buffer::from_vec(head),
+                        Buffer::from_vec(body),
+                    ]));
+                }
+                FramerState::Finished => {
+                    return datafusion_common::exec_err!(
+                        "Unexpected bytes after the end of the IPC stream in spill file"
+                    );
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Checks that the stream ended on a message boundary.
+    ///
+    /// This mirrors [`StreamDecoder::finish`]: a stream is complete either
+    /// when the end-of-stream marker was read, or when it ends right after a
+    /// message. Framing moves the partial bytes of a truncated file out of
+    /// the decoder's own scratch space and into the framer, so without this
+    /// check a truncated spill file would silently decode as a shorter
+    /// stream instead of erroring.
+    fn finish(&self) -> Result<()> {
+        match &self.state {
+            FramerState::Finished
+            | FramerState::Prefix {
+                read: 0,
+                continuation: false,
+                ..
+            } => Ok(()),
+            _ => datafusion_common::exec_err!(
+                "Unexpected end of spill file: the IPC stream ends mid-message"
+            ),
+        }
+    }
+}
+
+impl FramerState {
+    fn prefix() -> Self {
+        Self::Prefix {
+            head: Vec::with_capacity(8),
+            read: 0,
+            continuation: false,
+        }
+    }
+}
+
+/// Marks a length prefix in the IPC stream format, see `arrow_ipc`.
+const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 impl SpillReaderStream {
     fn new(
         schema: SchemaRef,
-        spill_file: RefCountedTempFile,
+        spill_file: Arc<dyn SpillFile>,
         max_record_batch_memory: Option<usize>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let byte_stream = spill_file.read_stream()?;
+        // DataFusion controls what it writes so it can trust its own IPC output,
+        // matching the behavior of the previous StreamReader-based implementation.
+        let decoder = unsafe { StreamDecoder::new().with_skip_validation(true) };
+        Ok(Self {
             schema,
-            state: SpillReaderStreamState::Uninitialized(spill_file),
+            decoder,
+            byte_stream,
             max_record_batch_memory,
-        }
-    }
-
-    fn poll_next_inner(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        match &mut self.state {
-            SpillReaderStreamState::Uninitialized(_) => {
-                // Temporarily replace with `Done` to be able to pass the file to the task.
-                let SpillReaderStreamState::Uninitialized(spill_file) =
-                    std::mem::replace(&mut self.state, SpillReaderStreamState::Done)
-                else {
-                    unreachable!()
-                };
-
-                let expected_schema = Arc::clone(&self.schema);
-                let task = SpawnedTask::spawn_blocking(move || {
-                    let file = BufReader::new(File::open(spill_file.path())?);
-                    // SAFETY: DataFusion's spill writer strictly follows Arrow IPC specifications
-                    // with validated schemas and buffers. Skip redundant validation during read
-                    // to speedup read operation. This is safe for DataFusion as input guaranteed to be correct when written.
-                    let mut reader = unsafe {
-                        StreamReader::try_new(file, None)?.with_skip_validation(true)
-                    };
-
-                    // Validate the schema read from Arrow IPC file is the same as the
-                    // schema of the current `SpillManager`
-                    let actual_schema = reader.schema();
-
-                    if actual_schema != expected_schema {
-                        return exec_err!(
-                            "Spill file schema mismatch: expected {}, got {}. \
-                            The caller must use the same SpillManager that created the spill file to read it.",
-                            expected_schema,
-                            actual_schema
-                        );
-                    }
-
-                    // TODO: Same-schema reads from a different SpillManager still pass today.
-                    // Add a SpillManager UID to IPC metadata and validate it here as well.
-                    let next_batch = reader.next().transpose()?;
-
-                    Ok((reader, next_batch))
-                });
-
-                self.state = SpillReaderStreamState::ReadInProgress(task);
-
-                // Poll again immediately so the inner task is polled and the waker is
-                // registered.
-                self.poll_next_inner(cx)
-            }
-
-            SpillReaderStreamState::ReadInProgress(task) => {
-                let result = futures::ready!(task.poll_unpin(cx))
-                    .unwrap_or_else(|err| Err(DataFusionError::External(Box::new(err))));
-
-                match result {
-                    Ok((reader, batch)) => {
-                        match batch {
-                            Some(batch) => {
-                                if let Some(max_record_batch_memory) =
-                                    self.max_record_batch_memory
-                                {
-                                    let actual_size =
-                                        get_record_batch_memory_size(&batch);
-                                    if actual_size
-                                        > max_record_batch_memory
-                                            + SPILL_BATCH_MEMORY_MARGIN
-                                    {
-                                        debug!(
-                                            "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
-                                                by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
-                                                This likely indicates a bug in memory accounting during spilling.\n\
-                                                Please report this issue in https://github.com/apache/datafusion/issues/17340."
-                                        );
-                                    }
-                                }
-                                self.state = SpillReaderStreamState::Waiting(reader);
-
-                                Poll::Ready(Some(Ok(batch)))
-                            }
-                            None => {
-                                // Stream is done
-                                self.state = SpillReaderStreamState::Done;
-
-                                Poll::Ready(None)
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        self.state = SpillReaderStreamState::Done;
-
-                        Poll::Ready(Some(Err(err)))
-                    }
-                }
-            }
-
-            SpillReaderStreamState::Waiting(_) => {
-                // Temporarily replace with `Done` to be able to pass the file to the task.
-                let SpillReaderStreamState::Waiting(mut reader) =
-                    std::mem::replace(&mut self.state, SpillReaderStreamState::Done)
-                else {
-                    unreachable!()
-                };
-
-                let task = SpawnedTask::spawn_blocking(move || {
-                    let next_batch = reader.next().transpose()?;
-
-                    Ok((reader, next_batch))
-                });
-
-                self.state = SpillReaderStreamState::ReadInProgress(task);
-
-                // Poll again immediately so the inner task is polled and the waker is
-                // registered.
-                self.poll_next_inner(cx)
-            }
-
-            SpillReaderStreamState::Done => Poll::Ready(None),
-        }
+            is_done: false,
+            current_buffer: Buffer::from(&[]),
+            framer: MessageFramer::new(),
+            pending: VecDeque::new(),
+            _spill_file: spill_file,
+            schema_validated: false,
+        })
     }
 }
 
@@ -235,7 +354,107 @@ impl Stream for SpillReaderStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.get_mut().poll_next_inner(cx)
+        let this = self.get_mut();
+
+        if this.is_done {
+            return Poll::Ready(None);
+        }
+
+        loop {
+            // Decode the framed messages first
+            if let Some(buffer) = this.pending.front_mut() {
+                if buffer.is_empty() {
+                    this.pending.pop_front();
+                    continue;
+                }
+                match this.decoder.decode(buffer) {
+                    Ok(Some(batch)) => {
+                        // One-time schema validation on the first decoded batch.
+                        // The IPC stream embeds the writer's schema in its header;
+                        // StreamDecoder surfaces it via the first batch's schema.
+                        // We check here rather than in new() because schema bytes
+                        // only arrive after decoding the IPC header from the stream.
+                        if !this.schema_validated {
+                            this.schema_validated = true;
+                            let actual = batch.schema();
+                            if actual != this.schema {
+                                this.is_done = true;
+                                return Poll::Ready(Some(Err(
+                                    datafusion_common::exec_datafusion_err!(
+                                        "Spill file schema mismatch: expected {}, got {}. \
+                     The caller must use the same SpillManager that created \
+                     the spill file to read it.",
+                                        this.schema,
+                                        actual
+                                    ),
+                                )));
+                            }
+                        }
+                        if let Some(max_record_batch_memory) =
+                            this.max_record_batch_memory
+                        {
+                            let actual_size = get_record_batch_memory_size(&batch);
+                            if actual_size
+                                > max_record_batch_memory + SPILL_BATCH_MEMORY_MARGIN
+                            {
+                                debug!(
+                                    "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
+                                        by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
+                                        This likely indicates a bug in memory accounting during spilling."
+                                );
+                            }
+                        }
+                        return Poll::Ready(Some(Ok(batch)));
+                    }
+                    Ok(None) => {
+                        // A schema or dictionary message, or the buffer was
+                        // only part of a message. Carry on with the next one.
+                    }
+                    Err(e) => {
+                        this.is_done = true;
+                        return Poll::Ready(Some(Err(e.into())));
+                    }
+                }
+                continue;
+            }
+
+            // Then frame the next message out of the current chunk
+            if !this.current_buffer.is_empty() {
+                match this.framer.push(&mut this.current_buffer) {
+                    Ok(Some(buffers)) => this.pending.extend(buffers),
+                    Ok(None) => {}
+                    Err(e) => {
+                        this.is_done = true;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                }
+                continue;
+            }
+
+            // Finally fetch another chunk
+            match futures::ready!(this.byte_stream.as_mut().poll_next(cx)) {
+                Some(Ok(chunk)) => {
+                    this.current_buffer = Buffer::from(chunk);
+                }
+                Some(Err(e)) => {
+                    this.is_done = true;
+                    return Poll::Ready(Some(Err(e)));
+                }
+                None => {
+                    this.is_done = true;
+
+                    // The framer holds the bytes of an incomplete trailing
+                    // message, so it is the one that detects truncation.
+                    if let Err(e) = this.framer.finish() {
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    if let Err(e) = this.decoder.finish() {
+                        return Poll::Ready(Some(Err(e.into())));
+                    }
+                    return Poll::Ready(None);
+                }
+            }
+        }
     }
 }
 
@@ -245,19 +464,55 @@ impl RecordBatchStream for SpillReaderStream {
     }
 }
 
-/// Write in Arrow IPC Stream format to a file.
+/// A  wrapper that counts the exact compressed IPC bytes written by Arrow.
 ///
-/// Stream format is used for spill because it supports dictionary replacement, and the random
-/// access of IPC File format is not needed (IPC File format doesn't support dictionary replacement).
+/// Arrow's `StreamWriter` does not return the number of bytes written during its
+/// `write()` calls. To accurately track the `spilled_bytes` metrics (especially
+/// when LZ4/ZSTD compression is applied), we must intercept the `std::io::Write`
+/// trait boundary to count the final serialized payload size.
+pub(crate) struct TrackingSpillWriter {
+    inner: Box<dyn SpillWriter>,
+    pub(crate) total_bytes_written: usize,
+}
+
+impl TrackingSpillWriter {
+    pub fn new(inner: Box<dyn SpillWriter>) -> Self {
+        Self {
+            inner,
+            total_bytes_written: 0,
+        }
+    }
+
+    pub fn finish(mut self) -> Result<()> {
+        self.inner.finish()
+    }
+}
+
+impl std::io::Write for TrackingSpillWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+
+        self.total_bytes_written += n;
+
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Write in Arrow IPC Stream format to an underlying `SpillWriter` backend.
+/// Stream format also supports dictionary replacement.
 struct IPCStreamWriter {
     /// Inner writer
-    pub writer: StreamWriter<File>,
+    writer: Option<StreamWriter<TrackingSpillWriter>>,
     /// Batches written
-    pub num_batches: usize,
+    num_batches: usize,
     /// Rows written
-    pub num_rows: usize,
+    num_rows: usize,
     /// Bytes written
-    pub num_bytes: usize,
+    num_bytes: usize,
 }
 
 impl IPCStreamWriter {
@@ -274,14 +529,10 @@ impl IPCStreamWriter {
     /// rather than relying solely on workspace-level feature unification;
     /// see #21917.
     pub fn new(
-        path: &Path,
+        spill_writer: Box<dyn SpillWriter>,
         schema: &Schema,
         spill_compression: SpillCompression,
     ) -> Result<Self> {
-        let file = File::create(path).map_err(|e| {
-            exec_datafusion_err!("(Hint: you may increase the file descriptor limit with shell command 'ulimit -n 4096') Failed to create partition file at {path:?}: {e:?}")
-        })?;
-
         let metadata_version = MetadataVersion::V5;
         // Depending on the schema, some array types such as StringViewArray require larger (16 byte in this case) alignment.
         // If the actual buffer layout after IPC read does not satisfy the alignment requirement,
@@ -291,15 +542,18 @@ impl IPCStreamWriter {
         let alignment = get_max_alignment_for_schema(schema);
         let mut write_options =
             IpcWriteOptions::try_new(alignment, false, metadata_version)?;
+
         let compression_type = Option::<CompressionType>::from(spill_compression);
         write_options = write_options.try_with_compression(compression_type)?;
 
-        let writer = StreamWriter::try_new_with_options(file, schema, write_options)?;
+        let adapter = TrackingSpillWriter::new(spill_writer);
+        let writer = StreamWriter::try_new_with_options(adapter, schema, write_options)?;
+
         Ok(Self {
             num_batches: 0,
             num_rows: 0,
             num_bytes: 0,
-            writer,
+            writer: Some(writer),
         })
     }
 
@@ -307,23 +561,50 @@ impl IPCStreamWriter {
     ///
     /// Returns a tuple containing the change in the number of rows and bytes written.
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(usize, usize)> {
-        self.writer.write(batch)?;
+        let writer = self.writer.as_mut().unwrap();
+
+        let bytes_before = writer.get_ref().total_bytes_written;
+        writer.write(batch)?;
+        let bytes_after = writer.get_ref().total_bytes_written;
         self.num_batches += 1;
         let delta_num_rows = batch.num_rows();
         self.num_rows += delta_num_rows;
-        let delta_num_bytes: usize = batch.get_array_memory_size();
+        let delta_num_bytes = bytes_after - bytes_before;
         self.num_bytes += delta_num_bytes;
         Ok((delta_num_rows, delta_num_bytes))
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.writer.flush()?;
+        use std::io::Write;
+        if let Some(writer) = &mut self.writer {
+            writer.get_mut().flush()?;
+        }
         Ok(())
     }
 
-    /// Finish the writer
-    pub fn finish(&mut self) -> Result<()> {
-        self.writer.finish().map_err(Into::into)
+    /// Finish the writer.
+    ///
+    /// Returns the number of trailing bytes written during the finish operation
+    /// (e.g., IPC metadata and footers).
+    pub fn finish(&mut self) -> Result<usize> {
+        let mut writer = self.writer.take().unwrap();
+
+        let bytes_before = writer.get_ref().total_bytes_written;
+        writer.finish()?; // Writes IPC tail
+
+        // Extract the adapter and flush the final bytes
+        let adapter = writer.into_inner()?;
+        let bytes_after = adapter.total_bytes_written;
+        adapter.finish()?;
+
+        Ok(bytes_after - bytes_before)
+    }
+    /// Returns the total number of bytes written so far
+    pub fn bytes_written(&self) -> usize {
+        self.writer
+            .as_ref()
+            .map(|w| w.get_ref().total_bytes_written)
+            .unwrap_or(0)
     }
 }
 
@@ -500,7 +781,7 @@ fn calculate_string_view_waste_ratio(array: &StringViewArray) -> f64 {
 #[cfg(test)]
 fn calculate_view_waste_ratio<F>(
     len: usize,
-    data_buffers: &[arrow::buffer::Buffer],
+    data_buffers: &[Buffer],
     get_value_size: F,
 ) -> f64
 where
@@ -558,7 +839,7 @@ mod tests {
         let spill_file = spill_manager
             .spill_record_batch_and_finish(&[batch1, batch2], "Test")?
             .unwrap();
-        assert!(spill_file.path().exists());
+        assert!(spill_file.path().unwrap().exists());
         let spilled_rows = spill_manager.metrics.spilled_rows.value();
         assert_eq!(spilled_rows, num_rows);
 
@@ -568,6 +849,361 @@ mod tests {
         let batches = collect(stream).await?;
         assert_eq!(batches.len(), 2);
 
+        Ok(())
+    }
+
+    /// Reading a spill file back must not inflate the batches' memory
+    /// footprint: the decoder is zero-copy, so without framing every small
+    /// batch would keep a whole read chunk alive, see [`MessageFramer`].
+    ///
+    /// Regression test for
+    /// <https://github.com/apache/datafusion/issues/17340>. Without framing
+    /// these 50 batches read back at 131072 bytes each, against a 22992 byte
+    /// maximum recorded at spill time, and the whole 345 KB stream is
+    /// accounted for as 5.9 MB. Note that this is not a counting bug that a
+    /// shared-buffer aware counter could net out: holding only 5 of the 50
+    /// batches still pins every read chunk, so the memory really is retained.
+    #[tokio::test]
+    async fn test_read_back_does_not_inflate_batch_memory() -> Result<()> {
+        use arrow::array::{ListArray, StringViewArray};
+        use arrow::buffer::OffsetBuffer;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, false),
+            Field::new("v", DataType::Utf8View, true),
+            Field::new(
+                "l",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                false,
+            ),
+        ]));
+
+        // Small batches: many fit in one 128 KB read chunk.
+        let batches: Vec<RecordBatch> = (0..50)
+            .map(|b| {
+                let n = 100;
+                let ints = Int32Array::from_iter_values((0..n).map(|i| b * n + i));
+                let strs = StringArray::from_iter_values(
+                    (0..n).map(|i| format!("string value number {i}")),
+                );
+                let views = StringViewArray::from_iter((0..n).map(|i| {
+                    (i % 3 != 0).then(|| format!("a longer view value {b}/{i}"))
+                }));
+                let values = Int32Array::from_iter_values(0..n * 2);
+                let offsets =
+                    OffsetBuffer::from_lengths(std::iter::repeat_n(2, n as usize));
+                let list = ListArray::new(
+                    Arc::new(Field::new("item", DataType::Int32, true)),
+                    offsets,
+                    Arc::new(values),
+                    None,
+                );
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(ints),
+                        Arc::new(strs),
+                        Arc::new(views),
+                        Arc::new(list),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let max_written = batches
+            .iter()
+            .map(get_record_batch_memory_size)
+            .max()
+            .unwrap();
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+        let spill_file = spill_manager
+            .spill_record_batch_and_finish(&batches, "Test")?
+            .unwrap();
+
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+        let read_back = collect(stream).await?;
+        assert_eq!(read_back.len(), batches.len());
+
+        for (written, read) in batches.iter().zip(&read_back) {
+            assert_eq!(written, read);
+            let size = get_record_batch_memory_size(read);
+            assert!(
+                size <= max_written + SPILL_BATCH_MEMORY_MARGIN,
+                "read-back batch retains {size} bytes, written max was {max_written}"
+            );
+        }
+        Ok(())
+    }
+
+    /// The workload from <https://github.com/apache/datafusion/issues/17340>,
+    /// reduced to a single spilled run.
+    ///
+    /// `memory_limit::test_stringview_external_sort` sorts 200 batches of 1000
+    /// random 100 byte strings under a 60 MB pool, producing around 10 spilled
+    /// runs of about 20 batches each. This spills one such run and reads it
+    /// back through the same [`SpillManager`] calls the external sorter and the
+    /// multi-level merge use: the spill records the largest batch's memory size,
+    /// and the merge reserves its budget from that number, so a batch that comes
+    /// back bigger is memory the merge is using without having reserved it.
+    ///
+    /// Each batch here is around 167 KB, larger than the 128 KB read chunk, so
+    /// every IPC message spans chunks. Without framing the decoder gathers such
+    /// a message into a `Vec` grown by doubling and the batch keeps the spare
+    /// capacity, so these batches read back at about 255 KB each against the
+    /// ~167 KB recorded at spill time - half again the budget the merge
+    /// reserved for them, which is the discrepancy the issue reports.
+    #[tokio::test]
+    async fn test_stringview_spill_read_back_memory_accounting() -> Result<()> {
+        use arrow::array::StringViewArray;
+        use rand::Rng;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("strings", DataType::Utf8View, false),
+            Field::new("random_numbers", DataType::Int32, false),
+        ]));
+
+        // 100 random bytes per string, as in the issue's reproducer: long
+        // enough that the views point into a data buffer rather than inlining,
+        // and random so nothing dedupes.
+        let mut rng = rand::rng();
+        let batches: Vec<RecordBatch> = (0..20)
+            .map(|_| {
+                let strings: Vec<String> = (0..1000)
+                    .map(|_| {
+                        (0..100)
+                            .map(|_| rng.random_range(0..=u8::MAX) as char)
+                            .collect()
+                    })
+                    .collect();
+                let numbers: Vec<i32> =
+                    (0..1000).map(|_| rng.random_range(0..=1000)).collect();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringViewArray::from(strings)) as ArrayRef,
+                        Arc::new(Int32Array::from(numbers)) as ArrayRef,
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+
+        // The same call the external sorter spills a sorted run with: the
+        // returned size is what the merge budgets against.
+        let (spill_file, max_record_batch_memory) = spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                batches
+                    .iter()
+                    .map(Ok::<_, datafusion_common::DataFusionError>),
+                "Test",
+            )?
+            .unwrap();
+
+        let stream = spill_manager
+            .read_spill_as_stream(spill_file, Some(max_record_batch_memory))?;
+        let read_back = collect(stream).await?;
+        assert_eq!(read_back.len(), batches.len());
+
+        for (written, read) in batches.iter().zip(&read_back) {
+            assert_eq!(written, read);
+            let size = get_record_batch_memory_size(read);
+            assert!(
+                size <= max_record_batch_memory + SPILL_BATCH_MEMORY_MARGIN,
+                "read-back batch retains {size} bytes, but the merge only \
+                 reserved for {max_record_batch_memory} bytes"
+            );
+        }
+        Ok(())
+    }
+
+    /// Frames an IPC stream delivered in chunks of `chunk_size` bytes and
+    /// decodes it, checking that every batch is intact and that its buffers
+    /// are backed by an allocation no larger than its own message body.
+    fn frame_and_decode(ipc: &[u8], chunk_size: usize, expected: &[RecordBatch]) {
+        let mut framer = MessageFramer::new();
+        let mut decoder = StreamDecoder::new();
+        let mut decoded = vec![];
+        for chunk in ipc.chunks(chunk_size) {
+            let mut input = Buffer::from(chunk);
+            while !input.is_empty() {
+                let Some(buffers) = framer.push(&mut input).unwrap() else {
+                    continue;
+                };
+                let body_size = buffers.last().unwrap().len();
+                for mut buffer in buffers {
+                    while !buffer.is_empty() {
+                        if let Some(batch) = decoder.decode(&mut buffer).unwrap() {
+                            let retained = get_record_batch_memory_size(&batch);
+                            assert!(
+                                retained <= body_size,
+                                "batch retains {retained} bytes for a {body_size} byte body"
+                            );
+                            decoded.push(batch);
+                        }
+                    }
+                }
+            }
+        }
+        decoder.finish().unwrap();
+        assert!(matches!(framer.state, FramerState::Finished));
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn test_message_framer_across_chunk_boundaries() {
+        let batches: Vec<RecordBatch> = (0..5)
+            .map(|b| {
+                let n = 10 * (b + 1);
+                build_table_i32(
+                    ("a", &(0..n).collect::<Vec<_>>()),
+                    ("b", &(n..2 * n).collect::<Vec<_>>()),
+                    ("c", &(2 * n..3 * n).collect::<Vec<_>>()),
+                )
+            })
+            .collect();
+        let schema = batches[0].schema();
+
+        let mut ipc = vec![];
+        let mut writer = StreamWriter::try_new(&mut ipc, &schema).unwrap();
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        for chunk_size in [1, 3, 7, 64, 1000, ipc.len()] {
+            frame_and_decode(&ipc, chunk_size, &batches);
+        }
+    }
+
+    /// Decodes `ipc` the way the reader did before framing, returning the
+    /// number of batches or `Err` if the stream is not a complete one.
+    fn decode_unframed(ipc: &[u8]) -> std::result::Result<usize, ()> {
+        let mut decoder = StreamDecoder::new();
+        let mut buffer = Buffer::from(ipc);
+        let mut batches = 0;
+        while !buffer.is_empty() {
+            match decoder.decode(&mut buffer) {
+                Ok(Some(_)) => batches += 1,
+                Ok(None) => {}
+                Err(_) => return Err(()),
+            }
+        }
+        decoder.finish().map_err(|_| ())?;
+        Ok(batches)
+    }
+
+    /// Same as [`decode_unframed`], but through the [`MessageFramer`].
+    fn decode_framed(ipc: &[u8]) -> std::result::Result<usize, ()> {
+        let mut framer = MessageFramer::new();
+        let mut decoder = StreamDecoder::new();
+        let mut input = Buffer::from(ipc);
+        let mut batches = 0;
+        while !input.is_empty() {
+            let Some(buffers) = framer.push(&mut input).map_err(|_| ())? else {
+                continue;
+            };
+            for mut buffer in buffers {
+                while !buffer.is_empty() {
+                    match decoder.decode(&mut buffer) {
+                        Ok(Some(_)) => batches += 1,
+                        Ok(None) => {}
+                        Err(_) => return Err(()),
+                    }
+                }
+            }
+        }
+        framer.finish().map_err(|_| ())?;
+        decoder.finish().map_err(|_| ())?;
+        Ok(batches)
+    }
+
+    /// Framing must not weaken the reader's detection of a corrupt or cut
+    /// short spill file. The partial bytes of an incomplete trailing message
+    /// end up in the [`MessageFramer`] instead of the decoder's own scratch
+    /// space, so the framer has to report them, see [`MessageFramer::finish`].
+    ///
+    /// Truncated at every possible offset, framed decoding must accept and
+    /// reject exactly what unframed decoding does.
+    #[test]
+    fn test_message_framer_reports_truncation_like_the_decoder() {
+        let batches: Vec<RecordBatch> = (0..3)
+            .map(|b| {
+                build_table_i32(
+                    ("a", &(0..50).map(|i| b * 50 + i).collect::<Vec<_>>()),
+                    ("b", &(0..50).collect::<Vec<_>>()),
+                    ("c", &(0..50).collect::<Vec<_>>()),
+                )
+            })
+            .collect();
+
+        let mut ipc = vec![];
+        let mut writer = StreamWriter::try_new(&mut ipc, &batches[0].schema()).unwrap();
+        for batch in &batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+
+        let mut complete = 0;
+        for cut in 0..=ipc.len() {
+            let truncated = &ipc[..cut];
+            let framed = decode_framed(truncated);
+            assert_eq!(
+                framed,
+                decode_unframed(truncated),
+                "framed and unframed decoding disagree on a stream cut to {cut} bytes"
+            );
+            complete += usize::from(framed.is_ok());
+        }
+        // Cutting anywhere but on a message boundary must be an error, so
+        // only the empty stream, the three batches and the end-of-stream
+        // marker may decode cleanly.
+        assert_eq!(complete, 5);
+        assert_eq!(decode_framed(&ipc), Ok(batches.len()));
+    }
+
+    /// End-to-end: a spill file cut short mid-message must error rather than
+    /// silently read back as a shorter stream.
+    #[tokio::test]
+    async fn test_truncated_spill_file_errors() -> Result<()> {
+        let batch = build_table_i32(
+            ("a", &(0..100).collect::<Vec<_>>()),
+            ("b", &(100..200).collect::<Vec<_>>()),
+            ("c", &(200..300).collect::<Vec<_>>()),
+        );
+        let schema = batch.schema();
+        let batches = vec![batch.clone(), batch];
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, Arc::clone(&schema));
+        let spill_file = spill_manager
+            .spill_record_batch_and_finish(&batches, "Test")?
+            .unwrap();
+
+        // Truncate the file mid-message: drop the 8 byte end-of-stream
+        // marker plus part of the last batch's body.
+        let path = spill_file.path().unwrap().to_path_buf();
+        let len = std::fs::metadata(&path)?.len();
+        let f = std::fs::OpenOptions::new().write(true).open(&path)?;
+        f.set_len(len - 8 - 13)?;
+        drop(f);
+
+        let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
+        let result = collect(stream).await;
+        assert!(
+            result.is_err(),
+            "truncated spill file should error, got Ok with {} batches",
+            result.as_ref().map(|b| b.len()).unwrap_or(0)
+        );
         Ok(())
     }
 
@@ -655,7 +1291,7 @@ mod tests {
                 "Test Spill",
             )?
             .unwrap();
-        assert!(spill_file.path().exists());
+        assert!(spill_file.path().unwrap().exists());
         assert!(max_batch_mem > 0);
 
         let stream = spill_manager.read_spill_as_stream(spill_file, None)?;
@@ -685,7 +1321,7 @@ mod tests {
 
     async fn validate(
         spill_manager: &SpillManager,
-        spill_file: RefCountedTempFile,
+        spill_file: Arc<dyn SpillFile>,
         num_rows: usize,
         schema: SchemaRef,
         batch_count: usize,
@@ -735,14 +1371,14 @@ mod tests {
         let zstd_spill_file = zstd_spill_manager
             .spill_record_batch_and_finish(&batches, "ZSTD_Test")?
             .unwrap();
-        assert!(uncompressed_spill_file.path().exists());
-        assert!(lz4_spill_file.path().exists());
-        assert!(zstd_spill_file.path().exists());
+        assert!(uncompressed_spill_file.path().unwrap().exists());
+        assert!(lz4_spill_file.path().unwrap().exists());
+        assert!(zstd_spill_file.path().unwrap().exists());
 
-        let lz4_spill_size = std::fs::metadata(lz4_spill_file.path())?.len();
-        let zstd_spill_size = std::fs::metadata(zstd_spill_file.path())?.len();
+        let lz4_spill_size = std::fs::metadata(lz4_spill_file.path().unwrap())?.len();
+        let zstd_spill_size = std::fs::metadata(zstd_spill_file.path().unwrap())?.len();
         let uncompressed_spill_size =
-            std::fs::metadata(uncompressed_spill_file.path())?.len();
+            std::fs::metadata(uncompressed_spill_file.path().unwrap())?.len();
 
         assert!(uncompressed_spill_size > lz4_spill_size);
         assert!(uncompressed_spill_size > zstd_spill_size);
@@ -797,7 +1433,7 @@ mod tests {
 
         let temp_file = spill_manager.spill_record_batch_and_finish(&[batch], "Test")?;
         assert!(temp_file.is_some());
-        assert!(temp_file.unwrap().path().exists());
+        assert!(temp_file.unwrap().path().unwrap().exists());
         Ok(())
     }
 
@@ -871,7 +1507,7 @@ mod tests {
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());
-        assert!(completed_file.unwrap().path().exists());
+        assert!(completed_file.unwrap().path().unwrap().exists());
         verify_metrics(&in_progress_file, 1, 712, 6)?;
         // Double finish produce error
         let result = in_progress_file.finish();
@@ -1285,7 +1921,7 @@ mod tests {
         }
 
         let spill_file = in_progress_file.finish()?.unwrap();
-        let file_size = fs::metadata(spill_file.path())?.len() as usize;
+        let file_size = fs::metadata(spill_file.path().unwrap())?.len() as usize;
 
         let theoretical_without_gc = total_buffer_size * sliced_batches.len();
         let reduction_percent = ((theoretical_without_gc - file_size) as f64
@@ -1455,7 +2091,7 @@ mod tests {
             .unwrap();
 
         // 4. Check file size on disk
-        let file_size = fs::metadata(spill_file.path())?.len();
+        let file_size = fs::metadata(spill_file.path().unwrap())?.len();
 
         // The original buffer size is around 70KB.
         // Without GC, the spill file would be > 70KB.
@@ -1499,7 +2135,7 @@ mod tests {
             .unwrap();
 
         // 4. Check file size on disk
-        let file_size = fs::metadata(spill_file.path())?.len();
+        let file_size = fs::metadata(spill_file.path().unwrap())?.len();
 
         // Original buffer is 100KB.
         // With GC, it should be much smaller.

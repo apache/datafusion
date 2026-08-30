@@ -302,6 +302,9 @@ pub struct ChildFilterDescription {
     /// Description of which parent filters can be pushed down into this node.
     /// Since we need to transmit filter pushdown results back to this node's parent
     /// we need to track each parent filter for each child, even those that are unsupported / won't be pushed down.
+    /// The entries must stay in the same order as the input parent filters: the
+    /// filter pushdown optimizer maps child results back to parent filters by
+    /// position.
     pub(crate) parent_filters: Vec<PushedDownPredicate>,
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays
@@ -398,6 +401,13 @@ impl ChildFilterDescription {
         parent_filters: &[Arc<dyn PhysicalExpr>],
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
+        // Building the remapper indexes every column of the child's schema, so
+        // with no filters to remap it is pure cost for the empty description
+        // `remap_filters` would return anyway. On a wide schema, and once per
+        // child, that is worth not paying.
+        if parent_filters.is_empty() {
+            return Ok(Self::empty());
+        }
         let remapper = FilterRemapper::new(child.schema());
         Self::remap_filters(parent_filters, &remapper)
     }
@@ -419,6 +429,10 @@ impl ChildFilterDescription {
         allowed_indices: HashSet<usize>,
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
+        // See [`Self::from_child`]: nothing to remap, nothing to index.
+        if parent_filters.is_empty() {
+            return Ok(Self::empty());
+        }
         let remapper =
             FilterRemapper::with_allowed_indices(child.schema(), allowed_indices);
         Self::remap_filters(parent_filters, &remapper)
@@ -442,6 +456,14 @@ impl ChildFilterDescription {
             parent_filters: child_parent_filters,
             self_filters: vec![],
         })
+    }
+
+    /// A description carrying no filters in either direction.
+    fn empty() -> Self {
+        Self {
+            parent_filters: vec![],
+            self_filters: vec![],
+        }
     }
 
     /// Mark all parent filters as unsupported for this child.

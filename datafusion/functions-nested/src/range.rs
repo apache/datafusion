@@ -80,11 +80,11 @@ make_udf_expr_and_func!(
 range(start, stop[, step])",
     sql_example = r#"```sql
 > select range(2, 10, 3);
-+-----------------------------------+
-| range(Int64(2),Int64(10),Int64(3))|
-+-----------------------------------+
-| [2, 5, 8]                         |
-+-----------------------------------+
++------------------------------------+
+| range(Int64(2),Int64(10),Int64(3)) |
++------------------------------------+
+| [2, 5, 8]                          |
++------------------------------------+
 
 > select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
 +--------------------------------------------------------------------------+
@@ -434,8 +434,8 @@ impl Range {
         let stop = cast_to_ns(stop)?;
         let stop = as_timestamp_nanosecond_array(&stop)?;
 
-        let start_tz = parse_tz(&start.timezone())?;
-        let stop_tz = parse_tz(&stop.timezone())?;
+        let start_tz = parse_tz(start.timezone())?;
+        let stop_tz = parse_tz(stop.timezone())?;
 
         // values are timestamps
         let values_builder = start
@@ -609,8 +609,8 @@ fn generate_range_values(
     Ok(())
 }
 
-fn parse_tz(tz: &Option<&str>) -> Result<Tz> {
-    let tz = tz.unwrap_or_else(|| "+00");
+fn parse_tz(tz: Option<&str>) -> Result<Tz> {
+    let tz = tz.unwrap_or("+00");
 
     Tz::from_str(tz)
         .map_err(|op| exec_datafusion_err!("failed to parse timezone {tz}: {:?}", op))

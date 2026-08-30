@@ -74,7 +74,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 +--------------------------+
 | names_list               |
 +--------------------------+
-| Charlie, Bob, Alice |
+| Charlie, Bob, Alice      |
 +--------------------------+
 ```"#,
     argument(
@@ -432,11 +432,6 @@ impl GroupsAccumulator for StringAggGroupsAccumulator {
         };
         Ok(vec![result])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.total_data_bytes
             + self.values.capacity() * size_of::<Option<String>>()
@@ -753,7 +748,7 @@ mod tests {
     fn some_str_sorted(value: ScalarValue, sep: &str) -> String {
         let value = some_str(value);
         let mut parts: Vec<&str> = value.split(sep).collect();
-        parts.sort();
+        parts.sort_unstable();
         parts.join(sep)
     }
 

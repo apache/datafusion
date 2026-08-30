@@ -33,7 +33,7 @@ use parquet::data_type::Decimal;
 /// This structure implements [`PruningStatistics`] and is used to prune
 /// Parquet row groups and data pages based on the query predicate.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct BloomFilterStatistics {
+pub struct BloomFilterStatistics {
     /// Per-column Bloom filters keyed by predicate column name.
     column_sbbf: HashMap<String, ColumnBloomFilter>,
 }
@@ -50,19 +50,25 @@ struct ColumnBloomFilter {
 
 impl BloomFilterStatistics {
     /// Create an empty [`BloomFilterStatistics`]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Default::default()
     }
 
     /// Create an empty [`BloomFilterStatistics`] with the specified capacity
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             column_sbbf: HashMap::with_capacity(capacity),
         }
     }
 
-    /// Add a Bloom filter and type for the specified column
-    pub(crate) fn insert(
+    /// Returns true if no per-column Bloom filters have been loaded.
+    pub fn is_empty(&self) -> bool {
+        self.column_sbbf.is_empty()
+    }
+
+    /// Add a Bloom filter for the specified column, along with the column's
+    /// Parquet physical [`Type`] and type length from the column descriptor.
+    pub fn insert(
         &mut self,
         column: impl Into<String>,
         sbbf: Sbbf,
@@ -248,12 +254,21 @@ mod tests {
     use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use datafusion_pruning::PruningPredicate;
-    use object_store::ObjectStoreExt;
+    use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
+    use object_store::{ObjectStore, ObjectStoreExt};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
+
+    fn build_test_pruning_predicate(
+        expr: Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        schema: Schema,
+    ) -> PruningPredicate {
+        PruningPredicateBuilder::new()
+            .with_file_schema(Arc::new(schema))
+            .try_build(expr)
+            .unwrap()
+    }
 
     #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
@@ -320,8 +335,7 @@ mod tests {
             false,
         );
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
         let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
             file_name,
@@ -438,8 +452,7 @@ mod tests {
                 None,
             ));
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate =
-                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+            let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &format!("decimal128-{precision}.parquet"),
@@ -476,8 +489,7 @@ mod tests {
                 None,
             ));
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate =
-                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+            let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &format!("negative-decimal128-{precision}.parquet"),
@@ -572,8 +584,7 @@ mod tests {
             let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate =
-                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+            let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &file_name,
@@ -643,17 +654,11 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
-        let inner =
-            ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
-                .with_file_size(object_meta.size);
-
+        let store: Arc<dyn ObjectStore> = Arc::new(in_memory);
         let partitioned_file = PartitionedFile::new_from_meta(object_meta);
 
-        let reader = ParquetFileReader {
-            inner,
-            file_metrics: file_metrics.clone(),
-            partitioned_file,
-        };
+        let reader =
+            ParquetFileReader::new(file_metrics.clone(), store, partitioned_file);
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());

@@ -56,7 +56,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.",
-    syntax_example = "array_position(array, element)\narray_position(array, element, index)",
+    syntax_example = "array_position(array, element[, index])",
     sql_example = r#"```sql
 > select array_position([1, 2, 2, 3, 1, 4], 2);
 +----------------------------------------------+
@@ -65,11 +65,11 @@ make_udf_expr_and_func!(
 | 2                                            |
 +----------------------------------------------+
 > select array_position([1, 2, 2, 3, 1, 4], 2, 3);
-+----------------------------------------------------+
++--------------------------------------------------------+
 | array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
-+----------------------------------------------------+
-| 3                                                  |
-+----------------------------------------------------+
++--------------------------------------------------------+
+| 3                                                      |
++--------------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -78,7 +78,7 @@ make_udf_expr_and_func!(
     argument(name = "element", description = "Element to search for in the array."),
     argument(
         name = "index",
-        description = "Index at which to start searching (1-indexed)."
+        description = "Index at which to start searching (1-indexed). Defaults to searching from the start"
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

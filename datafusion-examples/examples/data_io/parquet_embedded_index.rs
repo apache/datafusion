@@ -87,7 +87,7 @@
 //! 2. Read and deserialize the index.
 //!
 //! 3. Create a `TableProvider` that knows how to use the index to quickly find
-//!   the relevant files, row groups, data pages or rows based on on pushed down
+//!   the relevant files, row groups, data pages or rows based on pushed down
 //!   filters.
 //!
 //! # FAQ: Why do other Parquet readers skip over the custom index?
@@ -405,7 +405,7 @@ impl TableProvider for DistinctIndexTable {
     async fn scan(
         &self,
         _ctx: &dyn Session,
-        _proj: Option<&Vec<usize>>,
+        _proj: Option<&[usize]>,
         filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

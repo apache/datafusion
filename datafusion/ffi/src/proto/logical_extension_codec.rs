@@ -99,7 +99,7 @@ pub struct FFI_LogicalExtensionCodec {
     try_encode_udwf:
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> FFI_Result<SVec<u8>>,
 
-    pub task_ctx_provider: FFI_TaskContextProvider,
+    pub(crate) task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -294,15 +294,26 @@ impl Drop for FFI_LogicalExtensionCodec {
 
 impl FFI_LogicalExtensionCodec {
     /// Creates a new [`FFI_LogicalExtensionCodec`].
+    ///
+    /// If `codec` is already foreign, this re-exports its original FFI handle
+    /// rather than adding another wrapper layer. The handle still adopts the
+    /// `task_ctx_provider` supplied here, so it is never silently discarded and
+    /// an imported codec can be rebound to a different session.
+    ///
+    /// `runtime` is only honored when a new wrapper is created. An
+    /// already-foreign handle keeps the runtime of the library that owns it,
+    /// because that value lives in private data this side cannot reach.
     pub fn new(
-        codec: Arc<dyn LogicalExtensionCodec + Send>,
+        codec: Arc<dyn LogicalExtensionCodec>,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
         if let Some(codec) = (Arc::clone(&codec) as Arc<dyn Any>)
             .downcast_ref::<ForeignLogicalExtensionCodec>()
         {
-            return codec.0.clone();
+            let mut codec = codec.0.clone();
+            codec.task_ctx_provider = task_ctx_provider.into();
+            return codec;
         }
 
         let task_ctx_provider = task_ctx_provider.into();
@@ -507,7 +518,9 @@ mod tests {
     use datafusion_proto::logical_plan::LogicalExtensionCodec;
     use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
-    use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+    use crate::proto::logical_extension_codec::{
+        FFI_LogicalExtensionCodec, ForeignLogicalExtensionCodec,
+    };
     use crate::proto::physical_extension_codec::tests::TestExtensionCodec;
 
     fn create_test_table() -> MemTable {
@@ -712,14 +725,12 @@ mod tests {
 
     #[test]
     fn ffi_logical_extension_codec_local_bypass() {
-        let codec =
-            Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec + Send>;
+        let codec = Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec>;
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
         let mut ffi_codec =
             FFI_LogicalExtensionCodec::new(Arc::clone(&codec), None, task_ctx_provider);
 
-        let codec = codec as Arc<dyn LogicalExtensionCodec>;
         // Verify local libraries can be downcast to their original
         let foreign_codec: Arc<dyn LogicalExtensionCodec> = (&ffi_codec).into();
         assert!(arc_ptr_eq(&foreign_codec, &codec));
@@ -728,5 +739,62 @@ mod tests {
         ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_codec: Arc<dyn LogicalExtensionCodec> = (&ffi_codec).into();
         assert!(!arc_ptr_eq(&foreign_codec, &codec));
+    }
+
+    /// Importing a codec and re-wrapping it with a different task context
+    /// provider must rebind the handle. See
+    /// <https://github.com/apache/datafusion/issues/24722>.
+    #[test]
+    fn ffi_logical_extension_codec_rebind_adopts_task_ctx_provider() {
+        let (_ctx_a, provider_a) = crate::util::tests::test_session_and_ctx();
+        let (ctx_b, provider_b) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_codec = FFI_LogicalExtensionCodec::new(
+            Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec>,
+            None,
+            provider_a,
+        );
+        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+
+        let imported: Arc<dyn LogicalExtensionCodec> = (&ffi_codec).into();
+        assert!(
+            (Arc::clone(&imported) as Arc<dyn std::any::Any>)
+                .downcast_ref::<ForeignLogicalExtensionCodec>()
+                .is_some()
+        );
+
+        let rebound = FFI_LogicalExtensionCodec::new(imported, None, provider_b);
+
+        let task_ctx: Arc<TaskContext> = (&rebound.task_ctx_provider)
+            .try_into()
+            .expect("rebound codec resolves");
+        assert_eq!(task_ctx.session_id(), ctx_b.task_ctx().session_id());
+    }
+
+    /// Because the provider is held as a `Weak`, a codec that cannot be rebound
+    /// forces callers to keep the original session alive. Once rebinding works,
+    /// dropping it must not invalidate the handle.
+    #[test]
+    fn ffi_logical_extension_codec_rebind_releases_original_session() {
+        let (ctx_b, provider_b) = crate::util::tests::test_session_and_ctx();
+
+        let rebound = {
+            let (ctx_a, provider_a) = crate::util::tests::test_session_and_ctx();
+            let mut ffi_codec = FFI_LogicalExtensionCodec::new(
+                Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec>,
+                None,
+                provider_a,
+            );
+            ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
+            let imported: Arc<dyn LogicalExtensionCodec> = (&ffi_codec).into();
+            drop(ctx_a);
+
+            FFI_LogicalExtensionCodec::new(imported, None, provider_b)
+        };
+
+        let task_ctx: Arc<TaskContext> = (&rebound.task_ctx_provider)
+            .try_into()
+            .expect("rebound codec must not depend on the original session");
+        assert_eq!(task_ctx.session_id(), ctx_b.task_ctx().session_id());
     }
 }

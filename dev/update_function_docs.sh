@@ -27,7 +27,7 @@ cd "${ROOT_DIR}"
 source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
 TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
-PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- aggregate"
+PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- aggregate"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -121,7 +121,7 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 echo "'$TARGET_FILE' successfully updated!"
 
 TARGET_FILE="docs/source/user-guide/sql/scalar_functions.md"
-PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- scalar"
+PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- scalar"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -165,7 +165,7 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 echo "'$TARGET_FILE' successfully updated!"
 
 TARGET_FILE="docs/source/user-guide/sql/window_functions.md"
-PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- window"
+PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- window"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -316,6 +316,8 @@ UNBOUNDED FOLLOWING
 where **offset** is an non-negative integer.
 
 RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).
+
+In RANGE mode an **offset** is measured in ORDER BY values rather than in rows, so the bound is computed by adding it to or subtracting it from the current row's ORDER BY value. That restricts `offset PRECEDING` and `offset FOLLOWING` to ORDER BY types supporting such arithmetic, namely the numeric, date, and timestamp types. Other orderable types, such as strings, binaries, and times, can still be used with `UNBOUNDED PRECEDING`, `CURRENT ROW` and `UNBOUNDED FOLLOWING`, which are located by comparing ORDER BY values.
 
 ## Filter clause for aggregate window functions
 

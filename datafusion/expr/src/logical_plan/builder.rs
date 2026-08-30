@@ -283,7 +283,7 @@ impl LogicalPlanBuilder {
                     && !can_cast_types(&data_type, field_type)
                 {
                     return exec_err!(
-                        "type mismatch and can't cast to got {} and {}",
+                        "Types don't match and no valid cast exists, received data of type {} for field of type {}",
                         data_type,
                         field_type
                     );
@@ -2177,7 +2177,7 @@ pub fn wrap_projection_for_join_if_necessary(
         // Expr contains Arc with interior mutability but is intentionally used as hash key
         let join_key_items = alias_join_keys
             .iter()
-            .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
+            .filter(|expr| expr.try_as_col().is_none())
             .cloned()
             .collect::<HashSet<Expr>>();
         projection.extend(join_key_items);
@@ -2901,6 +2901,48 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_aggregate_rejects_nested_aggregates() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/23812
+        let err = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![0, 3, 4]),
+        )?
+        .aggregate(vec![col("id")], vec![sum(sum(col("salary")))])
+        .expect_err("nested aggregates should be rejected");
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot be nested: 'sum(employee_csv.salary)' is nested inside 'sum(sum(employee_csv.salary))'"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_window_rejects_nested_window_functions() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/23812
+        let sum_over = |arg| {
+            Expr::from(expr::WindowFunction::new(
+                crate::WindowFunctionDefinition::AggregateUDF(
+                    crate::test::function_stub::sum_udaf(),
+                ),
+                vec![arg],
+            ))
+        };
+        let err = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![4]))?
+            .window(vec![sum_over(sum_over(col("salary")))])
+            .expect_err("nested window functions should be rejected");
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls cannot be nested: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_join_metadata() -> Result<()> {
         let left_schema = DFSchema::new_with_metadata(
             vec![(None, Arc::new(Field::new("a", DataType::Int32, false)))],
@@ -2930,9 +2972,7 @@ mod tests {
     #[test]
     fn test_values_metadata() -> Result<()> {
         let metadata: HashMap<String, String> =
-            [("ARROW:extension:metadata".to_string(), "test".to_string())]
-                .into_iter()
-                .collect();
+            once(("ARROW:extension:metadata".to_string(), "test".to_string())).collect();
         let metadata = FieldMetadata::from(metadata);
         let values = LogicalPlanBuilder::values(vec![
             vec![lit_with_metadata(1, Some(metadata.clone()))],
@@ -2943,9 +2983,7 @@ mod tests {
 
         // Do not allow VALUES with different metadata mixed together
         let metadata2: HashMap<String, String> =
-            [("ARROW:extension:metadata".to_string(), "test2".to_string())]
-                .into_iter()
-                .collect();
+            once(("ARROW:extension:metadata".to_string(), "test2".to_string())).collect();
         let metadata2 = FieldMetadata::from(metadata2);
         assert!(
             LogicalPlanBuilder::values(vec![
@@ -2990,6 +3028,27 @@ mod tests {
                 Some("a:2".to_string()),
                 Some("a:1:1".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn test_values_with_schema_type_mismatch_error_message() {
+        // Date32 field, but the value is a Boolean, which cannot be cast to Date32.
+        let schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("a", DataType::Date32, false)].into(),
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
+
+        let err = LogicalPlanBuilder::values_with_schema(vec![vec![lit(true)]], &schema)
+            .unwrap_err();
+
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: Types don't match and no valid cast exists, \
+         received data of type Boolean for field of type Date32"
         );
     }
 }

@@ -294,7 +294,7 @@ $ mkdir -p /tmp/output_branch
 $ git checkout my_branch
 $ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
-./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
+uv run ./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
 ```
 
 This will produce output like:
@@ -483,6 +483,14 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 - Call its `start_new_case` method with a string that will appear in the "Query" column of the
   compare output.
 - Use `write_iter` to record elapsed times for the behavior you're benchmarking.
+- Call `set_memory_pool` with the `RuntimeEnv`'s memory pool (`ctx.runtime_env().memory_pool`),
+  and again for each new runtime if your benchmark builds one per query. Each case then reports a
+  `pool_peak_bytes` field: the peak `MemoryPool` reservation reached while running it, which is the
+  largest value across that case's iterations. The field is omitted when the benchmark runs without
+  `--memory-limit`, since no pool is installed to record. Comparing it against the peak RSS printed
+  by `print_memory_stats` shows how much of the run's memory the pool actually accounted for; the
+  pool only tracks the "large" allocations that scale with input size, so the two are expected to
+  differ.
 - When all cases are done, call the `BenchmarkRun`'s `maybe_write_json` method, giving it the value
   of the `--output` structopt field on `RunOpt`.
 
@@ -495,6 +503,61 @@ The output of `dfbench` help includes a description of each benchmark, which is 
 The ClickBench[1] benchmarks are widely cited in the industry and
 focus on grouping / aggregation / filtering. This runner uses the
 scripts and queries from [2].
+
+The runner applies two ClickBench-specific setup steps automatically:
+
+- ClickBench stores `EventDate` as `UInt16` days since `1970-01-01`.
+  The runner registers the parquet data as `hits_raw`, then creates a
+  `hits` view that casts `EventDate` through `INTEGER` to `DATE` for the
+  benchmark queries.
+- The source partitioned ClickBench dataset stores string columns without
+  the `string` Parquet logical type annotation. For partitioned runs, the
+  runner enables the parquet `binary_as_string` option so those columns
+  are read as strings.
+
+If you set up ClickBench manually through SQL, register the single-file
+dataset as follows:
+
+```sql
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION 'benchmarks/data/hits.parquet';
+```
+
+For the partitioned dataset, register the directory and enable
+`binary_as_string`:
+
+```sql
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION 'benchmarks/data/hits_partitioned'
+OPTIONS ('binary_as_string' 'true');
+```
+
+After registering either dataset as `hits_raw`, create the `hits` view with
+the required `EventDate` conversion:
+
+```sql
+CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw;
+```
+
+From the repository root, download data and run the default ClickBench
+queries against the single parquet file:
+
+```shell
+./benchmarks/bench.sh data clickbench_1
+./benchmarks/bench.sh run clickbench_1
+```
+
+Or run against the partitioned dataset:
+
+```shell
+./benchmarks/bench.sh data clickbench_partitioned
+./benchmarks/bench.sh run clickbench_partitioned
+```
 
 [1]: https://github.com/ClickHouse/ClickBench
 [2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
@@ -890,7 +953,7 @@ Several queries are included to test hash joins under various workloads.
 
 ## Sort Merge Join
 
-This benchmark focuses on the performance of queries with sort merge joins joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+This benchmark focuses on the performance of queries with sort merge joins, minimizing other overheads such as scanning data sources or evaluating predicates.
 
 Several queries are included to test sort merge joins under various workloads.
 

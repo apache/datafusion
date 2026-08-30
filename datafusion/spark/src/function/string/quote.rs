@@ -17,12 +17,14 @@
 
 use arrow::array::{ArrayRef, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
-use datafusion::logical_expr::{Coercion, ColumnarValue, Signature, TypeSignatureClass};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 use std::sync::Arc;

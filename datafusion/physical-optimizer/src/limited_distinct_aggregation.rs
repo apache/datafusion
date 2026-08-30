@@ -72,7 +72,8 @@ impl LimitedDistinctAggregation {
         if let Some(local_limit) = plan.downcast_ref::<LocalLimitExec>() {
             limit = local_limit.fetch();
             children = local_limit.children().into_iter().cloned().collect();
-        } else if let Some(global_limit) = plan.downcast_ref::<GlobalLimitExec>() {
+        } else {
+            let global_limit = plan.downcast_ref::<GlobalLimitExec>()?;
             global_fetch = global_limit.fetch();
             global_fetch?;
             global_skip = global_limit.skip();
@@ -80,8 +81,6 @@ impl LimitedDistinctAggregation {
             limit = global_fetch.unwrap() + global_skip;
             children = global_limit.children().into_iter().cloned().collect();
             is_global_limit = true
-        } else {
-            return None;
         }
         let child = children.iter().exactly_one().ok()?;
         // ensure there is no output ordering; can this rule be relaxed?

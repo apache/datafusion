@@ -40,7 +40,7 @@ use datafusion_physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_physical_plan::statistics::StatisticsArgs;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
@@ -57,17 +57,17 @@ impl JoinSelection {
     }
 }
 
-/// Get statistics for a plan node, using the registry if available.
+/// Get statistics for a plan node, consulting the registry's providers if one
+/// is available.
 fn get_stats(
     plan: &dyn ExecutionPlan,
     registry: Option<&StatisticsRegistry>,
 ) -> Result<Arc<Statistics>> {
-    if let Some(reg) = registry {
-        reg.compute(plan)
-            .map(|s| Arc::<Statistics>::clone(s.base_arc()))
-    } else {
-        plan.statistics_with_args(&StatisticsArgs::new())
-    }
+    let ctx = match registry {
+        Some(reg) => StatisticsContext::new_with_registry(reg.clone()),
+        None => StatisticsContext::new(),
+    };
+    ctx.compute(plan, &StatisticsArgs::new())
 }
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
@@ -153,16 +153,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let config = context.config_options();
-        let mut default_registry = None;
-        let registry: Option<&StatisticsRegistry> =
-            if config.optimizer.use_statistics_registry {
-                Some(context.statistics_registry().unwrap_or_else(|| {
-                    default_registry
-                        .insert(StatisticsRegistry::default_with_builtin_providers())
-                }))
-            } else {
-                None
-            };
+        let registry = context.statistics_registry();
         let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
@@ -184,6 +175,14 @@ impl PhysicalOptimizerRule for JoinSelection {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Determines whether it is possible to swap inputs of a hash join - for null-aware joins, we can only swap `LeftAnti` with no filters
+fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
+    hash_join.join_type().supports_swap()
+        && (!hash_join.null_aware
+            || (*hash_join.join_type() == JoinType::LeftAnti
+                && hash_join.filter().is_none()))
 }
 
 /// Tries to create a [`HashJoinExec`] in [`PartitionMode::CollectLeft`] when possible.
@@ -224,9 +223,8 @@ pub(crate) fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
-            // Don't swap null-aware anti joins as they have specific side requirements
-            if hash_join.join_type().supports_swap()
-                && !hash_join.null_aware
+            // For null-aware joins, we only swap `LeftAnti` joins where the left side is > right side
+            if can_swap_hash_join(hash_join)
                 && should_swap_join_order(&**left, &**right, config, registry)?
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
@@ -246,11 +244,7 @@ pub(crate) fn try_collect_left(
                 .build()?,
         ))),
         (false, true) => {
-            // Don't swap null-aware anti joins as they have specific side requirements
-            if optimizer_config.join_reordering
-                && hash_join.join_type().supports_swap()
-                && !hash_join.null_aware
-            {
+            if optimizer_config.join_reordering && can_swap_hash_join(hash_join) {
                 hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
@@ -275,22 +269,20 @@ pub(crate) fn partitioned_hash_join(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    // Don't swap null-aware anti joins as they have specific side requirements
-    if hash_join.join_type().supports_swap()
-        && !hash_join.null_aware
+    let partition_mode = if hash_join.null_aware {
+        PartitionMode::CollectLeft
+    } else {
+        PartitionMode::Partitioned
+    };
+    if can_swap_hash_join(hash_join)
         && should_swap_join_order(&**left, &**right, config, registry)?
     {
-        hash_join.swap_inputs(PartitionMode::Partitioned)
+        hash_join.swap_inputs(partition_mode)
     } else {
         // Null-aware anti joins must use CollectLeft mode because they track probe-side state
         // (probe_side_non_empty, probe_side_has_null) per-partition, but need global knowledge
         // for correct null handling. With partitioning, a partition might not see probe rows
         // even if the probe side is globally non-empty, leading to incorrect NULL row handling.
-        let partition_mode = if hash_join.null_aware {
-            PartitionMode::CollectLeft
-        } else {
-            PartitionMode::Partitioned
-        };
 
         Ok(Arc::new(
             hash_join
@@ -330,14 +322,16 @@ fn statistical_join_selection_subrule(
             PartitionMode::Partitioned => {
                 let left = hash_join.left();
                 let right = hash_join.right();
-                // Don't swap null-aware anti joins as they have specific side requirements
-                if hash_join.join_type().supports_swap()
-                    && !hash_join.null_aware
+                if can_swap_hash_join(hash_join)
                     && should_swap_join_order(&**left, &**right, config, registry)?
                 {
-                    hash_join
-                        .swap_inputs(PartitionMode::Partitioned)
-                        .map(Some)?
+                    // Null-aware RightAnti only supports CollectLeft
+                    let partition_mode = if hash_join.null_aware {
+                        PartitionMode::CollectLeft
+                    } else {
+                        PartitionMode::Partitioned
+                    };
+                    hash_join.swap_inputs(partition_mode).map(Some)?
                 } else {
                     None
                 }

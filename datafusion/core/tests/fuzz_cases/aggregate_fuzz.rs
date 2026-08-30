@@ -350,7 +350,12 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             schema.clone(),
         )
         .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    );
+    assert_ne!(
+        aggregate_exec_running.input_order_mode(),
+        &InputOrderMode::Linear,
+        "running aggregate should observe ordered input for group_by: {group_by:?}"
+    );
 
     let aggregate_exec_usual = Arc::new(
         AggregateExec::try_new(
@@ -362,7 +367,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             schema.clone(),
         )
         .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    );
 
     let task_ctx = ctx.task_ctx();
     let collected_usual = collect(aggregate_exec_usual.clone(), task_ctx.clone())
@@ -427,17 +432,17 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut rng = StdRng::seed_from_u64(random_seed);
     let mut input123: Vec<(i64, i64, i64)> = vec![(0, 0, 0); len];
     let mut input4: Vec<i64> = vec![0; len];
-    input123.iter_mut().for_each(|v| {
+    for v in &mut input123 {
         *v = (
             rng.random_range(0..n_distinct) as i64,
             rng.random_range(0..n_distinct) as i64,
             rng.random_range(0..n_distinct) as i64,
         )
-    });
-    input4.iter_mut().for_each(|v| {
+    }
+    for v in &mut input4 {
         *v = rng.random_range(0..n_distinct) as i64;
-    });
-    input123.sort();
+    }
+    input123.sort_unstable();
     let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
     let input2 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.1));
     let input3 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.2));

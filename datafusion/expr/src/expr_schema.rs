@@ -27,7 +27,9 @@ use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
-use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
+use crate::{
+    LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
+};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
@@ -85,6 +87,26 @@ fn cast_output_field(
         f = f.with_nullable(true);
     }
     Arc::new(f)
+}
+
+fn scalar_arguments_for_fields(
+    args: &[Expr],
+    arg_fields: &[FieldRef],
+) -> Vec<Option<ScalarValue>> {
+    args.iter()
+        .zip(arg_fields)
+        .map(|(expr, field)| scalar_argument_for_field(expr, field))
+        .collect()
+}
+
+fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<ScalarValue> {
+    match expr {
+        Expr::Literal(sv, _) => Some(
+            sv.cast_to(arg_field.data_type())
+                .unwrap_or_else(|_| sv.clone()),
+        ),
+        _ => None,
+    }
 }
 
 impl ExprSchemable for Expr {
@@ -157,7 +179,7 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
             }
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type {
@@ -284,56 +306,51 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                let nullable_then = case
-                    .when_then_expr
-                    .iter()
-                    .filter_map(|(w, t)| {
-                        let is_nullable = match t.nullable(input_schema) {
-                            Err(e) => return Some(Err(e)),
-                            Ok(n) => n,
-                        };
+                let nullable_then = case.when_then_expr.iter().find_map(|(w, t)| {
+                    let is_nullable = match t.nullable(input_schema) {
+                        Err(e) => return Some(Err(e)),
+                        Ok(n) => n,
+                    };
 
-                        // Branches with a then expression that is not nullable do not impact the
-                        // nullability of the case expression.
-                        if !is_nullable {
-                            return None;
-                        }
+                    // Branches with a then expression that is not nullable do not impact the
+                    // nullability of the case expression.
+                    if !is_nullable {
+                        return None;
+                    }
 
-                        // For case-with-expression assume all 'then' expressions are reachable
-                        if case.expr.is_some() {
-                            return Some(Ok(()));
-                        }
+                    // For case-with-expression assume all 'then' expressions are reachable
+                    if case.expr.is_some() {
+                        return Some(Ok(()));
+                    }
 
-                        // For branches with a nullable 'then' expression, try to determine
-                        // if the 'then' expression is ever reachable in the situation where
-                        // it would evaluate to null.
-                        let bounds = match predicate_bounds::evaluate_bounds(
-                            w,
-                            Some(unwrap_certainly_null_expr(t)),
-                            input_schema,
-                        ) {
-                            Err(e) => return Some(Err(e)),
-                            Ok(b) => b,
-                        };
+                    // For branches with a nullable 'then' expression, try to determine
+                    // if the 'then' expression is ever reachable in the situation where
+                    // it would evaluate to null.
+                    let bounds = match predicate_bounds::evaluate_bounds(
+                        w,
+                        Some(unwrap_certainly_null_expr(t)),
+                        input_schema,
+                    ) {
+                        Err(e) => return Some(Err(e)),
+                        Ok(b) => b,
+                    };
 
-                        let can_be_true = match bounds
-                            .contains_value(ScalarValue::Boolean(Some(true)))
-                        {
+                    let can_be_true =
+                        match bounds.contains_value(ScalarValue::Boolean(Some(true))) {
                             Err(e) => return Some(Err(e)),
                             Ok(b) => b,
                         };
 
-                        if !can_be_true {
-                            // If the derived 'when' expression can never evaluate to true, the
-                            // 'then' expression is not reachable when it would evaluate to NULL.
-                            // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                            None
-                        } else {
-                            // The branch might be taken
-                            Some(Ok(()))
-                        }
-                    })
-                    .next();
+                    if !can_be_true {
+                        // If the derived 'when' expression can never evaluate to true, the
+                        // 'then' expression is not reachable when it would evaluate to NULL.
+                        // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                        None
+                    } else {
+                        // The branch might be taken
+                        Some(Ok(()))
+                    }
+                });
 
                 if let Some(nullable_then) = nullable_then {
                     // There is at least one reachable nullable 'then' expression, so the case
@@ -366,13 +383,19 @@ impl ExprSchemable for Expr {
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
             Expr::SetComparison(_) => Ok(true),
-            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarSubquery(subquery) => {
-                Ok(subquery.subquery.schema().field(0).is_nullable())
+            Expr::InSubquery(InSubquery { expr, subquery, .. }) => {
+                let expr_nullable = expr.nullable(input_schema)?;
+                let subquery_nullable = subquery.subquery.schema().fields().first().ok_or_else(|| {
+                    plan_datafusion_err!("subquery must return exactly one column of data to compare against")
+                })?.is_nullable();
+
+                Ok(expr_nullable | subquery_nullable)
             }
-            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
-            }
+            Expr::ScalarSubquery(subquery) => Ok(scalar_subquery_nullable(subquery)),
+            Expr::BinaryExpr(BinaryExpr { left, right, op }) => match op {
+                Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => Ok(false),
+                _ => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
+            },
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
@@ -516,7 +539,13 @@ impl ExprSchemable for Expr {
                 Ok(Arc::new(Field::new(&schema_name, DataType::Boolean, false)))
             }
             Expr::ScalarSubquery(subquery) => {
-                Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
+                let field = subquery.subquery.schema().field(0);
+                Ok(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_nullable(scalar_subquery_nullable(subquery)),
+                ))
             }
             Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
                 let (left_field, right_field) =
@@ -529,17 +558,20 @@ impl ExprSchemable for Expr {
                 let mut coercer = BinaryTypeCoercer::new(lhs_type, op, rhs_type);
                 coercer.set_lhs_spans(left.spans().cloned().unwrap_or_default());
                 coercer.set_rhs_spans(right.spans().cloned().unwrap_or_default());
+                let nullable = match op {
+                    Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
+                    _ => lhs_nullable || rhs_nullable,
+                };
                 Ok(Arc::new(Field::new(
                     &schema_name,
                     coercer.get_result_type()?,
-                    lhs_nullable || rhs_nullable,
+                    nullable,
                 )))
             }
             Expr::WindowFunction(window_function) => {
                 let WindowFunction {
                     fun,
                     params: WindowFunctionParams { args, .. },
-                    ..
                 } = window_function.as_ref();
 
                 let fields = args
@@ -580,16 +612,12 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
-                let arguments = args
-                    .iter()
-                    .map(|e| match e {
-                        Expr::Literal(sv, _) => Some(sv),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
+                let arguments = scalar_arguments_for_fields(args, &new_fields);
+                let argument_refs =
+                    arguments.iter().map(Option::as_ref).collect::<Vec<_>>();
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
-                    scalar_arguments: &arguments,
+                    scalar_arguments: &argument_refs,
                 };
 
                 func.return_field_from_args(args)
@@ -752,6 +780,15 @@ fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
     }
 }
 
+/// Returns whether a scalar subquery may evaluate to NULL.
+///
+/// This is the case if the subquery's projected field is nullable, or if the
+/// subquery may return no rows: a scalar subquery that produces no rows
+/// evaluates to NULL regardless of the nullability of its projected field.
+fn scalar_subquery_nullable(subquery: &Subquery) -> bool {
+    subquery.subquery.schema().field(0).is_nullable() || subquery.subquery.min_rows() == 0
+}
+
 /// Cast subquery in InSubquery/ScalarSubquery to a given type.
 ///
 /// 1. **Projection plan**: If the subquery is a projection (i.e. a SELECT statement with specific
@@ -796,8 +833,14 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
+    use crate::logical_plan::builder::LogicalTableSource;
+    use crate::test::function_stub::count;
+    use crate::{
+        LogicalPlanBuilder, and, col, in_subquery, lit, not, or,
+        out_ref_col_with_metadata, scalar_subquery, when,
+    };
 
+    use arrow::datatypes::Schema;
     use datafusion_common::{DFSchema, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
@@ -808,13 +851,85 @@ mod tests {
     }
 
     #[test]
-    fn expr_schema_nullability() {
-        let expr = col("foo").eq(lit(1));
-        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
-        assert!(
-            expr.nullable(&MockExprSchema::new().with_nullable(true))
-                .unwrap()
+    fn scalar_arguments_match_coerced_fields() {
+        let int16_field: FieldRef = Field::new("arg", DataType::Int16, true).into();
+
+        assert_eq!(
+            scalar_argument_for_field(&lit(1_i64), &int16_field),
+            Some(ScalarValue::Int16(Some(1)))
         );
+        assert_eq!(
+            scalar_argument_for_field(&lit(ScalarValue::Null), &int16_field),
+            Some(ScalarValue::Int16(None))
+        );
+
+        let int32_list = ScalarValue::List(ScalarValue::new_list(
+            &[ScalarValue::Int32(Some(1))],
+            &DataType::Int32,
+            true,
+        ));
+        let int64_list_type = DataType::new_list(DataType::Int64, true);
+        let int64_list_field: FieldRef =
+            Field::new("arg", int64_list_type.clone(), true).into();
+        assert_eq!(
+            scalar_argument_for_field(&lit(int32_list.clone()), &int64_list_field),
+            Some(int32_list.cast_to(&int64_list_type).unwrap())
+        );
+    }
+
+    #[test]
+    fn scalar_arguments_exclude_expression_casts_and_preserve_invalid_values() {
+        let int16_field: FieldRef = Field::new("arg", DataType::Int16, true).into();
+        let int32_field: FieldRef = Field::new("arg", DataType::Int32, true).into();
+        let explicit_cast = Expr::Cast(Cast::new(Box::new(lit(1_i64)), DataType::Int16));
+        let explicit_try_cast =
+            Expr::TryCast(TryCast::new(Box::new(lit(1_i64)), DataType::Int16));
+        let out_of_i32_range = i64::from(i32::MAX) + 1;
+
+        assert_eq!(
+            scalar_argument_for_field(&explicit_cast, &int16_field),
+            None
+        );
+        assert_eq!(
+            scalar_argument_for_field(&explicit_try_cast, &int16_field),
+            None
+        );
+        assert_eq!(
+            scalar_argument_for_field(&lit("not an integer"), &int16_field),
+            Some(ScalarValue::Utf8(Some("not an integer".to_string())))
+        );
+        assert_eq!(
+            scalar_argument_for_field(&lit(out_of_i32_range), &int32_field),
+            Some(ScalarValue::Int64(Some(out_of_i32_range)))
+        );
+    }
+
+    #[test]
+    fn expr_schema_nullability() {
+        let cases = [
+            (Operator::Eq, false, false),
+            (Operator::Eq, true, true),
+            (Operator::IsDistinctFrom, true, false),
+            (Operator::IsNotDistinctFrom, true, false),
+        ];
+
+        for (op, input_nullable, expected) in cases {
+            let expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col("foo")),
+                op,
+                Box::new(col("bar")),
+            ));
+            let schema = MockExprSchema::new()
+                .with_data_type(DataType::Boolean)
+                .with_nullable(input_nullable);
+
+            assert_eq!(expr.nullable(&schema).unwrap(), expected, "{op}");
+            assert_eq!(
+                expr.to_field(&schema).unwrap().1.is_nullable(),
+                expected,
+                "{op}"
+            );
+        }
 
         test_is_expr_nullable!(is_null);
         test_is_expr_nullable!(is_not_null);
@@ -1190,6 +1305,110 @@ mod tests {
         fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
             Ok(&self.field)
         }
+    }
+
+    /// A scan of `t`, whose single column `a` has the given nullability.
+    fn scan_t(a_nullable: bool) -> LogicalPlanBuilder {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, a_nullable)]);
+        let source = Arc::new(LogicalTableSource::new(Arc::new(schema)));
+        LogicalPlanBuilder::scan("t", source, None).unwrap()
+    }
+
+    #[test]
+    fn in_subquery_nullability() {
+        // `x IN (SELECT a FROM t)` evaluates to NULL when `x` is NULL, and when `x`
+        // matches no row while `a` contains a NULL. So it is nullable exactly when
+        // either the compared expression or the subquery's output column is.
+        let cases = [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, true),
+        ];
+
+        for (x_nullable, a_nullable, expected) in cases {
+            let subquery = scan_t(a_nullable)
+                .project(vec![col("a")])
+                .unwrap()
+                .build()
+                .unwrap();
+            let expr = in_subquery(col("x"), Arc::new(subquery));
+            let schema = MockExprSchema::new().with_nullable(x_nullable);
+
+            assert_eq!(expr.nullable(&schema).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn in_subquery_nullability_uses_subquery_output_schema() {
+        // `DISTINCT` carries no expressions of its own, but its output column is still
+        // nullable, so the `IN` expression must be nullable too.
+        let subquery = scan_t(true)
+            .project(vec![col("a")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+        assert!(expr.nullable(&MockExprSchema::new()).unwrap());
+
+        // A computed projection's expressions reference `t.a`, which does not appear in
+        // the subquery's output schema, so nullability must be read off that schema's
+        // single column rather than by resolving the projection's expressions against it.
+        let subquery = scan_t(false)
+            .project(vec![col("a") + lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+    }
+
+    #[test]
+    fn in_subquery_nullability_errors_for_no_subquery_columns() {
+        let subquery = LogicalPlanBuilder::empty(false).build().unwrap();
+        let expr = in_subquery(col("x"), Arc::new(subquery));
+
+        let err = expr.nullable(&MockExprSchema::new()).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: subquery must return exactly one column of data to compare against"
+        );
+    }
+
+    #[test]
+    fn scalar_subquery_nullability_accounts_for_min_rows() {
+        let possibly_empty = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1)])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(!possibly_empty.schema().field(0).is_nullable());
+
+        let expr = scalar_subquery(Arc::new(possibly_empty));
+        assert!(expr.nullable(&MockExprSchema::new()).unwrap());
+
+        let field = expr.to_field(&MockExprSchema::new()).unwrap().1;
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
+
+        let always_one = LogicalPlanBuilder::empty(false)
+            .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(!always_one.schema().field(0).is_nullable());
+
+        let expr = scalar_subquery(Arc::new(always_one));
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        assert!(
+            !expr
+                .to_field(&MockExprSchema::new())
+                .unwrap()
+                .1
+                .is_nullable()
+        );
     }
 
     #[test]

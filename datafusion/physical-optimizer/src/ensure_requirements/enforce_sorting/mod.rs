@@ -178,8 +178,11 @@ fn update_coalesce_ctx_children(
             // and connected to some `CoalescePartitionsExec`:
             node.data
                 && !matches!(
-                    coalesce_context.plan.required_input_distribution()[idx],
-                    Distribution::SinglePartition
+                    coalesce_context
+                        .plan
+                        .input_distribution_requirements()
+                        .child_distribution(idx),
+                    Some(Distribution::SinglePartition)
                 )
         })
     };
@@ -209,7 +212,7 @@ pub fn replace_with_partial_sort(
 
     let mut common_prefix_length = 0;
     while child_eq_properties
-        .ordering_satisfy(sort_exprs[0..common_prefix_length + 1].to_vec())?
+        .ordering_satisfy(sort_exprs[0..=common_prefix_length].to_vec())?
     {
         common_prefix_length += 1;
     }
@@ -458,13 +461,17 @@ pub fn ensure_sorting(
     } else if is_sort_preserving_merge(&requirements.plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
-        // This `SortPreservingMergeExec` is unnecessary, input already has a
-        // single partition and no fetch is required.
-        let mut child_node = requirements.children.swap_remove(0);
+        // This `SortPreservingMergeExec` is unnecessary because its input has a
+        // single partition.
+        let child_node = requirements.children.swap_remove(0);
         if let Some(fetch) = requirements.plan.fetch() {
-            // Add the limit exec if the original SPM had a fetch:
-            child_node.plan =
-                Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
+            let mut limit = LocalLimitExec::new(Arc::clone(&child_node.plan), fetch);
+            limit.set_required_ordering(requirements.plan.output_ordering().cloned());
+            return Ok(Transformed::yes(PlanContext::new(
+                Arc::new(limit),
+                false,
+                vec![child_node],
+            )));
         }
         return Ok(Transformed::yes(child_node));
     }
@@ -539,24 +546,43 @@ fn adjust_window_sort_removal(
     let child_node = remove_corresponding_sort_from_sub_plan(
         window_tree.children.swap_remove(0),
         matches!(
-            window_tree.plan.required_input_distribution()[0],
-            Distribution::SinglePartition
+            window_tree
+                .plan
+                .input_distribution_requirements()
+                .child_distribution(0),
+            Some(Distribution::SinglePartition)
         ),
     )?;
     window_tree.children.push(child_node);
 
     let child_plan = &window_tree.children[0].plan;
+    // Captured up-front so the fallback `BoundedWindowAggExec::try_new` below
+    // can reinstall the observer that was on the source exec. `None` when
+    // the source is a `WindowAggExec` (no observer) or when no observer was
+    // installed on the source `BoundedWindowAggExec`.
+    let state_observer = window_tree
+        .plan
+        .downcast_ref::<BoundedWindowAggExec>()
+        .and_then(|exec| exec.state_observer().cloned());
     let (window_expr, new_window) = if let Some(exec) =
         window_tree.plan.downcast_ref::<WindowAggExec>()
     {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            None,
+        )?;
         (window_expr, new_window)
     } else if let Some(exec) = window_tree.plan.downcast_ref::<BoundedWindowAggExec>() {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            state_observer.clone(),
+        )?;
         (window_expr, new_window)
     } else {
         return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
@@ -579,12 +605,15 @@ fn adjust_window_sort_removal(
         window_tree.children.push(child_node);
 
         if window_expr.iter().all(|e| e.uses_bounded_memory()) {
-            Arc::new(BoundedWindowAggExec::try_new(
-                window_expr.to_vec(),
-                child_plan,
-                InputOrderMode::Sorted,
-                !window_expr[0].partition_by().is_empty(),
-            )?) as _
+            Arc::new(
+                BoundedWindowAggExec::try_new(
+                    window_expr.to_vec(),
+                    child_plan,
+                    InputOrderMode::Sorted,
+                    !window_expr[0].partition_by().is_empty(),
+                )?
+                .with_state_observer(state_observer)?,
+            ) as _
         } else {
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
@@ -603,11 +632,49 @@ fn adjust_window_sort_removal(
 /// the plan, some of the remaining `RepartitionExec`s might become unnecessary.
 /// Removes such `RepartitionExec`s from the plan as well.
 fn remove_bottleneck_in_subplan(
+    requirements: PlanWithCorrespondingCoalescePartitions,
+) -> Result<PlanWithCorrespondingCoalescePartitions> {
+    // The root is the node `parallelize_sorts` is rewriting (a `SortExec`,
+    // `SortPreservingMergeExec` or `CoalescePartitionsExec`). Its own distribution
+    // requirement does not constrain the removal, because the caller drops the node and
+    // rebuilds the cascade around the result.
+    remove_bottleneck_in_subplan_impl(requirements, true)
+}
+
+fn remove_bottleneck_in_subplan_impl(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
+    is_root: bool,
 ) -> Result<PlanWithCorrespondingCoalescePartitions> {
     let plan = &requirements.plan;
+    // Below the root, a `CoalescePartitionsExec` feeding a child that requires
+    // `Distribution::SinglePartition` is not an avoidable bottleneck: it is what satisfies
+    // that requirement. Removing it leaves the parent with a multi-partition input it cannot
+    // accept, and nothing re-runs distribution enforcement afterwards, so the plan reaches
+    // `SanityCheckPlan` invalid. The traversal reaches such a node because
+    // `update_coalesce_ctx_children` marks a node as connected when *any* child qualifies:
+    // a `CollectLeft` `HashJoinExec` whose probe side is connected is descended into even
+    // though its build side must stay single-partition.
+    //
+    // Only `SinglePartition` is protected. A `HashPartitioned` child is in principle in the
+    // same position — a single-partition input trivially satisfies a hash requirement, so a
+    // coalesce below one is also load-bearing — but nothing puts a coalesce there:
+    // `ensure_distribution` satisfies a hash requirement with a `RepartitionExec`, never a
+    // `CoalescePartitionsExec`. Widening the check would be dead code today.
+    let dist_reqs = plan.input_distribution_requirements();
+    let removable = |idx: usize| {
+        is_root
+            || !matches!(
+                dist_reqs.child_distribution(idx),
+                Some(Distribution::SinglePartition)
+            )
+    };
+    let remove_from_first_child = requirements
+        .children
+        .first()
+        .is_some_and(|child| is_coalesce_partitions(&child.plan))
+        && removable(0);
     let children = &mut requirements.children;
-    if is_coalesce_partitions(&children[0].plan) {
+    if remove_from_first_child {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
         let mut new_child_node = children[0].children.swap_remove(0);
         while new_child_node.plan.output_partitioning() == plan.output_partitioning()
@@ -621,9 +688,14 @@ fn remove_bottleneck_in_subplan(
         requirements.children = requirements
             .children
             .into_iter()
-            .map(|node| {
-                if node.data {
-                    remove_bottleneck_in_subplan(node)
+            .enumerate()
+            .map(|(idx, node)| {
+                // Deliberately conservative: not descending at all also skips legitimate
+                // cleanups *below* a protected child (a redundant second coalesce under the
+                // load-bearing one, say). This could later be narrowed to "descend, but
+                // protect only the topmost coalesce" if that turns out to matter.
+                if node.data && removable(idx) {
+                    remove_bottleneck_in_subplan_impl(node, false)
                 } else {
                     Ok(node)
                 }
@@ -654,8 +726,10 @@ fn update_child_to_remove_unnecessary_sort(
 ) -> Result<PlanWithCorrespondingSort> {
     if node.data {
         let requires_single_partition = matches!(
-            parent.required_input_distribution()[child_idx],
-            Distribution::SinglePartition
+            parent
+                .input_distribution_requirements()
+                .child_distribution(child_idx),
+            Some(Distribution::SinglePartition)
         );
         node = remove_corresponding_sort_from_sub_plan(node, requires_single_partition)?;
     }
@@ -676,7 +750,7 @@ fn remove_corresponding_sort_from_sub_plan(
         }
     } else {
         let mut any_connection = false;
-        let required_dist = node.plan.required_input_distribution();
+        let required_dist = node.plan.input_distribution_requirements().into_per_child();
         node.children = node
             .children
             .into_iter()

@@ -241,14 +241,14 @@ impl TableProvider for ParquetMetadataTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -283,16 +283,16 @@ fn convert_parquet_statistics(
             val.max_opt().map(|v| v.to_string()),
         ),
         (Statistics::ByteArray(val), ConvertedType::UTF8) => (
-            byte_array_to_string(val.min_opt()),
-            byte_array_to_string(val.max_opt()),
+            val.min_opt().map(byte_array_to_string),
+            val.max_opt().map(byte_array_to_string),
         ),
         (Statistics::ByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
             val.max_opt().map(|v| v.to_string()),
         ),
         (Statistics::FixedLenByteArray(val), ConvertedType::UTF8) => (
-            fixed_len_byte_array_to_string(val.min_opt()),
-            fixed_len_byte_array_to_string(val.max_opt()),
+            val.min_opt().map(fixed_len_byte_array_to_string),
+            val.max_opt().map(fixed_len_byte_array_to_string),
         ),
         (Statistics::FixedLenByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
@@ -302,21 +302,17 @@ fn convert_parquet_statistics(
 }
 
 /// Convert to a string if it has utf8 encoding, otherwise print bytes directly
-fn byte_array_to_string(val: Option<&ByteArray>) -> Option<String> {
-    val.map(|v| {
-        v.as_utf8()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_e| v.to_string())
-    })
+fn byte_array_to_string(val: &ByteArray) -> String {
+    val.as_utf8()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_e| val.to_string())
 }
 
 /// Convert to a string if it has utf8 encoding, otherwise print bytes directly
-fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<String> {
-    val.map(|v| {
-        v.as_utf8()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_e| v.to_string())
-    })
+fn fixed_len_byte_array_to_string(val: &FixedLenByteArray) -> String {
+    val.as_utf8()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_e| val.to_string())
 }
 
 #[derive(Debug)]
@@ -487,14 +483,14 @@ impl TableProvider for MetadataCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -604,14 +600,14 @@ impl TableProvider for StatisticsCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -649,6 +645,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
             Field::new("num_columns", DataType::UInt64, false),
             Field::new("table_size_bytes", DataType::Utf8, false),
             Field::new("statistics_size_bytes", DataType::UInt64, false),
+            Field::new("hits", DataType::UInt64, false),
         ]));
 
         // construct record batch from metadata
@@ -662,6 +659,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         let mut num_columns_arr = vec![];
         let mut table_size_bytes_arr = vec![];
         let mut statistics_size_bytes_arr = vec![];
+        let mut hits_arr = vec![];
 
         if let Some(file_statistics_cache) = self.cache_manager.get_file_statistic_cache()
         {
@@ -686,6 +684,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
                         .heap_size(&mut DFHeapSizeCtx::default())
                         as u64,
                 );
+                hits_arr.push(entry.hits as u64);
             }
         }
 
@@ -702,6 +701,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
                 Arc::new(UInt64Array::from(num_columns_arr)),
                 Arc::new(StringArray::from(table_size_bytes_arr)),
                 Arc::new(UInt64Array::from(statistics_size_bytes_arr)),
+                Arc::new(UInt64Array::from(hits_arr)),
             ],
         )?;
 
@@ -749,14 +749,14 @@ impl TableProvider for ListFilesCacheTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
-            projection.cloned(),
+            projection.map(|p| p.to_vec()),
         )?)
     }
 }
@@ -809,6 +809,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 DataType::List(Arc::new(metadata_field.clone())),
                 true,
             ),
+            Field::new("hits", DataType::UInt64, false),
         ]));
 
         let mut table_arr = vec![];
@@ -822,6 +823,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
         let mut etag_arr = vec![];
         let mut version_arr = vec![];
         let mut offsets: Vec<i32> = vec![0];
+        let mut hits_arr = vec![];
 
         if let Some(list_files_cache) = self.cache_manager.get_list_files_cache() {
             let now = Instant::now();
@@ -847,6 +849,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 }
                 current_offset += entry.value.files.len() as i32;
                 offsets.push(current_offset);
+                hits_arr.push(entry.hits as u64);
             }
         }
 
@@ -878,6 +881,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                     Arc::new(struct_arr),
                     None,
                 )),
+                Arc::new(UInt64Array::from(hits_arr)),
             ],
         )?;
 

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::SendableRecordBatchStream;
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
+use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{Array, UInt32Array};
 use arrow::compute::take_record_batch;
@@ -73,30 +73,37 @@ impl FusedStreams {
         stream_idx: usize,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            match ready!(self.0[stream_idx].poll_next_unpin(cx)) {
-                Some(Ok(b)) if b.num_rows() == 0 => continue,
-                r => return Poll::Ready(r),
+            let poll_result = self.0[stream_idx].poll_next_unpin(cx);
+            match &poll_result {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Ok(b))) if b.num_rows() == 0 => continue,
+                Poll::Ready(Some(Ok(_))) => return poll_result,
+                Poll::Ready(None) | Poll::Ready(Some(Err(_))) => {
+                    let stream_schema = self.0[stream_idx].get_ref().schema();
+
+                    // Replace the stream with an empty stream, so we can drop memory usage
+                    let empty_stream: SendableRecordBatchStream =
+                        Box::pin(EmptyRecordBatchStream::new(stream_schema));
+                    self.0[stream_idx] = empty_stream.fuse();
+
+                    return poll_result;
+                }
             }
         }
     }
 }
 
-/// A pair of `Arc<Rows>` that can be reused
+/// An `Arc<Rows>` that can be reused
 #[derive(Debug)]
 struct ReusableRows {
-    // inner[stream_idx] holds a two Arcs:
-    // at start of a new poll
-    // .0 is the rows from the previous poll (at start),
-    // .1 is the one that is being written to
-    // at end of a poll, .0 will be swapped with .1,
-    inner: Vec<[Option<Arc<Rows>>; 2]>,
+    inner: Vec<Option<Arc<Rows>>>,
 }
 
 impl ReusableRows {
     // return a Rows for writing,
     // does not clone if the existing rows can be reused
     fn take_next(&mut self, stream_idx: usize) -> Result<Rows> {
-        Arc::try_unwrap(self.inner[stream_idx][1].take().unwrap()).map_err(|_| {
+        Arc::try_unwrap(self.inner[stream_idx].take().unwrap()).map_err(|_| {
             internal_datafusion_err!(
                 "Rows from RowCursorStream is still in use by consumer"
             )
@@ -104,16 +111,13 @@ impl ReusableRows {
     }
     // save the Rows
     fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) {
-        self.inner[stream_idx][1] = Some(Arc::clone(rows));
-        // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
-        let [a, b] = &mut self.inner[stream_idx];
-        mem::swap(a, b);
+        self.inner[stream_idx] = Some(Arc::clone(rows));
     }
 }
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
-/// Note: the stream returns an error if the consumer buffers more than one RowValues (i.e. holds on to two RowValues
+/// Note: the stream returns an error if the consumer buffers even one RowValues (i.e. holds on to one RowValues
 /// from the same partition at the same time).
 #[derive(Debug)]
 pub struct RowCursorStream {
@@ -125,8 +129,9 @@ pub struct RowCursorStream {
     streams: FusedStreams,
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
-    /// Allocated rows for each partition, we keep two to allow for buffering one
-    /// in the consumer of the stream
+    /// Reused `Rows` allocation for each partition. The consumer must not
+    /// buffer the `RowValues` returned for a partition, since the old
+    /// `Arc<Rows>` must be dropped before that partition can be polled again.
     rows: ReusableRows,
 }
 
@@ -150,10 +155,7 @@ impl RowCursorStream {
         let mut rows = Vec::with_capacity(streams.len());
         for _ in &streams {
             // Initialize each stream with an empty Rows
-            rows.push([
-                Some(Arc::new(converter.empty_rows(0, 0))),
-                Some(Arc::new(converter.empty_rows(0, 0))),
-            ]);
+            rows.push(Some(Arc::new(converter.empty_rows(0, 0))));
         }
         Ok(Self {
             converter,
@@ -388,8 +390,12 @@ mod tests {
     use super::*;
     use arrow::array::{AsArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
+    use arrow_schema::SchemaRef;
     use datafusion_common::DataFusionError;
+    use datafusion_execution::RecordBatchStream;
     use datafusion_physical_expr::expressions::col;
+    use futures::Stream;
+    use std::pin::Pin;
 
     /// Verifies that `take_record_batch` in `IncrementalSortIterator` actually
     /// copies the data into a new allocation rather than returning a zero-copy
@@ -434,5 +440,94 @@ mod tests {
 
         assert_eq!(total_rows, original_len);
         Ok(())
+    }
+
+    #[test]
+    fn test_fused_stream_drop_finished_streams() {
+        #[derive(Clone)]
+        struct SingleItemManualStream {
+            // Held only so its `Arc` strong count reveals when the stream is dropped.
+            #[expect(dead_code)]
+            hold_ref: Arc<()>,
+            record_batch: RecordBatch,
+            should_finish: bool,
+        }
+
+        impl Stream for SingleItemManualStream {
+            type Item = Result<RecordBatch>;
+
+            fn poll_next(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Option<Self::Item>> {
+                if !self.should_finish {
+                    self.should_finish = true;
+                    return Poll::Ready(Some(Ok(self.record_batch.clone())));
+                }
+
+                Poll::Ready(None)
+            }
+        }
+
+        impl RecordBatchStream for SingleItemManualStream {
+            fn schema(&self) -> SchemaRef {
+                self.record_batch.schema()
+            }
+        }
+
+        let hold_ref = Arc::new(());
+        let record_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+
+        let stream_1 = SingleItemManualStream {
+            hold_ref: Arc::clone(&hold_ref),
+            should_finish: false,
+            record_batch: record_batch.clone(),
+        };
+        let stream_2 = stream_1.clone();
+
+        let stream_1: SendableRecordBatchStream = Box::pin(stream_1);
+        let stream_2: SendableRecordBatchStream = Box::pin(stream_2);
+
+        let mut fused_stream = FusedStreams(vec![stream_1.fuse(), stream_2.fuse()]);
+
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // The original plus one clone held by each of the two streams.
+        assert_eq!(Arc::strong_count(&hold_ref), 3);
+
+        // First fetch from stream 0 yields its single batch.
+        // the stream is not finished yet, so nothing is dropped.
+        let poll = fused_stream.poll_next(&mut cx, 0);
+        assert!(matches!(poll, Poll::Ready(Some(Ok(_)))));
+        assert_eq!(Arc::strong_count(&hold_ref), 3);
+
+        // Second fetch from stream 0 returns `None`, so it is replaced with an
+        // empty stream and dropped, releasing its `hold_ref` clone.
+        // running 3 times to make sure the stream is fused correctly
+        for _ in 0..3 {
+            let poll = fused_stream.poll_next(&mut cx, 0);
+            assert!(matches!(poll, Poll::Ready(None)));
+            assert_eq!(Arc::strong_count(&hold_ref), 2);
+        }
+
+        // First fetch from stream 1 yields its single batch
+        // the stream is not finished yet, so nothing is dropped.
+        let poll = fused_stream.poll_next(&mut cx, 1);
+        assert!(matches!(poll, Poll::Ready(Some(Ok(_)))));
+        assert_eq!(Arc::strong_count(&hold_ref), 2);
+
+        // Second fetch from stream 1 returns `None`, so it is replaced with an
+        // empty stream and dropped, releasing its `hold_ref` clone.
+        // running 3 times to make sure the stream is fused correctly
+        for _ in 0..3 {
+            let poll = fused_stream.poll_next(&mut cx, 1);
+            assert!(matches!(poll, Poll::Ready(None)));
+            assert_eq!(Arc::strong_count(&hold_ref), 1);
+        }
     }
 }

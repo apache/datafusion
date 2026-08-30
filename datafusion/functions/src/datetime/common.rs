@@ -32,7 +32,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
-    internal_datafusion_err, unwrap_or_internal_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -258,27 +258,30 @@ where
     F: Fn(&str) -> Result<O::Native>,
 {
     match &args[0] {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8View => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<&StringViewArray, O, _>(
-                    &a.as_string_view(),
-                    op,
-                )?,
-            ))),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<&GenericStringArray<i64>, O, _>(
-                    &a.as_string::<i64>(),
-                    op,
-                )?,
-            ))),
-            DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<&GenericStringArray<i32>, O, _>(
-                    &a.as_string::<i32>(),
-                    op,
-                )?,
-            ))),
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
+        ColumnarValue::Array(a) => {
+            let result: PrimitiveArray<O> = match a.data_type() {
+                DataType::Utf8View => {
+                    let strings = a.as_string_view();
+                    unary_string_to_primitive_function(&strings, op)?
+                }
+                DataType::LargeUtf8 => {
+                    let strings = a.as_string::<i64>();
+                    unary_string_to_primitive_function(&strings, op)?
+                }
+                DataType::Utf8 => {
+                    let strings = a.as_string::<i32>();
+                    unary_string_to_primitive_function(&strings, op)?
+                }
+                other => {
+                    return exec_err!(
+                        "Unsupported data type {other:?} for function {name}"
+                    );
+                }
+            };
+            Ok(ColumnarValue::Array(Arc::new(with_return_type(
+                result, dt,
+            )?)))
+        }
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
                 let result = a
@@ -342,9 +345,11 @@ where
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(
-                    strings_to_primitive_function::<O, _, _>(args, op, op2, name)?,
-                )))
+                let result =
+                    strings_to_primitive_function::<O, _, _>(args, op, op2, name)?;
+                Ok(ColumnarValue::Array(Arc::new(with_return_type(
+                    result, dt,
+                )?)))
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function {name}")
@@ -353,9 +358,9 @@ where
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
-                let a = a.as_ref();
-                // ASK: Why do we trust `a` to be non-null at this point?
-                let a = unwrap_or_internal_err!(a);
+                let Some(a) = a.as_ref() else {
+                    return Ok(ColumnarValue::Scalar(scalar_value(dt, None)?));
+                };
 
                 let mut ret = None;
 
@@ -384,7 +389,10 @@ where
                     }
                 }
 
-                unwrap_or_internal_err!(ret)
+                match ret {
+                    Some(ret) => ret,
+                    None => Ok(ColumnarValue::Scalar(scalar_value(dt, None)?)),
+                }
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function {name}")
@@ -483,12 +491,21 @@ where
             if let Some(x) = x {
                 for arg in args {
                     let v = match arg {
-                        ColumnarValue::Array(a) => match a.data_type() {
-                            DataType::Utf8View => Ok(a.as_string_view().value(pos)),
-                            DataType::LargeUtf8 => Ok(a.as_string::<i64>().value(pos)),
-                            DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
-                            other => exec_err!("Unexpected type encountered '{other}'"),
-                        },
+                        ColumnarValue::Array(a) => {
+                            if a.is_null(pos) {
+                                continue;
+                            }
+                            match a.data_type() {
+                                DataType::Utf8View => Ok(a.as_string_view().value(pos)),
+                                DataType::LargeUtf8 => {
+                                    Ok(a.as_string::<i64>().value(pos))
+                                }
+                                DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
+                                other => {
+                                    exec_err!("Unexpected type encountered '{other}'")
+                                }
+                            }
+                        }
                         ColumnarValue::Scalar(s) => match s.try_as_str() {
                             Some(Some(v)) => Ok(v),
                             Some(None) => continue, // null string
@@ -529,6 +546,30 @@ where
 {
     // first map is the iterator, second is for the `Option<_>`
     array.iter().map(|x| x.map(&op).transpose()).collect()
+}
+
+/// Re-annotates `array` with the return type `dt` declared by the calling
+/// function.
+///
+/// The parsing kernels build the array from `O::DATA_TYPE`, which for timestamps
+/// carries no timezone. `dt` is what the function advertised in `return_type`,
+/// so it may additionally carry the execution timezone; without this the array
+/// and the schema disagree and execution fails when the column is materialized.
+fn with_return_type<O: ArrowPrimitiveType>(
+    array: PrimitiveArray<O>,
+    dt: &DataType,
+) -> Result<PrimitiveArray<O>> {
+    let from = array.data_type().clone();
+    match (&from, dt) {
+        // Only the timezone may differ, which `with_data_type` adjusts in place.
+        (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _))
+            if from_unit == to_unit =>
+        {
+            Ok(array.with_data_type(dt.clone()))
+        }
+        _ if &from == dt => Ok(array),
+        _ => internal_err!("Cannot return {from} array as {dt}"),
+    }
 }
 
 fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {

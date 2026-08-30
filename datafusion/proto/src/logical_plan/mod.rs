@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::convert::{FromProto, TryFromProto};
-use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
     ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
     CustomTableScanNode, DmlNode, SortExprNodeCollection, dml_node,
@@ -41,6 +39,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::format::{
     ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
 };
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
     NullEquality, Result, TableReference, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
@@ -113,6 +112,29 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     ) -> Result<Self>
     where
         Self: Sized;
+}
+
+// In debug builds, keep each serializer arm's local temporaries out of the
+// recursive dispatcher frame. Without this call boundary, they inflate the
+// frame of every recursive invocation.
+#[cfg_attr(debug_assertions, inline(never))]
+fn serialize_logical_plan_arm<F>(serializer: F) -> Result<LogicalPlanNode>
+where
+    F: FnOnce() -> Result<LogicalPlanNode>,
+{
+    serializer()
+}
+
+macro_rules! dispatch_logical_plan {
+    ($plan:expr, { $($pattern:pat => $body:expr $(,)?)+ }) => {
+        match $plan {
+            $(
+                $pattern => serialize_logical_plan_arm(|| -> Result<LogicalPlanNode> {
+                    $body
+                }),
+            )+
+        }
+    };
 }
 
 pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
@@ -348,7 +370,7 @@ fn from_table_reference(
         )
     })?;
 
-    Ok(TableReference::try_from_proto(table_ref.clone())?)
+    Ok(TableReference::try_from(table_ref.clone())?)
 }
 
 /// Converts [LogicalPlan::TableScan] to [TableSource]
@@ -486,9 +508,11 @@ impl AsLogicalPlan for LogicalPlanNode {
         })?;
         match plan {
             LogicalPlanType::Values(values) => {
-                let n_cols = values.n_cols as usize;
+                let n_cols = usize_from_wire(values.n_cols, "Values", "n_cols")?;
                 let values: Vec<Vec<Expr>> = if values.values_list.is_empty() {
                     Ok(Vec::new())
+                } else if n_cols == 0 {
+                    internal_err!("ValuesNode n_cols must be greater than 0")
                 } else if values.values_list.len() % n_cols != 0 {
                     internal_err!(
                         "Invalid values list length, expect {} to be divisible by {}",
@@ -719,7 +743,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<SortExpr> =
                     from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
-                let fetch: Option<usize> = sort.fetch.try_into().ok();
+                let fetch = (sort.fetch >= 0)
+                    .then(|| usize_from_wire(sort.fetch, "Sort", "fetch"))
+                    .transpose()?;
                 LogicalPlanBuilder::from(input)
                     .sort_with_limit(sort_expr, fetch)?
                     .build()
@@ -735,16 +761,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )
                 })?;
 
+                let decode_partition_count =
+                    |count: u64| usize_from_wire(count, "Repartition", "partition_count");
                 let partitioning_scheme = match pb_partition_method {
                     PartitionMethod::Hash(protobuf::HashRepartition {
                         hash_expr: pb_hash_expr,
                         partition_count,
                     }) => Partitioning::Hash(
                         from_proto::parse_exprs(pb_hash_expr, ctx, extension_codec)?,
-                        *partition_count as usize,
+                        decode_partition_count(*partition_count)?,
                     ),
                     PartitionMethod::RoundRobin(partition_count) => {
-                        Partitioning::RoundRobinBatch(*partition_count as usize)
+                        Partitioning::RoundRobinBatch(decode_partition_count(
+                            *partition_count,
+                        )?)
                     }
                     PartitionMethod::Range(protobuf::RangeRepartition {
                         sort_expr: pb_sort_expr,
@@ -799,6 +829,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults.insert(col_name.clone(), expr);
                 }
 
+                let locations = if !create_extern_table.locations.is_empty() {
+                    create_extern_table.locations.clone()
+                } else if !create_extern_table.location.is_empty() {
+                    vec![create_extern_table.location.clone()]
+                } else {
+                    return Err(proto_error(
+                        "CreateExternalTableNode requires at least one location",
+                    ));
+                };
+                let location = locations[0].clone();
+
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
                     Box::new(
                         CreateExternalTable::builder(
@@ -806,10 +847,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 create_extern_table.name.as_ref(),
                                 "CreateExternalTable",
                             )?,
-                            create_extern_table.location.clone(),
+                            location,
                             create_extern_table.file_type.clone(),
                             pb_schema.try_into()?,
                         )
+                        .with_locations(locations)
                         .with_partition_cols(
                             create_extern_table.table_partition_cols.clone(),
                         )
@@ -949,13 +991,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
-                let skip = limit.skip.max(0) as usize;
+                let skip = usize_from_wire(limit.skip.max(0), "Limit", "skip")?;
 
-                let fetch = if limit.fetch < 0 {
-                    None
-                } else {
-                    Some(limit.fetch as usize)
-                };
+                let fetch = (limit.fetch >= 0)
+                    .then(|| usize_from_wire(limit.fetch, "Limit", "fetch"))
+                    .transpose()?;
 
                 LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
             }
@@ -1015,9 +1055,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Arc::new(right),
                     on,
                     filter,
-                    datafusion_expr::JoinType::from_proto(join_type),
-                    JoinConstraint::from_proto(join_constraint),
-                    NullEquality::from_proto(null_equality),
+                    datafusion_expr::JoinType::from(join_type),
+                    JoinConstraint::from(join_constraint),
+                    NullEquality::from(null_equality),
                     join.null_aware,
                 )?))
             }
@@ -1183,7 +1223,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         unnest
                             .options
                             .as_ref()
-                            .map(datafusion_common::UnnestOptions::from_proto)
+                            .map(datafusion_common::UnnestOptions::from)
                             .ok_or_else(|| {
                                 proto_error("Missing required field in protobuf")
                             })?,
@@ -1258,11 +1298,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                 .build()
             }
             LogicalPlanType::Dml(dml_node) => {
+                let table_name =
+                    from_table_reference(dml_node.table_name.as_ref(), "DML ")?;
+                let target = to_table_source(&dml_node.target, ctx, extension_codec)?;
                 let write_op =
                     from_proto::parse_write_op(dml_node, ctx, extension_codec)?;
-                Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
-                    from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
-                    to_table_source(&dml_node.target, ctx, extension_codec)?,
+                Ok(LogicalPlan::Dml(DmlStatement::new(
+                    table_name,
+                    target,
                     write_op,
                     Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
                 )))
@@ -1270,6 +1313,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         }
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_from_logical_plan(
         plan: &LogicalPlan,
         extension_codec: &dyn LogicalExtensionCodec,
@@ -1277,7 +1321,7 @@ impl AsLogicalPlan for LogicalPlanNode {
     where
         Self: Sized,
     {
-        match plan {
+        dispatch_logical_plan!(plan, {
             LogicalPlan::Values(Values { values, .. }) => {
                 let n_cols = if values.is_empty() {
                     0
@@ -1418,7 +1462,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
                             protobuf::ListingTableScanNode {
                                 file_format_type: Some(file_format_type),
-                                table_name: Some(protobuf::TableReference::from_proto(
+                                table_name: Some(protobuf::TableReference::from(
                                     table_name.clone(),
                                 )),
                                 file_extension: options.file_extension.clone(),
@@ -1440,7 +1484,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
                             protobuf::ViewTableScanNode {
-                                table_name: Some(protobuf::TableReference::from_proto(
+                                table_name: Some(protobuf::TableReference::from(
                                     table_name.clone(),
                                 )),
                                 input: Some(Box::new(
@@ -1467,7 +1511,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::CteWorkTableScan(
-                            protobuf::CteWorkTableScanNode {
+                            CteWorkTableScanNode {
                                 name,
                                 schema: Some(schema),
                             },
@@ -1479,7 +1523,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::EmptyTableScan(
                             protobuf::EmptyTableScanNode {
-                                table_name: Some(protobuf::TableReference::from_proto(
+                                table_name: Some(protobuf::TableReference::from(
                                     table_name.clone(),
                                 )),
                                 schema: Some(schema),
@@ -1494,8 +1538,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec
                         .try_encode_table_provider(table_name, provider, &mut bytes)
                         .map_err(|e| context!("Error serializing custom table", e))?;
-                    let scan = CustomScan(CustomTableScanNode {
-                        table_name: Some(protobuf::TableReference::from_proto(
+                    let scan = LogicalPlanType::CustomScan(CustomTableScanNode {
+                        table_name: Some(protobuf::TableReference::from(
                             table_name.clone(),
                         )),
                         projection,
@@ -1648,11 +1692,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .collect::<Result<Vec<_>, ToProtoError>>()?
                     .into_iter()
                     .unzip();
-                let join_type = protobuf::JoinType::from_proto(join_type.to_owned());
+                let join_type = protobuf::JoinType::from(join_type.to_owned());
                 let join_constraint =
-                    protobuf::JoinConstraint::from_proto(join_constraint.to_owned());
+                    protobuf::JoinConstraint::from(join_constraint.to_owned());
                 let null_equality =
-                    protobuf::NullEquality::from_proto(null_equality.to_owned());
+                    protobuf::NullEquality::from(null_equality.to_owned());
                 let filter = filter
                     .as_ref()
                     .map(|e| serialize_expr(e, extension_codec).map(Box::new))
@@ -1691,9 +1735,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
                         protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
-                            alias: Some(protobuf::TableReference::from_proto(
-                                (*alias).clone(),
-                            )),
+                            alias: Some(protobuf::TableReference::from((*alias).clone())),
                         },
                     ))),
                 })
@@ -1718,8 +1760,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: skip as i64,
-                            fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
+                            skip: usize_to_wire(skip, "Limit", "skip")?,
+                            fetch: match fetch {
+                                Some(f) => usize_to_wire(f, "Limit", "fetch")?,
+                                None => -1, // no limit
+                            },
                         },
                     ))),
                 })
@@ -1736,7 +1781,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::SortNode {
                             input: Some(Box::new(input)),
                             expr: sort_expr,
-                            fetch: fetch.map(|f| f as i64).unwrap_or(-1i64),
+                            fetch: match fetch {
+                                Some(f) => usize_to_wire(*f, "Sort", "fetch")?,
+                                None => -1, // no limit
+                            },
                         },
                     ))),
                 })
@@ -1804,7 +1852,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(ce)) => {
                 let CreateExternalTable {
                     name,
-                    location,
+                    locations,
                     file_type,
                     schema: df_schema,
                     table_partition_cols,
@@ -1832,14 +1880,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     converted_column_defaults
                         .insert(col_name.clone(), serialize_expr(expr, extension_codec)?);
                 }
+                let (legacy_location, proto_locations) = match locations.as_slice() {
+                    [location] => (location.clone(), vec![]),
+                    _ => (String::new(), locations.clone()),
+                };
 
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                         protobuf::CreateExternalTableNode {
-                            name: Some(protobuf::TableReference::from_proto(
-                                name.clone(),
-                            )),
-                            location: location.clone(),
+                            name: Some(protobuf::TableReference::from(name.clone())),
+                            location: legacy_location,
+                            locations: proto_locations,
                             file_type: file_type.clone(),
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
@@ -1865,7 +1916,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             })) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
-                        name: Some(protobuf::TableReference::from_proto(name.clone())),
+                        name: Some(protobuf::TableReference::from(name.clone())),
                         input: Some(Box::new(LogicalPlanNode::try_from_logical_plan(
                             input,
                             extension_codec,
@@ -2055,7 +2106,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .map(|c| *c as u64)
                                 .collect(),
                             schema: Some(schema.try_into()?),
-                            options: Some(protobuf::UnnestOptions::from_proto(options)),
+                            options: Some(protobuf::UnnestOptions::from(options)),
                         },
                     ))),
                 })
@@ -2076,7 +2127,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             })) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::DropView(
                     protobuf::DropViewNode {
-                        name: Some(protobuf::TableReference::from_proto(name.clone())),
+                        name: Some(protobuf::TableReference::from(name.clone())),
                         if_exists: *if_exists,
                         schema: Some(schema.try_into()?),
                     },
@@ -2138,7 +2189,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             Arc::clone(target),
                             extension_codec,
                         )?)),
-                        table_name: Some(protobuf::TableReference::from_proto(
+                        table_name: Some(protobuf::TableReference::from(
                             table_name.clone(),
                         )),
                         dml_type: dml_type.into(),
@@ -2194,6 +2245,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-        }
+        })
     }
 }

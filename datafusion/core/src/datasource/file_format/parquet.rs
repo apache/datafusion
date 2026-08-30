@@ -141,7 +141,7 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::dml::InsertOp;
-    use datafusion_physical_plan::statistics::StatisticsArgs;
+    use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
@@ -716,12 +716,15 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(8)
         );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent,
         );
@@ -766,11 +769,14 @@ mod tests {
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            exec.statistics_with_args(&StatisticsArgs::new())?
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent,
         );
@@ -1813,6 +1819,40 @@ mod tests {
         test_memory_reservation(col_parallel_write_opts)
             .await
             .expect("should track for column-parallel writes");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema_rejects_duplicate_field_names() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![10, 20, 30])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![100, 200, 300])) as ArrayRef,
+            ],
+        )?;
+
+        let store = Arc::new(LocalFileSystem::new()) as _;
+        let (meta, _files) = store_parquet(vec![batch], false).await?;
+
+        let ctx = SessionContext::new().state();
+        let error = ParquetFormat::default()
+            .infer_schema(&ctx, &store, &meta)
+            .await
+            .expect_err("duplicate field names must not infer a schema")
+            .to_string();
+
+        assert!(
+            error.contains("duplicate unqualified field name") && error.contains("value"),
+            "unexpected error: {error}"
+        );
 
         Ok(())
     }
