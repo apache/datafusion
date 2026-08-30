@@ -214,7 +214,7 @@ fn encode_dispatch(arr: &ArrayRef, charsets: &Charsets) -> Result<ArrayRef> {
         DataType::Binary => encode_binary_array(&arr.as_binary::<i32>(), charsets),
         DataType::LargeBinary => encode_binary_array(&arr.as_binary::<i64>(), charsets),
         DataType::BinaryView => encode_binary_array(&arr.as_binary_view(), charsets),
-        DataType::Null => Ok(null_binary_array(arr.len())),
+        DataType::Null => Ok(Arc::new(BinaryArray::new_null(arr.len()))),
         dt => exec_err!("encode expects a string or binary argument, got {dt:?}"),
     }
 }
