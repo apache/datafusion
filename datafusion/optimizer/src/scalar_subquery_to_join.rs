@@ -30,13 +30,15 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
+use datafusion_common::{
+    Column, Dependency, Result, ScalarValue, assert_or_internal_err, plan_err,
+};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::conjunction;
+use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, correlated_scalar_subquery_yields_single_row,
-    lit, not, when,
+    BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
+    correlated_scalar_subquery_yields_single_row, lit, not, when,
 };
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
@@ -345,6 +347,69 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 /// column to its `CASE WHEN __always_true IS NULL THEN ... END` compensation
 /// expression, which the caller must substitute into any expression that
 /// references those columns.
+/// Returns true when the decorrelated subquery cannot match more than one row
+/// for one set of outer values, because it is already unique on the columns the
+/// join equates with the outer plan.
+///
+/// This complements the shape test in
+/// [`correlated_scalar_subquery_yields_single_row`]: it also covers a subquery
+/// that inherits uniqueness from a declared constraint or from an aggregate
+/// further down, rather than from an aggregate the caller can see.
+///
+/// Only equality conjuncts count. Uniqueness on `(a, b)` says nothing about how
+/// many rows `sub.a = outer.a AND sub.b > outer.b` matches.
+fn subquery_unique_on_join_keys(
+    subquery: &LogicalPlan,
+    join_filter: &Expr,
+    subquery_alias: &str,
+) -> bool {
+    let schema = subquery.schema();
+    let mut join_key_indices = Vec::new();
+
+    for conjunct in split_conjunction(join_filter) {
+        let Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        }) = conjunct
+        else {
+            continue;
+        };
+        for (side, other) in [(left, right), (right, left)] {
+            let Some(column) = side.try_as_col() else {
+                continue;
+            };
+            // The other side has to come from the outer plan, or this equality
+            // relates two subquery columns and is not a join key.
+            let is_join_key = qualified_by(column, subquery_alias)
+                && !other
+                    .column_refs()
+                    .iter()
+                    .any(|column| qualified_by(column, subquery_alias));
+            if is_join_key && let Some(index) = schema.maybe_index_of_column(column) {
+                join_key_indices.push(index);
+            }
+        }
+    }
+
+    // A nullable determinant is still enough: the join uses
+    // `NullEquality::NullEqualsNothing`, so a NULL key matches nothing at all.
+    schema.functional_dependencies().iter().any(|dependency| {
+        dependency.mode == Dependency::Single
+            && dependency
+                .source_indices
+                .iter()
+                .all(|index| join_key_indices.contains(index))
+    })
+}
+
+fn qualified_by(column: &Column, alias: &str) -> bool {
+    column
+        .relation
+        .as_ref()
+        .is_some_and(|relation| relation.table() == alias)
+}
+
 fn build_join(
     subquery: &Subquery,
     outer_input: &LogicalPlan,
@@ -387,14 +452,20 @@ fn build_join(
     // the decorrelated subquery still yields at most one row per outer row
     // because its aggregate is grouped by the (empty) set of correlated inner
     // columns.
-    let join_filter = join_filter_opt.or_else(|| Some(lit(true)));
+    let join_filter = join_filter_opt.unwrap_or_else(|| lit(true));
 
-    // A subquery whose shape already guarantees at most one row per set of
-    // outer values joins with a plain `LEFT JOIN`; the rest need a single
-    // join, which raises an error at runtime when a second row matches. Only
-    // correlated subqueries can be ambiguous here -- an uncorrelated one is
-    // checked by `ScalarSubqueryExec` or, when this rule rewrites it, joined
-    // on `Boolean(true)` against a plan that already returns a single row.
+    // A subquery that cannot produce more than one row per set of outer values
+    // joins with a plain `LEFT JOIN`; the rest need a single join, which raises
+    // an error at runtime when a second row matches. Only correlated
+    // subqueries can be ambiguous here -- an uncorrelated one is checked by
+    // `ScalarSubqueryExec` or, when this rule rewrites it, joined on
+    // `Boolean(true)` against a plan that already returns a single row.
+    //
+    // Preferring the plain join matters beyond saving the runtime check: the
+    // optimizer may turn a `LEFT JOIN` inner when a predicate above it rejects
+    // nulls, fold a comparison into a second join key, and finish with a semi
+    // join. None of that is sound for a single join, because all three change
+    // how many rows match, which is what the single join has to observe.
     //
     // The single join only sees the outer rows that reach it, so an outer row
     // a pushed-down filter removed cannot raise the error. Whether a
@@ -402,6 +473,7 @@ fn build_join(
     // the same way it does in other engines.
     let join_type = if subquery.outer_ref_columns.is_empty()
         || correlated_scalar_subquery_yields_single_row(subquery_plan)?
+        || subquery_unique_on_join_keys(&aliased_subquery, &join_filter, subquery_alias)
     {
         JoinType::Left
     } else {
@@ -409,7 +481,7 @@ fn build_join(
     };
 
     let new_plan = LogicalPlanBuilder::from(outer_input.clone())
-        .join_on(aliased_subquery, join_type, join_filter)?
+        .join_on(aliased_subquery, join_type, Some(join_filter))?
         .build()?;
 
     // Add count-bug compensation for each of the subquery's projected

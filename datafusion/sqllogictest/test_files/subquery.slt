@@ -2874,6 +2874,82 @@ physical_plan
 07)----------AggregateExec: mode=Partial, gby=[dim_id@0 as dim_id], aggr=[max(sj_dup.name)]
 08)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Uniqueness the subquery inherits counts too, not just an aggregate the rule
+# can see: a declared key still proves the property when the correlated
+# predicate carries an extra condition, so this keeps the plain left join and
+# with it every rewrite a single join would block.
+statement ok
+CREATE TABLE sj_dim_pk(dim_id INT PRIMARY KEY, name TEXT, ok BOOLEAN) AS VALUES
+(10, 'ten', true),
+(20, 'twenty', false);
+
+query TT
+EXPLAIN SELECT id, (SELECT name FROM sj_dim_pk WHERE sj_dim_pk.dim_id = sj_fact.dim_id AND ok) AS name
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.name AS name
+02)--Left Join: sj_fact.dim_id = __scalar_sq_1.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: sj_dim_pk.name, sj_dim_pk.dim_id
+06)--------Filter: sj_dim_pk.ok
+07)----------TableScan: sj_dim_pk projection=[dim_id, name, ok]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(dim_id@1, dim_id@1)], projection=[id@2, name@0]
+02)--FilterExec: ok@2, projection=[name@1, dim_id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IT rowsort
+SELECT id, (SELECT name FROM sj_dim_pk WHERE sj_dim_pk.dim_id = sj_fact.dim_id AND ok) AS name
+FROM sj_fact
+----
+1 ten
+2 NULL
+3 NULL
+4 NULL
+
+# Grouping by the correlated column makes the subquery unique on the join key
+# even with no aggregate to group for.
+query TT
+EXPLAIN SELECT id, (SELECT dim_id FROM sj_dup WHERE sj_dup.dim_id = sj_fact.dim_id GROUP BY dim_id) AS dim_id
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.dim_id AS dim_id
+02)--Left Join: sj_fact.dim_id = __scalar_sq_1.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Aggregate: groupBy=[[sj_dup.dim_id]], aggr=[[]]
+06)--------TableScan: sj_dup projection=[dim_id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(dim_id@0, dim_id@1)], projection=[id@1, dim_id@0]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=FinalPartitioned, gby=[dim_id@0 as dim_id], aggr=[]
+04)------RepartitionExec: partitioning=Hash([dim_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[dim_id@0 as dim_id], aggr=[]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A unique key proves nothing when the correlated predicate is an inequality:
+# many rows can still match one outer row.
+query TT
+EXPLAIN SELECT id, (SELECT name FROM sj_dim_pk WHERE sj_dim_pk.dim_id > sj_fact.dim_id) AS name
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.name AS name
+02)--LeftSingle Join:  Filter: __scalar_sq_1.dim_id > sj_fact.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: sj_dim_pk.name, sj_dim_pk.dim_id
+06)--------TableScan: sj_dim_pk projection=[dim_id, name]
+physical_plan
+01)NestedLoopJoinExec: join_type=LeftSingle, filter=dim_id@1 > dim_id@0, projection=[id@0, name@2]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 DROP TABLE sj_fact;
 
@@ -2882,3 +2958,6 @@ DROP TABLE sj_dim;
 
 statement ok
 DROP TABLE sj_dup;
+
+statement ok
+DROP TABLE sj_dim_pk;
