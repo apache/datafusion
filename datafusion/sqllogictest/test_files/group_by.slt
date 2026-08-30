@@ -3411,18 +3411,14 @@ EXPLAIN SELECT s.sn, s.amount, 2*s.sn
 logical_plan
 01)Sort: s.sn ASC NULLS LAST
 02)--Projection: s.sn, s.amount, Int64(2) * CAST(s.sn AS Int64)
-03)----Aggregate: groupBy=[[s.sn, s.amount]], aggr=[[]]
-04)------SubqueryAlias: s
-05)--------TableScan: sales_global_with_pk projection=[sn, amount]
+03)----SubqueryAlias: s
+04)------TableScan: sales_global_with_pk projection=[sn, amount]
 physical_plan
 01)SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
 02)--SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[sn@0 as sn, amount@1 as amount, 2 * CAST(sn@0 AS Int64) as Int64(2) * s.sn]
-04)------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
-05)--------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
-06)----------AggregateExec: mode=Partial, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
-07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-08)--------------DataSourceExec: partitions=1, partition_sizes=[2]
+04)------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+05)--------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query IRI
 SELECT s.sn, s.amount, 2*s.sn
@@ -3621,24 +3617,16 @@ EXPLAIN SELECT *
 ----
 logical_plan
 01)Sort: l.sn ASC NULLS LAST
-02)--Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, l.sum_amount
-03)----Aggregate: groupBy=[[l.sn, l.zip_code, l.country, l.ts, l.currency, l.amount, l.sum_amount]], aggr=[[]]
-04)------SubqueryAlias: l
-05)--------Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS sum_amount
-06)----------WindowAggr: windowExpr=[[sum(CAST(l.amount AS Float64)) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
-07)------------SubqueryAlias: l
-08)--------------TableScan: sales_global_with_pk projection=[zip_code, country, sn, ts, currency, amount]
+02)--SubqueryAlias: l
+03)----Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS sum_amount
+04)------WindowAggr: windowExpr=[[sum(CAST(l.amount AS Float64)) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+05)--------SubqueryAlias: l
+06)----------TableScan: sales_global_with_pk projection=[zip_code, country, sn, ts, currency, amount]
 physical_plan
-01)SortPreservingMergeExec: [sn@2 ASC NULLS LAST]
-02)--ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]
-03)----SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, zip_code@1 as zip_code, country@2 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
-05)--------RepartitionExec: partitioning=Hash([sn@0, zip_code@1, country@2, ts@3, currency@4, amount@5, sum_amount@6], 8), input_partitions=8
-06)----------AggregateExec: mode=Partial, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
-07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-08)--------------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]
-09)----------------BoundedWindowAggExec: wdw=[sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Float64 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
-10)------------------DataSourceExec: partitions=1, partition_sizes=[2]
+01)ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]
+02)--SortExec: expr=[sn@2 ASC NULLS LAST], preserve_partitioning=[false]
+03)----BoundedWindowAggExec: wdw=[sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Float64 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+04)------DataSourceExec: partitions=1, partition_sizes=[2]
 
 
 query ITIPTRR
@@ -3965,14 +3953,12 @@ FROM multiple_ordered_table_with_pk
 GROUP BY c;
 ----
 logical_plan
-01)Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
+01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum(multiple_ordered_table_with_pk.d)
 02)--TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-02)--RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@0 ASC NULLS LAST
-03)----AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-04)------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+01)ProjectionExec: expr=[c@1 as c, b@0 as b, CAST(d@2 AS Int64) as sum(multiple_ordered_table_with_pk.d)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 # drop table multiple_ordered_table_with_pk
 statement ok
@@ -4004,14 +3990,12 @@ FROM multiple_ordered_table_with_pk
 GROUP BY c;
 ----
 logical_plan
-01)Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
+01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum(multiple_ordered_table_with_pk.d)
 02)--TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-02)--RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@0 ASC NULLS LAST
-03)----AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-04)------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+01)ProjectionExec: expr=[c@1 as c, b@0 as b, CAST(d@2 AS Int64) as sum(multiple_ordered_table_with_pk.d)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 statement ok
 set datafusion.execution.target_partitions = 1;
@@ -4025,15 +4009,9 @@ EXPLAIN SELECT c, sum1
 GROUP BY c;
 ----
 logical_plan
-01)Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, sum1]], aggr=[[]]
-02)--Projection: multiple_ordered_table_with_pk.c, sum(multiple_ordered_table_with_pk.d) AS sum1
-03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-04)------TableScan: multiple_ordered_table_with_pk projection=[c, d]
-physical_plan
-01)AggregateExec: mode=Single, gby=[c@0 as c, sum1@1 as sum1], aggr=[], ordering_mode=PartiallySorted([0])
-02)--ProjectionExec: expr=[c@0 as c, sum(multiple_ordered_table_with_pk.d)@1 as sum1]
-03)----AggregateExec: mode=Single, gby=[c@0 as c], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+01)Projection: multiple_ordered_table_with_pk.c, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+02)--TableScan: multiple_ordered_table_with_pk projection=[c, d]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, CAST(d@4 AS Int64) as sum1], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT c, sum1, SUM(b) OVER() as sumb
@@ -4045,15 +4023,12 @@ EXPLAIN SELECT c, sum1, SUM(b) OVER() as sumb
 logical_plan
 01)Projection: multiple_ordered_table_with_pk.c, sum1, sum(multiple_ordered_table_with_pk.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sumb
 02)--WindowAggr: windowExpr=[[sum(CAST(multiple_ordered_table_with_pk.b AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-03)----Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
-04)------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-05)--------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
+03)----Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+04)------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
 01)ProjectionExec: expr=[c@0 as c, sum1@2 as sum1, sum(multiple_ordered_table_with_pk.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as sumb]
 02)--WindowAggExec: wdw=[sum(multiple_ordered_table_with_pk.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(multiple_ordered_table_with_pk.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----ProjectionExec: expr=[c@0 as c, b@1 as b, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-04)------AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, b, CAST(d@4 AS Int64) as sum1], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT lhs.c, rhs.c, lhs.sum1, rhs.sum1
@@ -4071,21 +4046,15 @@ logical_plan
 01)Projection: lhs.c, rhs.c, lhs.sum1, rhs.sum1
 02)--Inner Join: lhs.b = rhs.b
 03)----SubqueryAlias: lhs
-04)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
-05)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-06)----------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
-07)----SubqueryAlias: rhs
-08)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
-09)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-10)----------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
+04)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+05)--------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
+06)----SubqueryAlias: rhs
+07)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+08)--------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)], projection=[c@0, c@3, sum1@2, sum1@5]
-02)--ProjectionExec: expr=[c@0 as c, b@1 as b, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-03)----AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
-05)--ProjectionExec: expr=[c@0 as c, b@1 as b, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-06)----AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, b, CAST(d@4 AS Int64) as sum1], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, b, CAST(d@4 AS Int64) as sum1], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT lhs.c, rhs.c, lhs.sum1, rhs.sum1
@@ -4102,22 +4071,16 @@ logical_plan
 01)Projection: lhs.c, rhs.c, lhs.sum1, rhs.sum1
 02)--Cross Join:
 03)----SubqueryAlias: lhs
-04)------Projection: multiple_ordered_table_with_pk.c, sum(multiple_ordered_table_with_pk.d) AS sum1
-05)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-06)----------TableScan: multiple_ordered_table_with_pk projection=[c, d]
-07)----SubqueryAlias: rhs
-08)------Projection: multiple_ordered_table_with_pk.c, sum(multiple_ordered_table_with_pk.d) AS sum1
-09)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-10)----------TableScan: multiple_ordered_table_with_pk projection=[c, d]
+04)------Projection: multiple_ordered_table_with_pk.c, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+05)--------TableScan: multiple_ordered_table_with_pk projection=[c, d]
+06)----SubqueryAlias: rhs
+07)------Projection: multiple_ordered_table_with_pk.c, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+08)--------TableScan: multiple_ordered_table_with_pk projection=[c, d]
 physical_plan
 01)ProjectionExec: expr=[c@0 as c, c@2 as c, sum1@1 as sum1, sum1@3 as sum1]
 02)--CrossJoinExec
-03)----ProjectionExec: expr=[c@0 as c, sum(multiple_ordered_table_with_pk.d)@1 as sum1]
-04)------AggregateExec: mode=Single, gby=[c@0 as c], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
-06)----ProjectionExec: expr=[c@0 as c, sum(multiple_ordered_table_with_pk.d)@1 as sum1]
-07)------AggregateExec: mode=Single, gby=[c@0 as c], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
-08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, CAST(d@4 AS Int64) as sum1], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, CAST(d@4 AS Int64) as sum1], output_ordering=[c@0 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 # we do not generate physical plan for Repartition yet (e.g Distribute By queries).
 query TT
@@ -4129,9 +4092,8 @@ DISTRIBUTE BY a
 ----
 logical_plan
 01)Repartition: DistributeBy(multiple_ordered_table_with_pk.a)
-02)--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
-03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-04)------TableScan: multiple_ordered_table_with_pk projection=[a, b, c, d]
+02)--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+03)----TableScan: multiple_ordered_table_with_pk projection=[a, b, d]
 physical_plan_error This feature is not implemented: Physical plan does not support DistributeBy partitioning
 
 # union with aggregate
@@ -4146,20 +4108,14 @@ UNION ALL
 ----
 logical_plan
 01)Union
-02)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
-03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-04)------TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
-05)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
-06)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-07)------TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
+02)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+03)----TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
+04)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+05)----TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
 physical_plan
 01)UnionExec
-02)--ProjectionExec: expr=[c@0 as c, a@1 as a, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-03)----AggregateExec: mode=Single, gby=[c@1 as c, a@0 as a], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
-05)--ProjectionExec: expr=[c@0 as c, a@1 as a, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-06)----AggregateExec: mode=Single, gby=[c@1 as c, a@0 as a], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
-07)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, a, CAST(d@4 AS Int64) as sum1], output_orderings=[[a@1 ASC NULLS LAST], [c@0 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, a, CAST(d@4 AS Int64) as sum1], output_orderings=[[a@1 ASC NULLS LAST], [c@0 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 # table scan should be simplified.
 query TT
@@ -4168,13 +4124,9 @@ EXPLAIN SELECT c, a, SUM(d) as sum1
  GROUP BY c
 ----
 logical_plan
-01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
-02)--Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-03)----TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
-physical_plan
-01)ProjectionExec: expr=[c@0 as c, a@1 as a, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-02)--AggregateExec: mode=Single, gby=[c@1 as c, a@0 as a], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
+02)--TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, a, CAST(d@4 AS Int64) as sum1], output_orderings=[[a@1 ASC NULLS LAST], [c@0 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 # limit should be simplified
 query TT
@@ -4185,15 +4137,10 @@ EXPLAIN SELECT *
    LIMIT 5)
 ----
 logical_plan
-01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
+01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, CAST(multiple_ordered_table_with_pk.d AS Int64) AS sum1
 02)--Limit: skip=0, fetch=5
-03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-04)------TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
-physical_plan
-01)ProjectionExec: expr=[c@0 as c, a@1 as a, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-02)--GlobalLimitExec: skip=0, fetch=5
-03)----AggregateExec: mode=Single, gby=[c@1 as c, a@0 as a], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
+03)----TableScan: multiple_ordered_table_with_pk projection=[a, c, d], fetch=5
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, a, CAST(d@4 AS Int64) as sum1], limit=5, output_orderings=[[a@1 ASC NULLS LAST], [c@0 ASC NULLS LAST]], constraints=[PrimaryKey([3])], file_type=csv, has_header=true
 
 statement ok
 set datafusion.execution.target_partitions = 8;
@@ -5673,14 +5620,9 @@ EXPLAIN SELECT DISTINCT u.id
   LEFT JOIN user_orders o ON u.id = o.user_id;
 ----
 logical_plan
-01)Aggregate: groupBy=[[u.id]], aggr=[[]]
-02)--SubqueryAlias: u
-03)----TableScan: users_with_pk projection=[id]
-physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
-02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SubqueryAlias: u
+02)--TableScan: users_with_pk projection=[id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table users_with_pk;
