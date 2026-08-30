@@ -146,7 +146,20 @@ pub(super) fn instantiate_fixed_size_binary_filter(
         return Ok(None);
     };
 
-    let primitive = reinterpret(array)?;
+ /// Creates an optimized filter for supported concrete `FixedSizeBinary` arrays.
+ pub(super) fn instantiate_fixed_size_binary_filter(
+     in_array: &ArrayRef,
+ ) -> Result<Option<StaticFilterRef>> {
+    if !matches!(in_array.data_type(), DataType::FixedSizeBinary(_)) {
+         return Ok(None);
+     }
+     let Some(array) = in_array.as_fixed_size_binary_opt() else {
+         return Ok(None);
+     };
+
+    let Some(primitive) = reinterpret(array)? else {
+        return Ok(None);
+    };
     let inner = instantiate_primitive_filter(&primitive)?.ok_or_else(|| {
         internal_datafusion_err!(
             "FixedSizeBinary filter: no primitive filter for {}",
