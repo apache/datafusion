@@ -133,6 +133,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "aggregate_drain"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "compute_statistics"
 
 [[bench]]
