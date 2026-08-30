@@ -108,11 +108,11 @@ impl StaticFilter for FixedSizeBinaryFilter {
             )
         })?;
         let primitive = reinterpret(array)?.ok_or_else(|| {
-             internal_datafusion_err!(
-                 "FixedSizeBinary filter: unsupported width {}",
-                 array.value_size()
-             )
-         })?;
+            internal_datafusion_err!(
+                "FixedSizeBinary filter: unsupported width {}",
+                array.value_size()
+            )
+        })?;
         self.inner.contains(primitive.as_ref(), negated)
     }
 }
@@ -121,41 +121,26 @@ impl StaticFilter for FixedSizeBinaryFilter {
 /// `None` if the width has no primitive representation.
 fn reinterpret(array: &FixedSizeBinaryArray) -> Result<Option<ArrayRef>> {
     Ok(Some(match array.value_size() {
-         1 => Arc::new(reinterpret_as_primitive::<UInt8Type>(array)?) as ArrayRef,
-         2 => Arc::new(reinterpret_as_primitive::<UInt16Type>(array)?),
-         4 => Arc::new(reinterpret_as_primitive::<UInt32Type>(array)?),
-         8 => Arc::new(reinterpret_as_primitive::<UInt64Type>(array)?),
-         16 => Arc::new(reinterpret_as_primitive::<Decimal128Type>(array)?),
+        1 => Arc::new(reinterpret_as_primitive::<UInt8Type>(array)?) as ArrayRef,
+        2 => Arc::new(reinterpret_as_primitive::<UInt16Type>(array)?),
+        4 => Arc::new(reinterpret_as_primitive::<UInt32Type>(array)?),
+        8 => Arc::new(reinterpret_as_primitive::<UInt64Type>(array)?),
+        16 => Arc::new(reinterpret_as_primitive::<Decimal128Type>(array)?),
 
         _ => return Ok(None),
     }))
- }
 }
 
 /// Creates an optimized filter for supported concrete `FixedSizeBinary` arrays.
 pub(super) fn instantiate_fixed_size_binary_filter(
     in_array: &ArrayRef,
 ) -> Result<Option<StaticFilterRef>> {
-    let DataType::FixedSizeBinary(width) = in_array.data_type() else {
-        return Ok(None);
-    };
-    if !matches!(width, 1 | 2 | 4 | 8 | 16) {
+    if !matches!(in_array.data_type(), DataType::FixedSizeBinary(_)) {
         return Ok(None);
     }
     let Some(array) = in_array.as_fixed_size_binary_opt() else {
         return Ok(None);
     };
-
- /// Creates an optimized filter for supported concrete `FixedSizeBinary` arrays.
- pub(super) fn instantiate_fixed_size_binary_filter(
-     in_array: &ArrayRef,
- ) -> Result<Option<StaticFilterRef>> {
-    if !matches!(in_array.data_type(), DataType::FixedSizeBinary(_)) {
-         return Ok(None);
-     }
-     let Some(array) = in_array.as_fixed_size_binary_opt() else {
-         return Ok(None);
-     };
 
     let Some(primitive) = reinterpret(array)? else {
         return Ok(None);
