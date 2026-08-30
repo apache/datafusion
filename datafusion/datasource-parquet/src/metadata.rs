@@ -43,7 +43,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
-use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
+use parquet::basic::{ColumnOrder, LogicalType, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
     RowGroupMetaData, SortingColumn,
@@ -70,17 +70,26 @@ fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
 /// The deprecated Parquet `min`/`max` fields use signed comparison, unlike
 /// Arrow's string and binary comparisons. Even the modern bounds cannot be
 /// interpreted without the corresponding footer `column_orders` entry.
-/// Signed logical types, such as decimals, retain their existing behavior.
+/// Non-floating signed logical types, such as decimals, retain their behavior.
 /// Columns with undefined sort orders, such as `INT96`, never have usable
 /// min/max bounds regardless of their physical type. The `INT96` check is
 /// defensive because parquet-rs does not currently expose those bounds.
+/// Floating-point bounds omit NaNs, which Arrow orders below or above all
+/// finite values depending on their sign. Without NaN-absence statistics,
+/// neither endpoint bounds every non-null value in the column.
 pub(crate) fn has_untrusted_min_max_order(
     parquet_schema: &SchemaDescriptor,
     column_orders: Option<&[ColumnOrder]>,
     parquet_column_index: usize,
 ) -> bool {
     let column = parquet_schema.column(parquet_column_index);
-    if column.sort_order() == SortOrder::UNDEFINED {
+    if column.sort_order() == SortOrder::UNDEFINED
+        || matches!(
+            column.physical_type(),
+            PhysicalType::FLOAT | PhysicalType::DOUBLE
+        )
+        || matches!(column.logical_type_ref(), Some(LogicalType::Float16))
+    {
         return true;
     }
     requires_unsigned_byte_array_order(&column)

@@ -742,11 +742,12 @@ uint_tests!(
 // page-2                         0  0.0                                       4.0
 // page-3                         0  5.0                                       9.0
 async fn prune_f64_lt() {
+    // Parquet floating bounds omit possible NaNs, so they cannot prune pages.
     test_prune(
         Scenario::Float64,
         "SELECT * FROM t where f < 1",
         Some(0),
-        Some(5),
+        Some(0),
         11,
         5,
     )
@@ -755,7 +756,7 @@ async fn prune_f64_lt() {
         Scenario::Float64,
         "SELECT * FROM t where -f > -1",
         Some(0),
-        Some(5),
+        Some(0),
         11,
         5,
     )
@@ -764,13 +765,13 @@ async fn prune_f64_lt() {
 
 #[tokio::test]
 async fn prune_f64_scalar_fun_and_gt() {
-    // result of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
-    // only use "f >= 0" to prune
+    // The scalar function is unsupported for pruning, and the floating bounds
+    // for f >= 0.1 omit possible NaNs. Neither condition can prune pages.
     test_prune(
         Scenario::Float64,
         "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1",
         Some(0),
-        Some(10),
+        Some(0),
         1,
         5,
     )
