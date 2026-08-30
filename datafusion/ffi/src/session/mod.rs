@@ -73,7 +73,7 @@ use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
-use crate::execution::FFI_TaskContext;
+use crate::execution::{FFI_RuntimeEnv, FFI_TaskContext};
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
@@ -140,6 +140,13 @@ pub(crate) struct FFI_SessionRef {
     default_table_options: unsafe extern "C" fn(&Self) -> SVec<(SString, SString)>,
 
     task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
+
+    /// Returns the session's runtime environment.
+    ///
+    /// This is the session's own environment, so a table provider that
+    /// registers an object store on it during planning finds that store again
+    /// when the resulting plan is executed.
+    runtime_env: unsafe extern "C" fn(&Self) -> FFI_RuntimeEnv,
 
     physical_optimizers: unsafe extern "C" fn(&Self) -> SVec<FFI_PhysicalOptimizerRule>,
 
@@ -369,7 +376,15 @@ unsafe extern "C" fn default_table_options_fn_wrapper(
 }
 
 unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskContext {
-    session.inner().task_ctx().into()
+    FFI_TaskContext::new(session.inner().task_ctx(), unsafe {
+        session.runtime().clone()
+    })
+}
+
+unsafe extern "C" fn runtime_env_fn_wrapper(session: &FFI_SessionRef) -> FFI_RuntimeEnv {
+    FFI_RuntimeEnv::new(Arc::clone(session.inner().runtime_env()), unsafe {
+        session.runtime().clone()
+    })
 }
 
 unsafe extern "C" fn physical_optimizers_fn_wrapper(
@@ -415,6 +430,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
+            runtime_env: runtime_env_fn_wrapper,
             physical_optimizers: physical_optimizers_fn_wrapper,
             logical_codec: provider.logical_codec.clone(),
             physical_codec: provider.physical_codec.clone(),
@@ -507,6 +523,7 @@ impl FFI_SessionRef {
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
+            runtime_env: runtime_env_fn_wrapper,
             physical_optimizers: physical_optimizers_fn_wrapper,
             logical_codec,
             physical_codec,
@@ -618,7 +635,14 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 aggregate_functions,
                 window_functions,
                 extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
-                runtime_env: Default::default(),
+                // `Session::runtime_env` returns a borrow, so this has to be
+                // built once here rather than lazily per call. That also makes
+                // the identity stable: a table provider that registers an
+                // object store through this environment finds it again later,
+                // which would not hold if each call rebuilt the environment.
+                runtime_env: <Arc<RuntimeEnv>>::try_from(&(session.runtime_env)(
+                    session,
+                ))?,
                 props: Default::default(),
                 query_planner: OnceLock::new(),
                 physical_optimizers: OnceLock::new(),

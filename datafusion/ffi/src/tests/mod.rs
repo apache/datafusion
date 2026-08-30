@@ -59,6 +59,7 @@ use crate::util::FFI_Option;
 mod async_provider;
 pub mod catalog;
 pub mod config;
+pub mod object_store_provider;
 mod physical_optimizer;
 mod query_planner;
 mod sync_provider;
@@ -139,6 +140,11 @@ pub struct ForeignLibraryModule {
 
     /// Create an aggregate UDAF using first_value
     pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
+
+    /// Construct a table provider that registers its own object store on the
+    /// session during planning and reads it back at execution time.
+    pub create_object_store_table:
+        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -370,5 +376,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_query_planner: query_planner::create_query_planner,
         version: super::version,
         create_first_value_udaf: create_ffi_first_value_func,
+        create_object_store_table: object_store_provider::create_object_store_table,
     }
 }

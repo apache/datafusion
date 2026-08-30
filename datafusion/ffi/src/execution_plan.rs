@@ -491,7 +491,9 @@ impl ExecutionPlan for ForeignExecutionPlan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let context = FFI_TaskContext::from(context);
+        // Attach the runtime this plan is being executed on. The foreign
+        // plan enters it when polling object stores owned by this library.
+        let context = FFI_TaskContext::new(context, Handle::try_current().ok());
         unsafe {
             df_result!((self.plan.execute)(&self.plan, partition, context))
                 .map(|stream| Pin::new(Box::new(stream)) as SendableRecordBatchStream)

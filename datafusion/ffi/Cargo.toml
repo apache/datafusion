@@ -48,6 +48,7 @@ arrow = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true }
 async-ffi = { version = "0.5.0" }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
@@ -69,10 +70,12 @@ datafusion-session = { workspace = true }
 futures = { workspace = true }
 libloading = "0.9"
 log = { workspace = true }
+object_store = { workspace = true }
 prost = { workspace = true }
 semver = "1.0.28"
 stabby = "72.1.2"
 tokio = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 datafusion = { workspace = true, default-features = false, features = ["sql"] }

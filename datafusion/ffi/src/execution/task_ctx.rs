@@ -25,10 +25,12 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
+use tokio::runtime::Handle;
 
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
 
+use crate::execution::runtime_env::FFI_RuntimeEnv;
 use crate::session::config::FFI_SessionConfig;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
@@ -58,6 +60,15 @@ pub struct FFI_TaskContext {
     /// Returns a vec of name-function pairs for window functions.
     pub window_functions: unsafe extern "C" fn(&Self) -> SVec<(SString, FFI_WindowUDF)>,
 
+    /// Returns the runtime environment.
+    ///
+    /// A plan executing on the far side of the boundary reaches the object
+    /// stores and the memory budget of the executing session through this,
+    /// so a store registered on the session during planning is available at
+    /// execution time and allocations count against the session's memory
+    /// limit.
+    pub runtime_env: unsafe extern "C" fn(&Self) -> FFI_RuntimeEnv,
+
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
 
@@ -73,6 +84,9 @@ pub struct FFI_TaskContext {
 
 struct TaskContextPrivateData {
     ctx: Arc<TaskContext>,
+    /// Tokio runtime handle of the providing library, attached to object stores
+    /// handed out by this context's runtime environment.
+    runtime: Option<Handle>,
 }
 
 impl FFI_TaskContext {
@@ -150,6 +164,16 @@ unsafe extern "C" fn window_functions_fn_wrapper(
     }
 }
 
+unsafe extern "C" fn runtime_env_fn_wrapper(ctx: &FFI_TaskContext) -> FFI_RuntimeEnv {
+    unsafe {
+        let private_data = ctx.private_data as *const TaskContextPrivateData;
+        FFI_RuntimeEnv::new(
+            Arc::clone(&(*private_data).ctx.runtime_env()),
+            (*private_data).runtime.clone(),
+        )
+    }
+}
+
 unsafe extern "C" fn release_fn_wrapper(ctx: &mut FFI_TaskContext) {
     unsafe {
         let private_data = Box::from_raw(ctx.private_data as *mut TaskContextPrivateData);
@@ -163,9 +187,21 @@ impl Drop for FFI_TaskContext {
     }
 }
 
-impl From<Arc<TaskContext>> for FFI_TaskContext {
-    fn from(ctx: Arc<TaskContext>) -> Self {
-        let private_data = Box::new(TaskContextPrivateData { ctx });
+impl FFI_TaskContext {
+    /// Create a new [`FFI_TaskContext`] from a local task context.
+    ///
+    /// `runtime` is the tokio runtime handle of the library creating this
+    /// context. It is attached to the object stores reached through this
+    /// context's runtime environment and entered while they are polled, so
+    /// that stores which spawn tasks or use timers work when driven by a
+    /// foreign executor.
+    ///
+    /// Pass `None` only when the context will not be used to reach an object
+    /// store, such as when it serves purely as a
+    /// [`FunctionRegistry`](datafusion_expr::registry::FunctionRegistry)
+    /// while encoding or decoding a plan.
+    pub fn new(ctx: Arc<TaskContext>, runtime: Option<Handle>) -> Self {
+        let private_data = Box::new(TaskContextPrivateData { ctx, runtime });
 
         FFI_TaskContext {
             session_id: session_id_fn_wrapper,
@@ -174,6 +210,7 @@ impl From<Arc<TaskContext>> for FFI_TaskContext {
             scalar_functions: scalar_functions_fn_wrapper,
             aggregate_functions: aggregate_functions_fn_wrapper,
             window_functions: window_functions_fn_wrapper,
+            runtime_env: runtime_env_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
@@ -228,7 +265,18 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                 })
                 .collect();
 
-            let runtime = Arc::new(RuntimeEnv::default());
+            // The providing side's runtime environment carries the registered
+            // object stores and the memory pool this context should execute
+            // against.
+            let ffi_runtime_env = (ffi_ctx.runtime_env)(&ffi_ctx);
+            let runtime_env = <Arc<RuntimeEnv>>::try_from(&ffi_runtime_env)
+                .unwrap_or_else(|e| {
+                    log::warn!(
+                        "Unable to reconstruct the runtime environment across \
+                         the FFI boundary, falling back to a default: {e}"
+                    );
+                    Arc::new(RuntimeEnv::default())
+                });
 
             Arc::new(TaskContext::new(
                 task_id,
@@ -238,7 +286,7 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                 HashMap::new(),
                 aggregate_functions,
                 window_functions,
-                runtime,
+                runtime_env,
             ))
         }
     }
@@ -258,7 +306,7 @@ mod tests {
     fn ffi_task_ctx_round_trip() -> Result<()> {
         let session_ctx = SessionContext::new();
         let original = session_ctx.task_ctx();
-        let mut ffi_task_ctx = FFI_TaskContext::from(Arc::clone(&original));
+        let mut ffi_task_ctx = FFI_TaskContext::new(Arc::clone(&original), None);
         ffi_task_ctx.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_task_ctx: Arc<TaskContext> = ffi_task_ctx.into();

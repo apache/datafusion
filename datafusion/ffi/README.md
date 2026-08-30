@@ -218,6 +218,40 @@ these methods that your provider remains valid for the lifetime of the
 calls. The `FFI_TaskContextProvider` is implemented on `SessionContext`
 and it is easy to implement on any struct that implements `Session`.
 
+## Runtime Environment
+
+The `RuntimeEnv` of a `Session` crosses the boundary, so a `TableProvider`
+shared over FFI can reach the object stores and memory budget of the session
+that is executing it. This matters most for providers backed by remote storage:
+such a provider typically builds its own `ObjectStore` and registers it during
+`TableProvider::scan`, then reads through it when the returned `ExecutionPlan`
+is executed. Planning and execution happen on opposite sides of the boundary,
+so both must agree on the store.
+
+`RuntimeEnv` is a plain struct rather than a trait, and its field list depends
+on enabled features, so it is not passed as an opaque pointer. Instead each of
+its components crosses on its own terms:
+
+| Component             | How it crosses                                |
+| --------------------- | --------------------------------------------- |
+| `ObjectStoreRegistry` | Shared, via `FFI_ObjectStoreRegistry`         |
+| `MemoryPool`          | Shared, via `FFI_MemoryPool`                  |
+| `DiskManager`         | Configuration copied; each side keeps its own |
+| `CacheManager`        | Configuration copied; each side keeps its own |
+
+Because the disk and cache managers are concrete structs they cannot be shared,
+only configured alike. Two consequences are worth knowing: spill limits are
+enforced per side, so total on-disk usage can reach twice
+`max_temp_directory_size`; and file statistics and listings cached by one side
+are not reused by the other.
+
+A store used within the library that created it does not pay for any of this.
+`FFI_ObjectStore::as_local` recovers the original `Arc<dyn ObjectStore>`, so a
+provider that registers its own store and then reads through it runs at full
+speed even though the store made a round trip through the foreign registry.
+Only a store genuinely owned by the _other_ library is driven through the
+wrapper.
+
 [apache datafusion]: https://datafusion.apache.org/
 [api docs]: http://docs.rs/datafusion-ffi/latest
 [rust abi]: https://doc.rust-lang.org/reference/abi.html

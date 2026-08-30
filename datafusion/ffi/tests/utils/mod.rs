@@ -31,13 +31,23 @@ use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 #[cfg_attr(not(feature = "integration-tests"), expect(dead_code))]
 pub fn ctx_and_codec() -> (Arc<SessionContext>, FFI_LogicalExtensionCodec) {
     let ctx = Arc::new(SessionContext::default());
-    let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+    let codec = codec_for(&ctx);
+
+    (ctx, codec)
+}
+
+/// Build an FFI logical extension codec bound to an existing context.
+///
+/// Use this instead of [`ctx_and_codec`] when the test needs a context
+/// configured a particular way, for example with a specific memory pool.
+#[cfg_attr(not(feature = "integration-tests"), expect(dead_code))]
+pub fn codec_for(ctx: &Arc<SessionContext>) -> FFI_LogicalExtensionCodec {
+    let task_ctx_provider = Arc::clone(ctx) as Arc<dyn TaskContextProvider>;
     let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
-    let codec = FFI_LogicalExtensionCodec::new(
+
+    FFI_LogicalExtensionCodec::new(
         Arc::new(DefaultLogicalExtensionCodec {}),
         None,
         task_ctx_provider,
-    );
-
-    (ctx, codec)
+    )
 }
