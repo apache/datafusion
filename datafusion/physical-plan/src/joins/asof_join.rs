@@ -166,6 +166,10 @@ impl AsOfJoinExec {
     /// expressions must be deterministic, reference only their corresponding
     /// input, and have matching input types. Equality types must support hashing.
     /// Projection indices refer to the full left-then-right join schema.
+    ///
+    /// The logical ASOF constructor validates the corresponding pre-coercion
+    /// contract. Keep the shared operator, side-ownership, and determinism checks
+    /// aligned across both public entry points.
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
