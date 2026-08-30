@@ -328,7 +328,8 @@ fn coerce_int96_to_resolution_impl(
                         current_field.name(),
                         processed_children.as_slice(),
                         current_field.is_nullable(),
-                    );
+                    )
+                    .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_struct));
                 }
                 (DataType::List(unprocessed_child), None) => {
@@ -361,7 +362,8 @@ fn coerce_int96_to_resolution_impl(
                         current_field.name(),
                         Arc::clone(&processed_children[0]),
                         current_field.is_nullable(),
-                    );
+                    )
+                    .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_list));
                 }
                 (DataType::Map(unprocessed_child, _), None) => {
@@ -391,7 +393,8 @@ fn coerce_int96_to_resolution_impl(
                         current_field.name(),
                         DataType::Map(Arc::clone(&processed_children[0]), *sorted),
                         current_field.is_nullable(),
-                    );
+                    )
+                    .with_metadata(current_field.metadata().clone());
                     parent_fields.borrow_mut().push(Arc::new(processed_map));
                 }
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
@@ -460,6 +463,7 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 }
 #[cfg(test)]
 mod tests {
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::parquet_to_arrow_schema;
 
     use super::*;
@@ -727,5 +731,54 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_preserves_field_metadata() {
+        // Spark and Delta Lake stamp a field id on every field. Coercion must
+        // carry that metadata across on nested fields as well as leaves:
+        // formats that identify a column by id rather than by name, such as
+        // Delta Lake column mapping, cannot resolve a column that loses it.
+        let spark_schema = "
+            message spark_schema {
+                REQUIRED INT64 c0 = 1;
+                OPTIONAL group c1 = 2 {
+                    OPTIONAL INT96 c2 = 3;
+                }
+                OPTIONAL group c3 (LIST) = 4 {
+                    REPEATED group list {
+                        OPTIONAL INT96 element = 5;
+                    }
+                }
+            }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+
+        for (original, coerced) in arrow_schema.fields().iter().zip(result.fields()) {
+            assert_eq!(
+                original.metadata(),
+                coerced.metadata(),
+                "field {} lost its metadata",
+                original.name(),
+            );
+        }
+
+        // The struct and the list are the fields the coercion rebuilds, so
+        // spell out that they kept their ids rather than leaving it to the loop.
+        assert_eq!(
+            result.field_with_name("c1").unwrap().metadata()[PARQUET_FIELD_ID_META_KEY],
+            "2",
+        );
+        assert_eq!(
+            result.field_with_name("c3").unwrap().metadata()[PARQUET_FIELD_ID_META_KEY],
+            "4",
+        );
     }
 }
