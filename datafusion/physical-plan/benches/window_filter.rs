@@ -43,9 +43,13 @@ use datafusion_physical_plan::windows::{
     BoundedWindowAggExec, WindowAggExec, create_window_expr,
 };
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, collect};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 
 const BATCH_SIZE: usize = 8192;
 const NUM_BATCHES: usize = 4;
+const NUM_ROWS: usize = BATCH_SIZE * NUM_BATCHES;
 
 #[derive(Clone, Copy)]
 enum ArgumentKind {
@@ -72,22 +76,23 @@ fn schema() -> SchemaRef {
     ]))
 }
 
+fn make_filter_mask(filter_percent: usize) -> Vec<bool> {
+    let selected_rows = NUM_ROWS * filter_percent / 100;
+    let mut mask = vec![false; NUM_ROWS];
+    mask[..selected_rows].fill(true);
+    mask.shuffle(&mut StdRng::seed_from_u64(42));
+    mask
+}
+
 fn make_batches(filter_percent: Option<usize>) -> Vec<RecordBatch> {
+    let include = make_filter_mask(filter_percent.unwrap_or(100));
     (0..NUM_BATCHES)
         .map(|batch_index| {
             let start = batch_index * BATCH_SIZE;
             let end = start + BATCH_SIZE;
             let id = UInt64Array::from_iter_values((start..end).map(|i| i as u64));
             let value = Float64Array::from_iter_values((start..end).map(|i| i as f64));
-            let include = BooleanArray::from(
-                (start..end)
-                    .map(|i| {
-                        filter_percent
-                            .map(|percent| (i * percent) % 100 < percent)
-                            .unwrap_or(true)
-                    })
-                    .collect::<Vec<_>>(),
-            );
+            let include = BooleanArray::from(include[start..end].to_vec());
 
             RecordBatch::try_new(
                 schema(),
@@ -202,19 +207,18 @@ fn benchmark_window_case(
     let mut group = c.benchmark_group(format!("window_aggregate_filter/{name}"));
     group.sample_size(sample_size);
 
-    let plan = make_window_plan(None, ArgumentKind::Column, window_frame.clone());
-    let task_ctx = Arc::new(TaskContext::default());
-    group.bench_function(
-        BenchmarkId::new(ArgumentKind::Column.name(), "no_filter"),
-        |b| {
+    for &argument_kind in argument_kinds {
+        let plan = make_window_plan(None, argument_kind, window_frame.clone());
+        let task_ctx = Arc::new(TaskContext::default());
+        group.bench_function(BenchmarkId::new(argument_kind.name(), "no_filter"), |b| {
             b.iter(|| {
                 let batches = runtime
                     .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
                     .unwrap();
                 black_box(batches);
             })
-        },
-    );
+        });
+    }
 
     for &filter_percent in filter_percents {
         for &argument_kind in argument_kinds {
