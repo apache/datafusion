@@ -187,17 +187,17 @@ impl fmt::Display for DateTruncGranularity {
     ),
     sql_example = r#"```sql
 > SELECT date_trunc('month', '2024-05-15T10:30:00');
-+-----------------------------------------------+
++-------------------------------------------------------+
 | date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
-+-----------------------------------------------+
-| 2024-05-01T00:00:00                           |
-+-----------------------------------------------+
++-------------------------------------------------------+
+| 2024-05-01T00:00:00                                   |
++-------------------------------------------------------+
 > SELECT date_trunc('hour', '2024-05-15T10:30:00');
-+----------------------------------------------+
++------------------------------------------------------+
 | date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
-+----------------------------------------------+
-| 2024-05-15T10:00:00                          |
-+----------------------------------------------+
++------------------------------------------------------+
+| 2024-05-15T10:00:00                                  |
++------------------------------------------------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -979,13 +979,13 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(original, granularity, expected)| {
+        for (original, granularity, expected) in &cases {
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
             let granularity_enum = DateTruncGranularity::from_str(granularity).unwrap();
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
-        });
+        }
     }
 
     #[test]
@@ -1129,7 +1129,7 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(original, tz_opt, expected)| {
+        for (original, tz_opt, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -1171,7 +1171,7 @@ mod tests {
             } else {
                 panic!("unexpected column type");
             }
-        });
+        }
     }
 
     #[test]
@@ -1317,7 +1317,7 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(original, tz_opt, expected)| {
+        for (original, tz_opt, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -1359,7 +1359,7 @@ mod tests {
             } else {
                 panic!("unexpected column type");
             }
-        });
+        }
     }
 
     #[test]
@@ -1483,54 +1483,52 @@ mod tests {
             ),
         ];
 
-        cases
-            .iter()
-            .for_each(|(original, tz_opt, granularity, expected)| {
-                let input = original
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let right = expected
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let batch_len = input.len();
-                let arg_fields = vec![
-                    Field::new("a", DataType::Utf8, false).into(),
-                    Field::new("b", input.data_type().clone(), false).into(),
-                ];
-                let args = ScalarFunctionArgs {
-                    args: vec![
-                        ColumnarValue::Scalar(ScalarValue::from(*granularity)),
-                        ColumnarValue::Array(Arc::new(input)),
-                    ],
-                    arg_fields,
-                    number_rows: batch_len,
-                    return_field: Field::new(
-                        "f",
-                        DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                        true,
-                    )
-                    .into(),
-                    config_options: Arc::new(ConfigOptions::default()),
-                };
-                let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
-                if let ColumnarValue::Array(result) = result {
-                    assert_eq!(
-                        result.data_type(),
-                        &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
-                    );
-                    let left = as_primitive_array::<TimestampNanosecondType>(&result);
-                    assert_eq!(
-                        left, &right,
-                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
-                    );
-                } else {
-                    panic!("unexpected column type");
-                }
-            });
+        for (original, tz_opt, granularity, expected) in &cases {
+            let input = original
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let right = expected
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let batch_len = input.len();
+            let arg_fields = vec![
+                Field::new("a", DataType::Utf8, false).into(),
+                Field::new("b", input.data_type().clone(), false).into(),
+            ];
+            let args = ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(ScalarValue::from(*granularity)),
+                    ColumnarValue::Array(Arc::new(input)),
+                ],
+                arg_fields,
+                number_rows: batch_len,
+                return_field: Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                )
+                .into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(
+                    result.data_type(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
+                );
+                let left = as_primitive_array::<TimestampNanosecondType>(&result);
+                assert_eq!(
+                    left, &right,
+                    "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
+                );
+            } else {
+                panic!("unexpected column type");
+            }
+        }
     }
 }

@@ -21,6 +21,7 @@ use crate::{
     EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
     expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
 };
+use arrow::datatypes::Schema;
 pub use datafusion_common::SplitPoint;
 use datafusion_common::{Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
@@ -281,6 +282,49 @@ impl RangePartitioning {
             split_points: self.split_points.clone(),
         })
     }
+
+    /// Checks whether the types of the given expressions match the data types of the split points in this range partitioning.
+    pub fn is_compatible_with_expressions(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+    ) -> bool {
+        if self.ordering.len() != exprs.len() {
+            return false;
+        }
+        if let Some(first_split) = self.split_points.first() {
+            exprs.iter().zip(first_split.values()).all(|(expr, val)| {
+                expr.data_type(schema)
+                    .map(|dt| dt == val.data_type())
+                    .unwrap_or(false)
+            })
+        } else {
+            true
+        }
+    }
+
+    /// Adapts this range partitioning to the given expressions, preserving split points and sort options.
+    /// Returns `None` if `exprs` count doesn't match ordering length or expression types don't match split points.
+    pub fn adapt(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+    ) -> Option<Self> {
+        if !self.is_compatible_with_expressions(exprs, schema) {
+            return None;
+        }
+        let new_ordering = LexOrdering::new(
+            exprs
+                .iter()
+                .zip(&self.ordering)
+                .map(|(expr, sort_expr)| PhysicalSortExpr {
+                    expr: Arc::clone(expr),
+                    options: sort_expr.options,
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        Self::try_new(new_ordering, self.split_points.clone()).ok()
+    }
 }
 
 impl Display for RangePartitioning {
@@ -517,6 +561,37 @@ impl Partitioning {
             }
         }
     }
+
+    /// Adapts this partitioning scheme to satisfy a required [`Distribution`] on the given schema.
+    ///
+    /// - For `Partitioning::Hash`: creates `Partitioning::Hash(exprs, partition_count)`.
+    /// - For `Partitioning::Range`: adapts the range partitioning to the requirement's expressions using [`RangePartitioning::adapt`].
+    /// - For other partitioning schemes: returns `None`.
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
+    pub fn adapt(
+        &self,
+        child_requirement: &Distribution,
+        child_schema: &Schema,
+    ) -> Option<Self> {
+        let (Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs)) =
+            child_requirement
+        else {
+            return None;
+        };
+
+        match self {
+            Partitioning::Range(ref_range) => ref_range
+                .adapt(exprs, child_schema)
+                .map(Partitioning::Range),
+            Partitioning::Hash(_, ref_count) => {
+                Some(Partitioning::Hash(exprs.to_vec(), *ref_count))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Protobuf conversions for [`Partitioning`].
@@ -536,19 +611,20 @@ impl Partitioning {
         &self,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<datafusion_proto_models::protobuf::Partitioning> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
 
+        let partition_count =
+            |count: usize| usize_to_wire::<u64>(count, "Partitioning", "partition_count");
         let partition_method = match self {
             Partitioning::RoundRobinBatch(n) => {
-                protobuf::partitioning::PartitionMethod::RoundRobin(wire_partition_count(
-                    *n,
-                )?)
+                protobuf::partitioning::PartitionMethod::RoundRobin(partition_count(*n)?)
             }
             Partitioning::Hash(exprs, n) => {
                 protobuf::partitioning::PartitionMethod::Hash(
                     protobuf::PhysicalHashRepartition {
                         hash_expr: ctx.encode_children_expressions(exprs)?,
-                        partition_count: wire_partition_count(*n)?,
+                        partition_count: partition_count(*n)?,
                     },
                 )
             }
@@ -574,9 +650,7 @@ impl Partitioning {
                 )
             }
             Partitioning::UnknownPartitioning(n) => {
-                protobuf::partitioning::PartitionMethod::Unknown(wire_partition_count(
-                    *n,
-                )?)
+                protobuf::partitioning::PartitionMethod::Unknown(partition_count(*n)?)
             }
         };
         Ok(protobuf::Partitioning {
@@ -593,9 +667,12 @@ impl Partitioning {
         node: &datafusion_proto_models::protobuf::Partitioning,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Option<Self>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_common::{ScalarValue, internal_datafusion_err, internal_err};
         use datafusion_proto_models::protobuf;
 
+        let partition_count =
+            |count: u64| usize_from_wire(count, "Partitioning", "partition_count");
         let Some(partition_method) = node.partition_method.as_ref() else {
             return Ok(None);
         };
@@ -644,29 +721,6 @@ impl Partitioning {
         };
         Ok(Some(partitioning))
     }
-}
-
-/// Narrow a wire partition count to `usize`.
-#[cfg(feature = "proto")]
-fn partition_count(count: u64) -> Result<usize> {
-    usize::try_from(count).map_err(|_| {
-        datafusion_common::internal_datafusion_err!(
-            "Partition count {count} exceeds usize::MAX"
-        )
-    })
-}
-
-/// Widen a partition count to its `u64` wire representation.
-///
-/// The mirror of [`partition_count`]: an out-of-range count is an error on both
-/// sides rather than a silent truncation on the way out.
-#[cfg(feature = "proto")]
-fn wire_partition_count(count: usize) -> Result<u64> {
-    u64::try_from(count).map_err(|_| {
-        datafusion_common::internal_datafusion_err!(
-            "Partition count {count} exceeds u64::MAX"
-        )
-    })
 }
 
 impl PartialEq for Partitioning {
@@ -1291,6 +1345,117 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_range_partitioning_adapt() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("a", DataType::Int32),
+            ("b", DataType::Int64),
+            ("c", DataType::Int32),
+        ])?;
+
+        let range = fixture.range(
+            [0],
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+            ],
+        );
+
+        // Adapting to col_c (same type Int32) succeeds
+        let adapted = range.adapt(&[fixture.col(2)], &fixture.schema).unwrap();
+        assert_eq!(adapted.ordering().len(), 1);
+        assert!(adapted.ordering()[0].expr.eq(&fixture.col(2)));
+        assert_eq!(adapted.partition_count(), 3);
+
+        // Adapting to col_b (different type Int64) fails
+        assert!(range.adapt(&[fixture.col(1)], &fixture.schema).is_none());
+
+        // Adapting to empty or mismatch count fails
+        assert!(range.adapt(&[], &fixture.schema).is_none());
+        assert!(
+            range
+                .adapt(&fixture.cols([0, 2]), &fixture.schema)
+                .is_none()
+        );
+
+        // Partitioning::adapt works with Distribution::KeyPartitioned
+        let part = Partitioning::Range(range);
+        assert!(
+            part.adapt(&fixture.key_distribution([1]), &fixture.schema)
+                .is_none()
+        );
+
+        let adapted_part = part
+            .adapt(&fixture.key_distribution([2]), &fixture.schema)
+            .unwrap();
+        match adapted_part {
+            Partitioning::Range(r) => assert!(r.ordering()[0].expr.eq(&fixture.col(2))),
+            _ => panic!("expected Range partitioning"),
+        }
+
+        // Partitioning::Hash adaptation
+        let hash_part = fixture.hash_partitioning([1], 4);
+        let adapted_hash = hash_part
+            .adapt(&fixture.key_distribution([2]), &fixture.schema)
+            .unwrap();
+        match adapted_hash {
+            Partitioning::Hash(exprs, count) => {
+                assert_eq!(count, 4);
+                assert_eq!(exprs.len(), 1);
+                assert!(exprs[0].eq(&fixture.col(2)));
+            }
+            _ => panic!("expected Hash partitioning"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_adapt_multi_key() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("k1", DataType::Int32),
+            ("k2", DataType::Utf8),
+            ("t1", DataType::Int32),
+            ("t2", DataType::Utf8),
+        ])?;
+
+        let opt_k1 = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let opt_k2 = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let ordering = LexOrdering::new(vec![
+            fixture.range_sort_expr(0, opt_k1),
+            fixture.range_sort_expr(1, opt_k2),
+        ])
+        .unwrap();
+
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int32(Some(20)), ScalarValue::Utf8(None)]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Utf8(Some("foo".to_string())),
+            ]),
+        ];
+
+        let range = RangePartitioning::try_new(ordering, split_points.clone())?;
+        let adapted = range.adapt(&fixture.cols([2, 3]), &fixture.schema).unwrap();
+
+        assert_eq!(adapted.ordering().len(), 2);
+        assert!(adapted.ordering()[0].expr.eq(&fixture.col(2)));
+        assert_eq!(adapted.ordering()[0].options, opt_k1);
+        assert!(adapted.ordering()[1].expr.eq(&fixture.col(3)));
+        assert_eq!(adapted.ordering()[1].options, opt_k2);
+        assert_eq!(adapted.split_points(), &split_points);
+        assert_eq!(adapted.partition_count(), 3);
+
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "proto"))]
@@ -1416,7 +1581,7 @@ mod partition_count_proto_tests {
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf;
 
-    use super::{Partitioning, partition_count, wire_partition_count};
+    use super::Partitioning;
     use crate::expressions::Column;
     use crate::proto_test_util::{StubDecoder, StubEncoder, column_node};
 
@@ -1445,36 +1610,6 @@ mod partition_count_proto_tests {
     }
 
     #[test]
-    fn partition_count_round_trips_at_the_usize_ceiling() {
-        // `usize::MAX` is the largest count that can exist in memory, so it has
-        // to widen onto the wire and narrow back unchanged.
-        let wire = wire_partition_count(usize::MAX).unwrap();
-        assert_eq!(wire, u64::try_from(usize::MAX).unwrap());
-        assert_eq!(partition_count(wire).unwrap(), usize::MAX);
-    }
-
-    #[test]
-    fn out_of_range_partition_count_is_reported_not_wrapped() {
-        // A count wider than the target's `usize` can only be reached by
-        // decoding on a narrower host than the one that encoded. That used to
-        // wrap (`as usize`) or panic (`unwrap`); it is an error now. On a
-        // 64-bit target every `u64` fits, so the same input has to decode
-        // losslessly instead of being rejected.
-        let narrowed = partition_count(u64::MAX);
-
-        #[cfg(target_pointer_width = "64")]
-        assert_eq!(narrowed.unwrap(), usize::MAX);
-
-        #[cfg(not(target_pointer_width = "64"))]
-        assert!(
-            narrowed
-                .unwrap_err()
-                .to_string()
-                .contains("Partition count 18446744073709551615 exceeds usize::MAX")
-        );
-    }
-
-    #[test]
     fn try_from_proto_narrows_every_counted_variant() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let decoder = StubDecoder::ok();
@@ -1492,7 +1627,7 @@ mod partition_count_proto_tests {
                 decoded
                     .unwrap_err()
                     .to_string()
-                    .contains("exceeds usize::MAX")
+                    .contains("is out of range for usize")
             );
         }
     }

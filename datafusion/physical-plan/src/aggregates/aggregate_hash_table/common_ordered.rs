@@ -30,7 +30,10 @@ use datafusion_expr::EmitTo;
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+    GroupByMetrics, GroupValues, new_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -38,10 +41,39 @@ use crate::aggregates::{
     evaluate_group_by,
 };
 
+use super::AggregateTableMetrics;
 use super::common::{
-    AggregateAccumulator, AggregateBatchFn, EvaluatedAggregateBatch,
+    AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
     MaterializeAccumulatorFn,
 };
+
+#[derive(Clone)]
+pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
+    pub(super) group_by: GroupByMetrics,
+    pub(super) aggregate_arguments: AggregateArgumentMetrics,
+    pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+}
+
+impl OrderedAggregateTableMetrics {
+    pub(in crate::aggregates) fn new(agg: &AggregateExec, partition: usize) -> Self {
+        let metrics = AggregateTableMetrics::new(agg, partition);
+        Self {
+            group_by: metrics.group_by,
+            aggregate_arguments: metrics.aggregate_arguments,
+            accumulator: metrics.accumulator,
+        }
+    }
+
+    pub(in crate::aggregates) fn from_hash_table<AggrMode>(
+        table: &AggregateHashTable<AggrMode>,
+    ) -> Self {
+        Self {
+            group_by: table.group_by_metrics.clone(),
+            aggregate_arguments: table.aggregate_argument_metrics.clone(),
+            accumulator: Arc::clone(&table.aggregate_accumulator_metrics),
+        }
+    }
+}
 
 /// Aggregate table shared by the ordered single, partial and final paths.
 ///
@@ -100,6 +132,12 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
 
+    /// Per-aggregate timing metrics for evaluating aggregate arguments.
+    pub(super) aggregate_argument_metrics: AggregateArgumentMetrics,
+
+    /// Per-aggregate timing metrics for accumulator operations.
+    pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
+
     /// Group keys, ordering state, and accumulator states.
     pub(super) buffer: OrderedAggregateTableBuffer,
 
@@ -149,7 +187,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         input_order_mode: &InputOrderMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         assert_or_internal_err!(
             batch_size > 0,
@@ -184,7 +222,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             output_schema,
             state_schema,
             batch_size,
-            group_by_metrics,
+            group_by_metrics: metrics.group_by,
+            aggregate_argument_metrics: metrics.aggregate_arguments,
+            aggregate_accumulator_metrics: metrics.accumulator,
             buffer: OrderedAggregateTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_ordering,
@@ -213,7 +253,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .buffer
             .accumulators
             .iter()
-            .map(|acc| acc.evaluate_acc_args(batch))
+            .enumerate()
+            .map(|(idx, acc)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_acc_args(batch))
+            })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
 
@@ -259,8 +303,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_indices.allocated_size()
     }
 
-    pub(in crate::aggregates) fn group_by_metrics(&self) -> GroupByMetrics {
-        self.group_by_metrics.clone()
+    pub(in crate::aggregates) fn metrics(&self) -> OrderedAggregateTableMetrics {
+        OrderedAggregateTableMetrics {
+            group_by: self.group_by_metrics.clone(),
+            aggregate_arguments: self.aggregate_argument_metrics.clone(),
+            accumulator: Arc::clone(&self.aggregate_accumulator_metrics),
+        }
     }
 
     /// Takes every intermediate aggregate state and resets the table so it can
@@ -277,9 +325,14 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             return Ok(None);
         }
 
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let mut output = self.buffer.group_values.emit(EmitTo::All)?;
-        for acc in &mut self.buffer.accumulators {
-            output.extend(acc.state(EmitTo::All)?);
+        for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
+            output.extend(accumulator_metrics.time(
+                idx,
+                AccumulatorPhase::State,
+                || acc.state(EmitTo::All),
+            )?);
         }
 
         let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
@@ -325,7 +378,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         &mut self,
         evaluated_batch: &EvaluatedAggregateBatch,
         aggregate_fn: AggregateBatchFn,
+        accumulator_phase: AccumulatorPhase,
     ) -> Result<()> {
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         for group_values in &evaluated_batch.grouping_set_args {
             let starting_num_groups = self.buffer.group_values.len();
             self.buffer
@@ -341,13 +396,21 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             }
 
             let timer = self.group_by_metrics.aggregation_time.timer();
-            for (acc, values) in self
+            for (idx, (acc, values)) in self
                 .buffer
                 .accumulators
                 .iter_mut()
                 .zip(evaluated_batch.accumulator_args.iter())
+                .enumerate()
             {
-                aggregate_fn(acc, values, &self.buffer.group_indices, total_num_groups)?;
+                accumulator_metrics.time(idx, accumulator_phase, || {
+                    aggregate_fn(
+                        acc,
+                        values,
+                        &self.buffer.group_indices,
+                        total_num_groups,
+                    )
+                })?;
             }
             drop(timer);
         }
@@ -365,6 +428,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     pub(super) fn next_output_batch_inner(
         &mut self,
         materialize_accumulator_fn: MaterializeAccumulatorFn,
+        accumulator_phase: AccumulatorPhase,
     ) -> Result<Option<RecordBatch>> {
         if self.buffer.group_values.is_empty() {
             return Ok(None);
@@ -376,6 +440,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let (emit_to, should_remove_groups) =
             self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
 
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
         if should_remove_groups {
@@ -388,8 +453,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             }
         }
 
-        for acc in &mut self.buffer.accumulators {
-            output.extend(materialize_accumulator_fn(acc, emit_to)?);
+        for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
+            output.extend(accumulator_metrics.time(idx, accumulator_phase, || {
+                materialize_accumulator_fn(acc, emit_to)
+            })?);
         }
         drop(timer);
 

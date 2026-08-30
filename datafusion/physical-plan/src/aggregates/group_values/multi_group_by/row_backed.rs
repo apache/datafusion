@@ -337,6 +337,10 @@ mod tests {
     /// marks a null list. Variable-length string payloads give retained rows
     /// distinct encoded lengths, which is what `take_n`'s byte preallocation
     /// depends on.
+    #[expect(
+        clippy::option_option,
+        reason = "The outer `None` marks a null list, the inner one a null string"
+    )]
     fn fsl_utf8(rows: Vec<Option<Option<&str>>>) -> ArrayRef {
         let child = StringArray::from(
             rows.iter()

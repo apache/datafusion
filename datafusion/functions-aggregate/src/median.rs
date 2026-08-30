@@ -15,48 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Ordering;
-use std::fmt::{Debug, Formatter};
-use std::mem::{size_of, size_of_val};
-use std::sync::Arc;
+use std::fmt::Debug;
 
-use arrow::array::{
-    ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
-    downcast_integer,
-};
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::{
-    array::{ArrayRef, AsArray},
-    datatypes::{
-        DataType, Decimal128Type, Decimal256Type, Field, Float16Type, Float32Type,
-        Float64Type,
-    },
-};
+use arrow::datatypes::DataType;
 
-use arrow::array::Array;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
-};
+use arrow::datatypes::FieldRef;
 
-use datafusion_common::hash_utils::RandomState;
-use datafusion_common::types::{NativeType, logical_float64};
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
-    internal_datafusion_err, internal_err,
+use crate::percentile_cont::{
+    PercentileCont, create_percentile_accumulator, create_percentile_groups_accumulator,
 };
+use datafusion_common::Result;
+use datafusion_common::types::logical_float64;
+use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
-    TypeSignatureClass, Volatility, function::AccumulatorArgs, utils::format_state_name,
+    TypeSignatureClass, Volatility, function::AccumulatorArgs,
 };
-use datafusion_expr::{EmitTo, GroupsAccumulator};
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
-use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
-use std::collections::HashMap;
 
 make_udaf_expr_and_func!(
     Median,
@@ -73,7 +49,7 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT median(column_name) FROM table_name;
 +----------------------+
-| median(column_name)   |
+| median(column_name)  |
 +----------------------+
 | 45.5                 |
 +----------------------+
@@ -91,6 +67,7 @@ make_udaf_expr_and_func!(
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Median {
     signature: Signature,
+    percentile_cont: PercentileCont,
 }
 
 impl Default for Median {
@@ -113,14 +90,14 @@ impl Median {
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Float,
                     )]),
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_float64()),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit_native(
+                        logical_float64(),
                         vec![TypeSignatureClass::Integer],
-                        NativeType::Float64,
                     )]),
                 ],
                 Volatility::Immutable,
             ),
+            percentile_cont: PercentileCont::new(),
         }
     }
 }
@@ -135,589 +112,38 @@ impl AggregateUDFImpl for Median {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        self.percentile_cont.return_type(arg_types)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        if args.input_fields[0].data_type().is_null() {
-            return Ok(vec![
-                Field::new(
-                    format_state_name(args.name, self.name()),
-                    DataType::Null,
-                    true,
-                )
-                .into(),
-            ]);
-        }
-
-        //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
-        let state_name = if args.is_distinct {
-            "distinct_median"
-        } else {
-            "median"
-        };
-
-        Ok(vec![
-            Field::new(
-                format_state_name(args.name, state_name),
-                DataType::List(Arc::new(field)),
-                true,
-            )
-            .into(),
-        ])
+        self.percentile_cont.state_fields(args)
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                if acc_args.is_distinct {
-                    Ok(Box::new(DistinctMedianAccumulator::<$t> {
-                        data_type: $dt.clone(),
-                        distinct_values: GenericDistinctBuffer::new($dt),
-                    }))
-                } else {
-                    Ok(Box::new(MedianAccumulator::<$t> {
-                        data_type: $dt.clone(),
-                        all_values: vec![],
-                    }))
-                }
-            };
-        }
-
-        let dt = acc_args.expr_fields[0].data_type().clone();
-        if dt.is_null() {
-            return Ok(Box::new(NoopAccumulator::default()));
-        }
-
-        downcast_integer! {
-            dt => (helper, dt),
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "MedianAccumulator not supported for {} with {}",
-                acc_args.name,
-                dt,
-            ))),
-        }
+    fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        create_percentile_accumulator(
+            self.name(),
+            0.5,
+            args.expr_fields[0].data_type(),
+            args.is_distinct,
+        )
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct && !args.expr_fields[0].data_type().is_null()
+        self.percentile_cont.groups_accumulator_supported(args)
     }
 
     fn create_groups_accumulator(
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        let num_args = args.exprs.len();
-        assert_eq_or_internal_err!(
-            num_args,
-            1,
-            "median should only have 1 arg, but found num args:{}",
-            num_args
-        );
-
-        let dt = args.expr_fields[0].data_type().clone();
-
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(MedianGroupsAccumulator::<$t>::new($dt)))
-            };
-        }
-
-        downcast_integer! {
-            dt => (helper, dt),
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "MedianGroupsAccumulator not supported for {} with {}",
-                args.name,
-                dt,
-            ))),
-        }
+        create_percentile_groups_accumulator(
+            self.name(),
+            0.5,
+            args.expr_fields[0].data_type(),
+        )
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-/// The median accumulator accumulates the raw input values
-/// as `ScalarValue`s
-///
-/// The intermediate state is represented as a List of scalar values updated by
-/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
-/// in the final evaluation step so that we avoid expensive conversions and
-/// allocations during `update_batch`.
-struct MedianAccumulator<T: ArrowNumericType> {
-    data_type: DataType,
-    all_values: Vec<T::Native>,
-}
-
-impl<T: ArrowNumericType> Debug for MedianAccumulator<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MedianAccumulator({})", self.data_type)
-    }
-}
-
-impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // Convert `all_values` to `ListArray` and return a single List ScalarValue
-
-        // Build offsets
-        let offsets =
-            OffsetBuffer::new(ScalarBuffer::from(vec![0, self.all_values.len() as i32]));
-
-        // Build inner array
-        let values_array = PrimitiveArray::<T>::new(
-            ScalarBuffer::from(std::mem::take(&mut self.all_values)),
-            None,
-        )
-        .with_data_type(self.data_type.clone());
-
-        // Build the result list array
-        let list_array = ListArray::new(
-            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
-            offsets,
-            Arc::new(values_array),
-            None,
-        );
-
-        Ok(vec![ScalarValue::List(Arc::new(list_array))])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<T>();
-        let additional = values.len() - values.null_count();
-        self.all_values.try_reserve(additional).map_err(|e| {
-            exec_datafusion_err!(
-                "failed to reserve {additional} values for median accumulator: {e}"
-            )
-        })?;
-        if values.null_count() > 0 {
-            self.all_values.extend(values.iter().flatten());
-        } else {
-            // Fast path: no nulls, so the values buffer can be appended wholesale.
-            self.all_values.extend_from_slice(values.values());
-        }
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let array = states[0].as_list::<i32>();
-        for v in array.iter().flatten() {
-            self.update_batch(&[v])?
-        }
-        Ok(())
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        let median = calculate_median::<T>(&mut self.all_values);
-        ScalarValue::new_primitive::<T>(median, &self.data_type)
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let mut to_remove: HashMap<Hashable<T::Native>, usize, RandomState> =
-            HashMap::default();
-
-        let arr = values[0].as_primitive::<T>();
-        if arr.null_count() > 0 {
-            for value in arr.iter().flatten() {
-                *to_remove.entry(Hashable(value)).or_default() += 1;
-            }
-        } else {
-            // Fast path: no nulls, so skip the per-element validity check.
-            for value in arr.values().iter() {
-                *to_remove.entry(Hashable(*value)).or_default() += 1;
-            }
-        }
-
-        let mut i = 0;
-        while i < self.all_values.len() {
-            let k = Hashable(self.all_values[i]);
-            if let Some(count) = to_remove.get_mut(&k)
-                && *count > 0
-            {
-                self.all_values.swap_remove(i);
-                *count -= 1;
-                if *count == 0 {
-                    to_remove.remove(&k);
-                    if to_remove.is_empty() {
-                        break;
-                    }
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        // Retracting values that are not tracked means the accumulator state
-        // has diverged from the window frame; continuing would silently
-        // produce wrong results, so surface it as an error.
-        if !to_remove.is_empty() {
-            return internal_err!(
-                "median retract_batch: retracted value(s) not present in the window"
-            );
-        }
-        Ok(())
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
-    }
-}
-
-/// The median groups accumulator accumulates the raw input values
-///
-/// For calculating the accurate medians of groups, we need to store all values
-/// of groups before final evaluation.
-/// So values in each group will be stored in a `Vec<T>`, and the total group values
-/// will be actually organized as a `Vec<Vec<T>>`.
-#[derive(Debug)]
-struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
-    data_type: DataType,
-    group_values: Vec<Vec<T::Native>>,
-}
-
-impl<T: ArrowNumericType + Send> MedianGroupsAccumulator<T> {
-    pub fn new(data_type: DataType) -> Self {
-        Self {
-            data_type,
-            group_values: Vec::new(),
-        }
-    }
-}
-
-impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T> {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values[0].as_primitive::<T>();
-
-        // Push the `not nulls + not filtered` row into its group
-        self.group_values.resize(total_num_groups, Vec::new());
-        accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            |group_index, new_value| {
-                self.group_values[group_index].push(new_value);
-            },
-        );
-
-        Ok(())
-    }
-
-    fn merge_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[usize],
-        total_num_groups: usize,
-    ) -> Result<()> {
-        assert_eq!(values.len(), 1, "one argument to merge_batch");
-
-        // The merged values should be organized like as a `ListArray` which is nullable
-        // (input with nulls usually generated from `convert_to_state`), but `inner array` of
-        // `ListArray`  is `non-nullable`.
-        //
-        // Following is the possible and impossible input `values`:
-        //
-        // # Possible values
-        // ```text
-        //   group 0: [1, 2, 3]
-        //   group 1: null (list array is nullable)
-        //   group 2: [6, 7, 8]
-        //   ...
-        //   group n: [...]
-        // ```
-        //
-        // # Impossible values
-        // ```text
-        //   group x: [1, 2, null] (values in list array is non-nullable)
-        // ```
-        //
-        let input_group_values = values[0].as_list::<i32>();
-
-        // Ensure group values big enough
-        self.group_values.resize(total_num_groups, Vec::new());
-
-        // Extend values to related groups
-        // TODO: avoid using iterator of the `ListArray`, this will lead to
-        // many calls of `slice` of its ``inner array`, and `slice` is not
-        // so efficient(due to the calculation of `null_count` for each `slice`).
-        group_indices
-            .iter()
-            .zip(input_group_values.iter())
-            .for_each(|(&group_index, values_opt)| {
-                if let Some(values) = values_opt {
-                    let values = values.as_primitive::<T>();
-                    self.group_values[group_index].extend(values.values().iter());
-                }
-            });
-
-        Ok(())
-    }
-
-    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        // Emit values
-        let emit_group_values = emit_to.take_needed(&mut self.group_values);
-
-        // Build offsets
-        let mut offsets = Vec::with_capacity(self.group_values.len() + 1);
-        offsets.push(0);
-        let mut cur_len = 0_i32;
-        for group_value in &emit_group_values {
-            cur_len += group_value.len() as i32;
-            offsets.push(cur_len);
-        }
-        // TODO: maybe we can use `OffsetBuffer::new_unchecked` like what in `convert_to_state`,
-        // but safety should be considered more carefully here(and I am not sure if it can get
-        // performance improvement when we introduce checks to keep the safety...).
-        //
-        // Can see more details in:
-        // https://github.com/apache/datafusion/pull/13681#discussion_r1931209791
-        //
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
-
-        // Build inner array
-        let flatten_group_values =
-            emit_group_values.into_iter().flatten().collect::<Vec<_>>();
-        let group_values_array =
-            PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None)
-                .with_data_type(self.data_type.clone());
-
-        // Build the result list array
-        let result_list_array = ListArray::new(
-            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
-            offsets,
-            Arc::new(group_values_array),
-            None,
-        );
-
-        Ok(vec![Arc::new(result_list_array)])
-    }
-
-    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        // Emit values
-        let emit_group_values = emit_to.take_needed(&mut self.group_values);
-
-        // Calculate median for each group
-        let mut evaluate_result_builder =
-            PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
-        for mut values in emit_group_values {
-            let median = calculate_median::<T>(&mut values);
-            evaluate_result_builder.append_option(median);
-        }
-
-        Ok(Arc::new(evaluate_result_builder.finish()))
-    }
-
-    fn convert_to_state(
-        &self,
-        values: &[ArrayRef],
-        opt_filter: Option<&BooleanArray>,
-    ) -> Result<Vec<ArrayRef>> {
-        assert_eq!(values.len(), 1, "one argument to merge_batch");
-
-        let input_array = values[0].as_primitive::<T>();
-
-        // Directly convert the input array to states, each row will be
-        // seen as a respective group.
-        // For detail, the `input_array` will be converted to a `ListArray`.
-        // And if row is `not null + not filtered`, it will be converted to a list
-        // with only one element; otherwise, this row in `ListArray` will be set
-        // to null.
-
-        // Reuse values buffer in `input_array` to build `values` in `ListArray`
-        let values = PrimitiveArray::<T>::new(input_array.values().clone(), None)
-            .with_data_type(self.data_type.clone());
-
-        // `offsets` in `ListArray`, each row as a list element
-        let offset_end = i32::try_from(input_array.len()).map_err(|e| {
-            internal_datafusion_err!(
-                "cast array_len to i32 failed in convert_to_state of group median, err:{e:?}"
-            )
-        })?;
-        let offsets = (0..=offset_end).collect::<Vec<_>>();
-        // Safety: all checks in `OffsetBuffer::new` are ensured to pass
-        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
-
-        // `nulls` for converted `ListArray`
-        let nulls = filtered_null_mask(opt_filter, input_array);
-
-        let converted_list_array = ListArray::new(
-            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
-            offsets,
-            Arc::new(values),
-            nulls,
-        );
-
-        Ok(vec![Arc::new(converted_list_array)])
-    }
-    fn size(&self) -> usize {
-        self.group_values
-            .iter()
-            .map(|values| values.capacity() * size_of::<T::Native>())
-            .sum::<usize>()
-            // account for size of self.group_values too
-            + self.group_values.capacity() * size_of::<Vec<T::Native>>()
-            + size_of::<Vec<Vec<T::Native>>>()
-    }
-}
-
-#[derive(Debug)]
-struct DistinctMedianAccumulator<T: ArrowNumericType> {
-    distinct_values: GenericDistinctBuffer<T>,
-    data_type: DataType,
-}
-
-impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        self.distinct_values.state()
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.distinct_values.update_batch(values)
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.distinct_values.merge_batch(states)
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut d: Vec<T::Native> =
-            self.distinct_values.values.iter().map(|v| v.0).collect();
-        let median = calculate_median::<T>(&mut d);
-        ScalarValue::new_primitive::<T>(median, &self.data_type)
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self) + self.distinct_values.size()
-    }
-}
-
-/// Get maximum entry in the slice,
-fn slice_max<T>(array: &[T::Native]) -> T::Native
-where
-    T: ArrowPrimitiveType,
-    T::Native: PartialOrd, // Ensure the type supports PartialOrd for comparison
-{
-    // Make sure that, array is not empty.
-    debug_assert!(!array.is_empty());
-    // `.unwrap()` is safe here as the array is supposed to be non-empty
-    *array
-        .iter()
-        .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Less))
-        .unwrap()
-}
-
-fn calculate_median<T: ArrowNumericType>(values: &mut [T::Native]) -> Option<T::Native> {
-    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
-
-    let len = values.len();
-    if len == 0 {
-        None
-    } else if len % 2 == 0 {
-        let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
-        // Get the maximum of the low (left side after bi-partitioning)
-        let left_max = slice_max::<T>(low);
-        // Calculate median as the average of the two middle values.
-        // Use checked arithmetic to detect overflow and fall back to safe formula.
-        let two = T::Native::usize_as(2);
-        let median = match left_max.add_checked(*high) {
-            Ok(sum) => sum.div_wrapping(two),
-            Err(_) => {
-                // Overflow detected - use safe midpoint formula:
-                // a/2 + b/2 + ((a%2 + b%2) / 2)
-                // This avoids overflow by dividing before adding.
-                let half_left = left_max.div_wrapping(two);
-                let half_right = (*high).div_wrapping(two);
-                let rem_left = left_max.mod_wrapping(two);
-                let rem_right = (*high).mod_wrapping(two);
-                // The sum of remainders (0, 1, or 2 for unsigned; -2 to 2 for signed)
-                // divided by 2 gives the correction factor (0 or 1 for unsigned; -1, 0, or 1 for signed)
-                let correction = rem_left.add_wrapping(rem_right).div_wrapping(two);
-                half_left.add_wrapping(half_right).add_wrapping(correction)
-            }
-        };
-        Some(median)
-    } else {
-        let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);
-        Some(*median)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::Float64Array;
-
-    fn median_accumulator() -> MedianAccumulator<Float64Type> {
-        MedianAccumulator {
-            data_type: DataType::Float64,
-            all_values: vec![],
-        }
-    }
-
-    #[test]
-    fn retract_batch_errors_on_untracked_value() {
-        let mut acc = median_accumulator();
-        let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
-        acc.update_batch(std::slice::from_ref(&values)).unwrap();
-
-        let retract: ArrayRef = Arc::new(Float64Array::from(vec![3.0]));
-        let err = acc
-            .retract_batch(std::slice::from_ref(&retract))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("not present in the window"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn update_batch_with_and_without_nulls_agree() {
-        // The null-free fast path must accumulate the same values as the
-        // general path.
-        let dense: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
-        let sparse: ArrayRef = Arc::new(Float64Array::from(vec![
-            Some(1.0),
-            None,
-            Some(2.0),
-            None,
-            Some(3.0),
-        ]));
-
-        let mut dense_acc = median_accumulator();
-        dense_acc
-            .update_batch(std::slice::from_ref(&dense))
-            .unwrap();
-        let mut sparse_acc = median_accumulator();
-        sparse_acc
-            .update_batch(std::slice::from_ref(&sparse))
-            .unwrap();
-
-        assert_eq!(dense_acc.all_values, sparse_acc.all_values);
     }
 }
