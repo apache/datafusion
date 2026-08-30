@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryBuilder, StringArray, StringArrayType,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, StringArray, StringArrayType,
 };
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
