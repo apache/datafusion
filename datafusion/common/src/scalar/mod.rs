@@ -2861,17 +2861,14 @@ impl ScalarValue {
             ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
                 {
                     let array = scalars
-                        .map(|sv| {
-                            if let ScalarValue::$SCALAR_TY(v, _) = sv {
-                                Ok(v)
-                            } else {
-                                _exec_err!(
-                                    "Inconsistent types in ScalarValue::iter_to_array. \
-                                    Expected {:?}, got {:?}",
-                                    data_type,
-                                    sv
-                                )
-                            }
+                        .map(|sv| match sv {
+                            ScalarValue::$SCALAR_TY(v, tz) if &tz == $TZ => Ok(v),
+                            sv => _exec_err!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected {:?}, got {:?}",
+                                data_type,
+                                sv
+                            ),
                         })
                         .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array.with_timezone_opt($TZ.clone()))
@@ -3161,15 +3158,16 @@ impl ScalarValue {
             }
             DataType::FixedSizeBinary(size) => {
                 let array = scalars
-                    .map(|sv| {
-                        if let ScalarValue::FixedSizeBinary(_, v) = sv {
+                    .map(|sv| match sv {
+                        ScalarValue::FixedSizeBinary(inner_size, v)
+                            if inner_size == *size =>
+                        {
                             Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected {data_type}, got {sv:?}"
-                            )
                         }
+                        sv => _exec_err!(
+                            "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected {data_type}, got {sv:?}"
+                        ),
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
@@ -3220,10 +3218,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal32(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                ScalarValue::Decimal32(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal32(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal32Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -3238,10 +3242,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal64(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                ScalarValue::Decimal64(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal64(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal64Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -3256,10 +3266,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal128(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                ScalarValue::Decimal128(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal128(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal128Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -3274,12 +3290,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal256(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!(
-                        "Expected ScalarValue::Decimal256 element. Received {s:?}"
-                    )
+                ScalarValue::Decimal256(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal256(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal256Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -7660,6 +7680,43 @@ mod tests {
         let result = ScalarValue::iter_to_array(scalars).unwrap_err();
         assert!(result.to_string().contains("Inconsistent types in ScalarValue::iter_to_array. Expected Boolean, got Int32(5)"),
                 "{}", result);
+    }
+
+    #[test]
+    fn scalar_iter_to_array_mismatched_parameterized_types() {
+        use ScalarValue::*;
+
+        let cases = [
+            (
+                "decimal precision",
+                vec![Decimal128(None, 10, 2), Decimal128(None, 11, 2)],
+            ),
+            (
+                "decimal scale",
+                vec![Decimal128(None, 10, 2), Decimal128(None, 10, 3)],
+            ),
+            (
+                "timestamp timezone",
+                vec![
+                    TimestampNanosecond(None, None),
+                    TimestampNanosecond(None, Some(Arc::from("UTC"))),
+                ],
+            ),
+            (
+                "fixed-size binary width",
+                vec![FixedSizeBinary(1, None), FixedSizeBinary(2, None)],
+            ),
+        ];
+
+        for (name, scalars) in cases {
+            let error = ScalarValue::iter_to_array(scalars).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Inconsistent types in ScalarValue::iter_to_array"),
+                "{name}: unexpected error: {error}"
+            );
+        }
     }
 
     #[test]

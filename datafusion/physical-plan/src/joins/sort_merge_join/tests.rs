@@ -33,6 +33,7 @@ use super::bitwise_stream::BitwiseSortMergeJoinStream;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
+use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
 use crate::test::exec::BarrierExec;
@@ -359,6 +360,166 @@ async fn join_collect_batch_size_equals_two(
     let stream = join.execute(0, task_ctx)?;
     let batches = common::collect(stream).await?;
     Ok((columns, batches))
+}
+
+fn join_and_projection_for_pushdown(
+    filter: Option<JoinFilter>,
+) -> Result<(Arc<SortMergeJoinExec>, ProjectionExec)> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![4, 5, 5]),
+        ("c1", &vec![7, 8, 9]),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20, 30]),
+        ("b2", &vec![4, 5, 5]),
+        ("c2", &vec![70, 8, 90]),
+    );
+    let on = vec![(
+        Arc::new(Column::new("b1", 1)) as _,
+        Arc::new(Column::new("b2", 1)) as _,
+    )];
+    let join = Arc::new(SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        filter,
+        Inner,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?);
+    let input: Arc<dyn ExecutionPlan> = Arc::clone(&join) as _;
+    let projection = ProjectionExec::try_new(
+        [
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c1", 2)),
+                alias: "c1".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("b1", 1)),
+                alias: "b1".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c2", 5)),
+                alias: "c2".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("b2", 4)),
+                alias: "b2".to_string(),
+            },
+        ],
+        input,
+    )?;
+
+    Ok((join, projection))
+}
+
+/// `c1 < c2`, referencing the last column of each child.
+fn filter_for_pushdown() -> JoinFilter {
+    JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    )
+}
+
+#[test]
+fn projection_pushdown_remaps_filter() -> Result<()> {
+    let (join, projection) =
+        join_and_projection_for_pushdown(Some(filter_for_pushdown()))?;
+
+    let swapped = join
+        .try_swapping_with_projection(&projection)?
+        .expect("projection should be pushed below the join");
+    let swapped = swapped
+        .downcast_ref::<SortMergeJoinExec>()
+        .expect("swapped plan should be a SortMergeJoinExec");
+
+    let (left_on, right_on) = &swapped.on()[0];
+    assert_eq!(left_on.downcast_ref::<Column>().unwrap().index(), 1);
+    assert_eq!(right_on.downcast_ref::<Column>().unwrap().index(), 1);
+    assert_eq!(
+        swapped.filter().as_ref().unwrap().column_indices(),
+        &[
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn projection_pushdown_remaps_filter_execute() -> Result<()> {
+    let (join, projection) =
+        join_and_projection_for_pushdown(Some(filter_for_pushdown()))?;
+    let expected_schema = projection.schema();
+
+    let swapped = join
+        .try_swapping_with_projection(&projection)?
+        .expect("projection should be pushed below the join");
+    assert!(
+        swapped.downcast_ref::<SortMergeJoinExec>().is_some(),
+        "projection should not be embedded in the join"
+    );
+    assert_eq!(swapped.schema(), expected_schema);
+
+    // The pushed-down children keep only `c*` and `b*`, so the filter must run
+    // against the remapped indices: `c1 < c2` filters out the (8, 8) and (9, 8)
+    // pairs of the `b1 = b2 = 5` group.
+    let batches =
+        common::collect(swapped.execute(0, Arc::new(TaskContext::default()))?).await?;
+
+    // The output order is important as SMJ preserves sortedness
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+
+    | c1 | b1 | c2 | b2 |
+    +----+----+----+----+
+    | 7  | 4  | 70 | 4  |
+    | 8  | 5  | 90 | 5  |
+    | 9  | 5  | 90 | 5  |
+    +----+----+----+----+
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn projection_pushdown_without_filter() -> Result<()> {
+    let (join, projection) = join_and_projection_for_pushdown(None)?;
+
+    let swapped = join
+        .try_swapping_with_projection(&projection)?
+        .expect("projection should be pushed below the join");
+    let swapped = swapped
+        .downcast_ref::<SortMergeJoinExec>()
+        .expect("swapped plan should be a SortMergeJoinExec");
+
+    assert!(swapped.filter().is_none());
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -4024,6 +4185,169 @@ async fn join_filtered_with_multiple_buffered_batches() -> Result<()> {
     Ok(())
 }
 
+/// A single key group spanning many buffered batches, re-scanned once per
+/// streamed row.
+///
+/// `pair_streamed_row_with_group` walks the group from buffered batch 0 for
+/// *every* streamed row (`scanning_reset`), and freezes whenever `batch_size`
+/// pairs have accumulated -- which happens mid-scan when `batch_size` is not a
+/// multiple of the group size. So one `freeze_streamed()` can see chunks whose
+/// `buffered_batch_idx` wraps (`.. 4, 5, 0, 1 ..`) or never reaches 0 at all,
+/// rather than a single ascending run. `materialize_right_columns` maps those
+/// indices to `interleave` source slots, so it must not assume either.
+///
+/// 6 one-row buffered batches x 2 streamed rows at `batch_size` 5 produces
+/// freezes covering batches `[0,1,2,3,4]`, `[5,0,1,2,3]` (wrapped) and
+/// `[4,5]` (no zero).
+#[tokio::test]
+async fn join_with_group_spanning_batches_rescanned_per_streamed_row() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_l", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_r", DataType::Int32, false),
+    ]));
+
+    // Two streamed rows sharing one key, so the buffered group is scanned twice.
+    let left = build_table_from_batches(vec![RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1])),
+            Arc::new(Int32Array::from(vec![10, 20])),
+        ],
+    )?]);
+
+    // One row per batch, all the same key: the group spans all 6 batches.
+    let right_batches: Vec<RecordBatch> = (1..=6)
+        .map(|i| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(Int32Array::from(vec![i * 100])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("key", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("key", &right.schema())?) as _,
+    )];
+
+    // 5 does not divide the 6-row group, so freezes land mid-scan.
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(5)),
+    );
+    let join = join(left, right, on, Inner)?;
+    let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 1   | 10    | 1   | 100   |
+    | 1   | 10    | 1   | 200   |
+    | 1   | 10    | 1   | 300   |
+    | 1   | 10    | 1   | 400   |
+    | 1   | 10    | 1   | 500   |
+    | 1   | 10    | 1   | 600   |
+    | 1   | 20    | 1   | 100   |
+    | 1   | 20    | 1   | 200   |
+    | 1   | 20    | 1   | 300   |
+    | 1   | 20    | 1   | 400   |
+    | 1   | 20    | 1   | 500   |
+    | 1   | 20    | 1   | 600   |
+    +-----+-------+-----+-------+
+    ");
+
+    Ok(())
+}
+
+/// A wrapped multi-source freeze that also carries a null buffered index.
+///
+/// `materialize_right_columns` has two independent offsets in play on the
+/// interleave path: `batch_idx - min_batch_idx` addresses the source table,
+/// and `+ source_offset` shifts past the null sentinel that occupies
+/// `interleave` slot 0. Only their combination is interesting, and the two
+/// halves are awkward to get into the same freeze: `freeze_dequeuing_buffered`
+/// freezes before popping consumed batches, so a null-joined streamed row
+/// normally lands in its own single-source freeze.
+///
+/// The one shape that combines them puts the unmatched streamed row *before*
+/// a key group spanning several batches, with two streamed rows matching that
+/// group so the scan wraps:
+///
+///   chunk sequence [0, 1, 2, 0, 1, 2], chunk 0 carrying the null
+///
+/// Streamed key 5 finds no buffered match, so `null_join_streamed_row` appends
+/// a null pair at scan position 0; the two streamed 10s then each re-walk
+/// batches 0..2 (`scanning_reset`), wrapping inside the same freeze.
+#[tokio::test]
+async fn join_wrapped_multi_source_freeze_with_null_buffered_index() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_l", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("val_r", DataType::Int32, false),
+    ]));
+
+    // Key 5 has no buffered match; the two 10s share one group.
+    let left = build_table_from_batches(vec![RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![5, 10, 10])),
+            Arc::new(Int32Array::from(vec![50, 101, 102])),
+        ],
+    )?]);
+
+    // One row per batch, all key 10: the group spans all three batches.
+    let right_batches: Vec<RecordBatch> = [1000, 2000, 3000]
+        .into_iter()
+        .map(|v| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![10])),
+                    Arc::new(Int32Array::from(vec![v])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let right = build_table_from_batches(right_batches);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("key", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("key", &right.schema())?) as _,
+    )];
+
+    let (_, batches) = join_collect(left, right, on, Left).await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +-----+-------+-----+-------+
+    | key | val_l | key | val_r |
+    +-----+-------+-----+-------+
+    | 10  | 101   | 10  | 1000  |
+    | 10  | 101   | 10  | 2000  |
+    | 10  | 101   | 10  | 3000  |
+    | 10  | 102   | 10  | 1000  |
+    | 10  | 102   | 10  | 2000  |
+    | 10  | 102   | 10  | 3000  |
+    | 5   | 50    |     |       |
+    +-----+-------+-----+-------+
+    ");
+
+    Ok(())
+}
+
 /// Returns the column names on the schema
 fn columns(schema: &Schema) -> Vec<String> {
     schema.fields().iter().map(|f| f.name().clone()).collect()
@@ -4114,6 +4438,109 @@ impl RecordBatchStream for PendingStream {
 /// Helper: collect all output from a BitwiseSortMergeJoinStream.
 async fn collect_stream(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
     common::collect(stream).await
+}
+
+#[rstest::rstest]
+#[case::empty_inner(true, false)]
+#[case::matching_key(false, false)]
+#[case::matching_key_with_filter(false, true)]
+#[tokio::test]
+async fn bitwise_emits_completed_batches_before_pending_outer(
+    #[values(LeftMark, RightMark)] join_type: JoinType,
+    #[case] empty_inner: bool,
+    #[case] with_filter: bool,
+) -> Result<()> {
+    let outer_batches = vec![
+        build_table_i32(
+            ("id", &vec![0, 1]),
+            ("key", &vec![1, 1]),
+            ("value", &vec![10, 20]),
+        ),
+        build_table_i32(
+            ("id", &vec![2, 3]),
+            ("key", &vec![1, 1]),
+            ("value", &vec![10, 20]),
+        ),
+    ];
+    let inner_batch = if empty_inner {
+        RecordBatch::new_empty(outer_batches[0].schema())
+    } else {
+        build_table_i32(("id", &vec![0]), ("key", &vec![1]), ("value", &vec![10]))
+    };
+    let outer = Box::pin(PendingStream::new(outer_batches.clone(), vec![false, true]));
+    let inner = Box::pin(PendingStream::new(vec![inner_batch], vec![false]));
+    let filter = with_filter.then(|| {
+        JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left_value", 0)),
+                Operator::Eq,
+                Arc::new(Column::new("right_value", 1)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 2,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 2,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("left_value", DataType::Int32, false),
+                Field::new("right_value", DataType::Int32, false),
+            ])),
+        )
+    });
+    let mut fields = outer.schema().fields().to_vec();
+    fields.push(Arc::new(Field::new("mark", DataType::Boolean, false)));
+    let schema = Arc::new(Schema::new(fields));
+    let metrics = ExecutionPlanMetricsSet::new();
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(inner.schema(), &metrics);
+    let mut stream = BitwiseSortMergeJoinStream::try_new(
+        Arc::clone(&schema),
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        outer,
+        inner,
+        vec![Arc::new(Column::new("key", 1))],
+        vec![Arc::new(Column::new("key", 1))],
+        filter,
+        join_type,
+        2,
+        0,
+        &metrics,
+        reservation,
+        spill_manager,
+        runtime_env,
+    )?;
+
+    // The first outer batch already fills an output batch. Do not wait for the next
+    // outer batch, even when draining unmatched rows or continuing the same key group.
+    let first = match futures::poll!(stream.next()) {
+        Poll::Ready(Some(batch)) => batch?,
+        other => panic!("Completed output must precede pending outer input: {other:?}"),
+    };
+    let mut output = vec![first];
+    output.extend(collect_stream(stream).await?);
+
+    let expected = outer_batches
+        .iter()
+        .map(|batch| {
+            let mut columns = batch.columns().to_vec();
+            columns.push(Arc::new(BooleanArray::from(vec![
+                !empty_inner,
+                !empty_inner && !with_filter,
+            ])));
+            RecordBatch::try_new(Arc::clone(&schema), columns)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        arrow::compute::concat_batches(&schema, &output)?,
+        arrow::compute::concat_batches(&schema, &expected)?,
+    );
+    Ok(())
 }
 
 // ==================== join_time metric tests ====================
@@ -6066,5 +6493,181 @@ async fn an_empty_projection_keeps_the_rows() -> Result<()> {
     let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
     assert_eq!(rows, 3);
 
+    Ok(())
+}
+
+/// Number of distinct join keys used by the streamed-order regression tests.
+const ORDER_KEYS: i32 = 7;
+
+/// Streamed side of the streamed-order tests: one row per key, ascending.
+fn order_unique_side(names: [&str; 3]) -> RecordBatch {
+    let keys: Vec<i32> = (0..ORDER_KEYS).collect();
+    build_table_i32((names[0], &keys), (names[1], &keys), (names[2], &keys))
+}
+
+/// Buffered side of the streamed-order tests.
+///
+/// Keys 0..5 carry 20 rows each — wide enough that the deferred-filter gate
+/// fires once per key and leaves a partial batch sitting in `output` — while
+/// keys 5 and 6 carry a single row each, so their output only ever leaves
+/// through the final flush. Mixing the two paths is what exposes reordering
+/// between them.
+fn order_skewed_side(names: [&str; 3]) -> RecordBatch {
+    let (mut a, mut b, mut c) = (vec![], vec![], vec![]);
+    for k in 0..ORDER_KEYS {
+        for j in 0..if k < 5 { 20 } else { 1 } {
+            a.push(k * 100 + j);
+            b.push(k);
+            c.push(j);
+        }
+    }
+    build_table_i32((names[0], &a), (names[1], &b), (names[2], &c))
+}
+
+/// Run a deferred-filtered outer join over the skew shape above and return
+/// the streamed key column of the output, concatenated across batches.
+///
+/// The filter is `<filter_column> < filter_lt` over the intermediate schema.
+async fn collect_streamed_keys(
+    join_type: JoinType,
+    filter_column: ColumnIndex,
+    filter_lt: i32,
+) -> Result<Vec<i32>> {
+    // RIGHT streams its *right* input (`maintains_input_order = [false, true]`),
+    // so the duplicate groups always belong on whichever side is buffered.
+    let (left, right) = if join_type == Right {
+        (
+            order_skewed_side(["a1", "b1", "c1"]),
+            order_unique_side(["a2", "b2", "c2"]),
+        )
+    } else {
+        (
+            order_unique_side(["a1", "b1", "c1"]),
+            order_skewed_side(["a2", "b2", "c2"]),
+        )
+    };
+
+    let (left_schema, right_schema) = (left.schema(), right.schema());
+    let left = TestMemoryExec::try_new_exec(&[vec![left]], left_schema, None)?;
+    let right = TestMemoryExec::try_new_exec(&[vec![right]], right_schema, None)?;
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(filter_lt)))),
+        )) as PhysicalExprRef,
+        vec![filter_column],
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)])),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        join_type,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?;
+
+    // A small batch size keeps the gate firing often enough to interleave the
+    // two output paths.
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(8)),
+    );
+    let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+    // Output is always [left cols.., right cols..], so the streamed key is
+    // `a2` at index 3 for RIGHT and `a1` at index 0 otherwise.
+    let key_col = if join_type == Right { 3 } else { 0 };
+    Ok(batches
+        .iter()
+        .flat_map(|b| {
+            b.column(key_col)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect())
+}
+
+/// `a1 < 0`, which never passes — so every streamed row is emitted
+/// null-joined by the deferred-filtering pipeline.
+fn never_passing_filter() -> (ColumnIndex, i32) {
+    (
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        },
+        0,
+    )
+}
+
+/// Regression test: deferred-filtered outer joins must not reorder their
+/// output.
+///
+/// `LEFT JOIN` advertises `maintains_input_order = [true, false]`, so the
+/// output must stay ordered on the streamed side. The final flush used to
+/// emit its batch directly instead of through the `output` coalescer, so any
+/// rows still buffered there from an earlier flush were emitted *after* it.
+#[tokio::test]
+async fn left_join_with_filter_preserves_streamed_order() -> Result<()> {
+    let (filter_column, filter_lt) = never_passing_filter();
+    let streamed_keys = collect_streamed_keys(Left, filter_column, filter_lt).await?;
+
+    assert_eq!(
+        streamed_keys,
+        (0..ORDER_KEYS).collect::<Vec<_>>(),
+        "LEFT JOIN output must stay ordered on the streamed side"
+    );
+    Ok(())
+}
+
+/// Mirror of [`left_join_with_filter_preserves_streamed_order`] for
+/// `RIGHT JOIN`, which advertises `maintains_input_order = [false, true]` and
+/// therefore streams its *right* input.
+#[tokio::test]
+async fn right_join_with_filter_preserves_streamed_order() -> Result<()> {
+    let (filter_column, filter_lt) = never_passing_filter();
+    let streamed_keys = collect_streamed_keys(Right, filter_column, filter_lt).await?;
+
+    assert_eq!(
+        streamed_keys,
+        (0..ORDER_KEYS).collect::<Vec<_>>(),
+        "RIGHT JOIN output must stay ordered on the streamed side"
+    );
+    Ok(())
+}
+
+/// Same shape, but with a filter that passes for *some* rows. The all-fail
+/// cases above only exercise the null-joined path; here matched rows survive
+/// the filter too, so the output mixes filter-passing and null-joined rows.
+#[tokio::test]
+async fn left_join_with_partial_filter_preserves_streamed_order() -> Result<()> {
+    // `c2 < 3`: keys 0..5 keep three of their twenty buffered rows, keys 5
+    // and 6 keep their single row.
+    let filter_column = ColumnIndex {
+        index: 2,
+        side: JoinSide::Right,
+    };
+    let streamed_keys = collect_streamed_keys(Left, filter_column, 3).await?;
+
+    let expected: Vec<i32> = (0..ORDER_KEYS)
+        .flat_map(|k| std::iter::repeat_n(k, if k < 5 { 3 } else { 1 }))
+        .collect();
+    assert_eq!(
+        streamed_keys, expected,
+        "LEFT JOIN output must stay ordered on the streamed side, \
+         with every surviving match present exactly once"
+    );
     Ok(())
 }
