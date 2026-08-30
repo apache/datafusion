@@ -685,8 +685,6 @@ impl StreamingFanoutState {
             (receiver, state),
             |(mut receiver, state)| async move {
                 let item = receiver.stream.next().await?;
-                let previous = receiver.queued.fetch_sub(1, Ordering::SeqCst);
-                debug_assert!(previous > 0);
                 Some((item, (receiver, state)))
             },
         );
@@ -696,7 +694,7 @@ impl StreamingFanoutState {
 
 #[derive(Debug)]
 struct FanoutPartition {
-    senders: Mutex<Option<Vec<FanoutSender>>>,
+    senders: Mutex<Option<Vec<Sender<Result<RecordBatch>>>>>,
     receivers: Vec<Mutex<Option<FanoutReceiver>>>,
     task: Mutex<Option<SpawnedTask<()>>>,
 }
@@ -710,14 +708,9 @@ impl FanoutPartition {
                 Arc::clone(schema),
                 CHANNEL_CAPACITY,
             );
-            let queued = Arc::new(AtomicUsize::new(0));
-            senders.push(FanoutSender {
-                sender: builder.tx(),
-                queued: Arc::clone(&queued),
-            });
+            senders.push(builder.tx());
             receivers.push(Mutex::new(Some(FanoutReceiver {
                 stream: builder.build(),
-                queued,
             })));
         }
         Self {
@@ -759,15 +752,8 @@ impl FanoutPartition {
     }
 }
 
-#[derive(Debug)]
-struct FanoutSender {
-    sender: Sender<Result<RecordBatch>>,
-    queued: Arc<AtomicUsize>,
-}
-
 struct FanoutReceiver {
     stream: SendableRecordBatchStream,
-    queued: Arc<AtomicUsize>,
 }
 
 impl fmt::Debug for FanoutReceiver {
@@ -778,7 +764,7 @@ impl fmt::Debug for FanoutReceiver {
 
 async fn run_producer(
     mut input: SendableRecordBatchStream,
-    mut senders: Vec<FanoutSender>,
+    mut senders: Vec<Sender<Result<RecordBatch>>>,
     metrics: Arc<FanoutMetrics>,
 ) {
     while let Some(item) = input.next().await {
@@ -795,20 +781,19 @@ async fn run_producer(
 }
 
 async fn broadcast(
-    senders: &mut Vec<FanoutSender>,
+    senders: &mut Vec<Sender<Result<RecordBatch>>>,
     item: &SharedResult<RecordBatch>,
     max_buffered_batches: &AtomicUsize,
 ) {
     let mut index = 0;
     while index < senders.len() {
-        let sender = senders[index].sender.clone();
-        let queued = Arc::clone(&senders[index].queued);
+        let sender = senders[index].clone();
         let Ok(permit) = sender.reserve_owned().await else {
             senders.swap_remove(index);
             continue;
         };
 
-        let buffered = queued.fetch_add(1, Ordering::SeqCst) + 1;
+        let buffered = senders[index].max_capacity() - senders[index].capacity();
         max_buffered_batches.fetch_max(buffered, Ordering::SeqCst);
         permit.send(match item {
             Ok(batch) => Ok(batch.clone()),
