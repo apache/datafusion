@@ -242,6 +242,8 @@ impl ScalarUDFImpl for SparkEncode {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [value_type, charset_type] = take_function_args(self.name(), arg_types)?;
 
+        // Preserve binary inputs because Arrow's binary-to-string cast rejects malformed UTF-8,
+        // while Spark's `encode` replaces malformed bytes with U+FFFD.
         let value_type = match value_type {
             DataType::Utf8
             | DataType::LargeUtf8
