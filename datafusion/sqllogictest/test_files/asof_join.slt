@@ -256,6 +256,64 @@ physical_plan
 04)--SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Deterministic predicates that reference only the left input can run before
+# matching. Right-only and mixed predicates must remain above the ASOF join.
+query TT
+EXPLAIN SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+WHERE l.id > 1 AND r.val <> 'a2' AND l.id <> length(r.val);
+----
+logical_plan
+01)Filter: r.val != Utf8View("a2") AND l.id != character_length(r.val)
+02)--Projection: l.id, r.val
+03)----AsOf Join: match=[l.ts >= r.ts], constraint=On, on=[l.grp = r.grp]
+04)------SubqueryAlias: l
+05)--------Filter: asof_left.id > Int32(1)
+06)----------TableScan: asof_left projection=[id, grp, ts]
+07)------SubqueryAlias: r
+08)--------TableScan: asof_right projection=[grp, ts, val]
+physical_plan
+01)FilterExec: val@1 != a2 AND id@0 != character_length(val@1)
+02)--AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts], projection=[id@0, val@5]
+03)----SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[true]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------FilterExec: id@0 > 1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
+08)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Volatile predicates retain their evaluation point even when they reference
+# only the left input, while independent deterministic conjuncts still move.
+query TT
+EXPLAIN SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+WHERE l.id > 1 AND l.id + random() > 0;
+----
+logical_plan
+01)Filter: CAST(l.id AS Float64) + random() > Float64(0)
+02)--Projection: l.id, r.val
+03)----AsOf Join: match=[l.ts >= r.ts], constraint=On, on=[l.grp = r.grp]
+04)------SubqueryAlias: l
+05)--------Filter: asof_left.id > Int32(1)
+06)----------TableScan: asof_left projection=[id, grp, ts]
+07)------SubqueryAlias: r
+08)--------TableScan: asof_right projection=[grp, ts, val]
+physical_plan
+01)FilterExec: CAST(id@0 AS Float64) + random() > 0
+02)--AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts], projection=[id@0, val@5]
+03)----SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[true]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------FilterExec: id@0 > 1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
+08)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # An ASOF join emits each left row exactly once, so the primary key from
 # asof_left remains unique. Because the outer LEFT JOIN does not use columns
 # from the ASOF side, it can be removed entirely.
