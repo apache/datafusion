@@ -43,7 +43,7 @@ use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec,
+    AsExecutionPlan, ComposedNamedPhysicalExtensionCodec, PhysicalExtensionCodec,
     PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
@@ -58,12 +58,9 @@ pub fn composed_extension_codec() -> Result<()> {
     });
     let ctx = SessionContext::new();
 
-    // Position in this list is important as it will be used for decoding.
-    // If new codec is added it should go to last position.
-    let composed_codec = ComposedPhysicalExtensionCodec::new(vec![
-        Arc::new(ParentPhysicalExtensionCodec {}),
-        Arc::new(ChildPhysicalExtensionCodec {}),
-    ]);
+    let composed_codec = ComposedNamedPhysicalExtensionCodec::default()
+        .with_type_named_codec(ParentPhysicalExtensionCodec {})?
+        .with_type_named_codec(ChildPhysicalExtensionCodec {})?;
 
     // Serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =

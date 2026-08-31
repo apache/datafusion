@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -25,8 +26,8 @@ use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
-    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    DataFusionError, Result, config_err, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err,
 };
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
@@ -1771,6 +1772,19 @@ struct DataEncoderTuple {
     pub blob: Vec<u8>,
 }
 
+/// NamedDataEncoderTuple captures the name of the encoder
+/// in the codec map that was used to encode the data and actual encoded data
+#[derive(Clone, PartialEq, prost::Message)]
+struct NamedDataEncoderTuple {
+    /// The name of the encoder used to encode data
+    /// (to be used for decoding)
+    #[prost(string, tag = 1)]
+    pub name: String,
+
+    #[prost(bytes, tag = 2)]
+    pub blob: Vec<u8>,
+}
+
 pub struct DefaultPhysicalProtoConverter {}
 
 impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
@@ -1951,11 +1965,16 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
 
 /// A PhysicalExtensionCodec that tries one of multiple inner codecs
 /// until one works
+#[deprecated(
+    since = "56.0.0",
+    note = "Please use `ComposedNamedPhysicalExtensionCodec`"
+)]
 #[derive(Debug)]
 pub struct ComposedPhysicalExtensionCodec {
     codecs: Vec<Arc<dyn PhysicalExtensionCodec>>,
 }
 
+#[expect(deprecated)]
 impl ComposedPhysicalExtensionCodec {
     // Position in this codecs list is important as it will be used for decoding.
     // If new codec is added it should go to last position.
@@ -2017,7 +2036,148 @@ impl ComposedPhysicalExtensionCodec {
     }
 }
 
+#[expect(deprecated)]
 impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.decode_protobuf(buf, |codec, data| {
+            codec.try_decode(data, inputs, ctx, proto_converter)
+        })
+    }
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| {
+            codec.try_encode(Arc::clone(&node), data, proto_converter)
+        })
+    }
+
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        self.decode_protobuf(buf, |codec, data| codec.try_decode_udf(name, data))
+    }
+
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| codec.try_encode_udf(node, data))
+    }
+
+    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        self.decode_protobuf(buf, |codec, data| codec.try_decode_udaf(name, data))
+    }
+
+    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+        self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
+    }
+}
+
+/// A PhysicalExtensionCodec that tries one of multiple inner codecs until one works.
+/// The name of the codec that successfully encoded an [`ExecutionPlan`] is stored in the
+/// encoded payload, and the codec with that exact name will be used for decoding.
+#[derive(Default, Debug)]
+pub struct ComposedNamedPhysicalExtensionCodec {
+    codecs: HashMap<Cow<'static, str>, Arc<dyn PhysicalExtensionCodec>>,
+}
+
+impl ComposedNamedPhysicalExtensionCodec {
+    /// Registers a new [`PhysicalExtensionCodec`] with a name extracted from its Rust type.
+    /// For example, if the implementation is called `MyPhysicalExtensionCodec`, then the codec
+    /// will be registered with the "MyPhysicalExtensionCodec" name.
+    pub fn with_type_named_codec(
+        self,
+        codec: impl PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        self.with_codec(std::any::type_name_of_val(&codec), Arc::new(codec))
+    }
+
+    /// Registers a new [`PhysicalExtensionCodec`] with the provided name.
+    pub fn with_codec(
+        mut self,
+        name: impl Into<Cow<'static, str>>,
+        codec: Arc<dyn PhysicalExtensionCodec>,
+    ) -> Result<Self> {
+        let name = name.into();
+        if self.codecs.contains_key(&name) {
+            return config_err!(
+                "Two PhysicalExtensionCodecs with the same name ('{name}') were registered"
+            );
+        }
+        self.codecs.insert(name, codec);
+        Ok(self)
+    }
+
+    fn decode_protobuf<R>(
+        &self,
+        buf: &[u8],
+        decode: impl FnOnce(&dyn PhysicalExtensionCodec, &[u8]) -> Result<R>,
+    ) -> Result<R> {
+        let proto = NamedDataEncoderTuple::decode(buf)
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+
+        let name = proto.name.as_str();
+
+        let Some(codec) = self.codecs.get(&Cow::Borrowed(name)) else {
+            let available_names = self
+                .codecs
+                .keys()
+                .map(|v| v.as_ref())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return internal_err!(
+                "The message was encoded by a codec with name '{name}', but this codec is not available in the current ComposedNamedPhysicalExtensionCodec. Available codecs are: {available_names}"
+            );
+        };
+
+        decode(codec.as_ref(), &proto.blob)
+    }
+
+    fn encode_protobuf(
+        &self,
+        buf: &mut Vec<u8>,
+        mut encode: impl FnMut(&dyn PhysicalExtensionCodec, &mut Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        let mut data = vec![];
+        let mut last_err = None;
+        let mut encoder_name = None;
+
+        // find the encoder
+        for (name, codec) in &self.codecs {
+            match encode(codec.as_ref(), &mut data) {
+                Ok(_) => {
+                    encoder_name = Some(name);
+                    break;
+                }
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        let encoder_name = encoder_name.ok_or_else(|| {
+            last_err.unwrap_or_else(|| {
+                DataFusionError::NotImplemented(
+                    "Empty list of composed named codecs".to_owned(),
+                )
+            })
+        })?;
+
+        // encode with encoder position
+        let proto = NamedDataEncoderTuple {
+            name: encoder_name.to_string(),
+            blob: data,
+        };
+        proto
+            .encode(buf)
+            .map_err(|e| internal_datafusion_err!("{e}"))
+    }
+}
+
+impl PhysicalExtensionCodec for ComposedNamedPhysicalExtensionCodec {
     fn try_decode(
         &self,
         buf: &[u8],
