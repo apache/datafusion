@@ -68,6 +68,10 @@ name = "stats_merge"
 harness = false
 name = "record_batch_memory"
 
+[[bench]]
+harness = false
+name = "split_vec"
+
 [dependencies]
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
