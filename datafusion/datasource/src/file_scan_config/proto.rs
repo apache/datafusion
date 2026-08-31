@@ -39,6 +39,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
@@ -128,7 +129,11 @@ impl FileScanConfig {
         Ok(protobuf::FileScanExecConf {
             file_groups,
             statistics: Some((&self.statistics()).into()),
-            limit: self.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
+            limit: self
+                .limit
+                .map(|limit| usize_to_wire::<u32>(limit, "FileScanConfig", "limit"))
+                .transpose()?
+                .map(|limit| protobuf::ScanLimit { limit }),
             projection: vec![],
             schema: Some((&schema).try_into()?),
             table_partition_cols: self
@@ -245,14 +250,28 @@ impl FileScanConfig {
             file_source
         };
 
+        let limit = conf
+            .limit
+            .as_ref()
+            .map(|limit| usize_from_wire(limit.limit, "FileScanConfig", "limit"))
+            .transpose()?;
+        let batch_size = conf
+            .batch_size
+            .map(|size| usize_from_wire(size, "FileScanConfig", "batch_size"))
+            .transpose()?;
+        if batch_size == Some(0) {
+            return datafusion_common::plan_err!(
+                "FileScanConfig: batch_size must be greater than 0"
+            );
+        }
         let config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
             .with_file_groups(file_groups)
             .with_constraints(constraints)
             .with_statistics(statistics)
-            .with_limit(conf.limit.as_ref().map(|sl| sl.limit as usize))
+            .with_limit(limit)
             .with_output_ordering(output_ordering)
             .with_output_partitioning(output_partitioning)
-            .with_batch_size(conf.batch_size.map(|s| s as usize))
+            .with_batch_size(batch_size)
             .with_file_compression_type(file_compression_type);
         Ok(config_builder.build())
     }

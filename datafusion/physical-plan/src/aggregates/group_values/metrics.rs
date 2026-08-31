@@ -426,7 +426,123 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_groupby_metrics_final_mode() -> Result<()> {
+    async fn test_legacy_groupby_aggregate_accumulator_metrics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::UInt32, false),
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 1, 2])),
+                Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                Arc::new(Float64Array::from(vec![5.0, 6.0, 7.0, 8.0])),
+            ],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+        let aggregates = vec![
+            sum_aggregate(&schema, "a", "SUM(a)")?,
+            sum_aggregate(&schema, "b", "SUM(b)")?,
+        ];
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            vec![None, None],
+            input,
+            schema,
+        )?);
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", false),
+            ),
+        );
+        let _result =
+            collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        assert_aggregate_metric_labels(&metrics, "arguments_time");
+        assert_aggregate_metric_labels(&metrics, "update_time");
+        assert_aggregate_metric_labels(&metrics, "state_time");
+        assert_aggregate_metric_times_positive(&metrics, "update_time");
+        assert_aggregate_metric_times_positive(&metrics, "state_time");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_groupby_aggregation_time_not_inflated_by_accumulator_count()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::UInt32, false),
+            Field::new("v", DataType::Float64, false),
+        ]));
+
+        const ROWS: usize = 8192;
+        let batches = (0..20)
+            .map(|_| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(UInt32Array::from(
+                            (0..ROWS).map(|r| (r % 8) as u32).collect::<Vec<_>>(),
+                        )),
+                        Arc::new(Float64Array::from(
+                            (0..ROWS).map(|r| r as f64).collect::<Vec<_>>(),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+
+        let aggregates = (0..8)
+            .map(|i| sum_aggregate(&schema, "v", &format!("SUM{i}(v)")))
+            .collect::<Result<Vec<_>>>()?;
+        let filters = vec![None; aggregates.len()];
+
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            filters,
+            input,
+            schema,
+        )?);
+
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", false),
+            ),
+        );
+        let _result =
+            collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let aggregation_time =
+            metrics.sum_by_name("aggregation_time").unwrap().as_usize();
+        let elapsed_compute = metrics.elapsed_compute().unwrap();
+        assert!(
+            aggregation_time <= elapsed_compute,
+            "aggregation_time {aggregation_time} exceeds elapsed_compute {elapsed_compute}"
+        );
+
+        Ok(())
+    }
+
+    async fn assert_groupby_metrics_final_mode(
+        enable_migration_aggregate: bool,
+    ) -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
@@ -486,12 +602,12 @@ mod tests {
             schema,
         )?);
 
-        let task_ctx = Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
+        let task_ctx = Arc::new(TaskContext::default().with_session_config(
+            SessionConfig::new().set_bool(
+                "datafusion.execution.enable_migration_aggregate",
+                enable_migration_aggregate,
             ),
-        );
+        ));
         let _result =
             collect(Arc::clone(&final_aggregate) as _, Arc::clone(&task_ctx)).await?;
 
@@ -513,6 +629,15 @@ mod tests {
         );
         assert_aggregate_metric_times_positive(&metrics, "merge_time");
         assert_aggregate_metric_times_positive(&metrics, "evaluate_time");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_groupby_metrics_final_mode() -> Result<()> {
+        for enable_migration_aggregate in [true, false] {
+            assert_groupby_metrics_final_mode(enable_migration_aggregate).await?;
+        }
 
         Ok(())
     }

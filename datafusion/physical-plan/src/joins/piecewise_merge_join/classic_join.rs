@@ -31,14 +31,15 @@ use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
+use std::sync::atomic::Ordering as AtomicOrdering;
 use std::{cmp::Ordering, task::ready};
 use std::{sync::Arc, task::Poll};
 
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
+use crate::joins::utils::JoinKeyComparator;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
-use crate::joins::utils::{JoinKeyComparator, get_final_indices_from_shared_bitmap};
 use crate::stream::EmptyRecordBatchStream;
 
 pub(super) enum PiecewiseMergeJoinStreamState {
@@ -332,17 +333,19 @@ impl ClassicPWMJStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
-        let buffered_data =
-            Arc::clone(&self.buffered_side.try_as_ready().unwrap().buffered_data);
+        let buffered_data = Arc::clone(&self.buffered_side.try_as_ready()?.buffered_data);
+        let buffered_batch = buffered_data.batch();
 
-        let (buffered_indices, _streamed_indices) = get_final_indices_from_shared_bitmap(
-            &buffered_data.visited_indices_bitmap,
-            self.join_type,
-            true,
-        );
-
-        let new_buffered_batch =
-            take_record_batch(buffered_data.batch(), &buffered_indices)?;
+        // Every match marks the suffix `[k, buffered_len)`, so the buffered rows that were
+        // never matched are exactly the complementary prefix `[0, min_marked)` -- which
+        // includes the null-keyed rows, since nulls sort first and the scan starts past
+        // them. That makes the final pass a zero-copy slice instead of building an index
+        // array and running `take` over it.
+        let min_marked = buffered_data
+            .min_marked
+            .load(AtomicOrdering::SeqCst)
+            .min(buffered_batch.num_rows());
+        let new_buffered_batch = buffered_batch.slice(0, min_marked);
         let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
         let streamed_columns: Vec<ArrayRef> = self
@@ -381,6 +384,10 @@ struct BatchProcessState {
     continue_process: bool,
     // Skip nulls
     processed_null_count: bool,
+    // Smallest buffered index marked while scanning the current stream batch, or
+    // `usize::MAX` if nothing has been marked yet. Because `buffer_idx` only moves forward
+    // within a batch, this lets all but the batch's first match skip the shared atomic.
+    batch_min_marked: usize,
 }
 
 impl BatchProcessState {
@@ -393,6 +400,7 @@ impl BatchProcessState {
             found: false,
             continue_process: true,
             processed_null_count: false,
+            batch_min_marked: usize::MAX,
         }
     }
 
@@ -403,6 +411,7 @@ impl BatchProcessState {
         self.found = false;
         self.continue_process = true;
         self.processed_null_count = false;
+        self.batch_min_marked = usize::MAX;
     }
 
     // `None` guarantees the coalescer holds no pending rows, so the caller
@@ -480,13 +489,14 @@ fn resolve_classic_join(
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
 
-                        let batch = build_matched_indices_and_set_buffered_bitmap(
+                        let batch = build_matched_indices_and_mark_buffered(
                             (buffer_idx, count),
                             (row_idx, count),
                             buffered_side,
                             stream_batch,
                             join_type,
                             join_schema,
+                            &mut batch_process_state.batch_min_marked,
                         )?;
 
                         batch_process_state.output_batches.push_batch(batch)?;
@@ -508,13 +518,14 @@ fn resolve_classic_join(
                     if matches!(compare, Ordering::Equal | Ordering::Less) {
                         batch_process_state.found = true;
                         let count = buffered_len - buffer_idx;
-                        let batch = build_matched_indices_and_set_buffered_bitmap(
+                        let batch = build_matched_indices_and_mark_buffered(
                             (buffer_idx, count),
                             (row_idx, count),
                             buffered_side,
                             stream_batch,
                             join_type,
                             join_schema,
+                            &mut batch_process_state.batch_min_marked,
                         )?;
 
                         // Flush batch and update pointers if we have a completed batch
@@ -575,20 +586,31 @@ fn resolve_classic_join(
 //
 // The two ranges are: buffered_range: (start index, count) and streamed_range: (start index, count) due
 // to batch.slice(start, count).
-fn build_matched_indices_and_set_buffered_bitmap(
+fn build_matched_indices_and_mark_buffered(
     buffered_range: (usize, usize),
     streamed_range: (usize, usize),
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
     join_type: JoinType,
     join_schema: &SchemaRef,
+    batch_min_marked: &mut usize,
 ) -> Result<RecordBatch> {
-    // Mark the buffered indices as visited
-    if need_produce_result_in_final(join_type) {
-        let mut bitmap = buffered_side.buffered_data.visited_indices_bitmap.lock();
-        for i in buffered_range.0..buffered_range.0 + buffered_range.1 {
-            bitmap.set_bit(i, true);
-        }
+    // Mark the matched buffered rows. `buffered_range` is always the suffix
+    // `[start, buffered_len)` -- a match emits every buffered row from the first match on --
+    // so the union of everything marked is `[min over matches, buffered_len)` and lowering a
+    // single watermark records it exactly. That replaces a mutex plus one `set_bit` per
+    // matched row, which was `O(buffered_len)` work for *every* matched streamed row.
+    //
+    // `buffer_idx` is monotone non-decreasing across a stream batch, so only the batch's
+    // first match can lower the watermark; `batch_min_marked` keeps the atomic off the hot
+    // path for all the others. It survives the early returns that hand back a completed
+    // output batch mid-scan, and `reset()` clears it for the next stream batch.
+    if need_produce_result_in_final(join_type) && buffered_range.0 < *batch_min_marked {
+        *batch_min_marked = buffered_range.0;
+        buffered_side
+            .buffered_data
+            .min_marked
+            .fetch_min(buffered_range.0, AtomicOrdering::SeqCst);
     }
 
     let new_buffered_batch = buffered_side
