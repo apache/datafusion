@@ -29,7 +29,6 @@ use arrow::{
     },
 };
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
@@ -43,6 +42,9 @@ use datafusion_expr::{
     utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocked_vec::{
+    BlockedVec, StorageMut, block_offset, take_blocked,
+};
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::Bitmap65536DistinctCountAccumulator,
     count_distinct::Bitmap65536DistinctCountAccumulatorI16,
@@ -635,12 +637,14 @@ struct CountGroupsAccumulator {
     /// output type of count is `DataType::Int64`. Thus by using `i64`
     /// for the counts, the output [`Int64Array`] can be created
     /// without copy.
-    counts: Vec<i64>,
+    counts: BlockedVec<i64>,
 }
 
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
-        Self { counts: vec![] }
+        Self {
+            counts: BlockedVec::new(),
+        }
     }
 }
 
@@ -658,16 +662,33 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         // Add one to each group's counter for each non null, non
         // filtered value
         self.counts.resize(total_num_groups, 0);
-        accumulate_indices(
-            group_indices,
-            values.logical_nulls().as_ref(),
-            opt_filter,
-            |group_index| {
-                // SAFETY: group_index is guaranteed to be in bounds
-                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
-                *count += 1;
-            },
-        );
+        let nulls = values.logical_nulls();
+        // Resolve how the state is stored once, outside the counting loop.
+        match self.counts.storage_mut() {
+            StorageMut::Flat(counts) => accumulate_indices(
+                group_indices,
+                nulls.as_ref(),
+                opt_filter,
+                |group_index| {
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let count = unsafe { counts.get_unchecked_mut(group_index) };
+                    *count += 1;
+                },
+            ),
+            StorageMut::Blocked(blocks) => accumulate_indices(
+                group_indices,
+                nulls.as_ref(),
+                opt_filter,
+                |group_index| {
+                    let (block, offset) = block_offset(group_index);
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let count = unsafe {
+                        blocks.get_unchecked_mut(block).get_unchecked_mut(offset)
+                    };
+                    *count += 1;
+                },
+            ),
+        }
 
         Ok(())
     }
@@ -688,17 +709,32 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         // Adds the counts with the partial counts
         self.counts.resize(total_num_groups, 0);
-        group_indices.iter().zip(partial_counts.iter()).for_each(
-            |(&group_index, partial_count)| {
-                self.counts[group_index] += partial_count;
-            },
-        );
+        match self.counts.storage_mut() {
+            StorageMut::Flat(counts) => group_indices
+                .iter()
+                .zip(partial_counts.iter())
+                .for_each(|(&group_index, partial_count)| {
+                    // SAFETY: group_index is in bounds after the resize above
+                    unsafe { *counts.get_unchecked_mut(group_index) += partial_count };
+                }),
+            StorageMut::Blocked(blocks) => group_indices
+                .iter()
+                .zip(partial_counts.iter())
+                .for_each(|(&group_index, partial_count)| {
+                    let (block, offset) = block_offset(group_index);
+                    // SAFETY: group_index is in bounds after the resize above
+                    unsafe {
+                        *blocks.get_unchecked_mut(block).get_unchecked_mut(offset) +=
+                            partial_count
+                    };
+                }),
+        }
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = take_blocked(&mut self.counts, emit_to);
 
         // Count is always non null (null inputs just don't contribute to the overall values)
         let nulls = None;
@@ -709,7 +745,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = take_blocked(&mut self.counts, emit_to);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
@@ -775,7 +811,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(vec![state_array])
     }
     fn size(&self) -> usize {
-        self.counts.heap_size(&mut DFHeapSizeCtx::default())
+        self.counts.capacity_bytes()
     }
 }
 
@@ -941,9 +977,8 @@ mod tests {
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
 
-        assert!(acc.counts.capacity() > 0);
-        let allocated_size = acc.counts.heap_size(&mut DFHeapSizeCtx::default());
-        assert_eq!(allocated_size, acc.counts.capacity() * size_of::<i64>());
+        let allocated_size = acc.counts.capacity_bytes();
+        assert!(allocated_size > 0);
         assert_eq!(acc.size(), allocated_size);
         assert!(acc.size() > empty_size);
 
