@@ -371,22 +371,26 @@ impl Unparser<'_> {
                 escape_char,
                 case_insensitive,
             }) => {
+                let negated = *negated;
+                let expr = Box::new(self.expr_to_sql_inner(expr)?);
+                let pattern = Box::new(self.expr_to_sql_inner(pattern)?);
+                let escape_char =
+                    escape_char.map(|c| SingleQuotedString(c.to_string()).into());
+
                 if *case_insensitive {
                     Ok(ast::Expr::ILike {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string()).into()),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 } else {
                     Ok(ast::Expr::Like {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string()).into()),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 }

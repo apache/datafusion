@@ -3023,23 +3023,14 @@ impl Display for SchemaDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SchemaDisplay(expr),
+                    SchemaDisplay(low),
+                    SchemaDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
@@ -3305,23 +3296,14 @@ impl Display for SqlDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SqlDisplay(expr),
+                    SqlDisplay(low),
+                    SqlDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)

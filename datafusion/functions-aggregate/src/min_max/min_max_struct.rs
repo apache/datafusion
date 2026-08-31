@@ -83,21 +83,11 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
             matches!(partial_cmp_struct(a, b), Some(Ordering::Greater))
         }
 
-        if self.is_min {
-            self.inner.update_batch(
-                array.as_struct(),
-                group_indices,
-                total_num_groups,
-                struct_min,
-            )
-        } else {
-            self.inner.update_batch(
-                array.as_struct(),
-                group_indices,
-                total_num_groups,
-                struct_max,
-            )
-        }
+        let cmp: fn(&StructArray, &StructArray) -> bool =
+            if self.is_min { struct_min } else { struct_max };
+
+        self.inner
+            .update_batch(array.as_struct(), group_indices, total_num_groups, cmp)
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
