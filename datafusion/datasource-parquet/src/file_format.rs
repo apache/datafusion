@@ -147,9 +147,6 @@ impl Debug for ParquetFormatFactory {
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
     options: TableParquetOptions,
-    /// When set, restricts RLE->Dictionary promotion to only these columns.
-    /// Overrides `enable_rle_to_dictionary`; see [`Self::with_rle_column_allowlist`].
-    rle_column_allowlist: Option<HashSet<String>>,
 }
 
 impl ParquetFormat {
@@ -211,22 +208,6 @@ impl ParquetFormat {
     /// Parquet options
     pub fn options(&self) -> &TableParquetOptions {
         &self.options
-    }
-
-    /// Restrict RLE->Dictionary promotion to a named subset of columns.
-    ///
-    /// Only columns in `columns` that also have dictionary pages in the file
-    /// are promoted to `Dictionary(Int32, …)` in the inferred schema.
-    /// Overrides `enable_rle_to_dictionary` when set; an empty set disables
-    /// promotion entirely. See <https://github.com/apache/datafusion/issues/24113>.
-    pub fn with_rle_column_allowlist(mut self, columns: HashSet<String>) -> Self {
-        self.rle_column_allowlist = Some(columns);
-        self
-    }
-
-    /// Returns the RLE->Dictionary column allowlist, if set.
-    pub fn rle_column_allowlist(&self) -> Option<&HashSet<String>> {
-        self.rle_column_allowlist.as_ref()
     }
 
     /// Return `true` if should use view types.
@@ -379,7 +360,7 @@ impl FileFormat for ParquetFormat {
                     &object.location,
                 )
                 .await?;
-                let mut meta = DFParquetMetadata::new(store.as_ref(), object)
+                let meta = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
@@ -388,9 +369,6 @@ impl FileFormat for ParquetFormat {
                     .with_enable_rle_to_dictionary(
                         self.options.global.enable_rle_to_dictionary,
                     );
-                if let Some(allowlist) = &self.rle_column_allowlist {
-                    meta = meta.with_rle_column_allowlist(allowlist.clone());
-                }
                 let result = meta.fetch_schema_with_location().await?;
                 Ok::<_, DataFusionError>(result)
             })
@@ -541,13 +519,7 @@ impl FileFormat for ParquetFormat {
             .downcast_ref::<ParquetSource>()
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
-        let mut source_options = self.options.clone();
-        // An allowlist implies dict-typed fields in the table schema, so the reader
-        // must also have the flag set to coerce those columns at scan time.
-        if self.rle_column_allowlist.is_some() {
-            source_options.global.enable_rle_to_dictionary = true;
-        }
-        source = source.with_table_parquet_options(source_options);
+        source = source.with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();

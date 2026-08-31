@@ -568,25 +568,6 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
             DataType::Binary | DataType::LargeBinary => {
                 field_with_new_type(field, DataType::BinaryView)
             }
-            // Also rewrite the value type inside dictionary columns so that
-            // dict<_, Utf8> / dict<_, LargeUtf8> become dict<_, Utf8View> and
-            // dict<_, Binary> / dict<_, LargeBinary> become dict<_, BinaryView>.
-            DataType::Dictionary(key_type, value_type) => {
-                let new_value = match value_type.as_ref() {
-                    DataType::Utf8 | DataType::LargeUtf8 => Some(DataType::Utf8View),
-                    DataType::Binary | DataType::LargeBinary => {
-                        Some(DataType::BinaryView)
-                    }
-                    _ => None,
-                };
-                match new_value {
-                    Some(vt) => field_with_new_type(
-                        field,
-                        DataType::Dictionary(key_type.clone(), Box::new(vt)),
-                    ),
-                    None => Arc::clone(field),
-                }
-            }
             _ => Arc::clone(field),
         })
         .collect();
@@ -602,22 +583,6 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
             DataType::Binary => field_with_new_type(field, DataType::Utf8),
             DataType::LargeBinary => field_with_new_type(field, DataType::LargeUtf8),
             DataType::BinaryView => field_with_new_type(field, DataType::Utf8View),
-            // Keep binary_as_string consistent for dictionary value types.
-            DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-                DataType::Binary => field_with_new_type(
-                    field,
-                    DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8)),
-                ),
-                DataType::LargeBinary => field_with_new_type(
-                    field,
-                    DataType::Dictionary(key_type.clone(), Box::new(DataType::LargeUtf8)),
-                ),
-                DataType::BinaryView => field_with_new_type(
-                    field,
-                    DataType::Dictionary(key_type.clone(), Box::new(DataType::Utf8View)),
-                ),
-                _ => Arc::clone(field),
-            },
             _ => Arc::clone(field),
         })
         .collect();
@@ -1089,60 +1054,5 @@ mod tests {
 
         assert_eq!(result.field(0).data_type(), &DataType::Utf8);
         assert_eq!(result.field(1).data_type(), &DataType::Utf8);
-    }
-
-    #[test]
-    fn transform_binary_to_string_rewrites_dict_binary_value_type() {
-        // binary_as_string must also rewrite dictionary value types.
-        let schema = Schema::new(vec![
-            Field::new(
-                "rle_binary",
-                DataType::Dictionary(
-                    Box::new(DataType::Int32),
-                    Box::new(DataType::Binary),
-                ),
-                true,
-            ),
-            Field::new(
-                "rle_large_binary",
-                DataType::Dictionary(
-                    Box::new(DataType::Int32),
-                    Box::new(DataType::LargeBinary),
-                ),
-                true,
-            ),
-            Field::new("plain_binary", DataType::Binary, true),
-            Field::new(
-                "rle_utf8",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                true,
-            ),
-        ]);
-
-        let result = transform_binary_to_string(&schema);
-
-        assert_eq!(
-            result.field(0).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            "Dict(Int32, Binary) must become Dict(Int32, Utf8)"
-        );
-        assert_eq!(
-            result.field(1).data_type(),
-            &DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::LargeUtf8)
-            ),
-            "Dict(Int32, LargeBinary) must become Dict(Int32, LargeUtf8)"
-        );
-        assert_eq!(
-            result.field(2).data_type(),
-            &DataType::Utf8,
-            "plain Binary must become Utf8"
-        );
-        assert_eq!(
-            result.field(3).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            "Dict(Int32, Utf8) must be unchanged"
-        );
     }
 }
