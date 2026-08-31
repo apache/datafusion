@@ -19,9 +19,9 @@
 # equi key runs on PiecewiseMergeJoin when enable_piecewise_merge_join=true and
 # on NestedLoopJoin when false, so sweeping {true,false} x batch_size
 # {1,2,100,8192} requires the two to agree row-for-row. PWMJ covers
-# Inner/Left/Right/Full (Part 1) and LeftSemi/LeftAnti (Part 2);
-# RightSemi/RightAnti/Mark stay on NLJ. Matrix rules: no EXPLAIN, no in-file SET
-# of a swept knob, rowsort every multi-row query.
+# Inner/Left/Right/Full (Part 1) and LeftSemi/LeftAnti (Part 2); explicit RIGHT
+# SEMI/ANTI JOIN and Mark (OR EXISTS) stay on NLJ. Matrix rules: no EXPLAIN, no
+# in-file SET of a swept knob, rowsort every multi-row query.
 
 # configMatrix: datafusion.optimizer.enable_piecewise_merge_join=true,false
 # configMatrix: datafusion.execution.batch_size=1,2,100,8192
@@ -168,7 +168,8 @@ SELECT l.lid, l.lv, r.rid, r.rv FROM cj_dup_l l JOIN cj_dup_r r ON l.lv < r.rv;
 # Part 2: Existence joins (LeftSemi / LeftAnti; Right/Mark fall back to NLJ)
 # ==================================================================
 # EXISTS -> LeftSemi, NOT EXISTS -> LeftAnti (the only existence joins PWMJ
-# implements). RightSemi/RightAnti and Mark stay on NLJ; covered at the end.
+# implements). Explicit RIGHT SEMI/ANTI JOIN and Mark (OR EXISTS) stay on NLJ;
+# covered at the end.
 
 # ------------------------------------------------------------------
 # Fixtures
