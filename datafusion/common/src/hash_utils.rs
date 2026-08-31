@@ -1579,11 +1579,11 @@ mod tests {
     fn test_create_hashes_dictionary_with_custom_hasher() {
         let strings = [Some("foo"), None, Some("bar"), Some("foo"), None];
         let string_array: ArrayRef =
-            Arc::new(strings.iter().cloned().collect::<StringArray>());
+            Arc::new(strings.iter().copied().collect::<StringArray>());
         let dict_array: ArrayRef = Arc::new(
             strings
                 .iter()
-                .cloned()
+                .copied()
                 .collect::<DictionaryArray<Int8Type>>(),
         );
         let hash_builder = BuildHasherDefault::<TestHasher>::default();
@@ -1751,11 +1751,11 @@ mod tests {
         let strings = [Some("foo"), None, Some("bar"), Some("foo"), None];
 
         let string_array: ArrayRef =
-            Arc::new(strings.iter().cloned().collect::<StringArray>());
+            Arc::new(strings.iter().copied().collect::<StringArray>());
         let dict_array: ArrayRef = Arc::new(
             strings
                 .iter()
-                .cloned()
+                .copied()
                 .collect::<DictionaryArray<Int8Type>>(),
         );
 
@@ -2112,11 +2112,11 @@ mod tests {
         let strings2 = [Some("blarg"), Some("blah"), None];
 
         let string_array: ArrayRef =
-            Arc::new(strings1.iter().cloned().collect::<StringArray>());
+            Arc::new(strings1.iter().copied().collect::<StringArray>());
         let dict_array: ArrayRef = Arc::new(
             strings2
                 .iter()
-                .cloned()
+                .copied()
                 .collect::<DictionaryArray<Int32Type>>(),
         );
 
