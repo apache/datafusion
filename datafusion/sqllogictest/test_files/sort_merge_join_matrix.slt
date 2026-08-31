@@ -15,26 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# ==================================================================
-# Sort-merge-join correctness across the config matrix
-# ==================================================================
-# Every equijoin below runs once with `prefer_hash_join=false` (SortMergeJoin)
-# and once with `prefer_hash_join=true` (HashJoin); the two must agree
-# row-for-row. It also sweeps `batch_size` = {1,2,100,8192}: SortMergeJoin
-# streams both sorted inputs and buffers runs of equal keys across batch
-# boundaries, so batch_size=1 forces every equal-key run to span many single-row
-# batches -- historically the bug-prone path -- while 8192 keeps each fixture in
-# one batch.
-#
-# SortMergeJoin is only planned when `prefer_hash_join=false` AND
-# `target_partitions>1` AND `repartition_joins`, so both are set below (they are
-# not swept). Null-aware anti joins (`NOT IN` over a nullable subquery) always
-# use CollectLeft HashJoin regardless of `prefer_hash_join`, so they are out of
-# scope here and covered by null_aware_anti_join.slt.
-#
-# Rules for a matrix file: no EXPLAIN (the plan differs per combination), no
-# in-file SET of a swept knob, and `rowsort` on every multi-row query so a
-# single expected block matches all eight combinations.
+# Sort-merge-join correctness across a config matrix. Every equijoin runs on
+# SortMergeJoin (prefer_hash_join=false) and HashJoin (true), so sweeping
+# {true,false} x batch_size {1,2,100,8192} requires them to agree row-for-row.
+# batch_size=1 forces equal-key runs to span single-row batches (historically
+# bug-prone). SMJ needs target_partitions>1 and repartition_joins, set below (not
+# swept). Null-aware NOT IN always uses HashJoin, so it is out of scope (see
+# null_aware_anti_join.slt). Matrix rules: no EXPLAIN, no in-file SET of a swept
+# knob, rowsort every multi-row query.
 
 # configMatrix: datafusion.optimizer.prefer_hash_join=true,false
 # configMatrix: datafusion.execution.batch_size=1,2,100,8192
@@ -280,10 +268,9 @@ NULL NULL n
 # ------------------------------------------------------------------
 # Duplicate keys across batch boundaries (verified by count)
 # ------------------------------------------------------------------
-# Runs of equal keys are what SortMergeJoin must buffer across batches. At
-# batch_size=1 each run spans several single-row batches. Left has five k=1,
-# three k=2, one unmatched k=9; right has four k=1, two k=2, one unmatched k=3.
-# INNER = 5*4 + 3*2 = 26.
+# SortExec re-batches to batch_size, so equal-key runs span batches (proof in
+# sort_merge_join_batches.slt). Left: five k=1, three k=2, one unmatched k=9;
+# right: four k=1, two k=2, one unmatched k=3. INNER = 5*4 + 3*2 = 26.
 statement ok
 CREATE TABLE smj_dup_l(k INT) AS VALUES
   (1), (1), (1), (1), (1), (2), (2), (2), (9);
