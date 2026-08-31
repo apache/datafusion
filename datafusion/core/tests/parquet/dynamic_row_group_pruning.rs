@@ -804,3 +804,67 @@ async fn topk_pushdown_does_not_reread_delivered_row_group() {
         "p4096 emitted more than once — rg_plan/decoder desync; got:\n{formatted}",
     );
 }
+
+/// Regression test for issue #24816: Aggregate dynamic filter must be disabled
+/// when an unsupported aggregate expression (e.g., `MIN(c + 1)`) is present alongside
+/// supported ones (`MIN(a)`, `MAX(a)`, `MAX(b)`).
+/// Otherwise, dynamic filter pushed to input scan prunes row groups required by the
+/// unsupported aggregate expression and produces incorrect results.
+#[tokio::test]
+async fn dynamic_rg_pruning_disabled_when_unsupported_aggregate_present() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+        Field::new("c", DataType::Int64, false),
+    ]));
+
+    // File with 2 row groups:
+    // RG 0: (1, 12, 100), (8, 4, 70)
+    // RG 1: (1, 6, 90), (8, 12, 110)
+    let batch_0 = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 8])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![12, 4])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![100, 70])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+
+    let batch_1 = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 8])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![6, 12])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![90, 110])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(2),
+        Arc::clone(&schema),
+        vec![batch_0, batch_1],
+    )
+    .await;
+
+    let output = ctx
+        .query("SELECT MIN(a), MAX(a), MAX(b), MIN(c + 1) FROM t")
+        .await;
+
+    assert_eq!(output.result_rows, 1, "query must return 1 aggregate row");
+    let formatted = output.pretty_results();
+    assert!(
+        formatted.contains("| 1 | 8 | 12 | 71 |"),
+        "expected output row '| 1 | 8 | 12 | 71 |'; got:\n{formatted}"
+    );
+
+    let pruned = output.row_groups_pruned_dynamic_filter().unwrap_or(0);
+    assert_eq!(
+        pruned,
+        0,
+        "dynamic filter should be disabled when unsupported aggregate is present; pruned={pruned}\n{}",
+        output.description()
+    );
+}

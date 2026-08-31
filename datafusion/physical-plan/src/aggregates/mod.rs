@@ -1852,6 +1852,8 @@ impl AggregateExec {
                     aggr_index: i,
                     shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
                 });
+            } else {
+                return;
             }
         }
 
@@ -8309,6 +8311,51 @@ mod tests {
             lit(true),
         ));
         assert!(agg.set_dynamic_filter(df).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_filter_disabled_when_unsupported_expr_present() -> Result<()> {
+        use datafusion_expr::Operator;
+        use datafusion_physical_expr::expressions::binary;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let col_a = col("a", &schema)?;
+        let col_a_plus_1 = binary(
+            Arc::clone(&col_a),
+            Operator::Plus,
+            lit(ScalarValue::Int64(Some(1))),
+            &schema,
+        )?;
+
+        // AggregateExec with MIN(a) (supported) and MIN(a + 1) (unsupported expr)
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![
+                Arc::new(
+                    AggregateExprBuilder::new(min_udaf(), vec![col_a])
+                        .schema(Arc::clone(&schema))
+                        .alias("min_a")
+                        .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(min_udaf(), vec![col_a_plus_1])
+                        .schema(Arc::clone(&schema))
+                        .alias("min_a_plus_1")
+                        .build()?,
+                ),
+            ],
+            vec![None, None],
+            child,
+            Arc::clone(&schema),
+        )?;
+
+        // Dynamic filter must NOT be initialized because of the unsupported MIN(a + 1)
+        assert!(agg.dynamic_expressions_produced().is_empty());
+        assert!(agg.dynamic_filter.is_none());
         Ok(())
     }
 }
