@@ -162,10 +162,6 @@ fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Ok(Arc::clone(&args[0]));
     }
 
-    if args[1..].iter().any(|array| array.is_null(0)) {
-        return Ok(new_null_array(args[0].data_type(), args[0].len()));
-    }
-
     let sort_order = if args.len() > 1 {
         Some(as_string_array(&args[1])?)
     } else {
@@ -272,6 +268,9 @@ where
         let end = window[1].as_usize() - values_start;
         let slice = &mut values[start..end];
         let descending = if let Some(sort_order) = sort_order {
+            if sort_order.is_null(row_index) {
+                continue;
+            }
             order_desc(sort_order.value(row_index))?
         } else {
             false
@@ -313,6 +312,7 @@ where
     let values_start = offsets[0].as_usize();
     let values_end = offsets[row_count].as_usize();
     let total_values = values_end - values_start;
+    let mut list_validity = BooleanBufferBuilder::new(row_count);
 
     let mut out_values: Vec<T::Native> = vec![T::Native::default(); total_values];
     let mut validity = BooleanBufferBuilder::new(total_values);
@@ -332,6 +332,7 @@ where
 
         if list_array.is_null(row_index) || row_len == 0 {
             validity.append_n(row_len, false);
+            list_validity.append(false);
             continue;
         }
 
@@ -339,6 +340,11 @@ where
         let valid_count = row_len - null_count;
 
         let nulls_first = if let Some(null_order) = null_order {
+            if null_order.is_null(row_index) {
+                list_validity.append(false);
+                validity.append_n(row_len, false);
+                continue;
+            }
             order_nulls_first(null_order.value(row_index))?
         } else {
             true
@@ -358,6 +364,11 @@ where
         let valid_slice = &mut out_values
             [out_start + valid_offset..out_start + valid_offset + valid_count];
         let descending = if let Some(sort_order) = sort_order {
+            if sort_order.is_null(row_index) {
+                validity.append_n(row_len, false);
+                list_validity.append(false);
+                continue;
+            }
             order_desc(sort_order.value(row_index))?
         } else {
             false
@@ -376,6 +387,8 @@ where
             validity.append_n(valid_count, true);
             validity.append_n(null_count, false);
         }
+
+        list_validity.append(true);
     }
 
     let new_offsets = rebase_offsets(offsets);
@@ -390,7 +403,7 @@ where
         field,
         new_offsets,
         sorted_values,
-        list_array.nulls().cloned(),
+        Some(NullBuffer::from(list_validity.finish())),
     )?))
 }
 
@@ -468,12 +481,20 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
         }
 
         let descending = if let Some(sort_order) = sort_order {
+            if sort_order.is_null(row_index) {
+                new_offsets.push(new_offsets[row_index]);
+                continue;
+            }
             order_desc(sort_order.value(row_index))?
         } else {
             false
         };
 
         let nulls_first = if let Some(null_order) = null_order {
+            if null_order.is_null(row_index) {
+                new_offsets.push(new_offsets[row_index]);
+                continue;
+            }
             order_nulls_first(null_order.value(row_index))?
         } else {
             true
