@@ -22,6 +22,7 @@ use crate::utils::parse_identifiers_normalized;
 use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -295,6 +296,7 @@ impl Column {
                 .iter()
                 .flat_map(|s| s.iter())
                 .flat_map(|s| s.columns())
+                .unique()
                 .collect(),
         })
     }

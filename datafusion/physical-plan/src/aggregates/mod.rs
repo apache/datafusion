@@ -3236,7 +3236,7 @@ mod tests {
     use crate::test::TestMemoryExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{
-        BlockingExec, StatisticsExec, assert_strong_count_converges_to_zero,
+        BlockingExec, PanicExec, StatisticsExec, assert_strong_count_converges_to_zero,
     };
 
     use arrow::array::{
@@ -4012,21 +4012,32 @@ mod tests {
                 Arc::clone(&input_schema),
             )?);
 
-            let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
+            let stream = partial_aggregate.execute_typed(0, &task_ctx);
 
             // ensure that we really got the version we wanted
-            match version {
+            let stream = match version {
                 0 => {
-                    assert!(matches!(stream, StreamType::AggregateStream(_)));
+                    // the ungrouped stream charges its accumulators' construction-time
+                    // state up front, so admission fails before any input is read
+                    let err = stream.err().unwrap();
+                    assert!(
+                        matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+                        "Wrong error type: {err}",
+                    );
+                    continue;
                 }
                 1 => {
+                    let stream = stream?;
                     assert!(matches!(stream, StreamType::GroupedHash(_)));
+                    stream
                 }
                 2 => {
+                    let stream = stream?;
                     assert!(matches!(stream, StreamType::SingleHash(_)));
+                    stream
                 }
                 _ => panic!("Unknown version: {version}"),
-            }
+            };
 
             let stream: SendableRecordBatchStream = stream.into();
             let err = collect(stream).await.unwrap_err();
@@ -4040,6 +4051,133 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// An accumulator that allocates its retained state in its constructor and keeps that
+    /// size across `update_batch` (Spark's `bloom_filter_agg` shape) is charged at
+    /// `execute`, so it is rejected before any input is polled and, when it fits, is
+    /// visible to the pool for the stream's lifetime.
+    #[tokio::test]
+    async fn test_ungrouped_agg_charges_constructor_allocated_state() -> Result<()> {
+        const STATE_BYTES: usize = 8 * 1024 * 1024;
+
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+        // panics when polled, so nothing here can pass by reading the input first
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(PanicExec::new(Arc::clone(&schema), 1));
+        let udaf = Arc::new(AggregateUDF::from(ConstructorAllocatingUdaf::new(
+            STATE_BYTES,
+        )));
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(udaf, vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("constructor_allocating(b)")
+                .build()?,
+        )];
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+
+        let too_small = RuntimeEnvBuilder::new()
+            .with_memory_limit(STATE_BYTES / 2, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(too_small));
+        let err = aggregate
+            .execute_typed(0, &task_ctx)
+            .err()
+            .expect("initial accumulator state should not fit the pool");
+        assert!(
+            matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "Wrong error type: {err}",
+        );
+
+        let fits = RuntimeEnvBuilder::new()
+            .with_memory_limit(4 * STATE_BYTES, 1.0)
+            .build_arc()?;
+        let pool = Arc::clone(&fits.memory_pool);
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(fits));
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::AggregateStream(_)));
+        assert!(
+            pool.reserved() >= STATE_BYTES,
+            "initial accumulator state not charged: {} bytes reserved",
+            pool.reserved(),
+        );
+
+        Ok(())
+    }
+
+    /// UDAF whose accumulator allocates all of its state at construction, the shape the
+    /// per-batch `size()` deltas in `aggregate_batch` cannot observe.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ConstructorAllocatingUdaf {
+        signature: Signature,
+        state_bytes: usize,
+    }
+
+    impl ConstructorAllocatingUdaf {
+        fn new(state_bytes: usize) -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+                state_bytes,
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for ConstructorAllocatingUdaf {
+        fn name(&self) -> &str {
+            "constructor_allocating"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(ConstructorAllocatingAccumulator {
+                state: vec![0; self.state_bytes],
+            }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct ConstructorAllocatingAccumulator {
+        state: Vec<u8>,
+    }
+
+    impl Accumulator for ConstructorAllocatingAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(Some(self.state.len() as i64)))
+        }
+
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            self.evaluate().map(|value| vec![value])
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self) + self.state.capacity()
+        }
     }
 
     #[tokio::test]
