@@ -800,7 +800,7 @@ fn bench_decimal256(c: &mut Criterion) {
     group.finish();
 }
 
-fn make_list_schema() -> SchemaRef {
+fn make_list_int_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new_list("list", Field::new_list_field(DataType::Int32, true), false),
         Field::new("id", DataType::Int32, false),
@@ -815,7 +815,7 @@ fn make_list_schema() -> SchemaRef {
 /// (`Int32`) once per element while cardinality stays controlled. The `Int32`
 /// column is keyed identically so the combined cardinality equals
 /// `num_distinct_groups`.
-fn generate_list_batches(
+fn generate_list_int_batches(
     num_distinct_groups: usize,
     num_rows: usize,
     batch_size: usize,
@@ -936,10 +936,11 @@ fn bench_list_int(c: &mut Criterion) {
     let mut group = c.benchmark_group("list_int");
     group.sample_size(15);
 
-    let schema = make_list_schema();
+    let schema = make_list_int_schema();
 
     for num_groups in [1_000, 1_000_000] {
-        let batches = generate_list_batches(num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
+        let batches =
+            generate_list_int_batches(num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
 
         for vectorized in [true, false] {
             let label = if vectorized {
