@@ -29,9 +29,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::Result;
-use datafusion_common::utils::split_vec_min_alloc;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use std::iter;
+use datafusion_common::utils::blocked_vec::{BlockedVec, StorageRef, block_offset};
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for primitive values
@@ -45,7 +43,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
     data_type: DataType,
-    group_values: Vec<T::Native>,
+    group_values: BlockedVec<T::Native>,
     nulls: NullBufferBuilder,
 }
 
@@ -58,8 +56,34 @@ where
     pub fn new(data_type: DataType) -> Self {
         Self {
             data_type,
-            group_values: vec![],
+            group_values: BlockedVec::new(),
             nulls: NullBufferBuilder::empty(),
+        }
+    }
+
+    /// The comparison loop, taking how to read a stored group as a parameter so it is
+    /// compiled once per representation rather than branching per row.
+    #[inline]
+    fn compare_non_nullable(
+        lhs_rows: &[usize],
+        rhs_rows: &[usize],
+        array_values: &[T::Native],
+        equal_to_results: &BooleanBufferBuilder,
+        cmp_buf: &mut [u8],
+        left_at: impl Fn(usize) -> T::Native,
+    ) {
+        for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(i) {
+                continue;
+            }
+            let left = left_at(lhs_row);
+            let right = unsafe { *array_values.get_unchecked(rhs_row) };
+            // `left` was already canonicalized on append; canonicalize the
+            // input so ±0 (and any future equivalence class) compares equal.
+            if left.is_eq(right.canonicalize()) {
+                cmp_buf[i / 8] |= 1 << (i % 8);
+            }
         }
     }
 
@@ -81,26 +105,28 @@ where
         let num_bytes = n.div_ceil(8);
         let mut cmp_buf = vec![0u8; num_bytes];
 
-        for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
-        {
-            if !equal_to_results.get_bit(i) {
-                continue;
-            }
-            let left = if cfg!(debug_assertions) {
-                self.group_values[lhs_row]
-            } else {
-                unsafe { *self.group_values.get_unchecked(lhs_row) }
-            };
-            let right = if cfg!(debug_assertions) {
-                array_values[rhs_row]
-            } else {
-                unsafe { *array_values.get_unchecked(rhs_row) }
-            };
-            // `left` was already canonicalized on append; canonicalize the
-            // input so ±0 (and any future equivalence class) compares equal.
-            if left.is_eq(right.canonicalize()) {
-                cmp_buf[i / 8] |= 1 << (i % 8);
-            }
+        // Resolve how the group values are stored once, so the comparison loop is not
+        // charged for re-checking it on every row.
+        match self.group_values.storage() {
+            StorageRef::Flat(values) => Self::compare_non_nullable(
+                lhs_rows,
+                rhs_rows,
+                array_values,
+                equal_to_results,
+                &mut cmp_buf,
+                |row| unsafe { *values.get_unchecked(row) },
+            ),
+            StorageRef::Blocked(blocks) => Self::compare_non_nullable(
+                lhs_rows,
+                rhs_rows,
+                array_values,
+                equal_to_results,
+                &mut cmp_buf,
+                |row| {
+                    let (block, offset) = block_offset(row);
+                    unsafe { *blocks.get_unchecked(block).get_unchecked(offset) }
+                },
+            ),
         }
 
         // AND the comparison result into the existing equal_to_results bitmask
@@ -124,24 +150,37 @@ where
         assert!(NULLABLE, "called with non-nullable input");
         let array = array.as_primitive::<T>();
 
-        for (idx, (&lhs_row, &rhs_row)) in
-            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
-        {
-            if !equal_to_results.get_bit(idx) {
-                continue;
-            }
-            let exist_null = self.nulls.is_null(lhs_row);
-            let input_null = array.is_null(rhs_row);
-            if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                if !result {
+        // Resolve how the group values are stored once, outside the loop.
+        let nulls = &self.nulls;
+        let mut compare = |left_at: &dyn Fn(usize) -> T::Native| {
+            for (idx, (&lhs_row, &rhs_row)) in
+                lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+            {
+                if !equal_to_results.get_bit(idx) {
+                    continue;
+                }
+                let exist_null = nulls.is_null(lhs_row);
+                let input_null = array.is_null(rhs_row);
+                if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                    if !result {
+                        equal_to_results.set_bit(idx, false);
+                    }
+                    continue;
+                }
+
+                if !left_at(lhs_row).is_eq(array.value(rhs_row).canonicalize()) {
                     equal_to_results.set_bit(idx, false);
                 }
-                continue;
             }
-
-            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).canonicalize()) {
-                equal_to_results.set_bit(idx, false);
+        };
+        match self.group_values.storage() {
+            StorageRef::Flat(values) => {
+                compare(&|row| unsafe { *values.get_unchecked(row) })
             }
+            StorageRef::Blocked(blocks) => compare(&|row| {
+                let (block, offset) = block_offset(row);
+                unsafe { *blocks.get_unchecked(block).get_unchecked(offset) }
+            }),
         }
     }
 }
@@ -162,7 +201,8 @@ where
             // Otherwise, we need to check their values
         }
 
-        self.group_values[lhs_row]
+        // SAFETY: `lhs_row` is an existing group index
+        unsafe { *self.group_values.get_unchecked(lhs_row) }
             .is_eq(array.as_primitive::<T>().value(rhs_row).canonicalize())
     }
 
@@ -240,7 +280,7 @@ where
             (true, Nulls::All) => {
                 self.nulls.append_n_nulls(rows.len());
                 self.group_values
-                    .extend(iter::repeat_n(T::default_value(), rows.len()));
+                    .resize(self.group_values.len() + rows.len(), T::default_value());
             }
 
             (false, _) => {
@@ -258,13 +298,13 @@ where
     }
 
     fn size(&self) -> usize {
-        self.group_values.allocated_size() + self.nulls.allocated_size()
+        self.group_values.capacity_bytes() + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
             data_type,
-            group_values,
+            mut group_values,
             nulls,
         } = *self;
 
@@ -273,13 +313,16 @@ where
             assert!(nulls.is_none(), "unexpected nulls in non nullable input");
         }
 
-        let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(group_values), nulls);
+        let arr = PrimitiveArray::<T>::new(
+            ScalarBuffer::from(group_values.take_contiguous()),
+            nulls,
+        );
         // Set timezone information for timestamp
         Arc::new(arr.with_data_type(data_type))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        let first_n = split_vec_min_alloc(&mut self.group_values, n);
+        let first_n = self.group_values.take_first(n);
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
         Arc::new(
