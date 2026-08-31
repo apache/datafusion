@@ -197,16 +197,16 @@ impl SelectBuilder {
         self.flatten_table_aliases.iter().any(|a| a == alias)
     }
 
-    pub fn enter_subquery_alias(&mut self) {
+    pub(super) fn enter_subquery_alias(&mut self) {
         self.subquery_alias_depth += 1;
     }
 
-    pub fn exit_subquery_alias(&mut self) {
+    pub(super) fn exit_subquery_alias(&mut self) {
         debug_assert!(self.subquery_alias_depth > 0);
         self.subquery_alias_depth -= 1;
     }
 
-    pub fn inside_subquery_alias(&self) -> bool {
+    pub(super) fn inside_subquery_alias(&self) -> bool {
         self.subquery_alias_depth > 0
     }
 

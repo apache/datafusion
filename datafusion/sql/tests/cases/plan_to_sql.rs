@@ -407,6 +407,18 @@ fn roundtrip_rebases_derived_projection_references() -> Result<(), DataFusionErr
         expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection`",
     );
     roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) ORDER BY j1_id ASC NULLS LAST",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` ORDER BY `derived_projection`.`j1_id` ASC",
+    );
+    roundtrip_statement_with_dialect_helper!(
         sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) where j1_id > 1;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
@@ -429,6 +441,22 @@ fn roundtrip_rebases_derived_projection_references() -> Result<(), DataFusionErr
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
         expected: @"SELECT `derived_distinct`.`j1_id` FROM (SELECT DISTINCT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_distinct`",
+    );
+
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql("select j1_id from (select ta.j1_id as j1_id from j1 ta)")?
+        .parse_statement()?;
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let plan = SqlToRel::new(&context).sql_statement_to_plan(statement)?;
+    let plan = LogicalPlanBuilder::from(plan)
+        .filter(col("ta.j1_id").gt(lit(1)))?
+        .build()?;
+    let unparser = Unparser::new(&UnparserMySqlDialect {});
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 1)"
     );
     Ok(())
 }

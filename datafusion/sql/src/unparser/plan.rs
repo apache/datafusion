@@ -164,6 +164,12 @@ impl<'a> UnparserAggScope<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DerivedInputScope<'a> {
+    alias: &'static str,
+    schema: &'a DFSchema,
+}
+
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
@@ -466,6 +472,74 @@ impl Unparser<'_> {
                 Self::derived_input_alias(repartition.input.as_ref())
             }
             _ => None,
+        }
+    }
+
+    fn derived_input_scope<'a>(
+        plan: &'a LogicalPlan,
+        select: &SelectBuilder,
+    ) -> Option<DerivedInputScope<'a>> {
+        if select.inside_subquery_alias() {
+            return None;
+        }
+
+        match plan {
+            LogicalPlan::Projection(projection) => {
+                let alias = Self::derived_input_alias(projection.input.as_ref())?;
+                let qualified_projection = projection.expr.iter().any(|expr| {
+                    expr.column_refs()
+                        .iter()
+                        .any(|column| column.relation.is_some())
+                });
+                let mut input_names = HashSet::new();
+                let unique_input_names = projection
+                    .input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .all(|field| input_names.insert(field.name()));
+
+                (qualified_projection
+                    && unique_input_names
+                    && find_unnest_node_within_select(plan).is_none())
+                .then_some(DerivedInputScope {
+                    alias,
+                    schema: projection.input.schema().as_ref(),
+                })
+            }
+            LogicalPlan::Filter(filter) => {
+                Self::derived_input_scope(filter.input.as_ref(), select)
+            }
+            LogicalPlan::Limit(limit) => {
+                Self::derived_input_scope(limit.input.as_ref(), select)
+            }
+            LogicalPlan::Sort(sort) => {
+                Self::derived_input_scope(sort.input.as_ref(), select)
+            }
+            LogicalPlan::Repartition(repartition) => {
+                Self::derived_input_scope(repartition.input.as_ref(), select)
+            }
+            _ => None,
+        }
+    }
+
+    fn rebase_derived_input_expr(
+        &self,
+        expr: Expr,
+        scope: Option<DerivedInputScope<'_>>,
+    ) -> Result<Expr> {
+        let Some(scope) = scope else {
+            return Ok(expr);
+        };
+        if self.dialect.requires_derived_table_alias() {
+            let mut alias_rewriter = TableAliasRewriter {
+                table_schema: scope.schema,
+                alias_name: TableReference::bare(scope.alias),
+                rewrite_unqualified: false,
+            };
+            expr.rewrite(&mut alias_rewriter).data()
+        } else {
+            Self::strip_column_qualifiers_for_schema(expr, scope.schema)
         }
     }
 
@@ -848,55 +922,20 @@ impl Unparser<'_> {
                     );
                 }
 
-                let qualified_projection = p.expr.iter().try_fold(false, |found, expr| {
-                    if found {
-                        Ok(true)
-                    } else {
-                        expr.exists(|expr| {
-                            Ok(matches!(expr, Expr::Column(column) if column.relation.is_some()))
-                        })
-                    }
-                })?;
-                let mut input_names = HashSet::new();
-                let unique_input_names = p
-                    .input
-                    .schema()
-                    .fields()
-                    .iter()
-                    .all(|field| input_names.insert(field.name()));
-                if let Some(input_alias) = Self::derived_input_alias(p.input.as_ref())
-                    && qualified_projection
-                    && unique_input_names
-                    && find_unnest_node_within_select(plan).is_none()
-                    && !select.inside_subquery_alias()
-                {
+                if let Some(scope) = Self::derived_input_scope(plan, select) {
                     // The input is about to enter a new SQL scope. Preserve that
                     // boundary explicitly and make the outer expressions resolve
                     // against the relation that will actually be visible there.
                     let requires_alias = self.dialect.requires_derived_table_alias();
                     let alias = requires_alias
-                        .then(|| self.new_table_alias(input_alias.to_string(), vec![]));
+                        .then(|| self.new_table_alias(scope.alias.to_string(), vec![]));
                     self.derive(p.input.as_ref(), relation, alias, false)?;
 
                     let items = p
                         .expr
                         .iter()
                         .cloned()
-                        .map(|expr| {
-                            if requires_alias {
-                                let mut alias_rewriter = TableAliasRewriter {
-                                    table_schema: p.input.schema().as_ref(),
-                                    alias_name: TableReference::bare(input_alias),
-                                    rewrite_unqualified: false,
-                                };
-                                expr.rewrite(&mut alias_rewriter).data()
-                            } else {
-                                Self::strip_column_qualifiers_for_schema(
-                                    expr,
-                                    p.input.schema().as_ref(),
-                                )
-                            }
-                        })
+                        .map(|expr| self.rebase_derived_input_expr(expr, Some(scope)))
                         .map(|expr| self.select_item_to_sql(&expr?))
                         .collect::<Result<Vec<_>>>()?;
                     select.projection(items);
@@ -1145,6 +1184,7 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(cur, query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
+                let derived_input_scope = Self::derived_input_scope(plan, select);
                 let window = find_window_nodes_within_select(
                     plan,
                     None,
@@ -1161,15 +1201,23 @@ impl Unparser<'_> {
                         unprojected =
                             UnparserAggScope::new(agg).prepare(unprojected, None)?;
                     }
+                    unprojected =
+                        self.rebase_derived_input_expr(unprojected, derived_input_scope)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.qualify(Some(filter_expr));
                 } else if let Some(agg) = agg {
-                    let unprojected = UnparserAggScope::new(agg)
+                    let mut unprojected = UnparserAggScope::new(agg)
                         .prepare(filter.predicate.clone(), None)?;
+                    unprojected =
+                        self.rebase_derived_input_expr(unprojected, derived_input_scope)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
-                    let filter_expr = self.expr_to_sql(&filter.predicate)?;
+                    let predicate = self.rebase_derived_input_expr(
+                        filter.predicate.clone(),
+                        derived_input_scope,
+                    )?;
+                    let filter_expr = self.expr_to_sql(&predicate)?;
                     select.selection(Some(filter_expr));
                 }
 
@@ -1245,17 +1293,25 @@ impl Unparser<'_> {
                     ))));
                 };
 
+                let derived_input_scope = Self::derived_input_scope(plan, select);
                 let agg = find_agg_node_within_select(plan, select.already_projected());
                 // unproject sort expressions
                 let sort_exprs: Vec<SortExpr> = sort
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        Self::unproject_sort_expr_in_scope(
+                        let sort_expr = Self::unproject_sort_expr_in_scope(
                             sort_expr.clone(),
                             agg,
                             sort.input.as_ref(),
-                        )
+                        )?;
+                        Ok(SortExpr {
+                            expr: self.rebase_derived_input_expr(
+                                sort_expr.expr,
+                                derived_input_scope,
+                            )?,
+                            ..sort_expr
+                        })
                     })
                     .collect::<Result<Vec<_>>>()?;
 
