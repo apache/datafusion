@@ -2144,7 +2144,7 @@ mod tests {
 
                 num_remaining_rows -= num_emit;
             }
-            assert!(num_remaining_rows == 0);
+            assert_eq!(num_remaining_rows, 0);
 
             let actual_batch = concat_batches(&schema, &actual_sub_batches).unwrap();
             check_result(&actual_batch, &data_set.expected_batch);

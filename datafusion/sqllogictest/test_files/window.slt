@@ -6874,3 +6874,222 @@ ORDER BY id
 2 NULL 3 3 3 3
 3 NULL NULL NULL NULL NULL
 4 7 7 7 7 7
+
+# RANGE window frame over a binary ORDER BY key. The default frame for an
+# ORDER BY without an explicit frame is RANGE BETWEEN UNBOUNDED PRECEDING AND
+# CURRENT ROW, which used to fail with
+# "Internal error: Cannot run range queries on datatype: Binary".
+# Binary is orderable, so peer/range comparison is well defined just like Utf8.
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('a', 'Binary')),
+             (arrow_cast('b', 'Binary')),
+             (arrow_cast('b', 'Binary')),
+             (arrow_cast('c', 'Binary'))) t(x)
+ORDER BY x
+----
+61 1
+62 3
+62 3
+63 4
+
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast('a', 'LargeBinary')),
+             (arrow_cast('b', 'LargeBinary')),
+             (arrow_cast('b', 'LargeBinary'))) t(x)
+ORDER BY x
+----
+61 3
+62 2
+62 2
+
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES (arrow_cast('a', 'BinaryView')),
+             (arrow_cast('b', 'BinaryView')),
+             (arrow_cast('b', 'BinaryView'))) t(x)
+ORDER BY x
+----
+61 3
+62 2
+62 2
+
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast(arrow_cast('a', 'Binary'), 'FixedSizeBinary(1)')),
+             (arrow_cast(arrow_cast('b', 'Binary'), 'FixedSizeBinary(1)'))) t(x)
+ORDER BY x
+----
+61 1
+62 2
+
+# A binary ORDER BY key nested in a dictionary resolves through the same arm.
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast(arrow_cast('a', 'Binary'), 'Dictionary(Int32, Binary)')),
+             (arrow_cast(arrow_cast('b', 'Binary'), 'Dictionary(Int32, Binary)')),
+             (arrow_cast(arrow_cast('b', 'Binary'), 'Dictionary(Int32, Binary)'))) t(x)
+ORDER BY x
+----
+61 1
+62 3
+62 3
+
+# A non-aggregate window function over a binary ORDER BY key.
+query ?I
+SELECT x, RANK() OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('a', 'Binary')),
+             (arrow_cast('b', 'Binary')),
+             (arrow_cast('b', 'Binary'))) t(x)
+ORDER BY x
+----
+61 1
+62 2
+62 2
+
+# RANGE window frame over a time ORDER BY key. Time is orderable, so free
+# frames can locate peer groups by comparison even though finite offsets do not
+# have suitable frame-bound arithmetic.
+query DI
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)')),
+             (arrow_cast('02:00:00', 'Time64(Microsecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+# A non-aggregate window function and descending order over nanosecond time.
+query DI
+SELECT x, RANK() OVER (ORDER BY x DESC)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Nanosecond)')),
+             (arrow_cast('02:00:00', 'Time64(Nanosecond)')),
+             (arrow_cast('02:00:00', 'Time64(Nanosecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 3
+02:00:00 1
+02:00:00 1
+
+# Explicit free bounds use the same comparison-only support.
+query DI
+SELECT x, COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES (arrow_cast('01:00:00', 'Time32(Second)')),
+             (arrow_cast('02:00:00', 'Time32(Second)')),
+             (arrow_cast('02:00:00', 'Time32(Second)'))) t(x)
+ORDER BY x
+----
+01:00:00 3
+02:00:00 2
+02:00:00 2
+
+query DI
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast('01:00:00.000', 'Time32(Millisecond)')),
+             (arrow_cast('02:00:00.000', 'Time32(Millisecond)')),
+             (arrow_cast('02:00:00.000', 'Time32(Millisecond)'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+# A time ORDER BY key nested in a dictionary resolves through the same arm.
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (arrow_cast(arrow_cast('01:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
+             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))')),
+             (arrow_cast(arrow_cast('02:00:00', 'Time64(Microsecond)'), 'Dictionary(Int32, Time64(Microsecond))'))) t(x)
+ORDER BY x
+----
+01:00:00 1
+02:00:00 3
+02:00:00 3
+
+# Finite offsets over time are rejected for both the start and end bound.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(µs\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN INTERVAL '1' HOUR PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(µs\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '1' HOUR FOLLOWING)
+FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
+
+# Unsupported RANGE ORDER BY types still propagate the type-coercion error.
+query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)
+SELECT COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (struct(1))) t(x)
+
+# An order key only needs to be comparable for a free range frame, whose bounds
+# are all UNBOUNDED or CURRENT ROW. A finite offset such as `1 PRECEDING` instead
+# has to be computed as `current_value - 1`, so it additionally requires
+# arithmetic on the order key type. Reject such frames during planning for every
+# order key type that has no arithmetic, rather than silently widening the frame
+# to the whole partition.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Binary
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast('a', 'Binary'))) t(x)
+
+# Dictionary-wrapped binary is unwrapped before checking offset arithmetic.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Binary
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast(arrow_cast('a', 'Binary'), 'Dictionary(Int32, Binary)'))) t(x)
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Utf8
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES ('a')) t(x)
+
+# The end bound is rejected on the same grounds as the start bound.
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Boolean
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
+FROM (VALUES (true)) t(x)
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type List\(Int64\)
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES ([1,2])) t(x)
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Null
+SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES (NULL)) t(x)
+
+# Numeric order keys keep their finite offsets, decimals included.
+query RI
+SELECT x, COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES (arrow_cast(1.5, 'Decimal128(10, 2)')),
+             (arrow_cast(2.0, 'Decimal128(10, 2)'))) t(x)
+ORDER BY x
+----
+1.5 1
+2 2
+
+# Free range frames over those same types keep working, so the rejection above is
+# narrowed to the offset form rather than to the order key type as a whole.
+query TI
+SELECT x, COUNT(*) OVER (ORDER BY x)
+FROM (VALUES ('a'), ('b'), ('b')) t(x)
+ORDER BY x
+----
+a 1
+b 3
+b 3
+
+query BI
+SELECT x, COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM (VALUES (false), (true), (true)) t(x)
+ORDER BY x
+----
+false 3
+true 2
+true 2
+
+statement error DataFusion error: Error during planning: 'first_value' does not support zero arguments
+SELECT first_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+statement error DataFusion error: Error during planning: 'last_value' does not support zero arguments
+SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
+SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)

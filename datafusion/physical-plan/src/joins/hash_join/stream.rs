@@ -445,7 +445,7 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
         return 0;
     }
 
-    debug_assert!(indices.null_count() == 0);
+    debug_assert_eq!(indices.null_count(), 0);
 
     let values_buf = indices.values();
     let values = values_buf.as_ref();
@@ -559,11 +559,13 @@ impl HashJoinStream {
             .bounds
             .clone()
             .unwrap_or_else(|| PartitionBounds::new(vec![]));
-        // Arrow tracks null counts per array, so this costs no data scan.
+        // Use the logical null count: a dictionary key whose entry points at a
+        // NULL dictionary value is a NULL key even though the key bitmap has no
+        // physical nulls (`null_count() == 0` but `logical_null_count() > 0`).
         let keys_have_null = left_data
             .values()
             .iter()
-            .any(|array| array.null_count() > 0);
+            .any(|array| array.logical_null_count() > 0);
 
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
