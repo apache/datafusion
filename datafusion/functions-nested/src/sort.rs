@@ -20,7 +20,7 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, GenericListArray, OffsetSizeTrait,
-    PrimitiveArray, UInt32Array, UInt64Array, new_empty_array, new_null_array,
+    PrimitiveArray, UInt32Array, UInt64Array, new_empty_array,
 };
 use arrow::array::{BooleanBufferBuilder, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
