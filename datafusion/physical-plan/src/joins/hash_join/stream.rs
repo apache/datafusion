@@ -49,6 +49,7 @@ use crate::{
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::NullBuffer;
+use arrow::compute::cast;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -392,6 +393,28 @@ impl RecordBatchStream for HashJoinStream {
 /// Build indices: 4, 5, 6, 6
 /// Probe indices: 3, 3, 4, 5
 /// ```
+pub(super) fn adapt_probe_side_values(
+    build_side_values: &[ArrayRef],
+    mut probe_side_values: Vec<ArrayRef>,
+) -> Result<Vec<ArrayRef>> {
+    for (build, probe) in build_side_values.iter().zip(&mut probe_side_values) {
+        if matches!(
+            (build.data_type(), probe.data_type()),
+            (
+                arrow::datatypes::DataType::Utf8View,
+                arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8,
+            ) | (
+                arrow::datatypes::DataType::BinaryView,
+                arrow::datatypes::DataType::Binary
+                    | arrow::datatypes::DataType::LargeBinary,
+            )
+        ) {
+            *probe = cast(probe, build.data_type())?;
+        }
+    }
+    Ok(probe_side_values)
+}
+
 #[expect(clippy::too_many_arguments)]
 pub(super) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
@@ -718,13 +741,21 @@ impl HashJoinStream {
                     None
                 };
 
+                // Collision checks require matching physical key types. Adapt
+                // once per probe batch and reuse the result if high fanout
+                // requires multiple hash-map lookup calls for this batch.
+                let values = adapt_probe_side_values(
+                    self.build_side.try_as_ready()?.left_data.values(),
+                    keys_values,
+                )?;
+
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
-                        values: keys_values,
+                        values,
                         valid_keys,
                         offset: (0, None),
                         joined_probe_idx: None,
