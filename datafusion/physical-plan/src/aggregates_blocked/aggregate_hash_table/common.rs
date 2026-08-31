@@ -144,7 +144,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .collect::<Result<_>>()?;
 
         let group_schema = agg.group_by.group_schema(&input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let group_values = new_group_values(group_schema, &GroupOrdering::None, batch_size)?;
 
         let metrics = AggregateTableMetrics::new(agg, partition);
 

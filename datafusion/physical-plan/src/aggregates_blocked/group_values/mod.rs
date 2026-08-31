@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;
-
+use datafusion_expr_common::groups_accumulator::BlockedEmitTo;
 // pub mod multi_group_by;
 
 // mod row;
@@ -92,6 +92,8 @@ pub(crate) use metrics::{
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
 pub trait BlockedGroupValues: Send {
+    fn block_size(&self) -> usize;
+
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
@@ -123,16 +125,21 @@ pub trait BlockedGroupValues: Send {
 
 
 pub struct BlockedGroupValuesAdapter {
+    block_size: usize,
     inner: Box<dyn crate::aggregates::group_values::GroupValues>,
 }
 
 impl BlockedGroupValuesAdapter {
-    pub fn new(inner: Box<dyn crate::aggregates::group_values::GroupValues>) -> Self {
-        Self { inner }
+    pub fn new(block_size: usize, inner: Box<dyn crate::aggregates::group_values::GroupValues>) -> Self {
+        Self { block_size, inner }
     }
 }
 
 impl BlockedGroupValues for BlockedGroupValuesAdapter {
+    fn block_size(&self) -> usize {
+        self.block_size
+    }
+
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         self.inner.intern(cols, groups)
     }
@@ -177,8 +184,9 @@ impl BlockedGroupValues for BlockedGroupValuesAdapter {
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
+    block_size: usize,
 ) -> Result<Box<dyn BlockedGroupValues>> {
     let mapped_group_ordering: crate::aggregates::order::GroupOrdering = group_ordering.clone().into();
     let mapped = crate::aggregates::group_values::new_group_values(schema, &mapped_group_ordering)?;
-    Ok(Box::new(BlockedGroupValuesAdapter::new(mapped)))
+    Ok(Box::new(BlockedGroupValuesAdapter::new(block_size, mapped)))
 }

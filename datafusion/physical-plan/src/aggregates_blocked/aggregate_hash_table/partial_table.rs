@@ -80,7 +80,7 @@ impl AggregateHashTable<PartialMarker> {
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
         let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let group_values = new_group_values(group_schema, &GroupOrdering::None, self.batch_size)?;
         let accumulators = state
             .accumulators
             .iter()

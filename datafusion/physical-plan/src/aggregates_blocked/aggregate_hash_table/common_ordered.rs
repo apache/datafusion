@@ -196,7 +196,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
 
         let group_ordering = GroupOrdering::try_new(input_order_mode)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values = new_group_values(group_schema, &group_ordering, batch_size)?;
         let aggregate_arguments = aggregate_expressions(
             &agg.aggr_expr,
             aggregate_mode,

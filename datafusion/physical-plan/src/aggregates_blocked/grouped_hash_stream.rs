@@ -540,7 +540,7 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values = new_group_values(group_schema, &group_ordering, batch_size)?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations
@@ -1378,7 +1378,7 @@ impl GroupedHashAggregateStream {
                 .merging_group_by
                 .group_schema(&self.spill_state.spill_schema)?;
             if group_schema.fields().len() > 1 {
-                self.group_values = new_group_values(group_schema, &self.group_ordering)?;
+                self.group_values = new_group_values(group_schema, &self.group_ordering, self.batch_size)?;
             }
 
             // Use `OutOfMemoryMode::ReportError` from this point on

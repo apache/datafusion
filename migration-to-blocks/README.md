@@ -51,3 +51,6 @@ this should have been done earlier maybe
 this is so we can migrate one by one while adding required functions to the `BlockedGroupValues` trait
 
 this requires to expose some functions from aggregate for now
+
+### 10. Add `batch_size` to `BlockedGroupValues` for later emit change
+this is needed for later emit change to return blocked, so we need to know the block size
