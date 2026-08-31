@@ -286,4 +286,15 @@ from values
 [NULL, 5, 3]
 [30, 20, 10]
 
+query ?
+select array_sort(arr, order)
+from values
+  (make_array('b', 'a'), 'asc'),
+  (make_array('y', 'z', 'x'), 'desc'),
+  (make_array('m', 'n', 'l'), 'desc') as t(arr, order);
+----
+[a, b]
+[z, y, x]
+[n, m, l]
+
 include ./cleanup.slt.part

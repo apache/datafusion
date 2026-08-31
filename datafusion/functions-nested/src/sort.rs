@@ -407,7 +407,7 @@ where
 fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: FieldRef,
-    _sort_order: Option<&StringArray>,
+    sort_order: Option<&StringArray>,
     sort_options: Option<SortOptions>,
 ) -> Result<ArrayRef> {
     let row_count = list_array.len();
@@ -416,12 +416,27 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     let values_start = offsets[0].as_usize();
     let total_values = offsets[row_count].as_usize() - values_start;
 
-    let converter = RowConverter::new(vec![SortField::new_with_options(
+    let nulls_first = sort_options.unwrap_or_default().nulls_first;
+
+    let desc_converter = RowConverter::new(vec![SortField::new_with_options(
         values.data_type().clone(),
-        sort_options.unwrap_or_default(),
+        SortOptions {
+            descending: true,
+            nulls_first,
+        },
     )])?;
+
+    let asc_converter = RowConverter::new(vec![SortField::new_with_options(
+        values.data_type().clone(),
+        SortOptions {
+            descending: false,
+            nulls_first,
+        },
+    )])?;
+
     let values_sliced = values.slice(values_start, total_values);
-    let rows = converter.convert_columns(&[Arc::clone(&values_sliced)])?;
+    let desc_rows = desc_converter.convert_columns(&[Arc::clone(&values_sliced)])?;
+    let asc_rows = asc_converter.convert_columns(&[Arc::clone(&values_sliced)])?;
 
     let mut indices: Vec<OffsetSize> = Vec::with_capacity(total_values);
     let mut new_offsets = Vec::with_capacity(row_count + 1);
@@ -438,6 +453,12 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
             continue;
         }
 
+        let descending = if let Some(sort_order) = sort_order {
+            order_desc(sort_order.value(row_index))?
+        } else {
+            false
+        };
+
         let len = (end - start).as_usize();
         let local_start = start.as_usize() - values_start;
 
@@ -446,7 +467,15 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
         } else {
             sort_scratch.clear();
             sort_scratch.extend(local_start..local_start + len);
-            sort_scratch.sort_unstable_by(|&a, &b| rows.row(a).cmp(&rows.row(b)));
+
+            if descending {
+                sort_scratch
+                    .sort_unstable_by(|&a, &b| desc_rows.row(a).cmp(&desc_rows.row(b)));
+            } else {
+                sort_scratch
+                    .sort_unstable_by(|&a, &b| asc_rows.row(a).cmp(&asc_rows.row(b)));
+            }
+
             indices.extend(sort_scratch.iter().map(|&i| OffsetSize::usize_as(i)));
         }
 
