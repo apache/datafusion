@@ -36,3 +36,7 @@ this is so the next steps of migrating streams one by one will be easier
 ### 6. Rename `GroupValues` to `BlockedGroupValues` and `GroupColumn` to `BlockedGroupColumn`
 
 to avoid confusion
+
+### 7. Add `BlockedIndex` and `BlockedEmitTo`
+
+this is not dependent on anything and it is a building block for everything else

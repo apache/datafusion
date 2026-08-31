@@ -17,6 +17,7 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
+use std::cmp::Ordering;
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{Result, utils::split_vec_min_alloc};
 
@@ -243,6 +244,157 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlocksIndex {
+    block_index: usize,
+    index_in_block: usize,
+}
+
+impl BlocksIndex {
+    pub const MAX: Self = Self {
+        block_index: usize::MAX,
+        index_in_block: usize::MAX,
+    };
+
+    pub fn new(block_index: usize, index_in_block: usize) -> Self {
+        Self {
+            block_index,
+            index_in_block,
+        }
+    }
+
+    pub fn new_in_first_block(index_in_block: usize) -> Self {
+        // Implementation note:
+        // not having From<usize> that will do this instead even when it will be more convenient
+        // so we can later change the layout to be a single usize with bit shifts
+        Self::new(0, index_in_block)
+    }
+
+    pub fn from_index_in_fixed_block_size(index: usize, block_size: usize) -> Self {
+        Self::new(index / block_size, index % block_size)
+    }
+
+    pub fn into_index_in_fixed_block_size(&self, block_size: usize) -> usize {
+        self.block_index * block_size + self.index_in_block
+    }
+
+    pub fn block_index(&self) -> usize {
+        self.block_index
+    }
+
+    pub fn index_in_block(&self) -> usize {
+        self.index_in_block
+    }
+
+    pub fn next_index_in_block(&self) -> Self {
+        self.add_index_in_block(1)
+    }
+
+    pub fn add_index_in_block(&self, n: usize) -> Self {
+        Self {
+            block_index: self.block_index,
+            index_in_block: self.index_in_block + n,
+        }
+    }
+
+    pub fn add_fixed(&self, n: usize, block_size: usize) -> Self {
+        let mut new = *self;
+        new.add_mut_fixed(n, block_size);
+        new
+    }
+
+    pub fn add_mut_fixed(&mut self, n: usize, block_size: usize) {
+        self.block_index += (self.index_in_block + n) / block_size;
+        self.index_in_block = (self.index_in_block + n) % block_size;
+    }
+
+    pub fn next_fixed(&self, block_size: usize) -> Self {
+        let mut new = *self;
+        new.next_mut_fixed(block_size);
+        new
+    }
+
+    pub fn next_mut_fixed(&mut self, block_size: usize) {
+        self.block_index += ((self.index_in_block + 1) == block_size) as usize;
+        self.index_in_block = (self.index_in_block + 1) % block_size;
+    }
+
+    pub fn prev_fixed(&self, block_size: usize) -> Self {
+        let mut new = *self;
+        new.prev_mut_fixed(block_size);
+        new
+    }
+
+    pub fn prev_mut_fixed(&mut self, block_size: usize) {
+        self.block_index -= (self.index_in_block == 0) as usize;
+        self.index_in_block = self.index_in_block.wrapping_sub(1).min(block_size - 1);
+    }
+
+    pub fn prev_block(&self) -> Self {
+        Self {
+            block_index: self.block_index - 1,
+            index_in_block: self.index_in_block
+        }
+    }
+
+    pub fn prev_block_saturate(&self) -> Self {
+        self.block_index.checked_sub(1).map_or_else(
+            || {
+                Self {
+                    block_index: 0,
+                    index_in_block: 0
+                }
+            },
+            |b| {
+                Self {
+                    block_index: b,
+                    index_in_block: self.index_in_block
+                }
+            })
+    }
+
+    pub fn prev_block_checked(&self) -> Option<Self> {
+        self.block_index.checked_sub(1).map(|b| {
+            Self {
+                block_index: b,
+                index_in_block: self.index_in_block
+            }
+        })
+    }
+}
+
+impl PartialOrd for BlocksIndex {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.block_index.partial_cmp(&other.block_index)
+          .map(|o| o.then(self.index_in_block.cmp(&other.index_in_block)))
+    }
+}
+
+impl Ord for BlocksIndex {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.block_index.cmp(&other.block_index).then(self.index_in_block.cmp(&other.index_in_block))
+    }
+}
+
+
+/// Describes how many rows should be emitted during grouping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockedEmitTo {
+    All,
+    /// Emit next group
+    NextBlock,
+    /// Emit only the first `n` groups and shift all existing group
+    /// indexes down by `n`.
+    ///
+    /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
+    /// and group indexes `10, 11, 12, ...` become `0, 1, 2, ...`.
+    ///
+    /// Requirements:
+    /// 1. `n` must be smaller than block_size
+    /// 2. `n` is not 0
+    First(usize),
 }
 
 #[cfg(test)]
