@@ -22,15 +22,25 @@ use std::mem::size_of;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-/// Groups per block once blocked. Sixteen batches' worth, and a megabyte for an
-/// eight byte state, so a block can be handed to Arrow as a buffer of its own.
-pub const BLOCK_LEN: usize = 1 << 17;
+/// Groups per block once blocked: 2 MB for an eight byte state, and a whole number of
+/// output batches, so a block can be handed to Arrow as a buffer of its own.
+///
+/// Counted in groups rather than bytes so that two states of different element types
+/// (`avg`'s sums and counts, say) always agree on where a block starts.
+pub const BLOCK_LEN: usize = 1 << 18;
 
 /// Groups a state may reach before it is worth holding in blocks.
 ///
 /// Below this the state is one plain `Vec`: growing it copies at most this many elements
 /// in total, which is not worth paying a second load on every group update to avoid.
-pub const THRESHOLD_LEN: usize = 1 << 20;
+///
+/// Equal to [`BLOCK_LEN`] so that the flat state is exactly one block when it switches,
+/// and becomes block zero without being copied or split.
+pub const THRESHOLD_LEN: usize = BLOCK_LEN;
+
+/// The flat state starts at a whole output batch rather than growing into one from
+/// nothing, which is a handful of reallocations every grouping would otherwise pay.
+const INITIAL_LEN: usize = 8192;
 
 const BLOCK_SHIFT: u32 = BLOCK_LEN.trailing_zeros();
 const BLOCK_MASK: usize = BLOCK_LEN - 1;
@@ -135,7 +145,12 @@ impl<T: Clone> BlockedVec<T> {
             self.switch_to_blocked();
         }
         match &mut self.storage {
-            Storage::Flat(values) => values.resize(total_num_groups, value),
+            Storage::Flat(values) => {
+                if values.capacity() == 0 {
+                    values.reserve(std::cmp::min(INITIAL_LEN, THRESHOLD_LEN));
+                }
+                values.resize(total_num_groups, value)
+            }
             Storage::Blocked(blocks) => {
                 let mut len = self.len;
                 while len < total_num_groups {
@@ -152,22 +167,31 @@ impl<T: Clone> BlockedVec<T> {
         self.len = total_num_groups;
     }
 
-    /// Chops the single allocation into blocks. Paid once, at the threshold.
+    /// Hands the single allocation over as block zero. Paid once, at the threshold.
+    ///
+    /// The threshold is one block, so what is already stored fits a block exactly and
+    /// nothing has to be copied or split; it is only given room to fill that block out.
     fn switch_to_blocked(&mut self) {
         let Storage::Flat(values) = &mut self.storage else {
             return;
         };
         let mut rest = std::mem::take(values);
-        let mut blocks: Vec<Vec<T>> = Vec::with_capacity(rest.len() / BLOCK_LEN + 1);
+        if rest.len() <= BLOCK_LEN {
+            // The usual case: growth switches at exactly one block, so the allocation
+            // is handed over as it stands and only given room to fill the block out.
+            rest.reserve_exact(BLOCK_LEN - rest.len());
+            self.storage = Storage::Blocked(vec![rest]);
+            return;
+        }
+        // `take_first` can leave more than a block behind, which has to be split.
+        let mut blocks: Vec<Vec<T>> = Vec::with_capacity(rest.len().div_ceil(BLOCK_LEN));
         while rest.len() > BLOCK_LEN {
             let tail = rest.split_off(BLOCK_LEN);
             blocks.push(rest);
             rest = tail;
         }
-        // The last piece keeps room to fill out its block.
-        let mut last = Vec::with_capacity(BLOCK_LEN);
-        last.extend(rest);
-        blocks.push(last);
+        rest.reserve_exact(BLOCK_LEN - rest.len());
+        blocks.push(rest);
         self.storage = Storage::Blocked(blocks);
     }
 
