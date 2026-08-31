@@ -22,6 +22,7 @@ use crate::utils::parse_identifiers_normalized;
 use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -271,7 +272,7 @@ impl Column {
                     })
                     .map_err(|err| {
                         let mut diagnostic = Diagnostic::new_error(
-                            format!("column '{}' is ambiguous", &self.name),
+                            format!("column '{}' is ambiguous", self.name),
                             self.spans().first(),
                         );
                         // TODO If [`DFSchema`] had spans, we could show the
@@ -295,6 +296,7 @@ impl Column {
                 .iter()
                 .flat_map(|s| s.iter())
                 .flat_map(|s| s.columns())
+                .unique()
                 .collect(),
         })
     }

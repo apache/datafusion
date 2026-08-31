@@ -16,33 +16,37 @@
 // under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, record_batch};
 use arrow_schema::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
 use async_trait::async_trait;
 use catalog::create_catalog_provider;
 use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
-use datafusion_common::record_batch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{Expr, TableType};
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{Expr, TableType, col, lit};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
-    create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
-    create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
+    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
+    create_ffi_rank_func, create_ffi_stddev_func, create_ffi_sum_func,
+    create_ffi_table_func,
 };
 
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::config::extension_options::FFI_ExtensionOptions;
 use crate::execution_plan::FFI_ExecutionPlan;
-use crate::execution_plan::tests::EmptyExec;
+use crate::execution_plan::tests::{EmptyExec, create_dynamic_filter};
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+use crate::query_planner::FFI_QueryPlanner;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
 use crate::tests::catalog::create_catalog_provider_list;
@@ -50,11 +54,13 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udtf::FFI_TableFunction;
 use crate::udwf::FFI_WindowUDF;
+use crate::util::FFI_Option;
 
 mod async_provider;
 pub mod catalog;
 pub mod config;
 mod physical_optimizer;
+mod query_planner;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -108,6 +114,10 @@ pub struct ForeignLibraryModule {
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_exec_with_expressions: extern "C" fn() -> FFI_ExecutionPlan,
+
+    pub create_exec_with_dynamic_expressions: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_table_with_statistics:
@@ -117,7 +127,18 @@ pub struct ForeignLibraryModule {
 
     pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
+    /// Construct a query planner. When `library_a_planner` is provided the
+    /// planner delegates to it, as library C does after library A swaps planners.
+    pub create_query_planner: extern "C" fn(
+        logical_codec: FFI_LogicalExtensionCodec,
+        physical_codec: FFI_PhysicalExtensionCodec,
+        library_a_planner: FFI_Option<FFI_QueryPlanner>,
+    ) -> FFI_QueryPlanner,
+
     pub version: extern "C" fn() -> u64,
+
+    /// Create an aggregate UDAF using first_value
+    pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -162,6 +183,21 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     FFI_ExecutionPlan::new(plan, None)
 }
 
+pub(crate) extern "C" fn create_exec_with_expressions() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::empty());
+    let expression: Arc<dyn PhysicalExpr> = create_dynamic_filter();
+    let plan = Arc::new(EmptyExec::new(schema).with_expressions(vec![expression]));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+pub(crate) extern "C" fn create_exec_with_dynamic_expressions() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::empty());
+    let expression: Arc<dyn PhysicalExpr> = create_dynamic_filter();
+    let plan =
+        Arc::new(EmptyExec::new(schema).with_dynamic_expressions(vec![expression]));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
 /// Returns canonical statistics used by both the producer and consumer sides of
 /// the integration tests so round-trips can be asserted without hard-coding
 /// the values in two places.
@@ -202,6 +238,8 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
 struct TableWithStats {
     inner: Arc<dyn TableProvider>,
     stats: Statistics,
+    delete_calls: AtomicUsize,
+    update_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -221,11 +259,61 @@ impl TableProvider for TableWithStats {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.inner.scan(session, projection, filters, limit).await
+    }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+        if !valid {
+            return exec_err!("Unexpected DELETE filters for call {call}");
+        }
+        Ok(dml_count_plan())
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if assignments
+            != vec![
+                ("b".to_string(), lit(42_f64)),
+                ("a".to_string(), lit(7_i32)),
+            ]
+        {
+            return exec_err!("Unexpected UPDATE assignments");
+        }
+
+        let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+
+        if !valid {
+            return exec_err!("Unexpected UPDATE filters for call {call}");
+        }
+
+        Ok(dml_count_plan())
+    }
+
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(dml_count_plan())
     }
 }
 
@@ -238,8 +326,19 @@ pub(crate) extern "C" fn create_table_with_statistics(
     let provider = Arc::new(TableWithStats {
         inner,
         stats: make_test_statistics(),
+        delete_calls: AtomicUsize::new(0),
+        update_calls: AtomicUsize::new(0),
     });
     FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
+}
+
+fn dml_count_plan() -> Arc<dyn ExecutionPlan> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "count",
+        DataType::UInt64,
+        false,
+    )]));
+    Arc::new(EmptyExec::new(schema))
 }
 
 /// This defines the entry point for using the module.
@@ -260,12 +359,16 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_exec_with_expressions,
+        create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
         create_table_with_statistics,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
         create_context_aware_optimizer_rule:
             physical_optimizer::create_context_aware_optimizer_rule,
+        create_query_planner: query_planner::create_query_planner,
         version: super::version,
+        create_first_value_udaf: create_ffi_first_value_func,
     }
 }

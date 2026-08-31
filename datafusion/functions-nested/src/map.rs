@@ -63,57 +63,33 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn expand_if_scalar(arg: ColumnarValue, rows: usize) -> Result<ColumnarValue> {
-    Ok(ColumnarValue::Array(arg.into_array(rows)?))
+fn into_array_and_type(
+    arg: ColumnarValue,
+    rows: usize,
+    expand_scalar: bool,
+) -> Result<(ArrayRef, DataType)> {
+    let data_type = arg.data_type();
+    let array = if expand_scalar {
+        arg.into_array(rows)?
+    } else {
+        get_first_array_ref(&arg)?
+    };
+
+    Ok((array, data_type))
 }
 
 fn make_map_batch(args: Vec<ColumnarValue>, number_rows: usize) -> Result<ColumnarValue> {
     let can_evaluate_to_const = can_evaluate_to_const(&args);
-    let [mut keys_arg, mut values_arg] = take_function_args("make_map", args)?;
+    let [keys_arg, values_arg] = take_function_args("make_map", args)?;
+    let expand_scalar = !can_evaluate_to_const;
 
-    // if we can't evaluate to const (inputs are not both scalar) then ensure they
-    // are expanded to arrays which following logic expects
-    if !can_evaluate_to_const {
-        keys_arg = expand_if_scalar(keys_arg, number_rows)?;
-        values_arg = expand_if_scalar(values_arg, number_rows)?;
-    };
+    let (keys, keys_data_type) =
+        into_array_and_type(keys_arg, number_rows, expand_scalar)?;
+    let (values, _) = into_array_and_type(values_arg, number_rows, expand_scalar)?;
 
-    let keys = get_first_array_ref(&keys_arg)?;
-    let key_array = keys.as_ref();
+    validate_map_keys_for_data_type(&keys, &keys_data_type, can_evaluate_to_const)?;
 
-    match &keys_arg {
-        ColumnarValue::Array(_) => match key_array.data_type() {
-            DataType::List(_) => keys
-                .as_list::<i32>()
-                .iter()
-                .flatten()
-                .try_for_each(|row| validate_map_keys(row.as_ref()))?,
-            DataType::LargeList(_) => keys
-                .as_list::<i64>()
-                .iter()
-                .flatten()
-                .try_for_each(|row| validate_map_keys(row.as_ref()))?,
-            DataType::FixedSizeList(_, _) => {
-                keys.as_fixed_size_list()
-                    .iter()
-                    .flatten()
-                    .try_for_each(|row| validate_map_keys(row.as_ref()))?
-            }
-            data_type => {
-                return exec_err!(
-                    "Expected list, large_list or fixed_size_list, got {:?}",
-                    data_type
-                );
-            }
-        },
-        ColumnarValue::Scalar(_) => {
-            validate_map_keys(key_array)?;
-        }
-    }
-
-    let values = get_first_array_ref(&values_arg)?;
-
-    make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_arg.data_type())
+    make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_data_type)
 }
 
 fn validate_unique_primitive_keys<T: ArrowPrimitiveType>(array: &dyn Array) -> Result<()>
@@ -237,6 +213,38 @@ fn validate_map_keys(array: &dyn Array) -> Result<()> {
     }
 }
 
+fn validate_map_keys_for_data_type(
+    keys: &ArrayRef,
+    keys_data_type: &DataType,
+    can_evaluate_to_const: bool,
+) -> Result<()> {
+    if can_evaluate_to_const {
+        return validate_map_keys(keys.as_ref());
+    }
+
+    match keys_data_type {
+        DataType::List(_) => keys
+            .as_list::<i32>()
+            .iter()
+            .flatten()
+            .try_for_each(|row| validate_map_keys(row.as_ref())),
+        DataType::LargeList(_) => keys
+            .as_list::<i64>()
+            .iter()
+            .flatten()
+            .try_for_each(|row| validate_map_keys(row.as_ref())),
+        DataType::FixedSizeList(_, _) => keys
+            .as_fixed_size_list()
+            .iter()
+            .flatten()
+            .try_for_each(|row| validate_map_keys(row.as_ref())),
+        data_type => exec_err!(
+            "Expected list, large_list or fixed_size_list, got {:?}",
+            data_type
+        ),
+    }
+}
+
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     match columnar_value {
         ColumnarValue::Scalar(value) => match value {
@@ -320,7 +328,7 @@ fn make_map_batch_internal(
     doc_section(label = "Map Functions"),
     description = "Returns an Arrow map with the specified key-value pairs.\n\n\
     The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
-    syntax_example = "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
+    syntax_example = "map(key, value)\nmap {key: value}\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
     sql_example = r#"
 ```sql
 -- Using map function
@@ -737,9 +745,8 @@ mod tests {
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");
@@ -843,9 +850,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 2, "Should have 2 maps");
@@ -916,9 +922,8 @@ mod tests {
         );
 
         // Verify the result
-        let map_array = match result.unwrap() {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected Array result"),
+        let ColumnarValue::Array(map_array) = result.unwrap() else {
+            panic!("Expected Array result")
         };
 
         assert_eq!(map_array.len(), 3, "Should have 3 maps");

@@ -65,32 +65,30 @@
 //! - `WHERE s['value'] > 5` — pushed down (accesses a primitive leaf)
 //! - `WHERE s IS NOT NULL`  — not pushed down (references the whole struct)
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use datafusion_functions::core::file_row_index::FileRowIndexFunc;
-use datafusion_functions::core::getfield::GetFieldFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
-use parquet::schema::types::SchemaDescriptor;
 
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
+use datafusion_common::tree_node::TreeNode;
+use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
 use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
+use crate::projection_read_plan::{
+    ParquetReadPlan, PushdownChecker, PushdownColumns, assemble_read_plan,
+    build_read_plan_with_cast_clipping,
+};
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
 /// row-level filtering during parquet decoding.
@@ -123,7 +121,12 @@ pub(crate) struct DatafusionArrowPredicate {
 }
 
 impl DatafusionArrowPredicate {
-    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
+    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`.
+    ///
+    /// Production code goes through [`prebuild_row_filter_candidates`] +
+    /// [`row_filter_from_prebuilt`]; this constructor remains as a test
+    /// convenience for exercising a single candidate.
+    #[cfg(test)]
     pub fn try_new(
         candidate: FilterCandidate,
         rows_pruned: metrics::Count,
@@ -164,9 +167,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 timer.stop();
                 Ok(bool_arr)
             })
+            // `ExternalError` is the only `ArrowError` variant that keeps a
+            // source, and therefore the only one that leaves the original error
+            // recoverable (see `DataFusionError::find_root`)
             .map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Error evaluating filter predicate: {e:?}"
+                ArrowError::ExternalError(Box::new(
+                    e.context("Error evaluating filter predicate"),
                 ))
             })
     }
@@ -187,22 +193,6 @@ pub(crate) struct FilterCandidate {
     required_bytes: usize,
     /// The resolved Parquet read plan (leaf indices + projected schema).
     read_plan: ParquetReadPlan,
-}
-
-/// The result of resolving which Parquet leaf columns and Arrow schema fields
-/// are needed to evaluate an expression against a Parquet file
-///
-/// This is the shared output of the column resolution pipeline used by both
-/// the row filter to build `ArrowPredicate`s and the opener to build `ProjectionMask`s
-#[derive(Debug, Clone)]
-pub(crate) struct ParquetReadPlan {
-    /// Projection mask built from leaf column indices in the Parquet schema.
-    /// Using a `ProjectionMask` directly (rather than raw indices) prevents
-    /// bugs from accidentally mixing up root vs leaf indices.
-    pub projection_mask: ProjectionMask,
-    /// The projected Arrow schema containing only the columns/fields required
-    /// Struct types are pruned to include only the accessed sub-fields
-    pub projected_schema: SchemaRef,
 }
 
 /// Helper to build a `FilterCandidate`.
@@ -246,289 +236,6 @@ impl FilterCandidateBuilder {
     }
 }
 
-/// Traverses a `PhysicalExpr` tree to determine if any column references would
-/// prevent the expression from being pushed down to the parquet decoder.
-///
-/// An expression cannot be pushed down if it references:
-/// - Unsupported nested columns (whole struct references or list fields that are
-///   not covered by the supported predicate set)
-/// - Columns that don't exist in the file schema
-///
-/// Struct field access via `get_field` is supported when the resolved leaf type
-/// is primitive (e.g. `get_field(struct_col, 'field') > 5`).
-struct PushdownChecker<'schema> {
-    /// Does the expression require any non-primitive columns (like structs)?
-    non_primitive_columns: bool,
-    /// Does the expression reference any columns not present in the file schema?
-    projected_columns: bool,
-    /// Does the expression references a ScalarUDF that requires some rewrite
-    /// and therefore can't be pushed down into the row-filter.
-    has_unpushable_udfs: bool,
-    /// Indices into the file schema of columns required to evaluate the expression.
-    /// Does not include struct columns accessed via `get_field`.
-    required_columns: Vec<usize>,
-    /// Struct field accesses via `get_field`.
-    struct_field_accesses: Vec<StructFieldAccess>,
-    /// Whether nested list columns are supported by the predicate semantics.
-    allow_list_columns: bool,
-    /// The Arrow schema of the parquet file.
-    file_schema: &'schema Schema,
-}
-
-impl<'schema> PushdownChecker<'schema> {
-    fn new(file_schema: &'schema Schema, allow_list_columns: bool) -> Self {
-        Self {
-            non_primitive_columns: false,
-            projected_columns: false,
-            has_unpushable_udfs: false,
-            required_columns: Vec::new(),
-            struct_field_accesses: Vec::new(),
-            allow_list_columns,
-            file_schema,
-        }
-    }
-
-    /// Checks whether a struct's root column exists in the file schema and, if so,
-    /// records its index so the entire struct is decoded for filter evaluation.
-    ///
-    /// This is called when we see a `get_field` expression that resolves to a
-    /// primitive leaf type. We only need the *root* column index because the
-    /// Parquet reader decodes all leaves of a struct together.
-    ///
-    /// # Example
-    ///
-    /// Given file schema `{a: Int32, s: Struct(foo: Utf8, bar: Int64)}` and the
-    /// expression `get_field(s, 'foo') = 'hello'`:
-    ///
-    /// - `column_name` = `"s"` (the root struct column)
-    /// - `file_schema.index_of("s")` returns `1`
-    /// - We push `1` into `required_columns`
-    /// - Return `None` (no issue — traversal continues in the caller)
-    ///
-    /// If `"s"` is not in the file schema (e.g. a projected-away column), we set
-    /// `projected_columns = true` and return `Jump` to skip the subtree.
-    fn check_struct_field_column(
-        &mut self,
-        column_name: &str,
-        field_path: Vec<String>,
-    ) -> Option<TreeNodeRecursion> {
-        let Ok(idx) = self.file_schema.index_of(column_name) else {
-            self.projected_columns = true;
-            return Some(TreeNodeRecursion::Jump);
-        };
-
-        self.struct_field_accesses.push(StructFieldAccess {
-            root_index: idx,
-            field_path,
-        });
-
-        None
-    }
-
-    fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        let idx = match self.file_schema.index_of(column_name) {
-            Ok(idx) => idx,
-            Err(_) => {
-                // Column does not exist in the file schema, so we can't push this down.
-                self.projected_columns = true;
-                return Some(TreeNodeRecursion::Jump);
-            }
-        };
-
-        // Duplicates are handled by dedup() in into_sorted_columns()
-        self.required_columns.push(idx);
-        let data_type = self.file_schema.field(idx).data_type();
-
-        if DataType::is_nested(data_type) {
-            self.handle_nested_type(data_type)
-        } else {
-            None
-        }
-    }
-
-    /// Determines whether a nested data type can be pushed down to Parquet decoding.
-    ///
-    /// Returns `Some(TreeNodeRecursion::Jump)` if the nested type prevents pushdown,
-    /// `None` if the type is supported and pushdown can continue.
-    fn handle_nested_type(&mut self, data_type: &DataType) -> Option<TreeNodeRecursion> {
-        if self.is_nested_type_supported(data_type) {
-            None
-        } else {
-            // Block pushdown for unsupported nested types:
-            // - Structs (regardless of predicate support)
-            // - Lists without supported predicates
-            self.non_primitive_columns = true;
-            Some(TreeNodeRecursion::Jump)
-        }
-    }
-
-    /// Checks if a nested data type is supported for list column pushdown.
-    ///
-    /// List columns are only supported if:
-    /// 1. The data type is a list variant (List, LargeList, or FixedSizeList)
-    /// 2. The expression contains supported list predicates (e.g., array_has_all)
-    fn is_nested_type_supported(&self, data_type: &DataType) -> bool {
-        let is_list = matches!(
-            data_type,
-            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
-        );
-        self.allow_list_columns && is_list
-    }
-
-    #[inline]
-    fn prevents_pushdown(&self) -> bool {
-        self.non_primitive_columns || self.projected_columns || self.has_unpushable_udfs
-    }
-
-    /// Consumes the checker and returns sorted, deduplicated column indices
-    /// wrapped in a `PushdownColumns` struct.
-    ///
-    /// This method sorts the column indices and removes duplicates. The sort
-    /// is required because downstream code relies on column indices being in
-    /// ascending order for correct schema projection.
-    fn into_sorted_columns(mut self) -> PushdownColumns {
-        self.required_columns.sort_unstable();
-        self.required_columns.dedup();
-        PushdownColumns {
-            required_columns: self.required_columns,
-            struct_field_accesses: self.struct_field_accesses,
-        }
-    }
-}
-
-impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
-    type Node = Arc<dyn PhysicalExpr>;
-
-    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        // Handle struct field access like `s['foo']['bar'] > 10`.
-        //
-        // DataFusion represents nested field access as `get_field(Column("s"), "foo")`
-        // (or chained: `get_field(get_field(Column("s"), "foo"), "bar")`).
-        //
-        // We intercept the outermost `get_field` on the way *down* the tree so
-        // the visitor never reaches the raw `Column("s")` node. Without this,
-        // `check_single_column` would see that `s` is a Struct and reject it.
-        //
-        // The strategy:
-        //   1. Match `get_field` whose first arg is a `Column` (the struct root).
-        //   2. Check that the *resolved* return type is primitive — meaning we've
-        //      drilled all the way to a leaf (e.g. `s['foo']` → Utf8).
-        //   3. Record the root column index via `check_struct_field_column` and
-        //      return `Jump` to skip visiting the children (the Column and the
-        //      literal field-name args), since we've already handled them.
-        //
-        // If the return type is still nested (e.g. `s['nested_struct']` → Struct),
-        // we fall through and let normal traversal continue, which will
-        // eventually reject the expression when it hits the struct Column.
-        if let Some(func) =
-            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(node.as_ref())
-        {
-            let args = func.args();
-
-            if let Some(column) = args.first().and_then(|a| a.downcast_ref::<Column>()) {
-                // for Map columns, get_field performs a runtime key lookup rather than a
-                // schema-level field access so the entire Map column must be read,
-                // we skip the struct field optimization and defer to normal Column traversal
-                let is_map_column = self
-                    .file_schema
-                    .index_of(column.name())
-                    .ok()
-                    .map(|idx| {
-                        matches!(
-                            self.file_schema.field(idx).data_type(),
-                            DataType::Map(_, _)
-                        )
-                    })
-                    .unwrap_or(false);
-
-                let return_type = func.return_type();
-
-                if !is_map_column
-                    && (!DataType::is_nested(return_type)
-                        || self.is_nested_type_supported(return_type))
-                {
-                    // try to resolve all field name arguments to strinrg literals
-                    // if any argument is not a string literal, we can not determine the exact
-                    // leaf path so we fall back to reading the entire struct root column
-                    let field_path = args[1..]
-                        .iter()
-                        .map(|arg| {
-                            arg.downcast_ref::<Literal>().and_then(|lit| {
-                                lit.value().try_as_str().flatten().map(|s| s.to_string())
-                            })
-                        })
-                        .collect();
-
-                    match field_path {
-                        Some(path) => {
-                            if let Some(recursion) =
-                                self.check_struct_field_column(column.name(), path)
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                        None => {
-                            // Could not resolve field path — fall back to
-                            // reading the entire struct root column.
-                            if let Some(recursion) =
-                                self.check_single_column(column.name())
-                            {
-                                return Ok(recursion);
-                            }
-                        }
-                    }
-
-                    return Ok(TreeNodeRecursion::Jump);
-                }
-            }
-        }
-
-        if let Some(column) = node.downcast_ref::<Column>()
-            && let Some(recursion) = self.check_single_column(column.name())
-        {
-            return Ok(recursion);
-        }
-
-        if ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
-            .is_some()
-        {
-            self.has_unpushable_udfs = true;
-            return Ok(TreeNodeRecursion::Jump);
-        }
-
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
-/// Describes the nested column behavior for filter pushdown.
-///
-/// This enum makes explicit the different states a predicate can be in
-/// with respect to nested column handling during Parquet decoding.
-/// Result of checking which columns are required for filter pushdown.
-#[derive(Debug)]
-struct PushdownColumns {
-    /// Sorted, unique column indices into the file schema required to evaluate
-    /// the filter expression. Must be in ascending order for correct schema
-    /// projection matching. Does not include struct columns accessed via `get_field`.
-    required_columns: Vec<usize>,
-    /// Struct field accesses via `get_field`. Each entry records the root struct
-    /// column index and the field path being accessed.
-    struct_field_accesses: Vec<StructFieldAccess>,
-}
-
-/// Records a struct field access via `get_field(struct_col, 'field1', 'field2', ...)`.
-///
-/// This allows the row filter to project only the specific Parquet leaf columns
-/// needed by the filter, rather than all leaves of the struct.
-#[derive(Debug, Clone)]
-struct StructFieldAccess {
-    /// Arrow root column index of the struct in the file schema.
-    root_index: usize,
-    /// Field names forming the path into the struct.
-    /// e.g., `["value"]` for `s['value']`, `["outer", "inner"]` for `s['outer']['inner']`.
-    field_path: Vec<String>,
-}
-
 /// Checks if a given expression can be pushed down to the parquet decoder.
 ///
 /// Returns `Some(PushdownColumns)` if the expression can be pushed down,
@@ -537,12 +244,17 @@ struct StructFieldAccess {
 ///
 /// Returns `None` if the expression cannot be pushed down (e.g., references
 /// unsupported nested types or columns not in the file).
+/// Struct casts are accepted only after schema adaptation, not while planning
+/// against the table schema: adaptation may insert another cast underneath an
+/// explicit cast, leaving an expression the runtime checker cannot handle.
 fn pushdown_columns(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
+    allow_struct_casts: bool,
 ) -> Result<Option<PushdownColumns>> {
     let allow_list_columns = supports_list_predicates(expr);
-    let mut checker = PushdownChecker::new(file_schema, allow_list_columns);
+    let mut checker =
+        PushdownChecker::new(file_schema, allow_list_columns, allow_struct_casts);
     expr.visit(&mut checker)?;
     Ok((!checker.prevents_pushdown()).then(|| checker.into_sorted_columns()))
 }
@@ -566,359 +278,34 @@ pub(crate) fn build_parquet_read_plan(
 ) -> Result<Option<(ParquetReadPlan, usize)>> {
     let schema_descr = metadata.file_metadata().schema_descr();
 
-    let Some(required_columns) = pushdown_columns(expr, file_schema)? else {
+    let Some(required_columns) = pushdown_columns(expr, file_schema, true)? else {
         return Ok(None);
     };
 
-    let root_indices = &required_columns.required_columns;
-
-    let mut leaf_indices =
-        leaf_indices_for_roots(root_indices.iter().copied(), schema_descr);
-
-    let struct_leaf_indices = resolve_struct_field_leaves(
-        &required_columns.struct_field_accesses,
-        file_schema,
-        schema_descr,
-    );
-    leaf_indices.extend_from_slice(&struct_leaf_indices);
-    leaf_indices.sort_unstable();
-    leaf_indices.dedup();
+    // A retained Struct cast names the fields its conversion touches, so the
+    // read is clipped to those leaves rather than decoding the whole root.
+    // A cast whose target covers every leaf, or that cannot be clipped safely,
+    // falls back to a full read of that root inside the helper.
+    let (read_plan, leaf_indices) = if required_columns.cast_accesses.is_empty() {
+        assemble_read_plan(
+            &required_columns.required_columns,
+            &required_columns.struct_field_accesses,
+            file_schema,
+            schema_descr,
+        )
+    } else {
+        build_read_plan_with_cast_clipping(
+            file_schema,
+            schema_descr,
+            &required_columns.required_columns,
+            &required_columns.struct_field_accesses,
+            &required_columns.cast_accesses,
+        )
+    };
 
     let required_bytes = size_of_columns(&leaf_indices, metadata)?;
 
-    let projection_mask =
-        ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
-
-    let projected_schema = build_filter_schema(
-        file_schema,
-        root_indices,
-        &required_columns.struct_field_accesses,
-    );
-
-    Ok(Some((
-        ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        },
-        required_bytes,
-    )))
-}
-
-/// Builds a unified [`ParquetReadPlan`] for a set of projection expressions
-///
-/// Unlike [`build_parquet_read_plan`] (which is used for filter pushdown and
-/// returns `None` when an expression references unsupported nested types or
-/// missing columns), this function always succeeds. It collects every column
-/// that *can* be resolved in the file and produces a leaf-level projection
-/// mask. Columns missing from the file are silently skipped since the projection
-/// layer handles those by inserting nulls.
-pub(crate) fn build_projection_read_plan(
-    exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
-    file_schema: &Schema,
-    schema_descr: &SchemaDescriptor,
-) -> ParquetReadPlan {
-    // fast path: if every expression is a plain Column reference, skip all
-    // struct analysis and use root-level projection directly
-    let exprs = exprs.into_iter().collect::<Vec<_>>();
-    let all_plain_columns = exprs.iter().all(|e| e.downcast_ref::<Column>().is_some());
-
-    if all_plain_columns {
-        let mut root_indices: Vec<usize> = exprs
-            .iter()
-            .map(|e| e.downcast_ref::<Column>().unwrap().index())
-            .collect();
-        root_indices.sort_unstable();
-        root_indices.dedup();
-
-        let projection_mask =
-            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
-        let projected_schema = Arc::new(
-            file_schema
-                .project(&root_indices)
-                .expect("valid column indices"),
-        );
-
-        return ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        };
-    }
-
-    // secondary fast path: if the schema has no struct columns, we can skip
-    // PushdownChecker traversal and use root-level projection
-    let has_struct_columns = file_schema
-        .fields()
-        .iter()
-        .any(|f| matches!(f.data_type(), DataType::Struct(_)));
-
-    if !has_struct_columns {
-        let mut root_indices = exprs
-            .into_iter()
-            .flat_map(|e| collect_columns(&e).into_iter().map(|col| col.index()))
-            .collect::<Vec<_>>();
-
-        root_indices.sort_unstable();
-        root_indices.dedup();
-
-        let projection_mask =
-            ProjectionMask::roots(schema_descr, root_indices.iter().copied());
-
-        let projected_schema = Arc::new(
-            file_schema
-                .project(&root_indices)
-                .expect("valid column indices"),
-        );
-
-        return ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        };
-    }
-
-    let mut all_root_indices = Vec::new();
-    let mut all_struct_accesses = Vec::new();
-
-    for expr in exprs {
-        let mut checker = PushdownChecker::new(file_schema, true);
-        let _ = expr.visit(&mut checker);
-        let columns = checker.into_sorted_columns();
-
-        all_root_indices.extend_from_slice(&columns.required_columns);
-        all_struct_accesses.extend(columns.struct_field_accesses);
-    }
-
-    all_root_indices.sort_unstable();
-    all_root_indices.dedup();
-
-    // when no struct field accesses were found, fall back to root-level projection
-    // to match the performance of the simple path
-    if all_struct_accesses.is_empty() {
-        let projection_mask =
-            ProjectionMask::roots(schema_descr, all_root_indices.iter().copied());
-        let projected_schema = Arc::new(
-            file_schema
-                .project(&all_root_indices)
-                .expect("valid column indices"),
-        );
-
-        return ParquetReadPlan {
-            projection_mask,
-            projected_schema,
-        };
-    }
-
-    let leaf_indices = {
-        let mut out =
-            leaf_indices_for_roots(all_root_indices.iter().copied(), schema_descr);
-        let struct_leaf_indices =
-            resolve_struct_field_leaves(&all_struct_accesses, file_schema, schema_descr);
-
-        out.extend_from_slice(&struct_leaf_indices);
-        out.sort_unstable();
-        out.dedup();
-
-        out
-    };
-
-    let projection_mask =
-        ProjectionMask::leaves(schema_descr, leaf_indices.iter().copied());
-
-    let projected_schema =
-        build_filter_schema(file_schema, &all_root_indices, &all_struct_accesses);
-
-    ParquetReadPlan {
-        projection_mask,
-        projected_schema,
-    }
-}
-
-fn leaf_indices_for_roots<I>(
-    root_indices: I,
-    schema_descr: &SchemaDescriptor,
-) -> Vec<usize>
-where
-    I: IntoIterator<Item = usize>,
-{
-    // Always map root (Arrow) indices to Parquet leaf indices via the schema
-    // descriptor. Arrow root indices only equal Parquet leaf indices when the
-    // schema has no group columns (Struct, Map, etc.); when group columns
-    // exist, their children become separate leaves and shift all subsequent
-    // leaf indices.
-    // Struct columns are unsupported.
-    let root_set: BTreeSet<_> = root_indices.into_iter().collect();
-
-    (0..schema_descr.num_columns())
-        .filter(|leaf_idx| {
-            root_set.contains(&schema_descr.get_column_root_idx(*leaf_idx))
-        })
-        .collect()
-}
-
-/// Resolves struct field access to specific Parquet leaf column indices
-///
-/// For every `StructFieldAccess`, finds the leaf columns in the Parquet schema
-/// whose path matches the struct root name + field path. This avoids reading all
-/// leaves of a struct when only specific fields are needed
-fn resolve_struct_field_leaves(
-    accesses: &[StructFieldAccess],
-    file_schema: &Schema,
-    schema_descr: &SchemaDescriptor,
-) -> Vec<usize> {
-    let mut leaf_indices = Vec::new();
-
-    for access in accesses {
-        let root_name = file_schema.field(access.root_index).name();
-        let prefix = std::iter::once(root_name.as_str())
-            .chain(access.field_path.iter().map(|p| p.as_str()))
-            .collect::<Vec<_>>();
-
-        for leaf_idx in 0..schema_descr.num_columns() {
-            let col = schema_descr.column(leaf_idx);
-            let col_path = col.path().parts();
-
-            // A leaf matches if its path starts with our prefix.
-            // e.g., prefix=["s", "value"] matches leaf path ["s", "value"]
-            // prefix=["s", "outer"] matches ["s", "outer", "inner"]
-
-            // a leaf matches if its path starts with our prefix
-            // for example: prefix=["s", "value"] matches leaf path ["s", "value"]
-            //              prefix=["s", "outer"] matches ["s", "outer", "inner"]
-            let leaf_matches_path = col_path.len() >= prefix.len()
-                && col_path.iter().zip(prefix.iter()).all(|(a, b)| a == b);
-
-            if leaf_matches_path {
-                leaf_indices.push(leaf_idx);
-            }
-        }
-    }
-
-    leaf_indices
-}
-
-/// Builds a filter schema that includes only the fields actually accessed by the
-/// filter expression.
-///
-/// For regular (non-struct) columns, the full field type is used.
-/// For struct columns accessed via `get_field`, a pruned struct type is created
-/// containing only the fields along the access path. Note: it must match the schema
-/// that the Parquet reader produces when projecting specific struct leaves
-fn build_filter_schema(
-    file_schema: &Schema,
-    regular_indices: &[usize],
-    struct_field_accesses: &[StructFieldAccess],
-) -> SchemaRef {
-    let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
-    let paths_by_root = group_access_paths_by_root(struct_field_accesses);
-
-    let all_indices = regular_indices
-        .iter()
-        .copied()
-        .chain(paths_by_root.keys().copied())
-        .collect::<BTreeSet<_>>();
-
-    let fields = all_indices
-        .iter()
-        .map(|&idx| {
-            let field = file_schema.field(idx);
-
-            // if this column appears as a regular (whole-column) reference,
-            // keep the full type
-            //
-            // Pruning is only valid when the column is accessed exclusively
-            // through struct field accesses
-            if regular_set.contains(&idx) {
-                return Arc::new(field.clone());
-            }
-
-            let Some(field_paths) = paths_by_root.get(&idx) else {
-                return Arc::new(field.clone());
-            };
-
-            let pruned_data_type = prune_struct_type(field.data_type(), field_paths);
-            Arc::new(Field::new(
-                field.name(),
-                pruned_data_type,
-                field.is_nullable(),
-            ))
-        })
-        .collect::<Vec<_>>();
-
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        file_schema.metadata().clone(),
-    ))
-}
-
-/// Groups struct field access paths once for the root schema level.
-///
-/// Each map entry contains the complete field paths accessed below a root
-/// column. Recursive pruning groups these paths by their next component at each
-/// nested struct level.
-fn group_access_paths_by_root(
-    struct_field_accesses: &[StructFieldAccess],
-) -> BTreeMap<usize, Vec<&[String]>> {
-    let mut paths_by_root: BTreeMap<usize, Vec<&[String]>> = BTreeMap::new();
-    for StructFieldAccess {
-        root_index,
-        field_path,
-    } in struct_field_accesses
-    {
-        paths_by_root
-            .entry(*root_index)
-            .or_default()
-            .push(field_path.as_slice());
-    }
-
-    paths_by_root
-}
-
-/// Groups access paths once for the current struct level.
-///
-/// The map key is the field name at this level. The map value is the list of
-/// remaining path suffixes below that field. An empty suffix means the access
-/// path terminates at that field, so the full field must be preserved.
-fn group_paths_by_next_field<'a>(
-    paths: &'a [&'a [String]],
-) -> BTreeMap<&'a str, Vec<&'a [String]>> {
-    let mut paths_by_field: BTreeMap<&str, Vec<&[String]>> = BTreeMap::new();
-    for path in paths {
-        if let Some((field, sub_path)) = path.split_first() {
-            paths_by_field
-                .entry(field.as_str())
-                .or_default()
-                .push(sub_path);
-        }
-    }
-
-    paths_by_field
-}
-
-fn prune_struct_type(dt: &DataType, paths: &[&[String]]) -> DataType {
-    let DataType::Struct(fields) = dt else {
-        return dt.clone();
-    };
-
-    let paths_by_field = group_paths_by_next_field(paths);
-
-    let pruned_fields = fields
-        .iter()
-        .filter_map(|f| {
-            let sub_paths = paths_by_field.get(f.name().as_str())?;
-
-            let out = if sub_paths.iter().any(|sub| sub.is_empty()) {
-                // Leaf of access path — keep the field as-is.
-                Arc::clone(f)
-            } else {
-                // Recurse into nested struct.
-                let pruned = prune_struct_type(f.data_type(), sub_paths);
-                Arc::new(Field::new(f.name(), pruned, f.is_nullable()))
-            };
-
-            Some(out)
-        })
-        .collect::<Vec<_>>();
-
-    DataType::Struct(pruned_fields.into())
+    Ok(Some((read_plan, required_bytes)))
 }
 
 /// Checks if a predicate expression can be pushed down to the parquet decoder.
@@ -991,7 +378,7 @@ pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
 ) -> bool {
-    match pushdown_columns(expr, file_schema) {
+    match pushdown_columns(expr, file_schema, false) {
         Ok(Some(_)) => true,
         Ok(None) | Err(_) => false,
     }
@@ -1042,16 +429,65 @@ pub fn build_row_filter(
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
-    let rows_pruned = &file_metrics.pushdown_rows_pruned;
-    let rows_matched = &file_metrics.pushdown_rows_matched;
-    let time = &file_metrics.row_pushdown_eval_time;
+    // Implemented on top of the prebuild split so there is a single place
+    // that splits conjuncts, orders candidates, and wires metrics — callers
+    // that build once per file go through the same code as the per-row-group
+    // rebuild path in `RowFilterContext`.
+    let Some(prebuilt) = prebuild_row_filter_candidates(expr, file_schema, metadata)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(row_filter_from_prebuilt(
+        &prebuilt,
+        reorder_predicates,
+        file_metrics,
+    )))
+}
 
+/// A precomputed [`FilterCandidate`] with its expression column-reassigned to
+/// the projected schema, ready to be wrapped into a [`DatafusionArrowPredicate`]
+/// on demand.
+///
+/// Extracting this from [`build_row_filter`] lets callers pay the tree-walk +
+/// column-resolution + `reassign_expr_columns` cost **once per file** instead
+/// of once per row group, which is the hot path for
+/// [`RowFilterContext::build_row_filter`](crate::push_decoder::RowFilterContext) rebuilds
+/// on `fully_matched → not-fully-matched` boundaries.
+#[derive(Clone, Debug)]
+pub(crate) struct PrebuiltRowFilterCandidate {
+    /// The predicate expression with all `Column` indices rewritten to point
+    /// into the projected file schema.
+    physical_expr: Arc<dyn PhysicalExpr>,
+    /// Projection mask over the parquet leaf columns needed to evaluate this
+    /// predicate.
+    projection_mask: ProjectionMask,
+    /// Precomputed sum-of-compressed-bytes for the referenced columns across
+    /// all row groups in the file. Used to sort predicates when
+    /// `reorder_predicates` is enabled. Stable across row groups within a
+    /// file, so we cache it once.
+    required_bytes: usize,
+}
+
+/// Precompute the list of [`PrebuiltRowFilterCandidate`]s for a predicate.
+///
+/// This is the expensive part of [`build_row_filter`]: split into conjuncts,
+/// resolve columns for each conjunct against the file schema, reassign
+/// `Column` indices, and compute the sort-order metadata. Doing it once per
+/// file (and reusing across row groups) avoids repeated `TreeNode::transform`
+/// walks and `Arc<PhysicalExpr>` allocations that showed up as top hot spots
+/// in TPCH profiles.
+///
+/// Returns `Ok(None)` when the predicate has no push-downable conjuncts, in
+/// which case callers should skip installing a `RowFilter` entirely.
+pub(crate) fn prebuild_row_filter_candidates(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    metadata: &ParquetMetaData,
+) -> Result<Option<Vec<PrebuiltRowFilterCandidate>>> {
     // Split into conjuncts:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
-
-    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
-    let mut candidates: Vec<FilterCandidate> = predicates
+    let candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
             FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
@@ -1062,119 +498,83 @@ pub fn build_row_filter(
         .flatten()
         .collect();
 
-    // no candidates
     if candidates.is_empty() {
         return Ok(None);
     }
 
+    let prebuilt: Vec<PrebuiltRowFilterCandidate> = candidates
+        .into_iter()
+        .map(|candidate| {
+            let physical_expr = reassign_expr_columns(
+                Arc::clone(&candidate.expr),
+                &candidate.read_plan.projected_schema,
+            )?;
+            Ok(PrebuiltRowFilterCandidate {
+                physical_expr,
+                projection_mask: candidate.read_plan.projection_mask.clone(),
+                required_bytes: candidate.required_bytes,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Some(prebuilt))
+}
+
+/// Wrap a list of prebuilt candidates into a fresh [`RowFilter`], assigning
+/// per-predicate metric counters and (optionally) reordering by
+/// `required_bytes`. This is the cheap per-row-group rebuild path — no tree
+/// walks, no column resolution, only counter allocation.
+pub(crate) fn row_filter_from_prebuilt(
+    prebuilt: &[PrebuiltRowFilterCandidate],
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+) -> RowFilter {
+    let rows_pruned = &file_metrics.pushdown_rows_pruned;
+    let rows_matched = &file_metrics.pushdown_rows_matched;
+    let time = &file_metrics.row_pushdown_eval_time;
+
+    // Clone (cheap: Arc bumps + ProjectionMask clone) into a working list we
+    // can sort without disturbing the shared cache.
+    let mut ordered: Vec<&PrebuiltRowFilterCandidate> = prebuilt.iter().collect();
     if reorder_predicates {
-        candidates.sort_unstable_by_key(|c| c.required_bytes);
+        ordered.sort_unstable_by_key(|c| c.required_bytes);
     }
 
-    // To avoid double-counting metrics when multiple predicates are used:
-    // - All predicates should count rows_pruned (cumulative pruned rows)
-    // - Only the last predicate should count rows_matched (final result)
-    // This ensures: rows_matched + rows_pruned = total rows processed
-    let total_candidates = candidates.len();
-
-    candidates
+    let total = ordered.len();
+    let filters: Vec<Box<dyn ArrowPredicate>> = ordered
         .into_iter()
         .enumerate()
         .map(|(idx, candidate)| {
-            let is_last = idx == total_candidates - 1;
-
-            // All predicates share the pruned counter (cumulative)
+            let is_last = idx == total - 1;
             let predicate_rows_pruned = rows_pruned.clone();
-
-            // Only the last predicate tracks matched rows (final result)
             let predicate_rows_matched = if is_last {
                 rows_matched.clone()
             } else {
                 metrics::Count::new()
             };
-
-            DatafusionArrowPredicate::try_new(
-                candidate,
-                predicate_rows_pruned,
-                predicate_rows_matched,
-                time.clone(),
-            )
-            .map(|pred| Box::new(pred) as _)
+            Box::new(DatafusionArrowPredicate {
+                physical_expr: Arc::clone(&candidate.physical_expr),
+                projection_mask: candidate.projection_mask.clone(),
+                rows_pruned: predicate_rows_pruned,
+                rows_matched: predicate_rows_matched,
+                time: time.clone(),
+            }) as Box<dyn ArrowPredicate>
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map(|filters| Some(RowFilter::new(filters)))
-}
-
-/// Builds row filters for a parquet decoder.
-///
-/// A [`RowFilter`] is owned by a decoder. The first filter is built eagerly
-/// during construction so the caller can attach it to the decoder via
-/// [`next_filter`](Self::next_filter) without a redundant build call.
-pub(crate) struct RowFilterGenerator<'a> {
-    predicate: Option<&'a Arc<dyn PhysicalExpr>>,
-    physical_file_schema: &'a SchemaRef,
-    file_metadata: &'a ParquetMetaData,
-    reorder_predicates: bool,
-    file_metrics: &'a ParquetFileMetrics,
-    first_row_filter: Option<RowFilter>,
-}
-
-impl<'a> RowFilterGenerator<'a> {
-    pub(crate) fn new(
-        predicate: Option<&'a Arc<dyn PhysicalExpr>>,
-        physical_file_schema: &'a SchemaRef,
-        file_metadata: &'a ParquetMetaData,
-        reorder_predicates: bool,
-        file_metrics: &'a ParquetFileMetrics,
-    ) -> Self {
-        let mut generator = Self {
-            predicate,
-            physical_file_schema,
-            file_metadata,
-            reorder_predicates,
-            file_metrics,
-            first_row_filter: None,
-        };
-        generator.first_row_filter = generator.build();
-        generator
-    }
-
-    pub(crate) fn next_filter(&mut self) -> Option<RowFilter> {
-        self.first_row_filter.take().or_else(|| self.build())
-    }
-
-    fn build(&self) -> Option<RowFilter> {
-        let predicate = self.predicate?;
-        match build_row_filter(
-            predicate,
-            self.physical_file_schema,
-            self.file_metadata,
-            self.reorder_predicates,
-            self.file_metrics,
-        ) {
-            Ok(Some(filter)) => Some(filter),
-            Ok(None) => None,
-            Err(e) => {
-                log::debug!(
-                    "Ignoring error building row filter for '{predicate:?}': {e}"
-                );
-                None
-            }
-        }
-    }
+        .collect();
+    RowFilter::new(filters)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow::datatypes::Fields;
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Fields};
+    use datafusion_common::{DataFusionError, ScalarValue};
 
     use arrow::array::{
         Int32Array, ListBuilder, StringArray, StringBuilder, StructArray,
     };
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_expr::{Expr, col};
+    use datafusion_expr::{Cast, Expr, col, lit};
     use datafusion_functions::core::get_field;
     use datafusion_functions_nested::array_has::{
         array_has_all_udf, array_has_any_udf, array_has_udf,
@@ -1182,6 +582,7 @@ mod test {
     use datafusion_functions_nested::expr_fn::{
         array_has, array_has_all, array_has_any, make_array,
     };
+    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
@@ -1193,8 +594,6 @@ mod test {
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use tempfile::NamedTempFile;
-
-    use datafusion_physical_expr::expressions::Column as PhysicalColumn;
 
     // List predicates used by the decoder should be accepted for pushdown
     #[test]
@@ -1314,6 +713,82 @@ mod test {
 
         let filtered = row_filter.evaluate(first_rb);
         assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![true; 8])));
+    }
+
+    /// A predicate that fails while it is being evaluated must report the
+    /// original error, not an opaque string, so that callers can still tell a
+    /// user error apart from an internal one.
+    #[test]
+    fn evaluate_reports_the_original_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec!["not_an_int"]))],
+        )
+        .expect("record batch");
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().expect("reopen file"))
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // Casting the column in the file to `Int32` fails on this data
+        let expr = Expr::Cast(Cast::new(Box::new(col("s")), DataType::Int32)).eq(lit(1));
+        let expr = logical2physical(&expr, &file_schema);
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
+
+        let mut predicate = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .expect("creating filter predicate");
+
+        let mut parquet_reader = parquet_reader_builder
+            .with_projection(predicate.projection().clone())
+            .build()
+            .expect("building reader");
+        let first_rb = parquet_reader
+            .next()
+            .expect("expected record batch")
+            .expect("expected error free record batch");
+
+        let err = predicate
+            .evaluate(first_rb)
+            .expect_err("evaluating the predicate should fail");
+
+        // The cast failure is still reachable, rather than being flattened into
+        // an untyped `ArrowError::ComputeError`
+        let err = DataFusionError::from(err);
+        let root = err.find_root();
+        assert!(
+            matches!(
+                root,
+                DataFusionError::ArrowError(inner, _)
+                    if matches!(inner.as_ref(), ArrowError::CastError(_))
+            ),
+            "expected the original cast error, got {root:?}"
+        );
+
+        // and the message still says where the failure happened
+        let message = err.to_string();
+        assert!(
+            message.contains("Error evaluating filter predicate"),
+            "{message}"
+        );
+        assert!(message.contains("Cannot cast string"), "{message}");
     }
 
     #[test]
@@ -1777,11 +1252,12 @@ mod test {
     fn get_field_filter_candidate_has_correct_leaf_indices() {
         use arrow::array::{Int32Array, StringArray, StructArray};
 
-        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8})
-        // Parquet leaves: id=0, s.value=1, s.label=2
+        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8, unused: Utf8})
+        // Parquet leaves: id=0, s.value=1, s.label=2, s.unused=3
         let struct_fields: Fields = vec![
             Arc::new(Field::new("value", DataType::Int32, false)),
             Arc::new(Field::new("label", DataType::Utf8, false)),
+            Arc::new(Field::new("unused", DataType::Utf8, false)),
         ]
         .into();
         let schema = Arc::new(Schema::new(vec![
@@ -1798,6 +1274,9 @@ mod test {
                     vec![
                         Arc::new(Int32Array::from(vec![10, 20, 30])) as _,
                         Arc::new(StringArray::from(vec!["a", "b", "c"])) as _,
+                        Arc::new(StringArray::from(vec![
+                            "unused-a", "unused-b", "unused-c",
+                        ])) as _,
                     ],
                     None,
                 )),
@@ -1826,18 +1305,150 @@ mod test {
         let expr = get_field_expr.gt(Expr::Literal(ScalarValue::Int32(Some(5)), None));
         let expr = logical2physical(&expr, &file_schema);
 
-        let candidate = FilterCandidateBuilder::new(expr, file_schema)
-            .build(&metadata)
-            .expect("building candidate")
-            .expect("get_field filter on struct should be pushable");
+        let candidate =
+            FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building candidate")
+                .expect("get_field filter on struct should be pushable");
 
         // The filter accesses only s.value, so only Parquet leaf 1 is needed.
-        // Leaf 2 (s.label) is not read, reducing unnecessary I/O.
+        // Neither sibling is read, reducing unnecessary I/O.
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]);
         assert_eq!(
             candidate.read_plan.projection_mask, expected_mask,
             "projection_mask should select only the accessed struct field leaf"
+        );
+
+        // Schema adaptation retains Struct ancestors for some decimal conversions
+        // so an all-null parent can skip child conversion. Runtime filters must
+        // preserve every conversion named by the retained cast target.
+        // This target includes `label`, so its conversion must still run even
+        // though get_field selects only `value`. Planning keeps a residual filter
+        // for explicit Struct casts.
+        let cast_type = DataType::Struct(
+            vec![
+                Field::new("value", DataType::Int32, false),
+                Field::new("label", DataType::Int32, true),
+            ]
+            .into(),
+        );
+        let cast_field = get_field().call(vec![
+            datafusion_expr::cast(col("s"), cast_type),
+            lit("value"),
+        ]);
+        let projection = logical2physical(&cast_field, &file_schema);
+        let cast_predicate = logical2physical(&cast_field.gt(lit(5)), &file_schema);
+        assert!(!can_expr_be_pushed_down_with_schemas(
+            &cast_predicate,
+            &file_schema
+        ));
+        let candidate =
+            FilterCandidateBuilder::new(cast_predicate, Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building cast candidate")
+                .expect("an adapted struct cast must remain evaluable");
+        // Clip the unused sibling, but preserve the failing `label` conversion.
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1, 2]);
+        assert_eq!(candidate.read_plan.projection_mask, expected_mask);
+        let DataType::Struct(physical_fields) = file_schema.field(1).data_type() else {
+            unreachable!("s is a struct")
+        };
+        let clipped_field =
+            file_schema
+                .field(1)
+                .clone()
+                .with_data_type(DataType::Struct(
+                    physical_fields.iter().take(2).cloned().collect(),
+                ));
+        assert_eq!(
+            candidate.read_plan.projected_schema.as_ref(),
+            &Schema::new(vec![clipped_field])
+        );
+        assert_eq!(
+            candidate.required_bytes,
+            (metadata.row_group(0).column(1).compressed_size()
+                + metadata.row_group(0).column(2).compressed_size()) as usize,
+            "filter cost must count only the leaves the cast target reads"
+        );
+
+        // A simultaneous direct access must not prune siblings that the cast
+        // needs in the output projection either.
+        let projection_plan = crate::projection_read_plan::build_projection_read_plan(
+            [expr, projection],
+            &file_schema,
+            metadata.file_metadata().schema_descr(),
+        );
+        assert_eq!(projection_plan.projection_mask, expected_mask);
+        assert_eq!(
+            projection_plan.projected_schema,
+            candidate.read_plan.projected_schema
+        );
+
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .unwrap();
+        let batch = builder
+            .with_projection(row_filter.projection().clone())
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let error = row_filter.evaluate(batch).unwrap_err().to_string();
+        datafusion_common::assert_contains!(error, "While casting struct field 'label'");
+
+        // A retained cast whose target names only the selected field — the
+        // shape `retain_field_path` produces for an evolved decimal — clips the
+        // read to that field's leaf instead of decoding the whole root.
+        let narrow_cast_type =
+            DataType::Struct(vec![Field::new("value", DataType::Int32, false)].into());
+        let narrow_field = get_field().call(vec![
+            datafusion_expr::cast(col("s"), narrow_cast_type.clone()),
+            lit("value"),
+        ]);
+        let narrow_predicate = logical2physical(&narrow_field.gt(lit(5)), &file_schema);
+        let candidate =
+            FilterCandidateBuilder::new(narrow_predicate, Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building narrow cast candidate")
+                .expect("a clipped struct cast must remain evaluable");
+        assert_eq!(
+            candidate.read_plan.projection_mask,
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]),
+            "the read must be clipped to the leaf the cast target names"
+        );
+        assert_eq!(candidate.read_plan.projected_schema.fields().len(), 1);
+        assert_eq!(
+            candidate.read_plan.projected_schema.field(0).data_type(),
+            &narrow_cast_type,
+            "sibling leaves must be pruned from the filter schema"
+        );
+
+        // The clipped schema must still evaluate: every row has value > 5.
+        let mut row_filter = DatafusionArrowPredicate::try_new(
+            candidate,
+            Count::new(),
+            Count::new(),
+            Time::new(),
+        )
+        .unwrap();
+        let batch = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .unwrap()
+            .with_projection(row_filter.projection().clone())
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row_filter.evaluate(batch).unwrap(),
+            BooleanArray::from(vec![true, true, true])
         );
     }
 
@@ -2052,34 +1663,47 @@ mod test {
         assert_eq!(file_metrics.pushdown_rows_matched.value(), 2);
     }
 
+    /// Sanity check that the given expression could be evaluated against the given schema without any errors.
+    /// This will fail if the expression references columns that are not in the schema or if the types of the columns are incompatible, etc.
+    fn check_expression_can_evaluate_against_schema(
+        expr: &Arc<dyn PhysicalExpr>,
+        table_schema: &Arc<Schema>,
+    ) -> bool {
+        let batch = RecordBatch::new_empty(Arc::clone(table_schema));
+        expr.evaluate(&batch).is_ok()
+    }
+
+    /// Multiple sibling fields under one struct root: `s['value'] AND s['label']`.
+    /// The projection mask should include exactly those two leaves (not the third
+    /// sibling), and the projected schema should be pruned to those siblings.
     #[test]
-    fn projection_read_plan_preserves_full_struct() {
-        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8})
-        // Parquet leaves: id=0, s.value=1, s.label=2
+    fn get_field_multiple_fields_under_same_root_uses_only_those_leaves() {
+        // Schema: s (Struct{value: Int32, label: Utf8, extra: Int32})
+        // Parquet leaves: s.value=0, s.label=1, s.extra=2
         let struct_fields: Fields = vec![
             Arc::new(Field::new("value", DataType::Int32, false)),
             Arc::new(Field::new("label", DataType::Utf8, false)),
+            Arc::new(Field::new("extra", DataType::Int32, false)),
         ]
         .into();
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("s", DataType::Struct(struct_fields.clone()), false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(struct_fields.clone()),
+            false,
+        )]));
 
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(StructArray::new(
-                    struct_fields,
-                    vec![
-                        Arc::new(Int32Array::from(vec![10, 20, 30])) as _,
-                        Arc::new(StringArray::from(vec!["a", "b", "c"])) as _,
-                    ],
-                    None,
-                )),
-            ],
+            vec![Arc::new(StructArray::new(
+                struct_fields.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![10, 20, 30])) as _,
+                    Arc::new(StringArray::from(vec!["a", "b", "c"])) as _,
+                    Arc::new(Int32Array::from(vec![100, 200, 300])) as _,
+                ],
+                None,
+            ))],
         )
         .unwrap();
 
@@ -2095,50 +1719,406 @@ mod test {
             .expect("reader builder");
         let metadata = builder.metadata().clone();
         let file_schema = builder.schema().clone();
-        let schema_descr = metadata.file_metadata().schema_descr();
 
-        // Simulate SELECT * output projection: Column("id") and Column("s")
-        // Plus a get_field(s, 'value') expression from the pushed-down filter
-        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(PhysicalColumn::new("id", 0)),
-            Arc::new(PhysicalColumn::new("s", 1)),
-            logical2physical(
-                &get_field().call(vec![
-                    col("s"),
-                    Expr::Literal(ScalarValue::Utf8(Some("value".to_string())), None),
-                ]),
-                &file_schema,
-            ),
-        ];
+        // s['value'] > 5 AND s['label'] = 'b'
+        let value_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("value".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(5)), None));
+        let label_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("label".to_string())), None),
+            ])
+            .eq(Expr::Literal(
+                ScalarValue::Utf8(Some("b".to_string())),
+                None,
+            ));
+        let expr = logical2physical(&value_expr.and(label_expr), &file_schema);
 
-        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("conjunction of two get_field predicates should be pushable");
 
-        // The projected schema must have the FULL struct type because Column("s")
-        // is in the projection. It should NOT be narrowed to Struct{value: Int32}.
-        let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
+        // Only s.value (leaf 0) and s.label (leaf 1) should be projected; s.extra (leaf 2) skipped.
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1]);
         assert_eq!(
-            s_field.data_type(),
-            &DataType::Struct(
-                vec![
-                    Arc::new(Field::new("value", DataType::Int32, false)),
-                    Arc::new(Field::new("label", DataType::Utf8, false)),
-                ]
-                .into()
-            ),
+            candidate.read_plan.projection_mask, expected_mask,
+            "projection_mask should include only the two accessed sibling leaves"
         );
 
-        // all3 Parquet leaves should be in the projection mask
-        let expected_mask = ProjectionMask::leaves(schema_descr, [0, 1, 2]);
-        assert_eq!(read_plan.projection_mask, expected_mask,);
+        let s_field = candidate
+            .read_plan
+            .projected_schema
+            .field_with_name("s")
+            .unwrap();
+        let expected_pruned: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, false)),
+            Arc::new(Field::new("label", DataType::Utf8, false)),
+        ]
+        .into();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(expected_pruned),
+            "projected struct schema should drop the un-accessed `extra` sibling"
+        );
     }
 
-    /// Sanity check that the given expression could be evaluated against the given schema without any errors.
-    /// This will fail if the expression references columns that are not in the schema or if the types of the columns are incompatible, etc.
-    fn check_expression_can_evaluate_against_schema(
-        expr: &Arc<dyn PhysicalExpr>,
-        table_schema: &Arc<Schema>,
-    ) -> bool {
-        let batch = RecordBatch::new_empty(Arc::clone(table_schema));
-        expr.evaluate(&batch).is_ok()
+    /// Two predicates share a nested prefix: `s['outer']['a'] AND s['outer']['b']`.
+    /// The projection mask should include exactly those two leaves and exclude
+    /// the cousin under `s['other']` plus `s['outer']['c']`. The projected
+    /// schema must mirror that shape.
+    #[test]
+    fn get_field_nested_shared_prefix_uses_only_prefix_leaves() {
+        // Schema: s (Struct{outer: Struct{a, b, c}, other: Struct{x}})
+        // Parquet leaves: s.outer.a=0, s.outer.b=1, s.outer.c=2, s.other.x=3
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+            Arc::new(Field::new("c", DataType::Int32, false)),
+        ]
+        .into();
+        let other_fields: Fields =
+            vec![Arc::new(Field::new("x", DataType::Int32, false))].into();
+        let s_fields: Fields = vec![
+            Arc::new(Field::new(
+                "outer",
+                DataType::Struct(outer_fields.clone()),
+                false,
+            )),
+            Arc::new(Field::new(
+                "other",
+                DataType::Struct(other_fields.clone()),
+                false,
+            )),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(s_fields.clone()),
+            false,
+        )]));
+
+        let outer_arr = StructArray::new(
+            outer_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as _,
+                Arc::new(Int32Array::from(vec![10, 20])) as _,
+                Arc::new(Int32Array::from(vec![100, 200])) as _,
+            ],
+            None,
+        );
+        let other_arr = StructArray::new(
+            other_fields,
+            vec![Arc::new(Int32Array::from(vec![7, 8])) as _],
+            None,
+        );
+        let s_arr = StructArray::new(
+            s_fields,
+            vec![Arc::new(outer_arr) as _, Arc::new(other_arr) as _],
+            None,
+        );
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s_arr)]).unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        // s['outer']['a'] > 0 AND s['outer']['b'] > 0
+        let a_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let b_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("b".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let expr = logical2physical(&a_expr.and(b_expr), &file_schema);
+
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("shared-prefix nested predicates should be pushable");
+
+        // Only s.outer.a (0) and s.outer.b (1) — not s.outer.c (2), not s.other.x (3).
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1]);
+        assert_eq!(
+            candidate.read_plan.projection_mask, expected_mask,
+            "projection_mask should drop cousin and un-accessed sibling leaves"
+        );
+
+        let s_field = candidate
+            .read_plan
+            .projected_schema
+            .field_with_name("s")
+            .unwrap();
+        let expected_inner: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let expected_outer: Fields = vec![Arc::new(Field::new(
+            "outer",
+            DataType::Struct(expected_inner),
+            false,
+        ))]
+        .into();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(expected_outer),
+            "projected schema should keep only the shared-prefix subtree"
+        );
+    }
+
+    /// Two predicates touch disjoint subtrees of the same struct root:
+    /// `s['outer']['a'] AND s['other']['x']`. Both subtrees must be retained
+    /// in the projection mask and in the projected schema.
+    #[test]
+    fn get_field_disjoint_subtrees_keep_both() {
+        // Schema: s (Struct{outer: Struct{a, b}, other: Struct{x, y}})
+        // Parquet leaves: s.outer.a=0, s.outer.b=1, s.other.x=2, s.other.y=3
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let other_fields: Fields = vec![
+            Arc::new(Field::new("x", DataType::Int32, false)),
+            Arc::new(Field::new("y", DataType::Int32, false)),
+        ]
+        .into();
+        let s_fields: Fields = vec![
+            Arc::new(Field::new(
+                "outer",
+                DataType::Struct(outer_fields.clone()),
+                false,
+            )),
+            Arc::new(Field::new(
+                "other",
+                DataType::Struct(other_fields.clone()),
+                false,
+            )),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(s_fields.clone()),
+            false,
+        )]));
+
+        let outer_arr = StructArray::new(
+            outer_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as _,
+                Arc::new(Int32Array::from(vec![3, 4])) as _,
+            ],
+            None,
+        );
+        let other_arr = StructArray::new(
+            other_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![5, 6])) as _,
+                Arc::new(Int32Array::from(vec![7, 8])) as _,
+            ],
+            None,
+        );
+        let s_arr = StructArray::new(
+            s_fields,
+            vec![Arc::new(outer_arr) as _, Arc::new(other_arr) as _],
+            None,
+        );
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s_arr)]).unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        // s['outer']['a'] > 0 AND s['other']['x'] > 0
+        let a_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let x_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("other".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("x".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(0)), None));
+        let expr = logical2physical(&a_expr.and(x_expr), &file_schema);
+
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("disjoint nested predicates should be pushable");
+
+        // s.outer.a (0) and s.other.x (2); not s.outer.b (1), not s.other.y (3).
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 2]);
+        assert_eq!(
+            candidate.read_plan.projection_mask, expected_mask,
+            "projection_mask should keep one leaf from each disjoint subtree"
+        );
+
+        let s_field = candidate
+            .read_plan
+            .projected_schema
+            .field_with_name("s")
+            .unwrap();
+        let expected_outer: Fields =
+            vec![Arc::new(Field::new("a", DataType::Int32, false))].into();
+        let expected_other: Fields =
+            vec![Arc::new(Field::new("x", DataType::Int32, false))].into();
+        let expected_s: Fields = vec![
+            Arc::new(Field::new("outer", DataType::Struct(expected_outer), false)),
+            Arc::new(Field::new("other", DataType::Struct(expected_other), false)),
+        ]
+        .into();
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(expected_s),
+            "projected schema should keep one pruned field from each disjoint subtree"
+        );
+    }
+
+    /// End-to-end: shared-prefix nested predicates filter rows correctly during
+    /// Parquet decoding and report the expected pushdown metrics.
+    #[test]
+    fn get_field_end_to_end_shared_prefix_filters_rows() {
+        // Schema: id (Int32), s (Struct{outer: Struct{a, b}})
+        // Parquet leaves: id=0, s.outer.a=1, s.outer.b=2
+        let outer_fields: Fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ]
+        .into();
+        let s_fields: Fields = vec![Arc::new(Field::new(
+            "outer",
+            DataType::Struct(outer_fields.clone()),
+            false,
+        ))]
+        .into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(s_fields.clone()), false),
+        ]));
+
+        // +----+--------------------------+
+        // | id | s                        |
+        // +----+--------------------------+
+        // |  1 | {outer: {a: 10, b: 50}}  |  <- a>5 and b<100 → match
+        // |  2 | {outer: {a:  0, b: 60}}  |  <- a>5 fails    → drop
+        // |  3 | {outer: {a: 20, b: 80}}  |  <- a>5 and b<100 → match
+        // |  4 | {outer: {a: 30, b: 200}} |  <- b<100 fails  → drop
+        // +----+--------------------------+
+        let outer_arr = StructArray::new(
+            outer_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![10, 0, 20, 30])) as _,
+                Arc::new(Int32Array::from(vec![50, 60, 80, 200])) as _,
+            ],
+            None,
+        );
+        let s_arr = StructArray::new(s_fields, vec![Arc::new(outer_arr) as _], None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(s_arr),
+            ],
+        )
+        .unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(reader_file)
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // s['outer']['a'] > 5 AND s['outer']['b'] < 100
+        let a_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+            ])
+            .gt(Expr::Literal(ScalarValue::Int32(Some(5)), None));
+        let b_expr = get_field()
+            .call(vec![
+                col("s"),
+                Expr::Literal(ScalarValue::Utf8(Some("outer".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("b".to_string())), None),
+            ])
+            .lt(Expr::Literal(ScalarValue::Int32(Some(100)), None));
+        let expr = logical2physical(&a_expr.and(b_expr), &file_schema);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics =
+            ParquetFileMetrics::new(0, "shared_prefix_e2e.parquet", &metrics);
+
+        let row_filter =
+            build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
+                .expect("building row filter")
+                .expect("row filter should exist");
+
+        let reader = parquet_reader_builder
+            .with_row_filter(row_filter)
+            .build()
+            .expect("build reader");
+
+        let mut total_rows = 0;
+        for batch in reader {
+            let batch = batch.expect("record batch");
+            total_rows += batch.num_rows();
+        }
+
+        assert_eq!(
+            total_rows, 2,
+            "expected 2 rows matching s.outer.a > 5 AND s.outer.b < 100"
+        );
+        assert_eq!(file_metrics.pushdown_rows_pruned.value(), 2);
+        assert_eq!(file_metrics.pushdown_rows_matched.value(), 2);
     }
 }

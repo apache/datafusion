@@ -20,26 +20,29 @@
 use std::sync::Arc;
 
 use crate::make_array::make_array_inner;
-use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
+use crate::utils::{
+    align_array_dimensions, check_datatypes, list_inner_field, list_type_with_element,
+    make_scalar_function,
+};
 use arrow::array::{
     Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
     OffsetSizeTrait,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
 use datafusion_common::utils::{
     ListCoercion, base_type, coerced_type_with_base_type_only,
 };
 use datafusion_common::{
     cast::as_generic_list_array,
-    exec_err, plan_err,
+    exec_err, internal_err, plan_err,
     utils::{list_ndims, take_function_args},
 };
 use datafusion_expr::binary::type_union_resolution;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -104,17 +107,26 @@ impl ScalarUDFImpl for ArrayAppend {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [array_type, element_type] = take_function_args(self.name(), arg_types)?;
-        if array_type.is_null() {
-            Ok(DataType::new_list(element_type.clone(), true))
-        } else {
-            Ok(array_type.clone())
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [array_field, element_field] =
+            take_function_args(self.name(), args.arg_fields)?;
+        let data_type = append_prepend_return_type(
+            array_field.data_type(),
+            element_field.data_type(),
+            element_field.is_nullable(),
+        );
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(array_append_inner)(&args.args)
+        let return_type = args.return_field.data_type().clone();
+        make_scalar_function(|args: &[ArrayRef]| array_append_inner(args, &return_type))(
+            &args.args,
+        )
     }
 
     fn aliases(&self) -> &[String] {
@@ -186,17 +198,26 @@ impl ScalarUDFImpl for ArrayPrepend {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [element_type, array_type] = take_function_args(self.name(), arg_types)?;
-        if array_type.is_null() {
-            Ok(DataType::new_list(element_type.clone(), true))
-        } else {
-            Ok(array_type.clone())
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [element_field, array_field] =
+            take_function_args(self.name(), args.arg_fields)?;
+        let data_type = append_prepend_return_type(
+            array_field.data_type(),
+            element_field.data_type(),
+            element_field.is_nullable(),
+        );
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(array_prepend_inner)(&args.args)
+        let return_type = args.return_field.data_type().clone();
+        make_scalar_function(|args: &[ArrayRef]| array_prepend_inner(args, &return_type))(
+            &args.args,
+        )
     }
 
     fn aliases(&self) -> &[String] {
@@ -375,13 +396,38 @@ pub fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             args[0].len(),
         )))
     } else if large_list {
-        concat_internal::<i64>(args)
+        concat_internal::<i64>(args, None)
     } else {
-        concat_internal::<i32>(args)
+        concat_internal::<i32>(args, None)
     }
 }
 
-fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+/// Return type shared by `array_append` and `array_prepend`: the input list
+/// type, except that its inner field is nullable whenever the appended or
+/// prepended element may be null.
+fn append_prepend_return_type(
+    array_type: &DataType,
+    element_type: &DataType,
+    element_nullable: bool,
+) -> DataType {
+    if array_type.is_null() {
+        DataType::new_list(element_type.clone(), true)
+    } else {
+        list_type_with_element(array_type, element_nullable)
+    }
+}
+
+/// Concatenates the list arrays in `args` row-wise.
+///
+/// `field` is the list field the output must carry. `array_concat` passes `None`
+/// because its `return_type` derives a fresh field from the unified element
+/// types, which is what deriving the field from the aligned inputs reproduces.
+/// `array_append` / `array_prepend` promise their input's field verbatim and so
+/// must pass it in explicitly.
+fn concat_internal<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    field: Option<&FieldRef>,
+) -> Result<ArrayRef> {
     let args = align_array_dimensions::<O>(args.to_vec())?;
 
     let list_arrays = args
@@ -432,17 +478,20 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let start = list_array.offsets()[row_idx].to_usize().unwrap();
             let end = list_array.offsets()[row_idx + 1].to_usize().unwrap();
             if start < end {
-                mutable.extend(arr_idx, start, end);
+                mutable.try_extend(arr_idx, start, end)?;
             }
         }
         offsets.push(O::usize_as(mutable.len()));
     }
 
-    let data_type = list_arrays[0].value_type();
+    let field = match field {
+        Some(field) => Arc::clone(field),
+        None => Arc::new(Field::new_list_field(list_arrays[0].value_type(), true)),
+    };
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         valid,
@@ -451,22 +500,26 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 // Kernel functions
 
-fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_append_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRef> {
     let [array, values] = take_function_args("array_append", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
-        DataType::List(_) => general_append_and_prepend::<i32>(args, true),
-        DataType::LargeList(_) => general_append_and_prepend::<i64>(args, true),
+        DataType::List(_) => general_append_and_prepend::<i32>(args, true, return_type),
+        DataType::LargeList(_) => {
+            general_append_and_prepend::<i64>(args, true, return_type)
+        }
         arg_type => exec_err!("array_append does not support type {arg_type}"),
     }
 }
 
-fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_prepend_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRef> {
     let [values, array] = take_function_args("array_prepend", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
-        DataType::List(_) => general_append_and_prepend::<i32>(args, false),
-        DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
+        DataType::List(_) => general_append_and_prepend::<i32>(args, false, return_type),
+        DataType::LargeList(_) => {
+            general_append_and_prepend::<i64>(args, false, return_type)
+        }
         arg_type => exec_err!("array_prepend does not support type {arg_type}"),
     }
 }
@@ -474,6 +527,7 @@ fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn general_append_and_prepend<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     is_append: bool,
+    return_type: &DataType,
 ) -> Result<ArrayRef>
 where
     i64: TryInto<O>,
@@ -490,14 +544,22 @@ where
         (list_array, element_array)
     };
 
+    let name = if is_append {
+        "array_append"
+    } else {
+        "array_prepend"
+    };
+    let field = list_inner_field(name, return_type)?;
+
     let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal::<O>(args)?,
-        DataType::LargeList(_) => concat_internal::<O>(args)?,
-        data_type => {
+        DataType::List(_) | DataType::LargeList(_) => {
+            concat_internal::<O>(args, Some(&field))?
+        }
+        _ => {
             return generic_append_and_prepend::<O>(
                 list_array,
                 element_array,
-                &data_type,
+                field,
                 is_append,
             );
         }
@@ -516,7 +578,7 @@ where
 ///
 /// * `list_array` - A reference to the ListArray to which elements will be appended/prepended.
 /// * `element_array` - A reference to the Array containing elements to be appended/prepended.
-/// * `field` - A reference to the Field describing the data type of the arrays.
+/// * `field` - The list field the output must carry, taken from the promised return type.
 /// * `is_append` - A boolean flag indicating whether to append (`true`) or prepend (`false`) elements.
 ///
 /// # Examples
@@ -528,7 +590,7 @@ where
 fn generic_append_and_prepend<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     element_array: &ArrayRef,
-    data_type: &DataType,
+    field: FieldRef,
     is_append: bool,
 ) -> Result<ArrayRef>
 where
@@ -553,11 +615,11 @@ where
         let start = offset_window[0].to_usize().unwrap();
         let end = offset_window[1].to_usize().unwrap();
         if is_append {
-            mutable.extend(values_index, start, end);
-            mutable.extend(element_index, row_index, row_index + 1);
+            mutable.try_extend(values_index, start, end)?;
+            mutable.try_extend(element_index, row_index, row_index + 1)?;
         } else {
-            mutable.extend(element_index, row_index, row_index + 1);
-            mutable.extend(values_index, start, end);
+            mutable.try_extend(element_index, row_index, row_index + 1)?;
+            mutable.try_extend(values_index, start, end)?;
         }
         offsets.push(offsets[row_index] + O::usize_as(end - start + 1));
     }
@@ -565,7 +627,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         None,

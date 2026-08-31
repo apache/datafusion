@@ -38,7 +38,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_execution::config::SessionConfig;
-use datafusion_physical_plan::statistics::StatisticsArgs;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -462,8 +462,8 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 4);
 
-    let stat_cols = physical_plan
-        .statistics_with_args(&StatisticsArgs::new())?
+    let stat_cols = StatisticsContext::new()
+        .compute(physical_plan.as_ref(), &StatisticsArgs::new())?
         .column_statistics
         .clone();
     assert_eq!(stat_cols.len(), 4);
@@ -489,8 +489,8 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 2);
 
-    let stat_cols = physical_plan
-        .statistics_with_args(&StatisticsArgs::new())?
+    let stat_cols = StatisticsContext::new()
+        .compute(physical_plan.as_ref(), &StatisticsArgs::new())?
         .column_statistics
         .clone();
     assert_eq!(stat_cols.len(), 2);
@@ -761,16 +761,13 @@ impl ObjectStore for MirroringObjectStore {
         let mut objects = vec![];
 
         for k in &self.files {
-            let mut parts = match k.prefix_match(prefix) {
-                Some(parts) => parts,
-                None => continue,
+            let Some(mut parts) = k.prefix_match(prefix) else {
+                continue;
             };
 
             // Pop first element
-            let common_prefix = match parts.next() {
-                Some(p) => p,
-                // Should only return children of the prefix
-                None => continue,
+            let Some(common_prefix) = parts.next() else {
+                continue;
             };
 
             if parts.next().is_some() {

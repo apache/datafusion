@@ -31,7 +31,6 @@ use std::vec;
 
 use super::Unparser;
 use super::dialect::{DistinctFromStyle, IntervalStyle};
-use crate::stack::StackGuard;
 use arrow::array::{
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
@@ -100,31 +99,62 @@ impl Unparser<'_> {
         // default `recursive` red zone, so without raising the minimum stack
         // size the stack-growing trampoline engages too late and the OS stack
         // overflows on deeply nested expressions (issue #23056). The size
-        // mirrors the planner's `StackGuard` usage in `query.rs`.
-        let _guard = StackGuard::new(256 * 1024);
-        self.expr_to_sql_with_nesting(expr)
+        // mirrors the planner's stack-growth usage in `query.rs`.
+        crate::stack::maybe_grow(|| self.expr_to_sql_with_nesting(expr))
     }
 
     /// Recursive entry point shared by the public [`Self::expr_to_sql`] and the
     /// internal recursion sites (scalar-function arguments, arrays, maps, and
     /// dialect scalar-function overrides).
     ///
-    /// This carries the `recursive` annotation so every nesting level becomes a
-    /// stack-growth checkpoint. Internal recursion must call this rather than
-    /// the public [`Self::expr_to_sql`]: the public entry point is not
-    /// annotated and would re-install the [`StackGuard`] on every level.
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    /// This is a stack-growth checkpoint. Internal recursion must call this
+    /// rather than the public [`Self::expr_to_sql`]: the public entry point
+    /// would re-enter the public stack-growth boundary on every level.
     pub(crate) fn expr_to_sql_with_nesting(&self, expr: &Expr) -> Result<ast::Expr> {
-        let mut root_expr = self.expr_to_sql_inner(expr)?;
-        if self.pretty {
-            root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
-        }
-        Ok(root_expr)
+        crate::stack::maybe_grow(|| {
+            let mut root_expr = self.expr_to_sql_inner(expr)?;
+            if self.pretty {
+                root_expr = self.remove_unnecessary_nesting(root_expr, LOWEST, LOWEST);
+            }
+            Ok(root_expr)
+        })
     }
 
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    fn distinct_from_to_sql(
+        &self,
+        left: ast::Expr,
+        right: ast::Expr,
+        is_distinct: bool,
+    ) -> Result<ast::Expr> {
+        match self.dialect.distinct_from_style() {
+            DistinctFromStyle::FullText => {
+                let expr = if is_distinct {
+                    ast::Expr::IsDistinctFrom(Box::new(left), Box::new(right))
+                } else {
+                    ast::Expr::IsNotDistinctFrom(Box::new(left), Box::new(right))
+                };
+                Ok(ast::Expr::Nested(Box::new(expr)))
+            }
+            DistinctFromStyle::Spaceship => {
+                let expr = ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    op: BinaryOperator::Spaceship,
+                }));
+                if is_distinct {
+                    Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
+                        op: UnaryOperator::Not,
+                        expr: Box::new(expr),
+                    })))
+                } else {
+                    Ok(expr)
+                }
+            }
+        }
+    }
+
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
-        match expr {
+        crate::stack::maybe_grow(|| match expr {
             Expr::InList(InList {
                 expr,
                 list,
@@ -176,24 +206,7 @@ impl Unparser<'_> {
             }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
-
-                match self.dialect.distinct_from_style() {
-                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
-                        ast::Expr::IsDistinctFrom(Box::new(l), Box::new(r)),
-                    ))),
-                    DistinctFromStyle::Spaceship => {
-                        Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
-                            op: UnaryOperator::Not,
-                            expr: Box::new(ast::Expr::Nested(Box::new(
-                                ast::Expr::BinaryOp {
-                                    left: Box::new(l),
-                                    right: Box::new(r),
-                                    op: BinaryOperator::Spaceship,
-                                },
-                            ))),
-                        })))
-                    }
-                }
+                self.distinct_from_to_sql(l, r, true)
             }
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -202,19 +215,7 @@ impl Unparser<'_> {
             }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
-
-                match self.dialect.distinct_from_style() {
-                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
-                        ast::Expr::IsNotDistinctFrom(Box::new(l), Box::new(r)),
-                    ))),
-                    DistinctFromStyle::Spaceship => {
-                        Ok(ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
-                            left: Box::new(l),
-                            right: Box::new(r),
-                            op: BinaryOperator::Spaceship,
-                        })))
-                    }
-                }
+                self.distinct_from_to_sql(l, r, false)
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
@@ -263,7 +264,7 @@ impl Unparser<'_> {
             }
             Expr::Cast(Cast { expr, field }) => Ok(self.cast_to_sql(expr, field)?),
             Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
+            Expr::Alias(Alias { expr, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(window_fun) => {
                 let WindowFunction {
                     fun,
@@ -401,20 +402,25 @@ impl Unparser<'_> {
                     ..
                 } = &agg.params;
 
-                let args = self.function_args_to_sql(args)?;
+                let args_to_use;
+                let within_group;
+
+                // if this is a WITHIN GROUP aggregate, skip the prepended arg
+                if agg.func.supports_within_group_clause() && !order_by.is_empty() {
+                    args_to_use = self.function_args_to_sql(&args[1..])?;
+                    within_group = order_by
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                } else {
+                    args_to_use = self.function_args_to_sql(args)?;
+                    within_group = Vec::new();
+                }
+
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
-                let within_group: Vec<ast::OrderByExpr> =
-                    if agg.func.supports_within_group_clause() {
-                        order_by
-                            .iter()
-                            .map(|sort_expr| self.sort_to_sql(sort_expr))
-                            .collect::<Result<Vec<ast::OrderByExpr>>>()?
-                    } else {
-                        Vec::new()
-                    };
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName::from(vec![Ident {
                         value: func_name.to_string(),
@@ -424,7 +430,7 @@ impl Unparser<'_> {
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: distinct
                             .then_some(DuplicateTreatment::Distinct),
-                        args,
+                        args: args_to_use,
                         clauses: vec![],
                     }),
                     filter,
@@ -437,10 +443,7 @@ impl Unparser<'_> {
             }
             Expr::ScalarSubquery(subq) => {
                 let sub_statement = self.plan_to_sql(subq.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -451,10 +454,7 @@ impl Unparser<'_> {
                 let inexpr = Box::new(self.expr_to_sql_inner(insubq.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -469,10 +469,7 @@ impl Unparser<'_> {
                 let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -494,10 +491,7 @@ impl Unparser<'_> {
             }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -654,7 +648,7 @@ impl Unparser<'_> {
             Expr::LambdaVariable(l) => Ok(ast::Expr::Identifier(
                 self.new_ident_quoted_if_needs(l.name.clone()),
             )),
-        }
+        })
     }
 
     pub fn scalar_function_to_sql(
@@ -1012,14 +1006,13 @@ impl Unparser<'_> {
     ///
     /// Also note that when fetching the precedence of a nested expression, we ignore other nested
     /// expressions, so precedence of expr `(a * (b + c))` equals `*` and not `+`.
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn remove_unnecessary_nesting(
         &self,
         expr: ast::Expr,
         left_op: &BinaryOperator,
         right_op: &BinaryOperator,
     ) -> ast::Expr {
-        match expr {
+        crate::stack::maybe_grow(|| match expr {
             ast::Expr::Nested(nested) => {
                 let surrounding_precedence = self
                     .sql_op_precedence(left_op)
@@ -1072,7 +1065,7 @@ impl Unparser<'_> {
                 self.remove_unnecessary_nesting(*expr, left_op, IS),
             )),
             _ => expr,
-        }
+        })
     }
 
     fn inner_precedence(&self, expr: &ast::Expr) -> u8 {
@@ -1214,14 +1207,11 @@ impl Unparser<'_> {
     where
         i64: From<T::Native>,
     {
-        let time_unit = match T::DATA_TYPE {
-            DataType::Timestamp(unit, _) => unit,
-            _ => {
-                return Err(internal_datafusion_err!(
-                    "Expected Timestamp, got {:?}",
-                    T::DATA_TYPE
-                ));
-            }
+        let DataType::Timestamp(time_unit, _) = T::DATA_TYPE else {
+            return Err(internal_datafusion_err!(
+                "Expected Timestamp, got {:?}",
+                T::DATA_TYPE
+            ));
         };
 
         let ts = if let Some(tz) = tz {
@@ -2447,6 +2437,7 @@ mod tests {
                         name: "array_col".to_string(),
                         spans: Spans::new(),
                     })),
+                    outer: false,
                 }),
                 r#"UNNEST("table".array_col)"#,
             ),
@@ -3395,6 +3386,44 @@ mod tests {
         // If the unparser overflows, the process aborts and this join is never
         // reached; otherwise the spawned thread returns cleanly.
         handle.join().expect("unparsing thread should not panic");
+    }
+
+    #[cfg(feature = "recursive_protection")]
+    #[test]
+    fn test_expr_to_sql_does_not_mutate_recursive_minimum_stack_size() -> Result<()> {
+        const DEFAULT_RECURSIVE_RED_ZONE: usize = 128 * 1024;
+
+        let previous_minimum = recursive::get_minimum_stack_size();
+        recursive::set_minimum_stack_size(DEFAULT_RECURSIVE_RED_ZONE);
+
+        let observed_minimum = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+        let dialect = DuckDBDialect::new().with_custom_scalar_overrides(vec![(
+            "dummy_udf",
+            Box::new({
+                let observed_minimum = Arc::clone(&observed_minimum);
+                move |unparser: &Unparser, args: &[Expr]| {
+                    observed_minimum.store(
+                        recursive::get_minimum_stack_size(),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    unparser.scalar_function_to_sql("dummy_udf", args).map(Some)
+                }
+            }) as ScalarFnToSqlHandler,
+        )]);
+        let expr = ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a")]);
+
+        let result = Unparser::new(&dialect).expr_to_sql(&expr);
+        let final_minimum = recursive::get_minimum_stack_size();
+        recursive::set_minimum_stack_size(previous_minimum);
+
+        result?;
+        assert_eq!(
+            observed_minimum.load(std::sync::atomic::Ordering::Relaxed),
+            DEFAULT_RECURSIVE_RED_ZONE
+        );
+        assert_eq!(final_minimum, DEFAULT_RECURSIVE_RED_ZONE);
+
+        Ok(())
     }
 
     #[test]

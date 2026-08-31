@@ -309,11 +309,12 @@ impl MetricsSet {
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
+            MetricValue::PeakMemoryUsage { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
             MetricValue::PruningMetrics { name, .. } => name == metric_name,
             MetricValue::Ratio { name, .. } => name == metric_name,
-            MetricValue::Custom { .. } => false,
+            MetricValue::Custom { name, .. } => name == metric_name,
         })
     }
 
@@ -414,6 +415,21 @@ impl MetricsSet {
                     .unwrap_or(MetricCategory::Uncategorized);
                 allowed.contains(&cat)
             })
+            .collect::<Vec<_>>();
+        Self { metrics }
+    }
+
+    /// Returns a new `MetricsSet` filtered by metric name.
+    /// Only metrics with the names appearing the list will be kept.
+    pub fn filter_by_names(self, names: &[String]) -> Self {
+        if names.is_empty() {
+            return Self { metrics: vec![] };
+        }
+
+        let metrics = self
+            .metrics
+            .into_iter()
+            .filter(|metric| names.iter().any(|name| name == metric.value().name()))
             .collect::<Vec<_>>();
         Self { metrics }
     }
@@ -640,6 +656,8 @@ impl Display for LabelValue {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use chrono::{TimeZone, Utc};
@@ -755,6 +773,60 @@ mod tests {
         };
 
         assert_eq!(metrics.sum(|_| true), Some(expected_sum));
+    }
+
+    #[test]
+    fn test_sum_by_name_custom_metric() {
+        #[derive(Debug)]
+        struct CustomCount(AtomicUsize);
+
+        impl Display for CustomCount {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0.load(Ordering::Relaxed))
+            }
+        }
+
+        impl CustomMetricValue for CustomCount {
+            fn new_empty(&self) -> Arc<dyn CustomMetricValue> {
+                Arc::new(Self(AtomicUsize::new(0)))
+            }
+
+            fn aggregate(&self, other: Arc<dyn CustomMetricValue + 'static>) {
+                let other = other.as_any().downcast_ref::<Self>().unwrap();
+                self.0
+                    .fetch_add(other.0.load(Ordering::Relaxed), Ordering::Relaxed);
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn as_usize(&self) -> usize {
+                self.0.load(Ordering::Relaxed)
+            }
+
+            fn is_eq(&self, other: &Arc<dyn CustomMetricValue>) -> bool {
+                other.as_any().downcast_ref::<Self>().is_some_and(|other| {
+                    self.0.load(Ordering::Relaxed) == other.0.load(Ordering::Relaxed)
+                })
+            }
+        }
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        for (name, value) in [("custom_count", 1), ("custom_count", 2), ("other", 4)] {
+            MetricBuilder::new(&metrics).build(MetricValue::Custom {
+                name: name.into(),
+                value: Arc::new(CustomCount(AtomicUsize::new(value))),
+            });
+        }
+
+        assert_eq!(
+            metrics
+                .clone_inner()
+                .sum_by_name("custom_count")
+                .map(|metric| metric.as_usize()),
+            Some(3)
+        );
     }
 
     #[test]
@@ -963,6 +1035,31 @@ mod tests {
         assert_eq!(
             "output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp",
             metric_names(&metrics)
+        );
+    }
+
+    #[test]
+    fn test_filter_by_names() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics).output_rows(0);
+        MetricBuilder::new(&metrics).counter("custom_counter", 0);
+
+        assert!(
+            metrics
+                .clone_inner()
+                .filter_by_names(&[])
+                .iter()
+                .next()
+                .is_none()
+        );
+
+        let names = vec!["output_rows".to_string()];
+        let filtered = metrics.clone_inner().filter_by_names(&names);
+
+        assert_eq!(filtered.iter().count(), 1);
+        assert_eq!(
+            filtered.iter().next().unwrap().value().name(),
+            "output_rows"
         );
     }
 }

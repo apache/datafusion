@@ -20,16 +20,13 @@
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray,
-        OffsetBufferBuilder, OffsetSizeTrait, new_empty_array,
+        OffsetSizeTrait, new_empty_array,
     },
     buffer::{OffsetBuffer, ScalarBuffer},
-    compute::{filter as arrow_filter, take_arrays},
+    compute::filter as arrow_filter,
     datatypes::{DataType, Field, FieldRef},
 };
-use datafusion_common::{
-    Result, ScalarValue, exec_err,
-    utils::{adjust_offsets_for_slice, list_values_row_number},
-};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
@@ -39,7 +36,7 @@ use datafusion_macros::user_doc;
 use std::sync::Arc;
 
 use crate::lambda_utils::{
-    ListValuesResult, coerce_single_list_arg, extract_list_values,
+    SingleListLambdaResult, coerce_single_list_arg, evaluate_single_list_predicate,
     single_list_lambda_parameters, value_lambda_pair,
 };
 
@@ -57,11 +54,11 @@ make_higher_order_function_expr_and_func!(
     syntax_example = "array_filter(array, x -> x > 2)",
     sql_example = r#"```sql
 > select array_filter([1, 2, 3, 4, 5], x -> x > 2);
-+--------------------------------------------+
++-------------------------------------------+
 | array_filter([1, 2, 3, 4, 5], x -> x > 2) |
-+--------------------------------------------+
-| [3, 4, 5]                                  |
-+--------------------------------------------+
++-------------------------------------------+
+| [3, 4, 5]                                 |
++-------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -130,12 +127,9 @@ impl HigherOrderUDFImpl for ArrayFilter {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
-        let list_array = list.to_array(args.number_rows)?;
-
-        let list_values = match extract_list_values(&list_array, args.return_type())? {
-            ListValuesResult::EarlyReturn(v) => return Ok(v),
-            ListValuesResult::Values(v) => v,
+        let evaluated = match evaluate_single_list_predicate(self.name(), &args)? {
+            SingleListLambdaResult::EarlyReturn(v) => return Ok(v),
+            SingleListLambdaResult::Ready(v) => v,
         };
 
         let field = match args.return_field.data_type() {
@@ -149,56 +143,47 @@ impl HigherOrderUDFImpl for ArrayFilter {
             }
         };
 
-        let values_param = || Ok(Arc::clone(&list_values));
-        let predicate_output = lambda.evaluate(&[&values_param], |arrays| {
-            let indices = list_values_row_number(&list_array)?;
-            Ok(take_arrays(arrays, &indices, None)?)
-        })?;
-
         // Scalar predicate short-circuit: x -> true or x -> false/null
-        if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) = &predicate_output {
+        if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) =
+            &evaluated.evaluated_result
+        {
             return match b {
-                Some(true) => Ok(ColumnarValue::Array(list_array)),
+                Some(true) => Ok(ColumnarValue::Array(evaluated.original_list)),
                 _ => Ok(ColumnarValue::Array(empty_filtered_list(
-                    &list_array,
+                    &evaluated.original_list,
                     field,
                 )?)),
             };
         }
 
-        let predicate = predicate_output.into_array(list_values.len())?;
-        let Some(predicate) = predicate.as_any().downcast_ref::<BooleanArray>() else {
-            return exec_err!(
-                "{} lambda must return boolean, got {}",
-                self.name(),
-                predicate.data_type()
-            );
-        };
+        let predicate = evaluated.boolean_predicate(self.name())?;
 
         // ListView and LargeListView are coerced to List/LargeList by coerce_value_types.
-        let filtered_list = match list_array.data_type() {
+        let filtered_list = match evaluated.original_list.data_type() {
             DataType::List(_) => {
-                let list = list_array.as_list::<i32>();
-                let adjusted_offsets = adjust_offsets_for_slice(list);
-                let (filtered_values, new_offsets) =
-                    filter_list_values(&list_values, predicate, &adjusted_offsets)?;
+                let (filtered_values, new_offsets) = filter_list_values(
+                    &evaluated.flattened_values,
+                    &predicate,
+                    &evaluated.adjusted_offsets::<i32>(),
+                )?;
                 Arc::new(ListArray::new(
                     field,
                     new_offsets,
                     filtered_values,
-                    list.nulls().cloned(),
+                    evaluated.nulls().cloned(),
                 )) as ArrayRef
             }
             DataType::LargeList(_) => {
-                let large_list = list_array.as_list::<i64>();
-                let adjusted_offsets = adjust_offsets_for_slice(large_list);
-                let (filtered_values, new_offsets) =
-                    filter_list_values(&list_values, predicate, &adjusted_offsets)?;
+                let (filtered_values, new_offsets) = filter_list_values(
+                    &evaluated.flattened_values,
+                    &predicate,
+                    &evaluated.adjusted_offsets::<i64>(),
+                )?;
                 Arc::new(LargeListArray::new(
                     field,
                     new_offsets,
                     filtered_values,
-                    large_list.nulls().cloned(),
+                    evaluated.nulls().cloned(),
                 ))
             }
             other => exec_err!("expected list, got {other}")?,
@@ -252,13 +237,11 @@ fn filter_list_values<O: OffsetSizeTrait>(
     offsets: &OffsetBuffer<O>,
 ) -> Result<(ArrayRef, OffsetBuffer<O>)> {
     let num_sublists = offsets.len().saturating_sub(1);
-    let mut builder = OffsetBufferBuilder::<O>::new(num_sublists);
-
     let has_nulls = predicate.null_count() > 0;
-    for i in 0..num_sublists {
+    let new_offsets = OffsetBuffer::<O>::from_lengths((0..num_sublists).map(|i| {
         let start = offsets[i].as_usize();
         let end = offsets[i + 1].as_usize();
-        let count = if has_nulls {
+        if has_nulls {
             (start..end)
                 .filter(|&j| predicate.is_valid(j) && predicate.value(j))
                 .count()
@@ -267,11 +250,8 @@ fn filter_list_values<O: OffsetSizeTrait>(
                 .values()
                 .slice(start, end - start)
                 .count_set_bits()
-        };
-        builder.push_length(count);
-    }
-
-    let new_offsets = builder.finish();
+        }
+    }));
 
     if new_offsets.last() == offsets.last() {
         return Ok((Arc::clone(values), offsets.clone()));
@@ -289,9 +269,14 @@ mod tests {
         buffer::{NullBuffer, OffsetBuffer},
     };
 
+    use arrow::array::Int32Array;
+
     use crate::array_filter::array_filter_higher_order_function;
-    use crate::lambda_utils::test_utils::{create_i32_list, eval_hof_on_i32_list, v};
-    use datafusion_expr::lit;
+    use crate::lambda_utils::test_utils::{
+        create_i32_large_list, create_i32_list, eval_hof_on_i32_list,
+        eval_hof_on_i32_list_with_outer, v,
+    };
+    use datafusion_expr::{col, lit};
 
     fn keep_greater_than_two(
         list: impl Array + Clone + 'static,
@@ -457,6 +442,47 @@ mod tests {
         let expected = create_i32_list(
             vec![0i32; 0],
             OffsetBuffer::<i32>::from_lengths(vec![0, 0]),
+            None,
+        );
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn filter_large_list_parity() {
+        let list = create_i32_large_list(
+            vec![1, 2, 3, 4, 5],
+            OffsetBuffer::<i64>::from_lengths(vec![5]),
+            None,
+        );
+        let res = keep_greater_than_two(list).unwrap();
+        let actual = res.as_list::<i64>();
+        let expected = create_i32_large_list(
+            vec![3, 4, 5],
+            OffsetBuffer::<i64>::from_lengths(vec![3]),
+            None,
+        );
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn filter_captured_outer_column() {
+        let list = create_i32_list(
+            vec![1, 50, 4, 50, 7, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2, 2]),
+            None,
+        );
+        let number = Int32Array::from(vec![10, 40, 60]);
+        let res = eval_hof_on_i32_list_with_outer(
+            array_filter_higher_order_function(),
+            list,
+            number,
+            v().gt(col("number")),
+        )
+        .unwrap();
+        let actual = res.as_list::<i32>();
+        let expected = create_i32_list(
+            vec![50, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![1, 1, 0]),
             None,
         );
         assert_eq!(actual, &expected);

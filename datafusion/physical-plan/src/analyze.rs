@@ -27,16 +27,22 @@ use super::{
 use crate::display::DisplayableExecutionPlan;
 use crate::execution_plan::EvaluationType;
 use crate::metrics::{MetricCategory, MetricType};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::operator_statistics::StatisticsRegistry;
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions,
+};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::instant::Instant;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -54,6 +60,9 @@ pub struct AnalyzeExec {
     metric_categories: Option<Vec<MetricCategory>>,
     /// Output format for the rendered plan + metrics.
     format: ExplainFormat,
+    /// Registry consulted when rendering displayed statistics, so `EXPLAIN
+    /// ANALYZE` reflects the same provider-refined stats as plain `EXPLAIN`.
+    statistics_registry: StatisticsRegistry,
     /// The input plan (the plan being analyzed)
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
@@ -72,6 +81,7 @@ pub struct AnalyzeExecBuilder {
     metric_types: Vec<MetricType>,
     metric_categories: Option<Vec<MetricCategory>>,
     format: ExplainFormat,
+    statistics_registry: StatisticsRegistry,
 }
 
 impl AnalyzeExecBuilder {
@@ -89,6 +99,7 @@ impl AnalyzeExecBuilder {
             metric_types: vec![MetricType::Summary, MetricType::Dev],
             metric_categories: None,
             format: ExplainFormat::Indent,
+            statistics_registry: StatisticsRegistry::new(),
         }
     }
 
@@ -110,6 +121,11 @@ impl AnalyzeExecBuilder {
         self
     }
 
+    pub fn with_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.statistics_registry = registry;
+        self
+    }
+
     pub fn build(self) -> AnalyzeExec {
         let cache =
             AnalyzeExec::compute_properties(&self.input, Arc::clone(&self.schema));
@@ -119,6 +135,7 @@ impl AnalyzeExecBuilder {
             metric_types: self.metric_types,
             metric_categories: self.metric_categories,
             format: self.format,
+            statistics_registry: self.statistics_registry,
             input: self.input,
             schema: self.schema,
             cache: Arc::new(cache),
@@ -210,12 +227,26 @@ impl ExecutionPlan for AnalyzeExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        self.input_distribution_requirements().into_per_child()
     }
 
-    fn with_new_children(
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
+            Distribution::UnspecifiedDistribution,
+        ])
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(
             AnalyzeExec::builder(
@@ -227,8 +258,19 @@ impl ExecutionPlan for AnalyzeExec {
             .with_metric_types(self.metric_types.clone())
             .with_metric_categories(self.metric_categories.clone())
             .with_format(self.format.clone())
+            .with_statistics_registry(self.statistics_registry.clone())
             .build(),
         ))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -266,6 +308,7 @@ impl ExecutionPlan for AnalyzeExec {
         let metric_types = self.metric_types.clone();
         let metric_categories = self.metric_categories.clone();
         let format = self.format.clone();
+        let statistics_registry = self.statistics_registry.clone();
 
         // future that gathers the results from all the tasks in the
         // JoinSet that computes the overall row count and final
@@ -278,7 +321,7 @@ impl ExecutionPlan for AnalyzeExec {
             }
             drop(input_stream);
 
-            let duration = Instant::now() - start;
+            let duration = start.elapsed();
             create_output_batch(
                 verbose,
                 show_statistics,
@@ -289,6 +332,7 @@ impl ExecutionPlan for AnalyzeExec {
                 &metric_types,
                 metric_categories.as_deref(),
                 &format,
+                &statistics_registry,
             )
         };
 
@@ -296,6 +340,166 @@ impl ExecutionPlan for AnalyzeExec {
             Arc::clone(&self.schema),
             futures::stream::once(output),
         )))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Exhaustive destructure: adding a field to `AnalyzeExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            verbose,
+            show_statistics,
+            metric_types,
+            metric_categories,
+            format,
+            input,
+            schema,
+            // Derived at construction from `input` and `schema`.
+            cache: _,
+            // Session-injected for display only; not part of the serialized plan.
+            statistics_registry: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let (has_metric_categories, metric_categories) = match metric_categories {
+            Some(categories) => {
+                (true, categories.iter().map(ToString::to_string).collect())
+            }
+            None => (false, vec![]),
+        };
+        let format = match format {
+            ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
+            ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
+            ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
+            ExplainFormat::Graphviz => protobuf::ExplainFormat::Graphviz,
+        } as i32;
+        let metric_types = metric_types
+            .iter()
+            .map(|metric_type| match metric_type {
+                MetricType::Summary => protobuf::MetricType::Summary,
+                MetricType::Dev => protobuf::MetricType::Dev,
+            } as i32)
+            .collect();
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Analyze(Box::new(
+                    protobuf::AnalyzeExecNode {
+                        verbose: *verbose,
+                        show_statistics: *show_statistics,
+                        input: Some(Box::new(input)),
+                        schema: Some(schema.as_ref().try_into()?),
+                        has_metric_categories,
+                        metric_categories,
+                        format,
+                        has_metric_types: true,
+                        metric_types,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AnalyzeExec {
+    /// Reconstruct an [`AnalyzeExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let analyze = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Analyze,
+            "AnalyzeExec",
+        );
+        // Exhaustive destructure: a new field on `AnalyzeExecNode` is a compile
+        // error here rather than a silently ignored wire field.
+        let protobuf::AnalyzeExecNode {
+            verbose,
+            show_statistics,
+            input,
+            schema,
+            has_metric_categories,
+            metric_categories,
+            format,
+            has_metric_types,
+            metric_types,
+        } = analyze.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "AnalyzeExec", "input")?;
+        let metric_types = if *has_metric_types {
+            Some(
+                metric_types
+                    .iter()
+                    .map(|metric_type| {
+                        let metric_type = protobuf::MetricType::try_from(*metric_type)
+                            .map_err(|_| {
+                                datafusion_common::internal_datafusion_err!(
+                                    "Received an AnalyzeExecNode message with unknown MetricType {metric_type}"
+                                )
+                            })?;
+                        Ok(match metric_type {
+                            protobuf::MetricType::Summary => MetricType::Summary,
+                            protobuf::MetricType::Dev => MetricType::Dev,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+        let metric_categories = if *has_metric_categories {
+            Some(
+                metric_categories
+                    .iter()
+                    .map(|category| category.parse::<MetricCategory>())
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+        let proto_format = protobuf::ExplainFormat::try_from(*format).map_err(|_| {
+            DataFusionError::Internal(format!(
+                "Received an AnalyzeExecNode message with unknown ExplainFormat {format}"
+            ))
+        })?;
+        let format = match proto_format {
+            protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
+            protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
+            protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
+            protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
+        };
+        let schema = schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "AnalyzeExec is missing required field 'schema'"
+            )
+        })?;
+        let mut builder = AnalyzeExec::builder(
+            *verbose,
+            *show_statistics,
+            input,
+            Arc::new(arrow::datatypes::Schema::try_from(schema)?),
+        );
+        // Retain the builder default for plans written before `metric_types`
+        // and its presence bit were added.
+        if let Some(metric_types) = metric_types {
+            builder = builder.with_metric_types(metric_types);
+        }
+        Ok(Arc::new(
+            builder
+                .with_metric_categories(metric_categories)
+                .with_format(format)
+                .build(),
+        ))
     }
 }
 
@@ -311,6 +515,7 @@ fn create_output_batch(
     metric_types: &[MetricType],
     metric_categories: Option<&[MetricCategory]>,
     format: &ExplainFormat,
+    statistics_registry: &StatisticsRegistry,
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
     let mut plan_builder = StringBuilder::with_capacity(1, 1024);
@@ -323,6 +528,7 @@ fn create_output_batch(
                 .set_metric_types(metric_types.to_vec())
                 .set_metric_categories(metric_categories.map(|c| c.to_vec()))
                 .set_show_statistics(show_statistics)
+                .set_statistics_registry(statistics_registry.clone())
                 .indent(verbose)
                 .to_string();
             plan_builder.append_value(annotated_plan);
@@ -335,6 +541,7 @@ fn create_output_batch(
                         .set_metric_types(metric_types.to_vec())
                         .set_metric_categories(metric_categories.map(|c| c.to_vec()))
                         .set_show_statistics(show_statistics)
+                        .set_statistics_registry(statistics_registry.clone())
                         .indent(verbose)
                         .to_string();
                 plan_builder.append_value(annotated_plan);

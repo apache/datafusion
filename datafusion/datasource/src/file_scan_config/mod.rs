@@ -20,6 +20,13 @@
 
 pub(crate) mod sort_pushdown;
 
+/// Shared `FileScanConfig` <-> proto conversion, gated on the `proto` feature.
+/// Attaches inherent `try_to_proto` / `try_from_proto` /
+/// `parse_table_schema_from_proto` helpers to [`FileScanConfig`] used by every
+/// file source's `try_to_proto` hook.
+#[cfg(feature = "proto")]
+mod proto;
+
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
@@ -30,8 +37,10 @@ use crate::{
 use arrow::datatypes::Fields;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
+    Constraint, Constraints, Result, ScalarValue, Statistics, internal_datafusion_err,
+    internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -39,12 +48,13 @@ use datafusion_execution::{
 use datafusion_expr::Operator;
 
 use crate::source::OpenArgs;
+use datafusion_common::stats::Precision;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::coop::cooperative;
@@ -81,7 +91,9 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
+/// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
+/// # use datafusion_physical_plan::PhysicalExpr;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -111,6 +123,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
+/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -159,6 +172,12 @@ pub struct FileScanConfig {
     /// DataFusion may attempt to read each partition of files
     /// concurrently, however files *within* a partition will be read
     /// sequentially, one after the next.
+    ///
+    /// Note that when `datafusion.execution.enable_file_stream_work_stealing`
+    /// is enabled (the default), files may be reassigned to a different
+    /// partition at runtime unless `preserve_order` or
+    /// `partitioned_by_file_group` is set, so a file is not guaranteed to be
+    /// read by the partition it is grouped under here.
     pub file_groups: Vec<FileGroup>,
     /// Table constraints
     pub constraints: Constraints,
@@ -198,17 +217,6 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
-    /// When true, file_groups are organized by partition column values
-    /// and output_partitioning will return Hash partitioning on partition columns.
-    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
-    /// on partition columns.
-    ///
-    /// If the number of file partitions > target_partitions, the file partitions will be grouped
-    /// in a round-robin fashion such that number of file partitions = target_partitions.
-    ///
-    /// Follow-up: remove this redundant field in favor of
-    /// `output_partitioning`, see <https://github.com/apache/datafusion/issues/23099>.
-    pub partitioned_by_file_group: bool,
     /// Declared physical output partitioning for this scan.
     ///
     /// Expressions are against the full table schema, before scan projection or
@@ -288,7 +296,6 @@ pub struct FileScanConfigBuilder {
     file_compression_type: Option<FileCompressionType>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    partitioned_by_file_group: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -315,7 +322,6 @@ impl FileScanConfigBuilder {
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
-            partitioned_by_file_group: false,
         }
     }
 
@@ -513,18 +519,6 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether file groups are organized by partition column values.
-    ///
-    /// When set to true, the output partitioning will be declared as Hash partitioning
-    /// on the partition columns.
-    pub fn with_partitioned_by_file_group(
-        mut self,
-        partitioned_by_file_group: bool,
-    ) -> Self {
-        self.partitioned_by_file_group = partitioned_by_file_group;
-        self
-    }
-
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -546,13 +540,13 @@ impl FileScanConfigBuilder {
             file_compression_type,
             batch_size,
             expr_adapter_factory: expr_adapter,
-            partitioned_by_file_group,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
-        let statistics = statistics.unwrap_or_else(|| {
+        let mut statistics = statistics.unwrap_or_else(|| {
             Statistics::new_unknown(file_source.table_schema().table_schema())
         });
+        add_key_distinct_counts(&constraints, &mut statistics);
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
 
@@ -571,9 +565,34 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
-            partitioned_by_file_group,
             output_partitioning,
         }
+    }
+}
+
+/// Records that a key column holds one distinct value per row, which no file format
+/// stores. Single-column keys only: a composite key says nothing about its columns.
+fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistics) {
+    let num_rows = statistics.num_rows;
+    for constraint in constraints.iter() {
+        let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
+        let [index] = indices[..] else {
+            continue;
+        };
+        let Some(column) = statistics.column_statistics.get_mut(index) else {
+            continue;
+        };
+        if column.distinct_count != Precision::Absent {
+            continue;
+        }
+        // A NULL is not a distinct value. A primary key has none; a unique column may
+        // repeat them, so an unknown count leaves the result inexact.
+        let nulls = match (constraint, column.null_count) {
+            (Constraint::PrimaryKey(_), Precision::Absent) => Precision::Exact(0),
+            (_, Precision::Absent) => Precision::Inexact(0),
+            (_, nulls) => nulls,
+        };
+        column.distinct_count = num_rows.sub(&nulls);
     }
 }
 
@@ -592,12 +611,15 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
-            partitioned_by_file_group: config.partitioned_by_file_group,
         }
     }
 }
 
-fn hash_partitioning_from_partition_fields(
+/// Builds output partitioning over `partition_cols` (resolved to their indices in
+/// `schema`) with `partition_count` partitions. Returns `None` when there are no
+/// partition columns. Callers use this to declare the output partitioning of a scan
+/// whose file groups are organized by partition column values.
+pub fn output_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
@@ -641,6 +663,57 @@ fn project_output_partitioning(
             partitioning.project(mapping, &input_eq_properties)
         }
     }
+}
+
+/// Returns `true` if merging `outer` into `inner` would duplicate a volatile or
+/// non-trivial expression that CSE deduplicated; the caller should then decline
+/// the merge.
+///
+/// Merging substitutes each `inner` expression into every `outer` reference to
+/// it. Since the logical optimizer extracts a repeated expression into a single
+/// `inner` entry referenced by column, re-inlining it at more than one
+/// reference site undoes that deduplication. An `inner` expression referenced
+/// more than once is therefore blocked when it is either:
+///
+/// - **volatile** (e.g. `random()`) — evaluating it independently at each site
+///   makes references that should share one "locked-in" value diverge (the
+///   correctness guard the physical `ProjectionPushdown` and `FilterPushdown`
+///   rules also apply via
+///   `datafusion_physical_expr_common::physical_expr::is_volatile`); or
+/// - **not cheap to recompute** — its placement is not push-to-leaves
+///   (`KeepInPlace`: arithmetic, casts, most scalar functions). Leaf-pushable
+///   expressions (columns, `get_field`, `input_file_name`) still merge. This
+///   matches `try_collapse_projection_chain`.
+///
+/// References are counted with multiplicity, so `r + r` counts as two; an
+/// expression referenced exactly once has nothing to duplicate.
+fn would_duplicate_costly_exprs(
+    inner: &ProjectionExprs,
+    outer: &ProjectionExprs,
+) -> bool {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+
+    let inner_exprs = inner.as_ref();
+
+    let mut ref_counts = vec![0usize; inner_exprs.len()];
+    for proj_expr in outer.as_ref() {
+        proj_expr
+            .expr
+            .apply(|e| {
+                if let Some(col) = e.as_ref().downcast_ref::<Column>()
+                    && let Some(count) = ref_counts.get_mut(col.index())
+                {
+                    *count += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("infallible closure should not fail");
+    }
+
+    ref_counts.iter().enumerate().any(|(idx, &count)| {
+        let expr = &inner_exprs[idx].expr;
+        count > 1 && (is_volatile(expr) || !expr.placement().should_push_to_leaves())
+    })
 }
 
 impl DataSource for FileScanConfig {
@@ -759,7 +832,7 @@ impl DataSource for FileScanConfig {
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // When file groups define output partitioning, repartitioning files
         // would invalidate the partition-to-file-group mapping.
-        if self.output_partitioning.is_some() || self.partitioned_by_file_group {
+        if self.output_partitioning.is_some() {
             return Ok(None);
         }
 
@@ -776,10 +849,8 @@ impl DataSource for FileScanConfig {
     /// Returns the output partitioning for this file scan.
     ///
     /// When `output_partitioning` is set, this returns the declared partitioning
-    /// after applying scan projection. When `partitioned_by_file_group` is true,
-    /// this returns `Partitioning::Hash` on the Hive partition columns, allowing
-    /// the optimizer to skip hash repartitioning for aggregates and joins on
-    /// those columns.
+    /// after applying scan projection, allowing the optimizer to skip hash
+    /// repartitioning for aggregates and joins on the partitioning columns.
     ///
     /// If projection or partition count validation fails, this returns
     /// `UnknownPartitioning`.
@@ -795,15 +866,7 @@ impl DataSource for FileScanConfig {
     /// - Idea: Could allow byte-range splitting within partition-aware groups,
     ///   preserving I/O parallelism while maintaining partition semantics.
     fn output_partitioning(&self) -> Partitioning {
-        let Some(output_partitioning) = self.output_partitioning.clone().or_else(|| {
-            self.partitioned_by_file_group.then(|| {
-                hash_partitioning_from_partition_fields(
-                    self.file_source.table_schema().table_schema(),
-                    self.table_partition_cols(),
-                    self.file_groups.len(),
-                )
-            })?
-        }) else {
+        let Some(output_partitioning) = self.output_partitioning.clone() else {
             return Partitioning::UnknownPartitioning(self.file_groups.len());
         };
         if output_partitioning.partition_count() != self.file_groups.len() {
@@ -939,6 +1002,17 @@ impl DataSource for FileScanConfig {
         &self,
         projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
+        // Don't merge a projection into the scan if it would inline a volatile
+        // or expensive expression referenced more than once. For a volatile
+        // expression (e.g. `random()` aliased in a subquery) this would turn a
+        // single "locked-in" value into multiple independent evaluations (see
+        // #23220); for an expensive scalar function it would undo CSE and
+        // re-evaluate the expression at every reference site.
+        if let Some(inner) = self.file_source.projection()
+            && would_duplicate_costly_exprs(inner, projection)
+        {
+            return Ok(None);
+        }
         match self.file_source.try_pushdown_projection(projection)? {
             Some(new_source) => {
                 let mut new_file_scan_config = self.clone();
@@ -1120,21 +1194,46 @@ impl DataSource for FileScanConfig {
         Some(Arc::new(new_config))
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the file source
+        self.file_source.apply_expressions(f)
+    }
+
     /// Create any shared state that should be passed between sibling streams
     /// during one execution.
     ///
     /// This returns `None` when sibling streams must not share work, such as
-    /// when file order must be preserved or the file groups define the output
-    /// partitioning needed for the rest of the plan
-    fn create_sibling_state(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+    /// when file order must be preserved, the file groups define the output
+    /// partitioning needed for the rest of the plan, or work stealing is
+    /// disabled via
+    /// `datafusion.execution.enable_file_stream_work_stealing`.
+    fn create_sibling_state(
+        &self,
+        config: &ConfigOptions,
+    ) -> Option<Arc<dyn Any + Send + Sync>> {
         if self.preserve_order
             || self.output_partitioning.is_some()
-            || self.partitioned_by_file_group
+            || !config.execution.enable_file_stream_work_stealing
         {
             return None;
         }
 
         Some(Arc::new(SharedWorkSource::from_config(self)) as Arc<dyn Any + Send + Sync>)
+    }
+
+    /// Serialize this file scan by delegating to the concrete
+    /// [`FileSource`]'s
+    /// [`try_to_proto`](crate::file::FileSource::try_to_proto) hook, passing
+    /// `self` as the shared spine it needs to emit the base config.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.file_source().try_to_proto(self, ctx)
     }
 }
 
@@ -1194,7 +1293,9 @@ impl FileScanConfig {
     /// we can't guarantee the statistics are exact because we don't know how many
     /// rows will be filtered out.
     pub fn statistics(&self) -> Statistics {
-        if self.file_source.filter().is_some() {
+        let filter_may_change_row_count = self.file_source.filter().is_some()
+            && self.statistics.num_rows != Precision::Exact(0);
+        if filter_may_change_row_count {
             self.statistics.clone().to_inexact()
         } else {
             self.statistics.clone()
@@ -1524,15 +1625,24 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::{Result, assert_batches_eq, internal_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::SortExpr;
+    use datafusion_physical_expr::PhysicalExpr;
+
+    #[cfg(feature = "proto")]
+    use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr::projection::ProjectionExprs;
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_physical_plan::execution_plan::collect;
+    #[cfg(feature = "proto")]
+    use datafusion_physical_plan::proto::{ExecutionPlanEncode, ExecutionPlanEncodeCtx};
+    #[cfg(feature = "proto")]
+    use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
     use futures::FutureExt as _;
     use futures::StreamExt as _;
     use futures::stream;
@@ -1589,6 +1699,122 @@ mod tests {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
         }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[derive(Clone)]
+    struct ProtoHookSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+    }
+
+    #[cfg(feature = "proto")]
+    impl ProtoHookSource {
+        fn new(table_schema: TableSchema) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+            }
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    impl FileSource for ProtoHookSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "proto-hook-test"
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn try_to_proto(
+            &self,
+            _base: &FileScanConfig,
+            _ctx: &ExecutionPlanEncodeCtx<'_>,
+        ) -> Result<Option<PhysicalPlanNode>> {
+            Ok(Some(PhysicalPlanNode::default()))
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    struct UnusedPlanEncoder;
+
+    #[cfg(feature = "proto")]
+    impl ExecutionPlanEncode for UnusedPlanEncoder {
+        fn encode_plan(
+            &self,
+            _plan: &Arc<dyn ExecutionPlan>,
+        ) -> Result<PhysicalPlanNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udf(&self, _udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udaf(&self, _udaf: &AggregateUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udwf(&self, _udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn data_source_exec_delegates_proto_to_file_source() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let source = Arc::new(ProtoHookSource::new(TableSchema::from(&schema)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let exec = DataSourceExec::from_data_source(config);
+        let encoder = UnusedPlanEncoder;
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        assert_eq!(exec.try_to_proto(&ctx)?, Some(PhysicalPlanNode::default()));
+        Ok(())
     }
 
     #[test]
@@ -1625,6 +1851,7 @@ mod tests {
         use chrono::TimeZone;
         use datafusion_common::DFSchema;
         use datafusion_expr::execution_props::ExecutionProps;
+        use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
         use object_store::{ObjectMeta, path::Path};
 
         struct File {
@@ -1838,6 +2065,7 @@ mod tests {
                             &expr,
                             &DFSchema::try_from(Arc::clone(&table_schema))?,
                             &ExecutionProps::default(),
+                            &PhysicalPlanningContext::default(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -1933,6 +2161,117 @@ mod tests {
     }
 
     // sets default for configs that play no role in projections
+    fn config_with_constraints(
+        table_schema: TableSchema,
+        statistics: Statistics,
+        constraints: Vec<Constraint>,
+        projection: Option<Vec<usize>>,
+    ) -> FileScanConfig {
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_statistics(statistics)
+        .with_constraints(Constraints::new_unverified(constraints))
+        .with_projection_indices(projection)
+        .unwrap()
+        .build()
+    }
+
+    /// A key column has one distinct value per row, which no file format records.
+    #[test]
+    fn key_columns_report_a_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("part", DataType::Int32, false),
+            Field::new("code", DataType::Int32, true),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+        // A unique column may repeat NULL, which is not a distinct value.
+        statistics.column_statistics[2].null_count = Precision::Exact(10);
+
+        let stats = |constraints| {
+            config_with_constraints(
+                table_schema.clone(),
+                statistics.clone(),
+                constraints,
+                None,
+            )
+            .statistics()
+        };
+
+        // A primary key cannot be null, so the count is as exact as the row count.
+        let primary_key = stats(vec![Constraint::PrimaryKey(vec![0])]);
+        assert_eq!(
+            primary_key.column_statistics[0].distinct_count,
+            Precision::Exact(100)
+        );
+        assert_eq!(
+            primary_key.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+
+        // The nulls a unique column may repeat are known here, so this is exact too.
+        let unique = stats(vec![Constraint::Unique(vec![2])]);
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Exact(90)
+        );
+
+        // With an unknown null count it is not exact.
+        let mut unknown_nulls = statistics.clone();
+        unknown_nulls.column_statistics[2].null_count = Precision::Absent;
+        let unique = config_with_constraints(
+            table_schema.clone(),
+            unknown_nulls,
+            vec![Constraint::Unique(vec![2])],
+            None,
+        )
+        .statistics();
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Inexact(100)
+        );
+
+        // A composite key leaves its columns alone: only the combination is unique.
+        let composite = stats(vec![Constraint::PrimaryKey(vec![0, 1])]);
+        assert_eq!(
+            composite.column_statistics[0].distinct_count,
+            Precision::Absent
+        );
+        assert_eq!(
+            composite.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+    }
+
+    /// The count has to reach the plan, which reads statistics through the projection.
+    #[test]
+    fn a_projected_scan_keeps_the_key_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, true),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+
+        let config = config_with_constraints(
+            table_schema,
+            statistics,
+            vec![Constraint::PrimaryKey(vec![1])],
+            Some(vec![1]),
+        );
+
+        let projected = config.partition_statistics(None).unwrap();
+        assert_eq!(
+            projected.column_statistics[0].distinct_count,
+            Precision::Exact(100)
+        );
+    }
+
     fn config_for_projection(
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
@@ -2204,7 +2543,10 @@ mod tests {
     #[test]
     fn test_split_groups_by_statistics_with_target_partitions() -> Result<()> {
         use datafusion_common::DFSchema;
-        use datafusion_expr::{col, execution_props::ExecutionProps};
+        use datafusion_expr::{
+            col, execution_props::ExecutionProps,
+            physical_planning_context::PhysicalPlanningContext,
+        };
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
@@ -2218,7 +2560,13 @@ mod tests {
         let sort_expr = [col("value").sort(true, false)];
         let sort_ordering = sort_expr
             .map(|expr| {
-                create_physical_sort_expr(&expr, &df_schema, &exec_props).unwrap()
+                create_physical_sort_expr(
+                    &expr,
+                    &df_schema,
+                    &exec_props,
+                    &PhysicalPlanningContext::default(),
+                )
+                .unwrap()
             })
             .into();
 
@@ -2363,9 +2711,8 @@ mod tests {
         // of just the projected ones.
 
         use crate::source::DataSourceExec;
-        use datafusion_physical_plan::statistics::StatisticsArgs;
+        use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
-        // Create a schema with 4 columns
         let schema = Arc::new(Schema::new(vec![
             Field::new("col0", DataType::Int32, false),
             Field::new("col1", DataType::Int32, false),
@@ -2417,8 +2764,11 @@ mod tests {
         let exec = DataSourceExec::from_data_source(config);
 
         // Get statistics for partition 0
-        let partition_stats = exec
-            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))
+        let partition_stats = StatisticsContext::new()
+            .compute(
+                exec.as_ref(),
+                &StatisticsArgs::new().with_partition(Some(0)),
+            )
             .unwrap();
 
         // Verify that only 2 columns are in the statistics (the projected ones)
@@ -2444,6 +2794,45 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_statistics_with_filter() {
+        assert_num_rows_with_filter(Precision::Absent, Precision::Absent);
+        assert_num_rows_with_filter(Precision::Exact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Inexact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Exact(0), Precision::Exact(0));
+
+        /// Creates a [`FileScanConfig`] with a filter and calls [`FileScanConfig::statistics`].
+        /// Then the function checks the output num_rows stats, given the input num_rows stats.
+        fn assert_num_rows_with_filter(
+            input_num_rows: Precision<usize>,
+            expected_num_rows: Precision<usize>,
+        ) {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "col0",
+                DataType::Int32,
+                false,
+            )]));
+
+            let stats =
+                Statistics::new_unknown(schema.as_ref()).with_num_rows(input_num_rows);
+            let file_group =
+                FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)]);
+
+            let table_schema = TableSchema::from(&schema);
+            let config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                Arc::new(MockSource::new(table_schema.clone()).with_filter(Arc::new(
+                    Literal::new(ScalarValue::Boolean(Some(true))),
+                ))),
+            )
+            .with_file_groups(vec![file_group])
+            .with_statistics(stats)
+            .build();
+
+            assert_eq!(config.statistics().num_rows, expected_num_rows,);
+        }
     }
 
     /// Regression test for reusing a `DataSourceExec` after its execution-local
@@ -2541,7 +2930,7 @@ mod tests {
             vec![partition_col],
         );
 
-        // partitioned_by_file_group defaults to false
+        // output_partitioning defaults to None
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
     }
@@ -2601,13 +2990,12 @@ mod tests {
     #[test]
     fn test_output_partitioning_no_partition_columns() {
         let file_schema = aggr_test_schema();
-        let mut config = config_for_projection(
+        let config = config_for_projection(
             Arc::clone(&file_schema),
             None,
             Statistics::new_unknown(&file_schema),
             vec![], // No partition columns
         );
-        config.partitioned_by_file_group = true;
 
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
@@ -2630,12 +3018,16 @@ mod tests {
             Statistics::new_unknown(&file_schema),
             single_partition_col,
         );
-        config.partitioned_by_file_group = true;
         config.file_groups = vec![
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
+        config.output_partitioning = output_partitioning_from_partition_fields(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
@@ -2659,11 +3051,15 @@ mod tests {
             Statistics::new_unknown(&file_schema),
             multiple_partition_cols,
         );
-        config.partitioned_by_file_group = true;
         config.file_groups = vec![
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
+        config.output_partitioning = output_partitioning_from_partition_fields(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
@@ -2794,6 +3190,13 @@ mod tests {
             Ok(SortOrderPushdownResult::Exact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 
@@ -3329,5 +3732,273 @@ mod tests {
             "Expected Exact (no NULLs), got {result:?}"
         );
         Ok(())
+    }
+
+    /// Helper: build a `ProjectionExprs` from `(expr, alias)` pairs.
+    fn make_projection(pairs: Vec<(Arc<dyn PhysicalExpr>, &str)>) -> ProjectionExprs {
+        ProjectionExprs::new(
+            pairs
+                .into_iter()
+                .map(|(expr, alias)| ProjectionExpr::new(expr, alias)),
+        )
+    }
+
+    /// Helper: create a volatile (non-deterministic) function expression,
+    /// e.g. `random()`.
+    fn make_volatile_expr() -> Arc<dyn PhysicalExpr> {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ScalarUDF;
+        use datafusion_functions::math::random::RandomFunc;
+        use datafusion_physical_expr::ScalarFunctionExpr;
+
+        Arc::new(ScalarFunctionExpr::new(
+            "random",
+            Arc::new(ScalarUDF::from(RandomFunc::new())),
+            vec![],
+            Arc::new(Field::new("random", DataType::Float64, false)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    /// Helper: create a deterministic but expensive scalar-function
+    /// expression, e.g. `abs(<arg>)`.
+    fn make_udf_expr(args: Vec<Arc<dyn PhysicalExpr>>) -> Arc<dyn PhysicalExpr> {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ScalarUDF;
+        use datafusion_functions::math::abs::AbsFunc;
+        use datafusion_physical_expr::ScalarFunctionExpr;
+
+        Arc::new(ScalarFunctionExpr::new(
+            "abs",
+            Arc::new(ScalarUDF::from(AbsFunc::new())),
+            args,
+            Arc::new(Field::new("abs", DataType::Int32, false)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    /// Helper: create a cheap, leaf-pushable scalar function — struct field
+    /// access `get_field(s, 'x')`, whose placement is `MoveTowardsLeafNodes`
+    /// when the base is a column and the key is a literal.
+    fn make_leaf_pushable_expr() -> Arc<dyn PhysicalExpr> {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ScalarUDF;
+        use datafusion_functions::core::getfield::GetFieldFunc;
+        use datafusion_physical_expr::ScalarFunctionExpr;
+        use datafusion_physical_expr::expressions::Literal;
+
+        Arc::new(ScalarFunctionExpr::new(
+            "get_field",
+            Arc::new(ScalarUDF::from(GetFieldFunc::new())),
+            vec![
+                Arc::new(Column::new("s", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("x".to_string())))),
+            ],
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    /// Column-only inner projections always merge safely, even when
+    /// the outer projection references them multiple times.
+    #[test]
+    fn test_would_duplicate_allows_column_only_inner() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
+
+        let inner =
+            make_projection(vec![(Arc::clone(&col_a), "a"), (Arc::clone(&col_b), "b")]);
+
+        // Outer references col 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("a", 0)), "x"),
+            (Arc::new(Column::new("a", 0)), "y"),
+        ]);
+
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// A non-trivial computed expression (arithmetic, `KeepInPlace`) referenced
+    /// multiple times blocks the merge — recomputing it per site is wasteful.
+    #[test]
+    fn test_would_duplicate_blocks_computed_multi_ref() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
+        // Inner: [a + b, b]  (index 0 is a non-trivial computed expression)
+        let inner = make_projection(vec![
+            (
+                Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&col_b),
+                )),
+                "sum",
+            ),
+            (Arc::clone(&col_b), "b"),
+        ]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("sum", 0)), "x"),
+            (Arc::new(Column::new("sum", 0)), "y"),
+        ]);
+
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression the outer projection does not reference is
+    /// safe to merge (it is projected away, not duplicated).
+    #[test]
+    fn test_would_duplicate_allows_unreferenced_volatile() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [random(), a]
+        let inner =
+            make_projection(vec![(make_volatile_expr(), "r"), (Arc::clone(&col_a), "a")]);
+
+        // Outer references only index 1 (the column), not the volatile expr
+        let outer = make_projection(vec![(Arc::new(Column::new("a", 1)), "a")]);
+
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression referenced multiple times must block merge:
+    /// this is the #23220 regression (`random()` aliased then referenced as
+    /// `x` and `y`).
+    #[test]
+    fn test_would_duplicate_blocks_multi_ref_volatile() {
+        // Inner: [random()]
+        let inner = make_projection(vec![(make_volatile_expr(), "r")]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("r", 0)), "x"),
+            (Arc::new(Column::new("r", 0)), "y"),
+        ]);
+
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression referenced exactly once has nothing to duplicate,
+    /// so the merge is allowed.
+    #[test]
+    fn test_would_duplicate_allows_single_ref_volatile() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [random(), a]
+        let inner =
+            make_projection(vec![(make_volatile_expr(), "r"), (Arc::clone(&col_a), "a")]);
+
+        // Outer references the volatile expression exactly once
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("r", 0)), "x"),
+            (Arc::new(Column::new("a", 1)), "a"),
+        ]);
+
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// References are counted with multiplicity, so a single outer expression
+    /// that duplicates the value (e.g. `r + r`) still blocks the merge.
+    #[test]
+    fn test_would_duplicate_blocks_single_expr_self_ref_volatile() {
+        // Inner: [random()]
+        let inner = make_projection(vec![(make_volatile_expr(), "r")]);
+
+        // Outer: [r + r] — one expression referencing `random()` twice
+        let outer = make_projection(vec![(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("r", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("r", 0)),
+            )),
+            "x",
+        )]);
+
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// A volatile expression buried inside a larger expression (e.g.
+    /// `random() + 1`) is still detected and blocks merge.
+    #[test]
+    fn test_would_duplicate_blocks_volatile_nested_in_arithmetic() {
+        // Inner: [random() + 1]
+        let inner = make_projection(vec![(
+            Arc::new(BinaryExpr::new(
+                make_volatile_expr(),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Float64(Some(1.0)))),
+            )),
+            "expr",
+        )]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("expr", 0)), "x"),
+            (Arc::new(Column::new("expr", 0)), "y"),
+        ]);
+
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// Empty projections should not block merging.
+    #[test]
+    fn test_would_duplicate_empty_projections() {
+        let inner = make_projection(vec![]);
+        let outer = make_projection(vec![]);
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// An expensive (scalar-function) expression referenced more than once
+    /// must block the merge to preserve CSE.
+    #[test]
+    fn test_would_duplicate_blocks_multi_ref_expensive() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [abs(a)]
+        let inner = make_projection(vec![(make_udf_expr(vec![col_a]), "abs_a")]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("abs_a", 0)), "x"),
+            (Arc::new(Column::new("abs_a", 0)), "y"),
+        ]);
+
+        assert!(would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// An expensive expression referenced only once has nothing to duplicate,
+    /// so the merge is allowed.
+    #[test]
+    fn test_would_duplicate_allows_single_ref_expensive() {
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        // Inner: [abs(a), a]
+        let inner = make_projection(vec![
+            (make_udf_expr(vec![Arc::clone(&col_a)]), "abs_a"),
+            (Arc::clone(&col_a), "a"),
+        ]);
+
+        // Outer references each inner column once
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("abs_a", 0)), "out"),
+            (Arc::new(Column::new("a", 1)), "a"),
+        ]);
+
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// A cheap, leaf-pushable scalar function (placement
+    /// `MoveTowardsLeafNodes`, e.g. `get_field` / `input_file_name`) still
+    /// merges even when referenced multiple times — it is meant to be pushed
+    /// into the scan, so blocking would defeat that optimization.
+    #[test]
+    fn test_would_duplicate_allows_leaf_pushable_scalar_function() {
+        // Inner: [input_file_name()]
+        let inner = make_projection(vec![(make_leaf_pushable_expr(), "f")]);
+
+        // Outer references index 0 twice
+        let outer = make_projection(vec![
+            (Arc::new(Column::new("f", 0)), "x"),
+            (Arc::new(Column::new("f", 0)), "y"),
+        ]);
+
+        assert!(!would_duplicate_costly_exprs(&inner, &outer));
     }
 }

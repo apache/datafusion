@@ -23,6 +23,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
@@ -46,9 +47,11 @@ use datafusion_cli::{
 };
 
 use clap::Parser;
+use datafusion::common::config::Dialect;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_spark::SessionStateBuilderSpark;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -142,6 +145,12 @@ struct Args {
 
     #[clap(long, help = "Enables console syntax highlighting")]
     color: bool,
+
+    #[clap(
+        long,
+        help = "Enable Apache Spark-compatible SQL dialect, functions, and expression planning"
+    )]
+    spark: bool,
 
     #[clap(
         short = 'd',
@@ -243,9 +252,16 @@ async fn main_inner() -> Result<()> {
 
     let runtime_env = rt_builder.build_arc()?;
 
+    let mut state_builder = SessionStateBuilder::new()
+        .with_config(session_config)
+        .with_runtime_env(runtime_env)
+        .with_default_features();
+    if args.spark {
+        state_builder = state_builder.with_spark_features();
+    }
+
     // enable dynamic file query
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
-        .enable_url_table();
+    let ctx = SessionContext::new_with_state(state_builder.build()).enable_url_table();
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
@@ -348,6 +364,10 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     // in the CLI, we want to show NULL values rather the empty strings
     if env::var_os("DATAFUSION_FORMAT_NULL").is_none() {
         config_options.format.null = String::from("NULL");
+    }
+
+    if args.spark {
+        config_options.sql_parser.dialect = Dialect::Spark;
     }
 
     let mut session_config =
@@ -711,17 +731,48 @@ mod tests {
             .await?;
         }
 
-        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, hits, table_size_bytes from statistics_cache() order by filename";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
-          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
-          | filename                          | table                     | file_size_bytes | num_rows     | num_columns | table_size_bytes |
-          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
-          | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | Absent           |
-          | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | Absent           |
-          | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | Absent           |
-          +-----------------------------------+---------------------------+-----------------+--------------+-------------+------------------+
+        assert_snapshot!(batches_to_string(&rbs),@"
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | filename                          | table                     | file_size_bytes | num_rows     | num_columns | hits | table_size_bytes |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | 0    | Absent           |
+        | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | 0    | Absent           |
+        | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | 0    | Absent           |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        ");
+
+        // increase the number of hits
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from alltypes_plain")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("select * from lz4_raw_compressed_larger")
+            .await?
+            .collect()
+            .await?;
+
+        let sql = "SELECT split_part(path, '/', -1) as filename, table, file_size_bytes, num_rows, num_columns, hits, table_size_bytes from statistics_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs),@"
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | filename                          | table                     | file_size_bytes | num_rows     | num_columns | hits | table_size_bytes |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
+        | alltypes_plain.parquet            | alltypes_plain            | 1851            | Exact(8)     | 11          | 3    | Absent           |
+        | alltypes_tiny_pages.parquet       | alltypes_tiny_pages       | 454233          | Exact(7300)  | 13          | 0    | Absent           |
+        | lz4_raw_compressed_larger.parquet | lz4_raw_compressed_larger | 380836          | Exact(10000) | 1           | 1    | Absent           |
+        +-----------------------------------+---------------------------+-----------------+--------------+-------------+------+------------------+
         ");
 
         Ok(())
@@ -779,7 +830,7 @@ mod tests {
         .collect()
         .await?;
 
-        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list FROM list_files_cache()";
+        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list, hits FROM list_files_cache()";
         let df = ctx
             .sql(sql)
             .await?
@@ -807,16 +858,17 @@ mod tests {
                 "filename",
                 "file_size_bytes",
                 "etag",
+                "hits",
             ])?
             .sort(vec![col("filename").sort(true, false)])?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs),@r"
-        +---------------------+-----------+-----------------+------+
-        | metadata_size_bytes | filename  | file_size_bytes | etag |
-        +---------------------+-----------+-----------------+------+
-        | 212                 | 0.parquet | 3642            | 0    |
-        | 212                 | 1.parquet | 3642            | 1    |
-        +---------------------+-----------+-----------------+------+
+        +---------------------+-----------+-----------------+------+------+
+        | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
+        +---------------------+-----------+-----------------+------+------+
+        | 212                 | 0.parquet | 3642            | 0    | 2    |
+        | 212                 | 1.parquet | 3642            | 1    | 2    |
+        +---------------------+-----------+-----------------+------+------+
         ");
 
         Ok(())

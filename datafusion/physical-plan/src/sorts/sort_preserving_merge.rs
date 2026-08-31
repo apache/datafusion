@@ -24,19 +24,23 @@ use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics, validate_child_count,
 };
 
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use crate::execution_plan::{EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
+};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -181,17 +185,6 @@ impl SortPreservingMergeExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for SortPreservingMergeExec {
@@ -260,14 +253,19 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self.input
             .with_preserve_order(preserve_order)
             .and_then(|new_input| {
-                Arc::new(self.clone())
-                    .with_new_children(vec![new_input])
+                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
                     .ok()
             })
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
+            Distribution::UnspecifiedDistribution,
+        ])
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -286,15 +284,53 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        crate::apply_expression_roots(
+            self.expr.iter().map(|sort_expr| &sort_expr.expr),
+            f,
+        )
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(
-            SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
-                .with_fetch(self.fetch),
-        ))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(
+                SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
+                    .with_fetch(self.fetch),
+            )),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -381,8 +417,25 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(&self.input, None)
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(None)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -414,6 +467,394 @@ impl ExecutionPlan for SortPreservingMergeExec {
             .with_fetch(self.fetch()),
         )))
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
+        use datafusion_proto_models::protobuf;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `SortPreservingMergeExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            expr,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            fetch,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            // Not serialized: `SortPreservingMergeExecNode` has no field for it,
+            // so decoding always yields the `true` default from
+            // `SortPreservingMergeExec::new`.
+            enable_round_robin_repartition: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let expr = expr
+            .iter()
+            .map(|e| {
+                Ok(protobuf::PhysicalExprNode {
+                    expr_id: None,
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
+                        Box::new(protobuf::PhysicalSortExprNode {
+                            expr: Some(Box::new(ctx.encode_expr(&e.expr)?)),
+                            asc: !e.options.descending,
+                            nulls_first: e.options.nulls_first,
+                        }),
+                    )),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge(
+                    Box::new(protobuf::SortPreservingMergeExecNode {
+                        input: Some(Box::new(input)),
+                        expr,
+                        fetch: match fetch {
+                            Some(n) => {
+                                usize_to_wire(*n, "SortPreservingMergeExec", "fetch")?
+                            }
+                            None => -1, // no limit
+                        },
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl SortPreservingMergeExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use arrow::compute::SortOptions;
+        use datafusion_common::utils::usize_from_wire;
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+        use datafusion_proto_models::protobuf;
+        let spm = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge,
+            "SortPreservingMergeExec",
+        );
+        // Destructure exhaustively so that a new field on
+        // `SortPreservingMergeExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::SortPreservingMergeExecNode { input, expr, fetch } = &**spm;
+        let input = ctx.decode_required_child(
+            input.as_deref(),
+            "SortPreservingMergeExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+        let exprs = expr
+            .iter()
+            .map(|e| {
+                let Some(protobuf::physical_expr_node::ExprType::Sort(sort)) =
+                    &e.expr_type
+                else {
+                    return internal_err!(
+                        "SortPreservingMergeExec expression is not a sort expression"
+                    );
+                };
+                let expr = ctx.decode_required_expr(
+                    sort.expr.as_deref(),
+                    input_schema.as_ref(),
+                    "SortPreservingMergeExec",
+                    "sort expression",
+                )?;
+                Ok(PhysicalSortExpr {
+                    expr,
+                    options: SortOptions {
+                        descending: !sort.asc,
+                        nulls_first: sort.nulls_first,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let Some(ordering) = LexOrdering::new(exprs) else {
+            return internal_err!("SortPreservingMergeExec requires an ordering");
+        };
+        let fetch = (*fetch >= 0)
+            .then(|| usize_from_wire(*fetch, "SortPreservingMergeExec", "fetch"))
+            .transpose()?;
+        Ok(Arc::new(
+            SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
+        ))
+    }
+}
+
+/// Field-level tests for the `try_to_proto` / `try_from_proto` hooks.
+///
+/// `SortPreservingMergeExec` had no proto coverage at all until #24172 (see
+/// #24171); these cover the fields that its `Debug` output does not show, so a
+/// dropped `fetch` fails here rather than passing silently.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{
+        StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, column_node,
+        encoded_child_node, sort_expr_node, stub_child,
+    };
+    use arrow::compute::SortOptions;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use datafusion_proto_models::protobuf;
+
+    /// A `SortPreservingMergeExec` over `a ASC NULLS LAST` with the given fetch.
+    fn spm_fixture(fetch: Option<usize>) -> SortPreservingMergeExec {
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        )])
+        .unwrap();
+        SortPreservingMergeExec::new(ordering, stub_child()).with_fetch(fetch)
+    }
+
+    /// Encode `plan` with a stub encoder, returning the `SortPreservingMergeExecNode`.
+    fn encode(
+        plan: &SortPreservingMergeExec,
+        encoder: &StubPlanEncoder,
+    ) -> protobuf::SortPreservingMergeExecNode {
+        let ctx = ExecutionPlanEncodeCtx::new(encoder);
+        let node = plan
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("SortPreservingMergeExec should encode to Some(node)");
+        match node.physical_plan_type {
+            Some(
+                protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge(spm),
+            ) => *spm,
+            other => panic!("expected a SortPreservingMerge node, got {other:?}"),
+        }
+    }
+
+    /// A hand-built `SortPreservingMergeExecNode` wrapped in its `PhysicalPlanNode`.
+    fn spm_node(
+        node: protobuf::SortPreservingMergeExecNode,
+    ) -> protobuf::PhysicalPlanNode {
+        protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge(
+                    Box::new(node),
+                ),
+            ),
+        }
+    }
+
+    /// A decodable `SortPreservingMergeExecNode`: one child, one sort key.
+    fn decodable_node(fetch: i64) -> protobuf::SortPreservingMergeExecNode {
+        protobuf::SortPreservingMergeExecNode {
+            input: Some(Box::new(encoded_child_node())),
+            expr: vec![sort_expr_node("a", 0, true, false)],
+            fetch,
+        }
+    }
+
+    /// Decode `node`, returning the `SortPreservingMergeExec`.
+    fn decode(
+        node: protobuf::SortPreservingMergeExecNode,
+        decoder: &StubPlanDecoder,
+    ) -> Arc<SortPreservingMergeExec> {
+        let ctx = ExecutionPlanDecodeCtx::new(decoder);
+        SortPreservingMergeExec::try_from_proto(&spm_node(node), &ctx)
+            .unwrap()
+            .downcast_ref::<SortPreservingMergeExec>()
+            .expect("decoded plan should be a SortPreservingMergeExec")
+            .clone()
+            .into()
+    }
+
+    #[test]
+    fn try_to_proto_encodes_absent_fetch_as_negative_one() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&spm_fixture(None), &encoder);
+
+        assert_eq!(node.fetch, -1);
+        assert_eq!(encoder.plan_calls(), 1);
+        assert_eq!(encoder.expr_calls(), 1);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_present_fetch() {
+        let encoder = StubPlanEncoder::ok();
+
+        assert_eq!(encode(&spm_fixture(Some(11)), &encoder).fetch, 11);
+    }
+
+    /// `Some(0)` must not collapse into the "absent" encoding.
+    #[test]
+    fn try_to_proto_distinguishes_zero_fetch_from_absent_fetch() {
+        let encoder = StubPlanEncoder::ok();
+
+        assert_eq!(encode(&spm_fixture(Some(0)), &encoder).fetch, 0);
+    }
+
+    /// `usize::MAX` does not fit the signed wire field on a 64-bit target and
+    /// must be rejected instead of wrapping to the `-1` "absent" encoding.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_to_proto_rejects_usize_max_fetch() {
+        let encoder = StubPlanEncoder::ok();
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let err = spm_fixture(Some(usize::MAX))
+            .try_to_proto(&ctx)
+            .unwrap_err();
+
+        assert_eq!(
+            err.strip_backtrace(),
+            format!(
+                "Error during planning: SortPreservingMergeExec: fetch value {} is out of range for the plan wire format",
+                usize::MAX
+            )
+        );
+    }
+
+    #[test]
+    fn try_to_proto_inverts_descending_into_asc() {
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )])
+        .unwrap();
+        let plan = SortPreservingMergeExec::new(ordering, stub_child());
+        let encoder = StubPlanEncoder::ok();
+
+        let node = encode(&plan, &encoder);
+        let sort_expr = match node.expr[0].expr_type.as_ref().unwrap() {
+            protobuf::physical_expr_node::ExprType::Sort(sort) => sort,
+            other => panic!("expected a Sort expr node, got {other:?}"),
+        };
+        assert!(!sort_expr.asc);
+        assert!(sort_expr.nulls_first);
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let encoder = StubPlanEncoder::failing_on_plan(1);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        let err = spm_fixture(None).try_to_proto(&ctx).unwrap_err();
+        assert!(err.to_string().contains("stub plan encode failure"));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let encoder = StubPlanEncoder::failing_on_expr(1);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        let err = spm_fixture(None).try_to_proto(&ctx).unwrap_err();
+        assert!(err.to_string().contains("stub expr encode failure"));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_negative_fetch_as_absent() {
+        let decoder = StubPlanDecoder::ok();
+
+        assert_eq!(decode(decodable_node(-1), &decoder).fetch(), None);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_zero_fetch_as_some_zero() {
+        let decoder = StubPlanDecoder::ok();
+
+        assert_eq!(decode(decodable_node(0), &decoder).fetch(), Some(0));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_present_fetch() {
+        let decoder = StubPlanDecoder::ok();
+
+        assert_eq!(decode(decodable_node(4), &decoder).fetch(), Some(4));
+    }
+
+    #[test]
+    fn try_from_proto_restores_sort_options() {
+        let decoder = StubPlanDecoder::ok();
+        let mut node = decodable_node(-1);
+        node.expr = vec![sort_expr_node("a", 0, false, true)];
+
+        let plan = decode(node, &decoder);
+        let sort_expr = plan.expr().first();
+        assert!(sort_expr.options.descending);
+        assert!(sort_expr.options.nulls_first);
+    }
+
+    /// `enable_round_robin_repartition` is deliberately not on the wire: a
+    /// decoded plan always comes back with the default. Pinning that here keeps
+    /// the omission a decision rather than an accident.
+    #[test]
+    fn try_from_proto_leaves_round_robin_repartition_at_its_default() {
+        let decoder = StubPlanDecoder::ok();
+        let plan = decode(decodable_node(-1), &decoder);
+
+        assert!(plan.enable_round_robin_repartition);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_different_plan_variant() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err = SortPreservingMergeExec::try_from_proto(&encoded_child_node(), &ctx)
+            .unwrap_err();
+        assert!(err.to_string().contains("not a SortPreservingMergeExec"));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_missing_input() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(-1);
+        node.input = None;
+
+        let err =
+            SortPreservingMergeExec::try_from_proto(&spm_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SortPreservingMergeExec is missing required field 'input'")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_non_sort_expression() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(-1);
+        node.expr = vec![column_node("a", 0)];
+
+        let err =
+            SortPreservingMergeExec::try_from_proto(&spm_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("expression is not a sort expression")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_an_empty_ordering() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node(-1);
+        node.expr = vec![];
+
+        let err =
+            SortPreservingMergeExec::try_from_proto(&spm_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SortPreservingMergeExec requires an ordering")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -432,9 +873,12 @@ mod tests {
     use crate::metrics::{MetricValue, Timestamp};
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
+    use crate::statistics::StatisticsContext;
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::TestMemoryExec;
-    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
+    use crate::test::exec::{
+        BlockingExec, StatisticsExec, assert_strong_count_converges_to_zero,
+    };
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
@@ -444,8 +888,9 @@ mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{assert_batches_eq, exec_err};
+    use datafusion_common::{ColumnStatistics, assert_batches_eq, exec_err};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
@@ -508,6 +953,52 @@ mod tests {
         let spm = SortPreservingMergeExec::new(sort, Arc::new(repartition_exec))
             .with_round_robin_repartition(enable_round_robin_repartition);
         Ok(Arc::new(spm))
+    }
+
+    #[test]
+    fn test_fetch_caps_statistics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Exact(1_000),
+                total_byte_size: Precision::Exact(8_000),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
+            },
+            schema.clone(),
+        ));
+        let sort = [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        let spm = SortPreservingMergeExec::new(sort, input).with_fetch(Some(1));
+        let statistics =
+            StatisticsContext::new().compute(&spm, &StatisticsArgs::new())?;
+
+        assert_eq!(statistics.num_rows, Precision::Exact(1));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(8));
+        assert!(matches!(
+            spm.cardinality_effect(),
+            CardinalityEffect::LowerEqual
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_fetch_preserves_statistics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Exact(8_000),
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        let input = Arc::new(StatisticsExec::new(input_stats.clone(), schema.clone()));
+        let sort = [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        let spm = SortPreservingMergeExec::new(sort, input);
+        let statistics =
+            StatisticsContext::new().compute(&spm, &StatisticsArgs::new())?;
+
+        assert_eq!(*statistics, input_stats);
+        assert!(matches!(spm.cardinality_effect(), CardinalityEffect::Equal));
+        Ok(())
     }
 
     /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
@@ -1408,11 +1899,28 @@ mod tests {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
-        fn with_new_children(
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
         fn execute(
             &self,

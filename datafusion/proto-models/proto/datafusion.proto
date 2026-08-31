@@ -173,7 +173,8 @@ message EmptyRelationNode {
 message CreateExternalTableNode {
   reserved 1; // was string name
   TableReference name = 9;
-  string location = 2;
+  string location = 2; // deprecated; use repeated locations
+  repeated string locations = 16;
   string file_type = 3;
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
@@ -402,7 +403,22 @@ message ColumnUnnestListRecursion {
 }
 
 message UnnestOptions {
-  bool preserve_nulls = 1;
+  // Reserved for the historical `bool preserve_nulls = 1;` field.
+  // Use `null_handling` instead.
+  reserved 1;
+  reserved "preserve_nulls";
+
+  enum NullHandling {
+    // Preserve nulls; empty lists produce no rows. The historical default.
+    PRESERVE = 0;
+    // Drop both null and empty lists from the output.
+    DROP = 1;
+    // Preserve nulls, and additionally expand empty lists into a single
+    // NULL output row (outer-unnest semantics).
+    PRESERVE_AND_EXPAND_EMPTY = 2;
+  }
+
+  NullHandling null_handling = 3;
   repeated RecursionUnnestOption recursions = 2;
 }
 
@@ -501,6 +517,10 @@ message LogicalExprNode {
 
     // Subquery expressions
     ScalarSubqueryExprNode scalar_subquery_expr = 36;
+
+    HigherOrderUDFExprNode higher_order_udf_expr = 37;
+    Lambda lambda = 38;
+    LambdaVariable lambda_variable = 39;
   }
 }
 
@@ -613,6 +633,9 @@ message NegativeNode {
 
 message Unnest {
   repeated LogicalExprNode exprs = 1;
+  // When true, this Unnest expression has outer-unnest semantics: NULL and
+  // empty input lists both produce a single NULL output row.
+  bool outer = 2;
 }
 
 message InListNode {
@@ -636,6 +659,22 @@ message ScalarUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
   optional bytes fun_definition = 3;
+}
+
+message HigherOrderUDFExprNode {
+  string fun_name = 1;
+  repeated LogicalExprNode args = 2;
+  optional bytes fun_definition = 3;
+}
+
+message Lambda {
+  repeated string params = 1;
+  LogicalExprNode body = 2;
+}
+
+message LambdaVariable {
+  string name = 1;
+  datafusion_common.Field field = 2;
 }
 
 message WindowExprNode {
@@ -860,6 +899,7 @@ message PhysicalPlanNode {
     BufferExecNode buffer = 37;
     ArrowScanExecNode arrow_scan = 38;
     ScalarSubqueryExecNode scalar_subquery = 39;
+    PiecewiseMergeJoinExecNode piecewise_merge_join = 40;
   }
 }
 
@@ -1007,6 +1047,12 @@ message PhysicalExprNode {
     PhysicalScalarSubqueryExprNode scalar_subquery = 22;
 
     PhysicalDynamicFilterNode dynamic_filter = 23;
+
+    PhysicalHigherOrderUdfNode higher_order_udf = 24;
+    PhysicalLambdaExprNode lambda = 25;
+    PhysicalLambdaVariableExprNode lambda_variable = 26;
+    PhysicalRangeExprNode range_expr = 27;
+    PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
   }
 }
 
@@ -1018,6 +1064,10 @@ message PhysicalDynamicFilterNode {
   bool is_complete = 5;
 }
 
+message PhysicalSqlSimilarToPatternNode {
+  PhysicalExprNode expr = 1;
+}
+
 message PhysicalScalarUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
@@ -1025,6 +1075,22 @@ message PhysicalScalarUdfNode {
   datafusion_common.ArrowType return_type = 4;
   bool nullable = 5;
   string return_field_name = 6;
+}
+
+message PhysicalHigherOrderUdfNode {
+  string name = 1;
+  repeated PhysicalExprNode args = 2;
+  optional bytes fun_definition = 3;
+}
+
+message PhysicalLambdaExprNode {
+  repeated string params = 1;
+  PhysicalExprNode body = 2;
+}
+
+message PhysicalLambdaVariableExprNode {
+  uint32 index = 1;
+  datafusion_common.Field field = 2;
 }
 
 message PhysicalAggregateExprNode {
@@ -1037,6 +1103,7 @@ message PhysicalAggregateExprNode {
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
   string human_display = 8;
+  bool is_reversed = 9;
 }
 
 message PhysicalWindowExprNode {
@@ -1142,6 +1209,11 @@ message PhysicalHashExprNode {
   string description = 6;
 }
 
+message PhysicalRangeExprNode {
+  repeated PhysicalSortExprNode sort_expr = 1;
+  repeated PhysicalRangeSplitPoint split_point = 2;
+}
+
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
@@ -1190,8 +1262,13 @@ message FileScanExecConf {
   optional uint64 batch_size = 12;
 
   optional ProjectionExprs projection_exprs = 13;
-  optional bool partitioned_by_file_group = 14;
+  // Was optional bool partitioned_by_file_group = 14.
+  reserved 14;
+  reserved "partitioned_by_file_group";
   optional Partitioning output_partitioning = 15;
+  // Compression used by formats such as CSV and JSON. Absent means uncompressed
+  // for compatibility with payloads written before this field existed.
+  optional datafusion_common.CompressionTypeVariant file_compression_type = 16;
 }
 
 message ParquetScanExecNode {
@@ -1218,18 +1295,32 @@ message CsvScanExecNode {
   }
   bool newlines_in_values = 7;
   bool truncate_rows = 8;
+  // Custom one-byte line terminator. Absent means the default newline terminator.
+  optional bytes terminator = 9;
 }
 
 message JsonScanExecNode {
   FileScanExecConf base_conf = 1;
+  // Absent means newline-delimited JSON for compatibility with older payloads.
+  optional bool newline_delimited = 2;
 }
 
 message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
+// Identifies which Arrow IPC format an ArrowScanExecNode reads.
+enum ArrowIpcFormat {
+  // Arrow IPC file format (with footer, supports range-based parallel reading).
+  // This is the default for payloads encoded before the format field existed.
+  ARROW_IPC_FORMAT_FILE = 0;
+  // Arrow IPC stream format (without footer, sequential reading only)
+  ARROW_IPC_FORMAT_STREAM = 1;
+}
+
 message ArrowScanExecNode {
   FileScanExecConf base_conf = 1;
+  ArrowIpcFormat format = 2;
 }
 
 message MemoryScanExecNode {
@@ -1263,6 +1354,14 @@ message HashJoinExecNode {
   bool null_aware = 10;
   // Optional dynamic filter expression for pushing down to the probe side.
   PhysicalExprNode dynamic_filter = 11;
+  // Optional row limit pushed into the join by the `limit_pushdown` rule.
+  //
+  // This is presence-tracked (`optional`) on purpose: messages produced by
+  // versions predating this field carry no `fetch` at all, and a plain proto3
+  // scalar would decode that absence as `0`, i.e. "fetch 0 rows", silently
+  // turning old plans into empty results. With `optional`, absent decodes to
+  // `None`, which is the correct reading of an older message.
+  optional uint64 fetch = 12;
 }
 
 enum StreamPartitionMode {
@@ -1306,6 +1405,10 @@ message AnalyzeExecNode {
   bool has_metric_categories = 5;
   repeated string metric_categories = 6;
   datafusion_common.ExplainFormat format = 7;
+  // Whether metric_types is present. False means use SUMMARY and DEV.
+  bool has_metric_types = 8;
+  // Types of metrics to display.
+  repeated datafusion_common.MetricType metric_types = 9;
 }
 
 message CrossJoinExecNode {
@@ -1329,10 +1432,16 @@ message JoinOn {
 
 message EmptyExecNode {
   datafusion_common.Schema schema = 1;
+  // Number of output partitions. Absent (0) means a single partition, so that
+  // plans encoded before this field existed decode to the previous default.
+  uint32 partitions = 2;
 }
 
 message PlaceholderRowExecNode {
   datafusion_common.Schema schema = 1;
+  // Number of output partitions. Absent (0) means a single partition, so that
+  // plans encoded before this field existed decode to the previous default.
+  uint32 partitions = 2;
 }
 
 message ProjectionExecNode {
@@ -1397,6 +1506,8 @@ message AggregateExecNode {
   bool has_grouping_set = 12;
   // Optional dynamic filter expression for pushing down to the child.
   PhysicalExprNode dynamic_filter = 13;
+  // Output schema preserved by physical optimizer rewrites.
+  datafusion_common.Schema schema = 14;
 }
 
 message GlobalLimitExecNode {
@@ -1405,11 +1516,15 @@ message GlobalLimitExecNode {
   uint32 skip = 2;
   // Maximum number of rows to fetch; negative means no limit
   int64 fetch = 3;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 4;
 }
 
 message LocalLimitExecNode {
   PhysicalPlanNode input = 1;
   uint32 fetch = 2;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 3;
 }
 
 message SortExecNode {
@@ -1588,6 +1703,19 @@ message SortMergeJoinExecNode {
   JoinFilter filter = 5;
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
+  repeated uint32 projection = 8;
+}
+
+message PiecewiseMergeJoinExecNode {
+  PhysicalPlanNode buffered = 1;
+  PhysicalPlanNode streamed = 2;
+  // The buffered-side and streamed-side halves of the single range predicate.
+  PhysicalExprNode on_buffered = 3;
+  PhysicalExprNode on_streamed = 4;
+  // `Operator` variant name, e.g. "Lt". Must be one of Lt/LtEq/Gt/GtEq.
+  string operator = 5;
+  datafusion_common.JoinType join_type = 6;
+  uint64 num_partitions = 7;
 }
 
 message AsyncFuncExecNode {

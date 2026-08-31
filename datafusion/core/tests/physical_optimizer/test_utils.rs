@@ -27,10 +27,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::source::DataSourceExec;
+use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     ColumnStatistics, JoinType, NullEquality, Result, Statistics, internal_err,
@@ -40,9 +42,10 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{self, col};
+use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -67,8 +70,9 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PlanProperties, SortOrderPushdownResult, StatisticsArgs, displayable,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    InputDistributionRequirements, InputOrderMode, Partitioning, PlanProperties,
+    ReplaceChildrenOptions, SortOrderPushdownResult, StatisticsArgs, displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -230,6 +234,16 @@ pub fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
     MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
 }
 
+pub fn inexact_memory_exec(
+    partitions: &[Vec<RecordBatch>],
+    schema: SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let source = InexactMemorySource {
+        inner: MemorySourceConfig::try_new(partitions, schema, None)?,
+    };
+    Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+}
+
 pub fn hash_join_exec(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
@@ -264,6 +278,22 @@ pub fn bounded_window_exec_with_partition(
     partition_by: &[Arc<dyn PhysicalExpr>],
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
+    bounded_window_exec_with_can_repartition(
+        col_name,
+        sort_exprs,
+        partition_by,
+        input,
+        false,
+    )
+}
+
+pub fn bounded_window_exec_with_can_repartition(
+    col_name: &str,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    input: Arc<dyn ExecutionPlan>,
+    can_repartition: bool,
+) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
     let schema = input.schema();
     let window_expr = create_window_expr(
@@ -285,7 +315,7 @@ pub fn bounded_window_exec_with_partition(
             vec![window_expr],
             Arc::clone(&input),
             InputOrderMode::Sorted,
-            false,
+            can_repartition,
         )
         .unwrap(),
     )
@@ -373,6 +403,18 @@ pub fn sort_exec_with_preserve_partitioning(
     Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true))
 }
 
+pub fn sort_exec_with_fetch_and_preserve_partitioning(
+    ordering: LexOrdering,
+    fetch: Option<usize>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        SortExec::new(ordering, input)
+            .with_fetch(fetch)
+            .with_preserve_partitioning(true),
+    )
+}
+
 pub fn sort_exec_with_fetch(
     ordering: LexOrdering,
     fetch: Option<usize>,
@@ -396,6 +438,7 @@ pub fn projection_exec(
 #[derive(Debug)]
 pub struct RequirementsTestExec {
     required_input_ordering: Option<LexOrdering>,
+    required_input_distribution: Distribution,
     maintains_input_order: bool,
     input: Arc<dyn ExecutionPlan>,
 }
@@ -404,6 +447,7 @@ impl RequirementsTestExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             required_input_ordering: None,
+            required_input_distribution: Distribution::UnspecifiedDistribution,
             maintains_input_order: true,
             input,
         }
@@ -415,6 +459,15 @@ impl RequirementsTestExec {
         required_input_ordering: Option<LexOrdering>,
     ) -> Self {
         self.required_input_ordering = required_input_ordering;
+        self
+    }
+
+    /// sets the required input distribution
+    pub fn with_required_input_distribution(
+        mut self,
+        required_input_distribution: Distribution,
+    ) -> Self {
+        self.required_input_distribution = required_input_distribution;
         self
     }
 
@@ -461,6 +514,10 @@ impl ExecutionPlan for RequirementsTestExec {
         ]
     }
 
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![self.required_input_distribution.clone()])
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![self.maintains_input_order]
     }
@@ -469,15 +526,27 @@ impl ExecutionPlan for RequirementsTestExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         Ok(RequirementsTestExec::new(Arc::clone(&children[0]))
             .with_required_input_ordering(self.required_input_ordering.clone())
+            .with_required_input_distribution(self.required_input_distribution.clone())
             .with_maintains_input_order(self.maintains_input_order)
             .into_arc())
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -486,6 +555,13 @@ impl ExecutionPlan for RequirementsTestExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("Test exec does not support execution")
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -762,7 +838,7 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 fn format_lines(s: &str) -> Vec<String> {
-    s.trim().split('\n').map(|s| s.to_string()).collect()
+    s.trim().lines().map(|s| s.to_string()).collect()
 }
 
 /// Create a simple ProjectionExec with column indices (simplified version)
@@ -893,6 +969,18 @@ impl TestScan {
         self.supports_fetch = supports;
         self
     }
+
+    /// Set the number of output partitions reported by this scan.
+    pub fn with_partition_count(mut self, partition_count: usize) -> Self {
+        let eq_properties = self.plan_properties.equivalence_properties().clone();
+        self.plan_properties = Arc::new(PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(partition_count),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        self
+    }
 }
 
 impl DisplayAs for TestScan {
@@ -948,15 +1036,26 @@ impl ExecutionPlan for TestScan {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
             Ok(self)
         } else {
             internal_err!("TestScan should have no children")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -967,7 +1066,11 @@ impl ExecutionPlan for TestScan {
         internal_err!("TestScan is for testing optimizer only, not for execution")
     }
 
-    fn statistics_with_args(&self, _args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 
@@ -1019,6 +1122,13 @@ impl ExecutionPlan for TestScan {
             })
         }
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
 }
 
 /// Helper function to create a TestScan with ordering
@@ -1027,4 +1137,68 @@ pub fn test_scan_with_ordering(
     ordering: LexOrdering,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(TestScan::with_ordering(schema, ordering))
+}
+
+#[derive(Debug, Clone)]
+struct InexactMemorySource {
+    inner: MemorySourceConfig,
+}
+
+impl DataSource for InexactMemorySource {
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.inner.apply_expressions(f)
+    }
+
+    fn open(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.inner.open(partition, context)
+    }
+
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        self.inner.output_partitioning()
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        self.inner.eq_properties()
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        self.inner.partition_statistics(partition)
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        let mut new_source = self.clone();
+        new_source.inner = new_source.inner.with_limit(limit);
+        Some(Arc::new(new_source))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.inner.fetch()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        Ok(SortOrderPushdownResult::Inexact {
+            inner: Arc::new(self.clone()),
+        })
+    }
 }

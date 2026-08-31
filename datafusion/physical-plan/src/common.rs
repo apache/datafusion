@@ -181,7 +181,8 @@ pub fn project_plan_to_schema(
 }
 
 /// If running in a tokio context spawns the execution of `stream` to a separate task
-/// allowing it to execute in parallel with an intermediate buffer of size `buffer`
+/// allowing it to execute in parallel with an intermediate buffer of size `buffer`.
+/// At most `buffer` record batches will be produced ahead of the consumer.
 pub fn spawn_buffered(
     mut input: SendableRecordBatchStream,
     buffer: usize,
@@ -196,11 +197,22 @@ pub fn spawn_buffered(
             let sender = builder.tx();
 
             builder.spawn(async move {
-                while let Some(item) = input.next().await {
-                    if sender.send(item).await.is_err() {
-                        // Receiver dropped when query is shutdown early (e.g., limit) or error,
-                        // no need to return propagate the send error.
-                        return Ok(());
+                // We call `reserve` (which waits until there's room for at least 1 message in the
+                // channel buffer) **before** polling from input to ensure we hold a maximum of
+                // `buffer` record batches in memory.
+                // Polling from input and then calling send() would block when the channel is full
+                // so it would essentially hold `buffer` + 1 record batches:
+                // * `buffer`: this many elements would live inside the channel, since this is the
+                //   channel's capacity
+                // * 1 extra RecordBatch which was produced, but there was no room for it in the
+                //   channel, so it's being owned by the send() future, which keeps the batch in
+                //   memory while it waits for a slot to free up
+                while let Ok(permit) = sender.reserve().await {
+                    // Receiver dropped when query is shutdown early (e.g., limit) or error,
+                    // no need to return propagate the send error.
+                    match input.next().await {
+                        Some(item) => permit.send(item),
+                        None => break,
                     }
                 }
 
@@ -298,10 +310,13 @@ mod tests {
     use crate::empty::EmptyExec;
     use crate::projection::ProjectionExec;
 
+    use crate::stream::RecordBatchStreamAdapter;
+    use futures::stream;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow::{
-        array::{Float32Array, Float64Array, UInt64Array},
+        array::{Float32Array, Float64Array, Int32Array, UInt64Array},
         datatypes::{DataType, Field, Schema},
     };
 
@@ -553,5 +568,56 @@ mod tests {
 
         let err = project_plan_to_schema(input, &expected_schema).unwrap_err();
         assert!(err.to_string().contains("schema metadata differ"));
+    }
+
+    /// Verifies that `spawn_buffered` holds exactly `buffer` record batches in memory
+    /// when no receiver is polling
+    async fn spawn_buffered_max_in_flight_batches(buffer_size: usize) {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let num_batches = 10;
+
+        let produced_count = Arc::new(AtomicUsize::new(0));
+        let produced_clone = Arc::clone(&produced_count);
+        let schema_clone = Arc::clone(&schema);
+
+        // Stream increments the counter each time a batch is pulled by the producer.
+        let input_stream = stream::unfold(0usize, move |i| {
+            let schema = Arc::clone(&schema_clone);
+            let counter = Arc::clone(&produced_clone);
+            async move {
+                if i >= num_batches {
+                    return None;
+                }
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int32Array::from(vec![i as i32]))],
+                )
+                .unwrap();
+                counter.fetch_add(1, Ordering::SeqCst);
+                Some((Ok(batch), i + 1))
+            }
+        });
+
+        let input = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&schema),
+            input_stream,
+        ));
+        // Drop the returned stream immediately so no receiver is ever polled.
+        let _buffered = spawn_buffered(input, buffer_size);
+
+        // Give the producer task time to fill the channel and stall on send().
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        assert_eq!(
+            produced_count.load(Ordering::SeqCst),
+            buffer_size,
+            "expected exactly {buffer_size} batch(es) in memory with no receiver polling"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spawn_buffered_max_in_flight_batches() {
+        spawn_buffered_max_in_flight_batches(1).await;
+        spawn_buffered_max_in_flight_batches(2).await;
     }
 }

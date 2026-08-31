@@ -81,7 +81,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -131,7 +132,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -181,7 +183,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -231,7 +234,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -267,7 +271,7 @@ The time zone can be a value like +00:00, 'Europe/London' etc.
 | to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +--------------------------------------------------------------------------------------------------------------+
 | 2023-05-17T03:59:00.123456789                                                                                |
-+---------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------+
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
@@ -280,7 +284,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         description = r#"
 Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
 only supported at the end of the string preceded by a space.
 "#
     )
@@ -831,7 +836,10 @@ mod tests {
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
     };
-    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
+    use arrow::array::{
+        ArrayRef, Int64Array, LargeStringArray, StringArray, StringBuilder,
+        StringViewArray,
+    };
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::{DateTime, FixedOffset, Utc};
     use datafusion_common::{DataFusionError, assert_contains};
@@ -950,7 +958,9 @@ mod tests {
 
         string_builder.append_null();
         ts_builder.append_null();
-        let expected_timestamps = &ts_builder.finish() as &dyn Array;
+        // the test helpers above configure "UTC" as the execution timezone
+        let expected = ts_builder.finish().with_timezone("UTC");
+        let expected_timestamps = &expected as &dyn Array;
 
         let string_array =
             ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
@@ -1018,7 +1028,9 @@ mod tests {
         format3_builder.append_value("%+");
         ts_builder.append_value(1599572549190850000);
 
-        let expected_timestamps = &ts_builder.finish() as &dyn Array;
+        // the test helpers above configure "UTC" as the execution timezone
+        let expected = ts_builder.finish().with_timezone("UTC");
+        let expected_timestamps = &expected as &dyn Array;
 
         let string_array = [
             ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef),
@@ -1142,6 +1154,62 @@ mod tests {
             );
 
             assert_eq!(result, Some("2020-09-08 13:42:29 -05:00".to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// An array result must be annotated with the same timezone that
+    /// `return_type` advertises, otherwise execution fails when the column is
+    /// materialized. See <https://github.com/apache/datafusion/issues/24632>.
+    #[test]
+    fn to_timestamp_array_respects_execution_timezone() -> Result<()> {
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("-05:00".to_string());
+
+        // every string array flavor `handle`/`handle_multiple` dispatch on
+        let string_arrays: [fn(Vec<&str>) -> ArrayRef; 3] = [
+            |values| Arc::new(StringArray::from(values)) as ArrayRef,
+            |values| Arc::new(LargeStringArray::from(values)) as ArrayRef,
+            |values| Arc::new(StringViewArray::from(values)) as ArrayRef,
+        ];
+
+        for (udf, time_unit) in udfs_and_timeunit() {
+            let udf = udf.with_updated_config(&options).unwrap();
+            let expected = udf.return_type(&[Utf8])?;
+            assert_eq!(expected, Timestamp(time_unit, Some("-05:00".into())));
+
+            for string_array in string_arrays {
+                // both the single argument and the explicit format overloads
+                for args in [
+                    vec![ColumnarValue::Array(string_array(vec![
+                        "2020-09-08T13:42:29",
+                    ]))],
+                    vec![
+                        ColumnarValue::Array(string_array(vec!["2020-09-08 13:42:29"])),
+                        ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                            "%Y-%m-%d %H:%M:%S".to_string(),
+                        ))),
+                    ],
+                ] {
+                    let arg_fields = args
+                        .iter()
+                        .map(|arg| Field::new("arg", arg.data_type(), true).into())
+                        .collect();
+                    let result = udf.invoke_with_args(ScalarFunctionArgs {
+                        args,
+                        arg_fields,
+                        number_rows: 1,
+                        return_field: Field::new("f", expected.clone(), true).into(),
+                        config_options: Arc::new(options.clone()),
+                    })?;
+
+                    let ColumnarValue::Array(array) = result else {
+                        panic!("expected an array result");
+                    };
+                    assert_eq!(array.data_type(), &expected);
+                }
+            }
         }
 
         Ok(())
@@ -1698,9 +1766,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
@@ -1748,9 +1815,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
@@ -1783,10 +1849,16 @@ mod tests {
         micros_builder.append_value(1599572549190850);
         sec_builder.append_value(1599572549);
 
-        let nanos_expected_timestamps = &nanos_builder.finish() as &dyn Array;
-        let millis_expected_timestamps = &millis_builder.finish() as &dyn Array;
-        let micros_expected_timestamps = &micros_builder.finish() as &dyn Array;
-        let sec_expected_timestamps = &sec_builder.finish() as &dyn Array;
+        // the test helpers above configure "UTC" as the execution timezone
+        let nanos_expected = nanos_builder.finish().with_timezone("UTC");
+        let millis_expected = millis_builder.finish().with_timezone("UTC");
+        let micros_expected = micros_builder.finish().with_timezone("UTC");
+        let sec_expected = sec_builder.finish().with_timezone("UTC");
+
+        let nanos_expected_timestamps = &nanos_expected as &dyn Array;
+        let millis_expected_timestamps = &millis_expected as &dyn Array;
+        let micros_expected_timestamps = &micros_expected as &dyn Array;
+        let sec_expected_timestamps = &sec_expected as &dyn Array;
 
         for (func, time_unit) in funcs {
             // test UTF8
@@ -1829,7 +1901,10 @@ mod tests {
                 .expect("that to_timestamp with format args parsed values without error");
             if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
                 assert_eq!(parsed_array.len(), 1);
-                assert!(matches!(parsed_array.data_type(), Timestamp(_, None)));
+                assert!(matches!(
+                    parsed_array.data_type(),
+                    Timestamp(_, Some(tz)) if tz.as_ref() == "UTC"
+                ));
 
                 match time_unit {
                     Nanosecond => {

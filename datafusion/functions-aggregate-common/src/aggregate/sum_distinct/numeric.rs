@@ -40,15 +40,22 @@ pub struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
 }
 
 impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
-    pub fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: DataType) -> Self {
         Self {
             values: GenericDistinctBuffer::new(data_type.clone()),
-            data_type: data_type.clone(),
+            data_type,
         }
     }
 
     pub fn distinct_count(&self) -> usize {
         self.values.values.len()
+    }
+
+    /// Iterates the distinct values collected so far. `AVG(DISTINCT)` re-sums
+    /// them in a wider type instead of using [`Self::evaluate`]'s input-typed
+    /// sum.
+    pub(crate) fn distinct_values(&self) -> impl Iterator<Item = T::Native> + '_ {
+        self.values.values.iter().map(|v| v.0)
     }
 }
 

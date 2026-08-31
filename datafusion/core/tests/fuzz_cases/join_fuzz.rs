@@ -20,7 +20,7 @@ use std::time::SystemTime;
 
 use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
-use arrow::array::{ArrayRef, BinaryArray, Int32Array};
+use arrow::array::{Array, ArrayRef, BinaryArray, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -34,18 +34,24 @@ use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
+    SortMergeJoinExec,
 };
+use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, common};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{NullEquality, ScalarValue};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 use itertools::Itertools;
 use rand::Rng;
+use rand::{SeedableRng, rngs::StdRng};
 use test_utils::stagger_batch_with_seed;
 
 // Determines what Fuzz tests needs to run
@@ -943,9 +949,13 @@ impl JoinFuzzTestCase {
 
                 if join_tests.contains(&NljHj) && nlj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    hj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &hj_formatted_sorted {
+                        println!("{s}");
+                    }
                     println!("=============== NestedLoopJoinExec ==================");
-                    nlj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &nlj_formatted_sorted {
+                        println!("{s}");
+                    }
                     Self::save_partitioned_batches_as_parquet(
                         &nlj_collected,
                         out_dir_name,
@@ -960,9 +970,13 @@ impl JoinFuzzTestCase {
 
                 if join_tests.contains(&HjSmj) && smj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
-                    hj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &hj_formatted_sorted {
+                        println!("{s}");
+                    }
                     println!("=============== SortMergeJoinExec ==================");
-                    smj_formatted_sorted.iter().for_each(|s| println!("{s}"));
+                    for s in &smj_formatted_sorted {
+                        println!("{s}");
+                    }
 
                     Self::save_partitioned_batches_as_parquet(
                         &hj_collected,
@@ -1008,14 +1022,12 @@ impl JoinFuzzTestCase {
 
             if join_tests.contains(&HjSmj) {
                 let err_msg_row_cnt = format!(
-                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}",
-                    &batch_size
+                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {batch_size}"
                 );
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
                 let err_msg_contents = format!(
-                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}",
-                    &batch_size
+                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {batch_size}"
                 );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
@@ -1070,10 +1082,10 @@ impl JoinFuzzTestCase {
             let mut file = std::fs::File::create(&file_path).unwrap();
             println!(
                 "{}: Saving batch idx {} rows {} to parquet {}",
-                &out_name,
+                out_name,
                 idx,
                 batch.num_rows(),
-                &file_path
+                file_path
             );
             let mut writer = parquet::arrow::ArrowWriter::try_new(
                 &mut file,
@@ -1268,9 +1280,9 @@ fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<Record
     let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
     let mut input3: Vec<i32> = vec![0; len];
     let mut input4: Vec<i32> = vec![0; len];
-    input12
-        .iter_mut()
-        .for_each(|v| *v = (rng.random_range(0..100), rng.random_range(0..100)));
+    for v in &mut input12 {
+        *v = (rng.random_range(0..100), rng.random_range(0..100));
+    }
     rng.fill(&mut input3[..]);
     rng.fill(&mut input4[..]);
     input12.sort_unstable();
@@ -1348,4 +1360,366 @@ fn make_staggered_batches_binary(
 
     // preserve your existing randomized partitioning
     stagger_batch_with_seed(batch, 42)
+}
+
+// ---- Differential fuzz: PiecewiseMergeJoin existence joins vs NestedLoopJoin ----
+//
+// `PiecewiseMergeJoinExec` takes a range predicate and no equi keys, so it cannot be added to
+// `JoinFuzzTestCase` above (that harness joins on `a` and `b` and folds the equality into the
+// NestedLoopJoin filter). These tests use `NestedLoopJoinExec` with an equivalent filter as
+// the oracle instead.
+//
+// What only randomization reaches: `LeftSemi`/`LeftAnti` record matches in a shared
+// `AtomicUsize` watermark and emit once, from whichever streamed partition finishes last. The
+// streamed side below is spread round-robin over several partitions as one-row batches, so
+// batches arrive in an order no static test pins down, and the counter that gates the final
+// pass is seeded from a partition count that deliberately disagrees with the `num_partitions`
+// argument.
+
+fn pwmj_kv_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
+        arrow::datatypes::Field::new("k", arrow::datatypes::DataType::Int32, true),
+    ]))
+}
+
+fn pwmj_kv_batch(ids: &[i32], keys: &[Option<i32>]) -> RecordBatch {
+    RecordBatch::try_new(
+        pwmj_kv_schema(),
+        vec![
+            Arc::new(Int32Array::from(ids.to_vec())),
+            Arc::new(Int32Array::from(keys.to_vec())),
+        ],
+    )
+    .unwrap()
+}
+
+/// Single-partition, single-batch input: the buffered side, and the oracle's probe side.
+fn pwmj_single_exec(ids: &[i32], keys: &[Option<i32>]) -> Arc<dyn ExecutionPlan> {
+    MemorySourceConfig::try_new_exec(
+        &[vec![pwmj_kv_batch(ids, keys)]],
+        pwmj_kv_schema(),
+        None,
+    )
+    .unwrap()
+}
+
+/// Streamed side spread round-robin across `nparts` partitions, one row per batch.
+fn pwmj_parts_exec(
+    ids: &[i32],
+    keys: &[Option<i32>],
+    nparts: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let nparts = nparts.max(1);
+    let mut partitions: Vec<Vec<RecordBatch>> = vec![Vec::new(); nparts];
+    for (row, (&id, key)) in ids.iter().zip(keys.iter()).enumerate() {
+        partitions[row % nparts].push(pwmj_kv_batch(&[id], &[*key]));
+    }
+    for p in partitions.iter_mut() {
+        if p.is_empty() {
+            p.push(pwmj_kv_batch(&[], &[]));
+        }
+    }
+    MemorySourceConfig::try_new_exec(&partitions, pwmj_kv_schema(), None).unwrap()
+}
+
+fn pwmj_plan(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    op: Operator,
+    join_type: JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    // Matches `PiecewiseMergeJoinExec::required_input_ordering`: descending for `<`/`<=`,
+    // ascending for `>`/`>=`, NULLs first either way.
+    let sort_options = match op {
+        Operator::Lt | Operator::LtEq => SortOptions::new(true, true),
+        Operator::Gt | Operator::GtEq => SortOptions::new(false, true),
+        other => panic!("not a range operator: {other:?}"),
+    };
+    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+        Arc::new(Column::new("k", 1)),
+        sort_options,
+    )])
+    .unwrap();
+    let sorted_left = Arc::new(SortExec::new(ordering, left));
+    let on: (PhysicalExprRef, PhysicalExprRef) =
+        (Arc::new(Column::new("k", 1)), Arc::new(Column::new("k", 1)));
+    // `num_partitions` is 1 while the streamed side has up to 3: the final-pass counter must
+    // come from the streamed side's partition count, not from this argument.
+    Arc::new(
+        PiecewiseMergeJoinExec::try_new(sorted_left, right, on, op, join_type, 1)
+            .unwrap(),
+    )
+}
+
+fn pwmj_nlj_oracle_plan(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    op: Operator,
+    join_type: JoinType,
+) -> Arc<dyn ExecutionPlan> {
+    let intermediate_schema = Schema::new(vec![
+        arrow::datatypes::Field::new("k", arrow::datatypes::DataType::Int32, true),
+        arrow::datatypes::Field::new("k", arrow::datatypes::DataType::Int32, true),
+    ]);
+    let expr = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("k", 0)),
+        op,
+        Arc::new(Column::new("k", 1)),
+    )) as PhysicalExprRef;
+    let column_indices = vec![
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Right,
+        },
+    ];
+    let filter = JoinFilter::new(expr, column_indices, Arc::new(intermediate_schema));
+    Arc::new(
+        NestedLoopJoinExec::try_new(left, right, Some(filter), &join_type, None).unwrap(),
+    )
+}
+
+/// Executes every output partition concurrently and returns the join's rows as
+/// `(left id, right id)` pairs, sorted so partition interleaving does not affect the
+/// comparison. `None` means the join filled that side with NULLs, or -- for the existence
+/// joins, whose output carries the left side only -- that the side is absent entirely.
+///
+/// Concurrent rather than one partition at a time: the partitions share the watermark and race
+/// to be the one that runs the final pass, which is the part a sequential drain cannot reach.
+async fn pwmj_collect_id_pairs(
+    plan: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Vec<(Option<i32>, Option<i32>)> {
+    let streams = (0..plan.output_partitioning().partition_count())
+        .map(|partition| plan.execute(partition, Arc::clone(&task_ctx)).unwrap())
+        .collect::<Vec<_>>();
+    let per_partition =
+        futures::future::join_all(streams.into_iter().map(|stream| {
+            SpawnedTask::spawn(async move { common::collect(stream).await })
+        }))
+        .await;
+
+    let id_column = |batch: &RecordBatch, col: usize| {
+        batch
+            .column(col)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .clone()
+    };
+
+    let mut pairs = Vec::new();
+    for batches in per_partition {
+        for batch in batches.unwrap().unwrap() {
+            let left = id_column(&batch, 0);
+            // Left is (id, k), so the right side's `id` follows it -- when there is one.
+            let right = (batch.num_columns() > 2).then(|| id_column(&batch, 2));
+            for row in 0..batch.num_rows() {
+                pairs.push((
+                    left.is_valid(row).then(|| left.value(row)),
+                    right
+                        .as_ref()
+                        .filter(|r| r.is_valid(row))
+                        .map(|r| r.value(row)),
+                ));
+            }
+        }
+    }
+    pairs.sort_unstable();
+    pairs
+}
+
+/// Differential test for every join type `PiecewiseMergeJoin` supports, against a
+/// `NestedLoopJoin` oracle.
+///
+/// `Left`/`Full` are the ones with teeth: their unmatched buffered rows are derived from the
+/// shared `min_marked` watermark rather than materialized per row, and that encoding is only
+/// valid because every match marks a *suffix* of the buffered side. The dimensions the
+/// cheaper tests do not reach are the ones that matter here -- `pwmj.slt` and the unit tests
+/// both run the streamed side at a single partition and the default batch size, so neither
+/// covers several partitions racing to run the final pass, nor the mid-scan resume path a
+/// small batch size forces.
+#[tokio::test(flavor = "multi_thread")]
+async fn fuzz_pwmj_matches_nested_loop() {
+    // A small batch size splits output across several coalesced batches even for these tiny
+    // inputs, covering that boundary too.
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(3)),
+    );
+    let ops = [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq];
+    let join_types = [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftSemi,
+        JoinType::LeftAnti,
+    ];
+
+    for seed in 0..60u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let left_len = rng.random_range(0..25usize);
+        let right_len = rng.random_range(0..25usize);
+        // A narrow key range forces duplicates and equal-boundary cases.
+        let key_range = rng.random_range(1..6i32);
+        let nparts = rng.random_range(1..4usize);
+
+        let gen_keys = |n: usize, rng: &mut StdRng| -> Vec<Option<i32>> {
+            (0..n)
+                .map(|_| (!rng.random_bool(0.2)).then(|| rng.random_range(0..key_range)))
+                .collect()
+        };
+
+        let left_ids: Vec<i32> = (0..left_len as i32).collect();
+        let left_keys = gen_keys(left_len, &mut rng);
+        let right_ids: Vec<i32> = (0..right_len as i32).collect();
+        let right_keys = gen_keys(right_len, &mut rng);
+
+        for op in ops {
+            for join_type in join_types {
+                let got = pwmj_collect_id_pairs(
+                    pwmj_plan(
+                        pwmj_single_exec(&left_ids, &left_keys),
+                        pwmj_parts_exec(&right_ids, &right_keys, nparts),
+                        op,
+                        join_type,
+                    ),
+                    Arc::clone(&task_ctx),
+                )
+                .await;
+                let want = pwmj_collect_id_pairs(
+                    pwmj_nlj_oracle_plan(
+                        pwmj_single_exec(&left_ids, &left_keys),
+                        pwmj_single_exec(&right_ids, &right_keys),
+                        op,
+                        join_type,
+                    ),
+                    Arc::clone(&task_ctx),
+                )
+                .await;
+
+                assert_eq!(
+                    got, want,
+                    "mismatch seed={seed} op={op:?} join_type={join_type:?} \
+                     nparts={nparts} left_keys={left_keys:?} right_keys={right_keys:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A named, deterministic companion to [`fuzz_pwmj_matches_nested_loop`] for the two join
+/// types that read the `min_marked` watermark, with the expected output spelled out by hand.
+///
+/// The fuzz test covers these dimensions already, but only through seeds -- when it fails it
+/// hands back a seed and a pair of generated key vectors to reconstruct from. These cases pin
+/// the input instead: NULL keys on both sides, duplicate keys, a streamed side split across 3
+/// partitions racing to run the final pass, and `batch_size = 3` to force the mid-scan resume
+/// path. A regression in the watermark path therefore names itself.
+///
+/// Both branches of the encoding get a case. In the first, buffered `k` is `[1, 1, 2, NULL, 3]`
+/// against streamed `[2, NULL, 3, 2, 5]`: buffered row 3 is the only unmatched left row and
+/// streamed row 1 the only unmatched right row, both because a NULL key matches nothing.
+/// Sorted descending for `<`, the buffered side is `[NULL, 3, 2, 1, 1]`, so the matched suffix
+/// is `[1, 5)` and the unmatched prefix the single NULL row -- what `min_marked` has to encode.
+/// The second case has no match at all, so `min_marked` is never lowered and stays
+/// `usize::MAX`; the clamp against the buffered row count is what keeps the final pass from
+/// slicing past the end.
+#[tokio::test(flavor = "multi_thread")]
+async fn pwmj_watermark_nulls_duplicates_multi_partition() {
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(3)),
+    );
+    let left_ids: Vec<i32> = vec![0, 1, 2, 3, 4];
+    let left_keys = vec![Some(1), Some(1), Some(2), None, Some(3)];
+    let nparts = 3;
+
+    // The matched pairs are enumerated by hand from `left.k < right.k`; `Left` adds the
+    // unmatched buffered rows and `Full` those plus the unmatched streamed ones.
+    struct Case {
+        name: &'static str,
+        streamed_ids: Vec<i32>,
+        streamed_keys: Vec<Option<i32>>,
+        /// `(left id, right id)` pairs the predicate matches.
+        matched: Vec<(i32, i32)>,
+        unmatched_streamed: Vec<i32>,
+    }
+
+    let cases = vec![
+        Case {
+            name: "partial match",
+            streamed_ids: vec![0, 1, 2, 3, 4],
+            streamed_keys: vec![Some(2), None, Some(3), Some(2), Some(5)],
+            matched: vec![
+                // streamed 0 (k=2) and streamed 3 (k=2): buffered 0 and 1 (k=1)
+                (0, 0),
+                (1, 0),
+                (0, 3),
+                (1, 3),
+                // streamed 2 (k=3): buffered 0, 1 (k=1) and buffered 2 (k=2)
+                (0, 2),
+                (1, 2),
+                (2, 2),
+                // streamed 4 (k=5): every non-NULL buffered row
+                (0, 4),
+                (1, 4),
+                (2, 4),
+                (4, 4),
+            ],
+            // streamed 1 (k=NULL) matches nothing
+            unmatched_streamed: vec![1],
+        },
+        Case {
+            // Nothing is below the smallest buffered key, so no buffered row is ever marked.
+            name: "no match",
+            streamed_ids: vec![0, 1, 2],
+            streamed_keys: vec![Some(0), None, Some(1)],
+            matched: vec![],
+            unmatched_streamed: vec![0, 1, 2],
+        },
+    ];
+
+    for case in cases {
+        let matched_left: Vec<i32> = case.matched.iter().map(|&(l, _)| l).collect();
+        let mut pairs: Vec<(Option<i32>, Option<i32>)> = case
+            .matched
+            .iter()
+            .map(|&(l, r)| (Some(l), Some(r)))
+            .collect();
+        // The unmatched buffered rows are the ones no streamed row paired with.
+        pairs.extend(
+            left_ids
+                .iter()
+                .filter(|id| !matched_left.contains(id))
+                .map(|&id| (Some(id), None)),
+        );
+
+        for join_type in [JoinType::Left, JoinType::Full] {
+            let mut want = pairs.clone();
+            if join_type == JoinType::Full {
+                want.extend(case.unmatched_streamed.iter().map(|&id| (None, Some(id))));
+            }
+            want.sort_unstable();
+
+            let got = pwmj_collect_id_pairs(
+                pwmj_plan(
+                    pwmj_single_exec(&left_ids, &left_keys),
+                    pwmj_parts_exec(&case.streamed_ids, &case.streamed_keys, nparts),
+                    Operator::Lt,
+                    join_type,
+                ),
+                Arc::clone(&task_ctx),
+            )
+            .await;
+
+            let name = case.name;
+            assert_eq!(got, want, "mismatch case={name} join_type={join_type:?}");
+        }
+    }
 }

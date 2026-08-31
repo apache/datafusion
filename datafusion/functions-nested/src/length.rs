@@ -49,7 +49,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns the length of the array dimension.",
-    syntax_example = "array_length(array, dimension)",
+    syntax_example = "array_length(array[, dimension])",
     sql_example = r#"```sql
 > select array_length([1, 2, 3, 4, 5], 1);
 +-------------------------------------------+
@@ -62,7 +62,7 @@ make_udf_expr_and_func!(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
-    argument(name = "dimension", description = "Array dimension.")
+    argument(name = "dimension", description = "Array dimension. Default is 1")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayLength {
@@ -171,9 +171,8 @@ fn compute_array_length(
     dimension: Option<i64>,
 ) -> Result<Option<u64>> {
     let mut current_dimension: i64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
+    let Some(mut value) = arr else {
+        return Ok(None);
     };
     let dimension = match dimension {
         Some(value) => {

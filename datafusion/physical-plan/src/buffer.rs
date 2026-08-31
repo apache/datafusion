@@ -18,21 +18,24 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
+};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
 use crate::projection::ProjectionExec;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SortOrderPushdownResult,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions, SortOrderPushdownResult, validate_child_count,
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, Statistics, internal_err, plan_err};
+use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -41,9 +44,10 @@ use datafusion_physical_expr_common::metrics::{
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
 use std::fmt;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -122,17 +126,6 @@ impl BufferExec {
     pub fn capacity(&self) -> usize {
         self.capacity
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for BufferExec {
@@ -169,15 +162,49 @@ impl ExecutionPlan for BufferExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        if children.len() != 1 {
-            return plan_err!("BufferExec can only have one child");
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                Ok(Arc::new(Self::new(children.swap_remove(0), self.capacity)))
+            }
         }
-        Ok(Arc::new(Self::new(children.swap_remove(0), self.capacity)))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -194,8 +221,7 @@ impl ExecutionPlan for BufferExec {
         let curr_mem_out = Arc::clone(&curr_mem_in);
         let mut max_mem_in = 0;
         let max_mem = MetricBuilder::new(&self.metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("max_mem_used", partition);
+            .peak_memory_usage("max_mem_used", partition);
 
         let curr_queued_in = Arc::new(AtomicUsize::new(0));
         let curr_queued_out = Arc::clone(&curr_queued_in);
@@ -238,8 +264,16 @@ impl ExecutionPlan for BufferExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(&self.input, args.partition())
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -255,9 +289,10 @@ impl ExecutionPlan for BufferExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(
-                Arc::new(self.clone()).with_new_children(vec![new_input])?,
-            )),
+            Some(new_input) => Ok(Some(replace_children_if_necessary(
+                Arc::new(self.clone()),
+                vec![new_input],
+            )?)),
             None => Ok(None),
         }
     }
@@ -289,6 +324,63 @@ impl ExecutionPlan for BufferExec {
         self.input.try_pushdown_sort(order)?.try_map(|new_input| {
             Ok(Arc::new(Self::new(new_input, self.capacity)) as Arc<dyn ExecutionPlan>)
         })
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `BufferExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Derived from the input's properties at construction time.
+            properties: _,
+            capacity,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Buffer(Box::new(
+                    protobuf::BufferExecNode {
+                        input: Some(Box::new(input)),
+                        capacity: *capacity as u64,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl BufferExec {
+    /// Reconstruct a [`BufferExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`].
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
+        use datafusion_proto_models::protobuf;
+        let buffer = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Buffer,
+            "BufferExec",
+        );
+        // Destructure exhaustively so that a new field on `BufferExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::BufferExecNode { input, capacity } = &**buffer;
+        let input = ctx.decode_required_child(input.as_deref(), "BufferExec", "input")?;
+        let capacity = usize_from_wire(*capacity, "BufferExec", "capacity")?;
+        Ok(Arc::new(BufferExec::new(input, capacity)))
     }
 }
 
@@ -338,11 +430,24 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
                 let item_or_err = tokio::select! {
                     biased;
                     _ = batch_tx.closed() => break,
-                    item_or_err = input.next() => {
-                        let Some(item_or_err) = item_or_err else {
-                            break; // stream finished
-                        };
-                        item_or_err
+                    // Catch a panic in the input poll so it surfaces as a stream error
+                    // instead of dropping `batch_tx` and looking like a clean EOF.
+                    polled = AssertUnwindSafe(input.next()).catch_unwind() => {
+                        match polled {
+                            Ok(Some(item_or_err)) => item_or_err,
+                            Ok(None) => break, // stream finished
+                            Err(panic) => {
+                                let msg = panic
+                                    .downcast_ref::<&str>()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                                    .unwrap_or_else(|| "unknown panic".to_string());
+                                let _ = batch_tx.send(internal_err!(
+                                    "BufferExec input stream panicked: {msg}"
+                                ));
+                                break;
+                            }
+                        }
                     }
                 };
 
@@ -551,6 +656,27 @@ mod tests {
         pull_ok_msg(&mut buffered).await?;
         pull_ok_msg(&mut buffered).await?;
         pull_err_msg(&mut buffered).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn panic_in_input_is_propagated() -> Result<(), Box<dyn Error>> {
+        // A panic while polling the input must surface as a stream error, not a
+        // silent end-of-stream that drops the rest of the partition's output.
+        let input = futures::stream::iter([1, 2, 3, 4]).map(|v| {
+            assert!(v != 3, "boom on 3");
+            Ok(v)
+        });
+        let (_, res) = memory_pool_and_reservation();
+
+        let mut buffered = MemoryBufferedStream::new(input, 10, res);
+        wait_for_buffering().await;
+
+        pull_ok_msg(&mut buffered).await?;
+        pull_ok_msg(&mut buffered).await?;
+        let err = pull_err_msg(&mut buffered).await?;
+        assert_contains!(err.to_string(), "panicked");
 
         Ok(())
     }

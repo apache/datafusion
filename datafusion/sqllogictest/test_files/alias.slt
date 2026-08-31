@@ -103,4 +103,25 @@ physical_plan
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
+insert into t values (1, 2);
+
+query II
+select t_.x, t_.y
+from (select "B.C", "A" from t) as t_(x, y);
+----
+2 1
+
+query I
+select "x.y"
+from (select "B.C" from t) as t_("x.y");
+----
+2
+
+query I
+select t_."x.y"
+from (select "B.C" from t) as t_("x.y");
+----
+2
+
+statement ok
 drop table t;

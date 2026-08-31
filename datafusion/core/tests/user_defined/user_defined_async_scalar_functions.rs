@@ -267,6 +267,7 @@ impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
 }
 
 /// Simulates calling an async external service
+#[expect(clippy::unused_async)]
 async fn call_external_service(arg1: ColumnarValue) -> Result<ColumnarValue> {
     Ok(arg1)
 }

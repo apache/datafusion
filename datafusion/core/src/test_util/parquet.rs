@@ -29,6 +29,7 @@ use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::physical_plan::ParquetSource;
 use crate::error::Result;
 use crate::logical_expr::execution_props::ExecutionProps;
+use crate::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use crate::logical_expr::simplify::SimplifyContext;
 use crate::optimizer::simplify_expressions::ExprSimplifier;
 use crate::physical_expr::create_physical_expr;
@@ -149,7 +150,7 @@ impl TestParquetFile {
     /// ```
     ///
     /// Otherwise if `maybe_filter` is None, return just a `DataSourceExec`
-    pub async fn create_scan(
+    pub fn create_scan(
         &self,
         ctx: &SessionContext,
         maybe_filter: Option<Expr>,
@@ -172,8 +173,12 @@ impl TestParquetFile {
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, &df_schema).unwrap();
-            let physical_filter_expr =
-                create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
+            let physical_filter_expr = create_physical_expr(
+                &filter,
+                &df_schema,
+                &ExecutionProps::default(),
+                &PhysicalPlanningContext::default(),
+            )?;
 
             let source = Arc::new(
                 ParquetSource::new(Arc::clone(&self.schema))

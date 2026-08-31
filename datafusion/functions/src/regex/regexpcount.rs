@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::regex::{compile_and_cache_regex, compile_regex};
+use crate::regex::{compile_and_cache_regex, compile_regex, start_to_byte_offset};
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -36,7 +36,7 @@ use std::sync::Arc;
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
     description = "Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.",
-    syntax_example = "regexp_count(str, regexp[, start, flags])",
+    syntax_example = "regexp_count(str, regexp[, start[, flags]])",
     sql_example = r#"```sql
 > select regexp_count('abcAbAbc', 'abc', 2, 'i');
 +---------------------------------------------------------------+
@@ -49,16 +49,11 @@ use std::sync::Arc;
     standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "start",
-        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."
+        description = "Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -267,48 +262,37 @@ fn regexp_count_inner<'a, S>(
 where
     S: StringArrayType<'a>,
 {
-    let (regex_scalar, is_regex_scalar) = if is_regex_scalar || regex_array.len() == 1 {
-        (
-            (!regex_array.is_null(0)).then(|| regex_array.value(0)),
-            true,
-        )
+    // Treat single-element arrays as scalars, broadcast to every row. An
+    // absent optional argument behaves like a scalar set to its default.
+    let is_regex_scalar = is_regex_scalar || regex_array.len() == 1;
+    let is_start_scalar =
+        start_array.is_none_or(|array| is_start_scalar || array.len() == 1);
+    let is_flags_scalar =
+        flags_array.is_none_or(|array| is_flags_scalar || array.len() == 1);
+
+    // A NULL in any scalar argument produces a NULL result for every row
+    if (is_regex_scalar && regex_array.is_null(0))
+        || (is_start_scalar && start_array.is_some_and(|array| array.is_null(0)))
+        || (is_flags_scalar && flags_array.is_some_and(|array| array.is_null(0)))
+    {
+        return Ok(Arc::new(Int64Array::new_null(values.len())));
+    }
+
+    let regex_scalar = is_regex_scalar.then(|| regex_array.value(0));
+    // An absent `start` defaults to 1
+    let start_scalar =
+        is_start_scalar.then(|| start_array.map_or(1, |array| array.value(0)));
+    // A `flags_scalar` of None means no flags were supplied
+    let flags_scalar = if is_flags_scalar {
+        flags_array.map(|array| array.value(0))
     } else {
-        (None, false)
+        None
     };
-
-    let (start_array, start_scalar, is_start_scalar) =
-        if let Some(start_array) = start_array {
-            if is_start_scalar || start_array.len() == 1 {
-                (None, Some(start_array.value(0)), true)
-            } else {
-                (Some(start_array), None, false)
-            }
-        } else {
-            (None, Some(1), true)
-        };
-
-    let (flags_array, flags_scalar, is_flags_scalar) =
-        if let Some(flags_array) = flags_array {
-            if is_flags_scalar || flags_array.len() == 1 {
-                (None, Some(flags_array.value(0)), true)
-            } else {
-                (Some(flags_array), None, false)
-            }
-        } else {
-            (None, None, true)
-        };
 
     let mut regex_cache = HashMap::new();
 
-    match (is_regex_scalar, is_start_scalar, is_flags_scalar) {
-        (true, true, true) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
-                Some(regex) => regex,
-            };
-
+    match (regex_scalar, is_start_scalar, is_flags_scalar) {
+        (Some(regex), true, true) => {
             let pattern = compile_regex(regex, flags_scalar)?;
 
             Ok(Arc::new(
@@ -318,14 +302,7 @@ where
                     .collect::<Result<Int64Array, ArrowError>>()?,
             ))
         }
-        (true, true, false) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
-                Some(regex) => regex,
-            };
-
+        (Some(regex), true, false) => {
             let flags_array = flags_array.unwrap();
             if values.len() != flags_array.len() {
                 return Err(ArrowError::ComputeError(format!(
@@ -340,21 +317,21 @@ where
                     .iter()
                     .zip(flags_array.iter())
                     .map(|(value, flags)| {
-                        let pattern =
-                            compile_and_cache_regex(regex, flags, &mut regex_cache)?;
+                        let Some(flags) = flags else {
+                            return Ok(None);
+                        };
+
+                        let pattern = compile_and_cache_regex(
+                            regex,
+                            Some(flags),
+                            &mut regex_cache,
+                        )?;
                         count_matches(value, pattern, start_scalar)
                     })
                     .collect::<Result<Int64Array, ArrowError>>()?,
             ))
         }
-        (true, false, true) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
-                Some(regex) => regex,
-            };
-
+        (Some(regex), false, true) => {
             let pattern = compile_regex(regex, flags_scalar)?;
 
             let start_array = start_array.unwrap();
@@ -367,14 +344,7 @@ where
                     .collect::<Result<Int64Array, ArrowError>>()?,
             ))
         }
-        (true, false, false) => {
-            let regex = match regex_scalar {
-                None => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
-                }
-                Some(regex) => regex,
-            };
-
+        (Some(regex), false, false) => {
             let flags_array = flags_array.unwrap();
             if values.len() != flags_array.len() {
                 return Err(ArrowError::ComputeError(format!(
@@ -391,15 +361,19 @@ where
                     flags_array.iter()
                 )
                 .map(|(value, start, flags)| {
+                    let Some(flags) = flags else {
+                        return Ok(None);
+                    };
+
                     let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache)?;
+                        compile_and_cache_regex(regex, Some(flags), &mut regex_cache)?;
 
                     count_matches(value, pattern, start)
                 })
                 .collect::<Result<Int64Array, ArrowError>>()?,
             ))
         }
-        (false, true, true) => {
+        (None, true, true) => {
             if values.len() != regex_array.len() {
                 return Err(ArrowError::ComputeError(format!(
                     "regex_array must be the same length as values array; got {} and {}",
@@ -413,9 +387,8 @@ where
                     .iter()
                     .zip(regex_array.iter())
                     .map(|(value, regex)| {
-                        let regex = match regex {
-                            None => return Ok(0),
-                            Some(regex) => regex,
+                        let Some(regex) = regex else {
+                            return Ok(None);
                         };
 
                         let pattern = compile_and_cache_regex(
@@ -428,7 +401,7 @@ where
                     .collect::<Result<Int64Array, ArrowError>>()?,
             ))
         }
-        (false, true, false) => {
+        (None, true, false) => {
             if values.len() != regex_array.len() {
                 return Err(ArrowError::ComputeError(format!(
                     "regex_array must be the same length as values array; got {} and {}",
@@ -449,20 +422,22 @@ where
             Ok(Arc::new(
                 izip!(values.iter(), regex_array.iter(), flags_array.iter())
                     .map(|(value, regex, flags)| {
-                        let regex = match regex {
-                            None => return Ok(0),
-                            Some(regex) => regex,
+                        let (Some(regex), Some(flags)) = (regex, flags) else {
+                            return Ok(None);
                         };
 
-                        let pattern =
-                            compile_and_cache_regex(regex, flags, &mut regex_cache)?;
+                        let pattern = compile_and_cache_regex(
+                            regex,
+                            Some(flags),
+                            &mut regex_cache,
+                        )?;
 
                         count_matches(value, pattern, start_scalar)
                     })
                     .collect::<Result<Int64Array, ArrowError>>()?,
             ))
         }
-        (false, false, true) => {
+        (None, false, true) => {
             if values.len() != regex_array.len() {
                 return Err(ArrowError::ComputeError(format!(
                     "regex_array must be the same length as values array; got {} and {}",
@@ -483,9 +458,8 @@ where
             Ok(Arc::new(
                 izip!(values.iter(), regex_array.iter(), start_array.iter())
                     .map(|(value, regex, start)| {
-                        let regex = match regex {
-                            None => return Ok(0),
-                            Some(regex) => regex,
+                        let Some(regex) = regex else {
+                            return Ok(None);
                         };
 
                         let pattern = compile_and_cache_regex(
@@ -498,7 +472,7 @@ where
                     .collect::<Result<Int64Array, ArrowError>>()?,
             ))
         }
-        (false, false, false) => {
+        (None, false, false) => {
             if values.len() != regex_array.len() {
                 return Err(ArrowError::ComputeError(format!(
                     "regex_array must be the same length as values array; got {} and {}",
@@ -533,13 +507,12 @@ where
                     flags_array.iter()
                 )
                 .map(|(value, regex, start, flags)| {
-                    let regex = match regex {
-                        None => return Ok(0),
-                        Some(regex) => regex,
+                    let (Some(regex), Some(flags)) = (regex, flags) else {
+                        return Ok(None);
                     };
 
                     let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache)?;
+                        compile_and_cache_regex(regex, Some(flags), &mut regex_cache)?;
                     count_matches(value, pattern, start)
                 })
                 .collect::<Result<Int64Array, ArrowError>>()?,
@@ -552,45 +525,23 @@ fn count_matches(
     value: Option<&str>,
     pattern: &Regex,
     start: Option<i64>,
-) -> Result<i64, ArrowError> {
-    let value = match value {
-        None => return Ok(0),
-        Some(value) => value,
+) -> Result<Option<i64>, ArrowError> {
+    // A NULL value or start position produces a NULL result.
+    let (Some(value), Some(start)) = (value, start) else {
+        return Ok(None);
     };
 
-    if let Some(start) = start {
-        if start < 1 {
-            return Err(ArrowError::ComputeError(
-                "regexp_count() requires start to be 1 based".to_string(),
-            ));
-        }
-
-        let char_len = value.chars().count();
-        let start_index = (start as usize).saturating_sub(1);
-
-        if start_index > char_len {
-            return Ok(0);
-        }
-
-        // Find the byte offset for the start position (1-based character index)
-        let byte_offset = if start_index == char_len {
-            value.len()
-        } else {
-            value
-                .char_indices()
-                .nth(start_index)
-                .map(|(idx, _)| idx)
-                .unwrap_or(value.len())
-        };
-
-        // Use string slicing instead of collecting chars into a new String
-        let find_slice = &value[byte_offset..];
-        let count = pattern.find_iter(find_slice).count();
-        Ok(count as i64)
-    } else {
-        let count = pattern.find_iter(value).count();
-        Ok(count as i64)
+    if start < 1 {
+        return Err(ArrowError::ComputeError(
+            "regexp_count() requires start to be 1 based".to_string(),
+        ));
     }
+
+    let Some(byte_offset) = start_to_byte_offset(value, start) else {
+        return Ok(Some(0));
+    };
+    let count = pattern.find_iter(&value[byte_offset..]).count();
+    Ok(Some(count as i64))
 }
 
 #[cfg(test)]
@@ -625,6 +576,24 @@ mod tests {
         test_case_sensitive_regexp_count_array_complex::<StringViewArray>();
 
         test_case_regexp_count_cache_check::<GenericStringArray<i32>>();
+
+        test_regexp_count_null_scalars();
+
+        test_regexp_count_null_array_rows::<GenericStringArray<i32>>();
+        test_regexp_count_null_array_rows::<GenericStringArray<i64>>();
+        test_regexp_count_null_array_rows::<StringViewArray>();
+
+        test_regexp_count_null_start_array::<GenericStringArray<i32>>();
+        test_regexp_count_null_start_array::<GenericStringArray<i64>>();
+        test_regexp_count_null_start_array::<StringViewArray>();
+
+        test_regexp_count_null_flags_array::<GenericStringArray<i32>>();
+        test_regexp_count_null_flags_array::<GenericStringArray<i64>>();
+        test_regexp_count_null_flags_array::<StringViewArray>();
+
+        test_regexp_count_null_scalar_regex_array_values::<GenericStringArray<i32>>();
+        test_regexp_count_null_scalar_regex_array_values::<GenericStringArray<i64>>();
+        test_regexp_count_null_scalar_regex_array_values::<StringViewArray>();
     }
 
     fn regexp_count_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
@@ -985,6 +954,129 @@ mod tests {
             Arc::new(flags),
         ])
         .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_regexp_count_null_scalars() {
+        // A NULL in any scalar argument produces a NULL result.
+        let cases: Vec<Vec<ScalarValue>> = vec![
+            vec![ScalarValue::Utf8(None), ScalarValue::Utf8(None)],
+            vec![
+                ScalarValue::Utf8(None),
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Utf8(Some("i".to_string())),
+            ],
+            vec![
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Utf8(None),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Utf8(Some("i".to_string())),
+            ],
+            vec![
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Int64(None),
+                ScalarValue::Utf8(Some("i".to_string())),
+            ],
+            vec![
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Utf8(Some("abc".to_string())),
+                ScalarValue::Int64(Some(1)),
+                ScalarValue::Utf8(None),
+            ],
+        ];
+
+        for args in cases {
+            let re = regexp_count_with_scalar_values(&args);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, None, "regexp_count null scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+        }
+    }
+
+    fn test_regexp_count_null_array_rows<A>()
+    where
+        A: From<Vec<Option<&'static str>>> + Array + 'static,
+    {
+        let values = A::from(vec![
+            None,
+            Some("abc"),
+            Some("abc"),
+            Some("abc"),
+            Some("abc"),
+        ]);
+        let regex = A::from(vec![
+            Some("abc"),
+            None,
+            Some("abc"),
+            Some("abc"),
+            Some("abc"),
+        ]);
+        let start = Int64Array::from(vec![Some(1), Some(1), None, Some(1), Some(1)]);
+        let flags = A::from(vec![Some("i"), Some("i"), Some("i"), None, Some("i")]);
+
+        let expected = Int64Array::from(vec![None, None, None, None, Some(1)]);
+
+        let re = regexp_count_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(flags),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_regexp_count_null_start_array<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["abc", "abcb"]);
+        let regex = A::from(vec!["b"]);
+        let start = Int64Array::from(vec![Some(1), None]);
+
+        let expected = Int64Array::from(vec![Some(1), None]);
+
+        let re = regexp_count_func(&[Arc::new(values), Arc::new(regex), Arc::new(start)])
+            .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_regexp_count_null_flags_array<A>()
+    where
+        A: From<Vec<&'static str>> + From<Vec<Option<&'static str>>> + Array + 'static,
+    {
+        let values: A = vec!["aB", "aB"].into();
+        let regex: A = vec!["b"].into();
+        let start = Int64Array::from(vec![1]);
+        let flags: A = vec![None, Some("i")].into();
+
+        let expected = Int64Array::from(vec![None, Some(1)]);
+
+        let re = regexp_count_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(flags),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_regexp_count_null_scalar_regex_array_values<A>()
+    where
+        A: From<Vec<&'static str>> + From<Vec<Option<&'static str>>> + Array + 'static,
+    {
+        let values: A = vec!["abc", "abcabc"].into();
+        let regex: A = vec![Option::<&str>::None].into();
+
+        let expected = Int64Array::from(vec![None::<i64>, None]);
+
+        let re = regexp_count_func(&[Arc::new(values), Arc::new(regex)]).unwrap();
         assert_eq!(re.as_ref(), &expected);
     }
 
