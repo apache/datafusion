@@ -41,6 +41,7 @@ use crate::utils::{
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::internal_err;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::Transformed;
 use datafusion_expr::logical_plan::{Aggregate, JoinType};
@@ -784,7 +785,7 @@ fn preserving_order_enables_streaming(
 /// requirement is satisfied.
 fn add_merge_on_top(
     input: DistributionContext,
-    fetch: Option<usize>,
+    fetch: &mut Option<usize>,
 ) -> DistributionContext {
     // Apply only when the partition count is larger than one.
     if input.plan.output_partitioning().partition_count() > 1 {
@@ -794,21 +795,19 @@ fn add_merge_on_top(
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
         // (determined by flag `config.optimizer.prefer_existing_sort`)
-        let new_plan: Arc<dyn ExecutionPlan> = if let Some(req) =
-            input.plan.output_ordering()
-        {
-            let mut spm =
-                SortPreservingMergeExec::new(req.clone(), Arc::clone(&input.plan));
-            if let Some(f) = fetch {
-                spm = spm.with_fetch(Some(f));
-            }
-            Arc::new(spm)
-        } else {
-            // If there is no input order, we can simply coalesce partitions:
-            Arc::new(
-                CoalescePartitionsExec::new(Arc::clone(&input.plan)).with_fetch(fetch),
-            )
-        };
+        let new_plan: Arc<dyn ExecutionPlan> =
+            if let Some(req) = input.plan.output_ordering() {
+                let mut spm =
+                    SortPreservingMergeExec::new(req.clone(), Arc::clone(&input.plan));
+                spm = spm.with_fetch(fetch.take());
+                Arc::new(spm)
+            } else {
+                // If there is no input order, we can simply coalesce partitions:
+                Arc::new(
+                    CoalescePartitionsExec::new(Arc::clone(&input.plan))
+                        .with_fetch(fetch.take()),
+                )
+            };
 
         DistributionContext::new(new_plan, true, vec![input])
     } else {
@@ -840,23 +839,33 @@ struct RemovedDistOps {
     /// The fetch value from the removed SPM/Coalesce, if any.
     /// Must be re-applied when distribution operators are re-inserted.
     removed_fetch: Option<usize>,
+    /// The outermost removed operator carrying a fetch, used to restore the
+    /// limit when no replacement distribution operator consumes it.
+    fetch_plan: Option<Arc<dyn ExecutionPlan>>,
+}
+
+fn min_fetch(left: Option<usize>, right: Option<usize>) -> Option<usize> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (left, right) => left.or(right),
+    }
 }
 
 fn remove_dist_changing_operators(
     mut distribution_context: DistributionContext,
 ) -> Result<RemovedDistOps> {
     let mut removed_fetch = None;
+    let mut fetch_plan = None;
     while is_repartition(&distribution_context.plan)
         || is_coalesce_partitions(&distribution_context.plan)
         || is_sort_preserving_merge(&distribution_context.plan)
     {
         // Preserve fetch from SPM or CoalescePartitions before removing (#14150).
         if let Some(fetch) = distribution_context.plan.fetch() {
-            removed_fetch = Some(
-                removed_fetch
-                    .map(|existing: usize| existing.min(fetch))
-                    .unwrap_or(fetch),
-            );
+            if fetch_plan.is_none() {
+                fetch_plan = Some(Arc::clone(&distribution_context.plan));
+            }
+            removed_fetch = min_fetch(removed_fetch, Some(fetch));
         }
         // All of above operators have a single child. First child is only child.
         // Remove any distribution changing operators at the beginning:
@@ -867,6 +876,7 @@ fn remove_dist_changing_operators(
     Ok(RemovedDistOps {
         context: distribution_context,
         removed_fetch,
+        fetch_plan,
     })
 }
 
@@ -889,26 +899,47 @@ fn remove_dist_changing_operators(
 /// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 pub fn replace_order_preserving_variants(
-    mut context: DistributionContext,
+    context: DistributionContext,
 ) -> Result<DistributionContext> {
-    context.children = context
-        .children
-        .into_iter()
-        .map(|child| {
-            if child.data {
-                replace_order_preserving_variants(child)
-            } else {
-                Ok(child)
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let (context, fetch) = replace_order_preserving_variants_with_fetch(context, false)?;
+    debug_assert!(
+        fetch.is_none(),
+        "fetch must stay in the plan when no replacement sort is needed"
+    );
+    Ok(context)
+}
+
+/// Also returns a fetch that must be applied to the replacement sort when
+/// removing an ordered merge whose ordering satisfied the requirement. A
+/// `None` value means any fetch remains enforced within the returned context.
+fn replace_order_preserving_variants_with_fetch(
+    mut context: DistributionContext,
+    ordering_satisfied: bool,
+) -> Result<(DistributionContext, Option<usize>)> {
+    let mut children = Vec::with_capacity(context.children.len());
+    let mut fetch = None;
+    for child in context.children {
+        if child.data {
+            let (child, child_fetch) =
+                replace_order_preserving_variants_with_fetch(child, ordering_satisfied)?;
+            children.push(child);
+            fetch = min_fetch(fetch, child_fetch);
+        } else {
+            children.push(child);
+        }
+    }
+    context.children = children;
 
     if is_sort_preserving_merge(&context.plan) {
+        let fetch = min_fetch(fetch, context.plan.fetch());
         let child_plan = Arc::clone(&context.children[0].plan);
-        context.plan = Arc::new(
-            CoalescePartitionsExec::new(child_plan).with_fetch(context.plan.fetch()),
-        );
-        return Ok(context);
+        if ordering_satisfied {
+            context.plan = Arc::new(CoalescePartitionsExec::new(child_plan));
+            return Ok((context, fetch));
+        }
+        context.plan =
+            Arc::new(CoalescePartitionsExec::new(child_plan).with_fetch(fetch));
+        return Ok((context, None));
     } else if let Some(repartition) = context.plan.downcast_ref::<RepartitionExec>()
         && repartition.preserve_order()
     {
@@ -916,10 +947,12 @@ pub fn replace_order_preserving_variants(
             Arc::clone(&context.children[0].plan),
             repartition.partitioning().clone(),
         )?);
-        return Ok(context);
+        return Ok((context, fetch));
     }
 
-    context.update_plan_from_children()
+    context
+        .update_plan_from_children()
+        .map(|context| (context, fetch))
 }
 
 /// A struct to keep track of repartition requirements for each child node.
@@ -1361,7 +1394,8 @@ pub fn ensure_distribution(
                 data,
                 children,
             },
-        removed_fetch,
+        mut removed_fetch,
+        fetch_plan,
     } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
@@ -1517,7 +1551,7 @@ pub fn ensure_distribution(
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
-                    child = add_merge_on_top(child, removed_fetch);
+                    child = add_merge_on_top(child, &mut removed_fetch);
                 }
                 Distribution::HashPartitioned(exprs)
                 | Distribution::KeyPartitioned(exprs) => {
@@ -1630,17 +1664,23 @@ pub fn ensure_distribution(
                         && !streaming_benefit
                         && context.data
                     {
-                        context = replace_order_preserving_variants(context)?;
+                        let (replaced_context, preserved_fetch) =
+                            replace_order_preserving_variants_with_fetch(
+                                context,
+                                ordering_satisfied,
+                            )?;
+                        context = replaced_context;
                         // If ordering requirements were satisfied before repartitioning,
                         // make sure ordering requirements are still satisfied after.
                         if ordering_satisfied {
                             // Make sure to satisfy ordering requirement:
+                            let output_fetch = plan
+                                .downcast_ref::<OutputRequirementExec>()
+                                .and_then(|output| output.fetch());
                             context = add_sort_above_with_check(
                                 context,
                                 sort_req,
-                                plan.downcast_ref::<OutputRequirementExec>()
-                                    .map(|output| output.fetch())
-                                    .unwrap_or(None),
+                                min_fetch(preserved_fetch, output_fetch),
                             )?;
                         }
                     }
@@ -1722,9 +1762,26 @@ pub fn ensure_distribution(
         replace_children_if_necessary(plan, children_plans)?
     };
 
-    Ok(Transformed::yes(DistributionContext::new(
-        plan, data, children,
-    )))
+    let mut optimized_context = DistributionContext::new(plan, data, children);
+
+    // A removed fetch must survive even when this node does not need a new
+    // distribution operator. Otherwise a second optimizer pass can silently
+    // remove the query's LIMIT.
+    if let Some(fetch) = removed_fetch {
+        let Some(fetch_plan) = fetch_plan else {
+            return internal_err!("removed distribution fetch has no source plan");
+        };
+        let fetch_plan = replace_children_if_necessary(
+            fetch_plan,
+            vec![Arc::clone(&optimized_context.plan)],
+        )?;
+        let Some(plan) = fetch_plan.with_fetch(Some(fetch)) else {
+            return internal_err!("removed distribution operator cannot restore fetch");
+        };
+        optimized_context = DistributionContext::new(plan, data, vec![optimized_context]);
+    }
+
+    Ok(Transformed::yes(optimized_context))
 }
 
 /// Keeps track of distribution changing operators (like `RepartitionExec`,

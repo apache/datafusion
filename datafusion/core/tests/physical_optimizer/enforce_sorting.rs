@@ -2327,7 +2327,9 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
       DataSourceExec: partitions=1, partition_sizes=[0]
 
     Optimized Plan:
-    DataSourceExec: partitions=1, partition_sizes=[0]
+    LocalLimitExec: fetch=100
+      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
+        DataSourceExec: partitions=1, partition_sizes=[0]
     ");
 
     Ok(())
