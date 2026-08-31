@@ -148,9 +148,6 @@ pub struct DFParquetMetadata<'a> {
     pub coerce_int96_tz: Option<Arc<str>>,
     /// If true, promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
     enable_rle_to_dictionary: bool,
-    /// When set, restricts RLE->Dictionary promotion to only these columns.
-    /// Takes priority over `enable_rle_to_dictionary`; `None` defers to the flag.
-    rle_column_allowlist: Option<HashSet<String>>,
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -169,23 +166,12 @@ impl<'a> DFParquetMetadata<'a> {
             coerce_int96: None,
             coerce_int96_tz: None,
             enable_rle_to_dictionary: false,
-            rle_column_allowlist: None,
         }
     }
 
     /// Promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
     pub fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
         self.enable_rle_to_dictionary = enable;
-        self
-    }
-
-    /// Restrict RLE->Dictionary promotion to a named subset of columns.
-    /// Overrides `enable_rle_to_dictionary`; see [`crate::file_format::ParquetFormat::with_rle_column_allowlist`].
-    pub(crate) fn with_rle_column_allowlist(
-        mut self,
-        columns: impl IntoIterator<Item = String>,
-    ) -> Self {
-        self.rle_column_allowlist = Some(columns.into_iter().collect());
         self
     }
 
@@ -463,9 +449,7 @@ impl<'a> DFParquetMetadata<'a> {
             })
             .unwrap_or(schema);
 
-        let should_promote =
-            self.enable_rle_to_dictionary || self.rle_column_allowlist.is_some();
-        let schema = if should_promote {
+        let schema = if self.enable_rle_to_dictionary {
             let schema_descr = file_metadata.schema_descr();
             // Top-level columns that have a dictionary page in at least one row group.
             let dict_cols: HashSet<String> = metadata
@@ -485,14 +469,6 @@ impl<'a> DFParquetMetadata<'a> {
                         })
                 })
                 .collect();
-            let dict_cols = if let Some(allowlist) = &self.rle_column_allowlist {
-                dict_cols
-                    .into_iter()
-                    .filter(|name| allowlist.contains(name))
-                    .collect::<HashSet<String>>()
-            } else {
-                dict_cols
-            };
             if dict_cols.is_empty() {
                 schema
             } else {
@@ -506,10 +482,8 @@ impl<'a> DFParquetMetadata<'a> {
                         let dict_value_type = match field.data_type() {
                             DataType::Utf8 => Some(DataType::Utf8),
                             DataType::LargeUtf8 => Some(DataType::LargeUtf8),
-                            DataType::Utf8View => Some(DataType::Utf8View),
                             DataType::Binary => Some(DataType::Binary),
                             DataType::LargeBinary => Some(DataType::LargeBinary),
-                            DataType::BinaryView => Some(DataType::BinaryView),
                             _ => None,
                         };
                         dict_value_type.map_or_else(
