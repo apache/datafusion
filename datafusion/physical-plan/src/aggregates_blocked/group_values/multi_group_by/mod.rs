@@ -27,7 +27,7 @@ pub mod row_backed;
 
 use std::mem::{self, size_of};
 
-use crate::aggregates_blocked::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::BlockedGroupValues;
 use crate::aggregates_blocked::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder,
@@ -65,7 +65,7 @@ const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 /// incoming rows.
 ///
 /// [`GroupValuesColumn`]: crate::aggregates_blocked::group_values::GroupValuesColumn
-pub trait GroupColumn: Send + Sync {
+pub trait BlockedGroupColumn: Send + Sync {
     /// Returns equal if the row stored in this builder at `lhs_row` is equal to
     /// the row in `array` at `rhs_row`
     ///
@@ -103,7 +103,7 @@ pub trait GroupColumn: Send + Sync {
         self.len() == 0
     }
 
-    /// Returns the number of bytes used by this [`GroupColumn`]
+    /// Returns the number of bytes used by this [`BlockedGroupColumn`]
     fn size(&self) -> usize;
 
     /// Builds a new array from all of the stored rows
@@ -157,7 +157,7 @@ impl GroupIndexView {
     }
 }
 
-/// A [`GroupValues`] that stores multiple columns of group values,
+/// A [`BlockedGroupValues`] that stores multiple columns of group values,
 /// and supports vectorized operators for them
 pub struct GroupValuesColumn<const STREAMING: bool> {
     /// The output schema
@@ -201,14 +201,14 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     vectorized_operation_buffers: VectorizedOperationBuffers,
 
     /// The actual group by values, stored column-wise. Compare from
-    /// the left to right, each column is stored as [`GroupColumn`].
+    /// the left to right, each column is stored as [`BlockedGroupColumn`].
     ///
     /// Performance tests showed that this design is faster than using the
     /// more general purpose [`GroupValuesRows`]. See the ticket for details:
     /// <https://github.com/apache/datafusion/pull/12269>
     ///
     /// [`GroupValuesRows`]: crate::aggregates_blocked::group_values::GroupValuesRows
-    group_values: Vec<Box<dyn GroupColumn>>,
+    group_values: Vec<Box<dyn BlockedGroupColumn>>,
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
@@ -281,15 +281,15 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         })
     }
 
-    /// Build one fresh [`GroupColumn`] per field in the schema.
+    /// Build one fresh [`BlockedGroupColumn`] per field in the schema.
     ///
     /// Used at construction time (`try_new`) and to repopulate the column
     /// vector after operations that drain it (`emit(EmitTo::All)`,
     /// `clear_shrink`). Centralising it keeps the post-condition that
     /// `self.group_values` always contains exactly one builder per schema
     /// field outside of those transient drain points.
-    fn build_group_columns(schema: &Schema) -> Result<Vec<Box<dyn GroupColumn>>> {
-        let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(schema.fields().len());
+    fn build_group_columns(schema: &Schema) -> Result<Vec<Box<dyn BlockedGroupColumn>>> {
+        let mut v: Vec<Box<dyn BlockedGroupColumn>> = Vec::with_capacity(schema.fields().len());
         for f in schema.fields().iter() {
             v.push(make_group_column(f.as_ref())?);
         }
@@ -371,7 +371,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                     }
 
                     fn check_row_equal(
-                        array_row: &dyn GroupColumn,
+                        array_row: &dyn BlockedGroupColumn,
                         lhs_row: usize,
                         array: &ArrayRef,
                         rhs_row: usize,
@@ -826,7 +826,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ) -> bool {
         // Check if this row exists in `group_values`
         fn check_row_equal(
-            array_row: &dyn GroupColumn,
+            array_row: &dyn BlockedGroupColumn,
             lhs_row: usize,
             array: &ArrayRef,
             rhs_row: usize,
@@ -910,7 +910,7 @@ macro_rules! instantiate_primitive {
 }
 
 /// Returns true if the specified data type has a specialized
-/// [`GroupColumn`] builder in [`make_group_column`].
+/// [`BlockedGroupColumn`] builder in [`make_group_column`].
 ///
 /// This is the allow-list that gates the `GroupValuesRows` fallback in
 /// [`crate::aggregates_blocked::group_values::new_group_values`]: it must accept
@@ -971,7 +971,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
     ) || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
 }
 
-/// Build a [`GroupColumn`] for a single schema field.
+/// Build a [`BlockedGroupColumn`] for a single schema field.
 ///
 /// Extracted from the inline match that used to live in
 /// [`GroupValuesColumn::intern`] so the per-field dispatch lives in one
@@ -986,10 +986,10 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 ///
 /// The allow-list that gates this dispatcher lives in
 /// [`group_column_supported_type`] directly above.
-fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
+fn make_group_column(field: &Field) -> Result<Box<dyn BlockedGroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
-    let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
+    let mut v: Vec<Box<dyn BlockedGroupColumn>> = Vec::with_capacity(1);
     match *data_type {
         DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
         DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
@@ -1128,7 +1128,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                     ))
                 };
             }
-            let col: Box<dyn GroupColumn> = match key_dt.as_ref() {
+            let col: Box<dyn BlockedGroupColumn> = match key_dt.as_ref() {
                 DataType::Int8 => dict_col!(Int8Type),
                 DataType::Int16 => dict_col!(Int16Type),
                 DataType::Int32 => dict_col!(Int32Type),
@@ -1163,7 +1163,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     Ok(v.into_iter().next().unwrap())
 }
 
-impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
+impl<const STREAMING: bool> BlockedGroupValues for GroupValuesColumn<STREAMING> {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // `try_new` and the reset points in `emit` / `clear_shrink` keep
         // `self.group_values` populated with one builder per schema field,
@@ -1342,7 +1342,7 @@ mod tests {
     use datafusion_expr::EmitTo;
 
     use crate::aggregates_blocked::group_values::{
-        GroupValues, multi_group_by::GroupValuesColumn,
+        BlockedGroupValues, multi_group_by::GroupValuesColumn,
     };
 
     use super::{
@@ -1456,7 +1456,7 @@ mod tests {
     /// group-index numbering between the vectorized column path and the
     /// sequential rows fallback.
     ///
-    /// The [`GroupValues`] trait only guarantees that equal keys receive the
+    /// The [`BlockedGroupValues`] trait only guarantees that equal keys receive the
     /// same group-id and that new keys receive a fresh id; the order in which
     /// new ids are handed out is deliberately not part of the contract, and
     /// can differ between correct implementations (e.g. because of internal
@@ -2526,7 +2526,7 @@ mod tests {
             }
         }
 
-        fn load_to_group_values(&self, group_values: &mut impl GroupValues) {
+        fn load_to_group_values(&self, group_values: &mut impl BlockedGroupValues) {
             for batch in self.test_batches.iter() {
                 group_values.intern(batch, &mut vec![]).unwrap();
             }

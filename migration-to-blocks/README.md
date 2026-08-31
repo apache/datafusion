@@ -32,3 +32,7 @@ keeping the tests in `aggregate` module call `actual_try_new` is ok since those 
 make sure that when `BlockedAggregateExec` the underlying `fallback_agg` also updates
 
 this is so the next steps of migrating streams one by one will be easier
+
+### 6. Rename `GroupValues` to `BlockedGroupValues` and `GroupColumn` to `BlockedGroupColumn`
+
+to avoid confusion

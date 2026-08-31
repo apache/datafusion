@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates_blocked::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::BlockedGroupValues;
 
 use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
@@ -41,7 +41,7 @@ impl GroupValuesBoolean {
     }
 }
 
-impl GroupValues for GroupValuesBoolean {
+impl BlockedGroupValues for GroupValuesBoolean {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         let array = cols[0].as_boolean();
         groups.clear();

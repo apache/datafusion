@@ -17,14 +17,14 @@
 
 use std::mem::size_of;
 
-use crate::aggregates_blocked::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::BlockedGroupValues;
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 
-/// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
+/// A [`BlockedGroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
 ///
 /// This specialization is significantly faster than using the more general
 /// purpose `Row`s format
@@ -44,7 +44,7 @@ impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
     }
 }
 
-impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
+impl<O: OffsetSizeTrait> BlockedGroupValues for GroupValuesBytes<O> {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
 

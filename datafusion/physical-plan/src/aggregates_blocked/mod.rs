@@ -757,6 +757,7 @@ impl BlockedAggregateExec {
         partition: usize,
         context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
+        // TOOD - support
         if self.group_by.is_true_no_grouping() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
@@ -767,6 +768,7 @@ impl BlockedAggregateExec {
         if let Some(config) = self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
         {
+            // TODO - support
             return Ok(StreamType::GroupedPriorityQueue(
                 GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
             ));

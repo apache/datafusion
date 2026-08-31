@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates_blocked::group_values::multi_group_by::GroupColumn;
+use crate::aggregates_blocked::group_values::multi_group_by::BlockedGroupColumn;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, Int64Array,
     PrimitiveArray,
@@ -33,14 +33,14 @@ use std::sync::Arc;
 
 use crate::aggregates_blocked::AGGREGATION_HASH_SEED;
 
-/// [`GroupColumn`] for dictionary-encoded columns with key type `K`.
+/// [`BlockedGroupColumn`] for dictionary-encoded columns with key type `K`.
 ///
 /// `inner` holds one slot per distinct value seen across all batches.
 /// `group_to_inner[group_idx]` maps each group to its slot in `inner`,
 /// so groups with the same value share a slot rather than duplicating data.
 pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> {
     /// Deduplicated store of distinct values.
-    inner: Box<dyn GroupColumn>,
+    inner: Box<dyn BlockedGroupColumn>,
     /// Unary null array (length 1) reused for every null appended to `inner`.
     null_array: ArrayRef,
     /// Maps each group index to its slot in `inner`.
@@ -64,7 +64,7 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
 }
 
 impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
-    pub fn new(inner: Box<dyn GroupColumn>, field: &Field) -> Self {
+    pub fn new(inner: Box<dyn BlockedGroupColumn>, field: &Field) -> Self {
         let null_array = arrow::array::new_null_array(field.data_type(), 1);
         Self {
             inner,
@@ -277,7 +277,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     }
 }
 
-impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
+impl<K: ArrowDictionaryKeyType + Send + Sync> BlockedGroupColumn
     for DictionaryGroupValuesColumn<K>
 {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {

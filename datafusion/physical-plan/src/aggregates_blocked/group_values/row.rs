@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates_blocked::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::BlockedGroupValues;
 use arrow::array::{
     ArrayRef,
 };
@@ -31,9 +31,9 @@ use hashbrown::hash_table::HashTable;
 use log::debug;
 use std::mem::size_of;
 
-/// A [`GroupValues`] making use of [`Rows`]
+/// A [`BlockedGroupValues`] making use of [`Rows`]
 ///
-/// This is a general implementation of [`GroupValues`] that works for any
+/// This is a general implementation of [`BlockedGroupValues`] that works for any
 /// combination of data types and number of columns, including nested types such as
 /// structs and lists.
 ///
@@ -112,7 +112,7 @@ impl GroupValuesRows {
     }
 }
 
-impl GroupValues for GroupValuesRows {
+impl BlockedGroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
         // primitive hashing both group ±0 together. No-op for non-float

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates_blocked::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::BlockedGroupValues;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -96,7 +96,7 @@ macro_rules! hash_float {
 
 hash_float!(f16, f32, f64);
 
-/// A [`GroupValues`] storing a single column of primitive values
+/// A [`BlockedGroupValues`] storing a single column of primitive values
 ///
 /// This specialization is significantly faster than using the more general
 /// purpose `Row`s format
@@ -131,7 +131,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
+impl<T: ArrowPrimitiveType> BlockedGroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {

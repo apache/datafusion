@@ -29,7 +29,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use crate::PhysicalExpr;
 use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
+    GroupByMetrics, BlockedGroupValues, new_group_values,
 };
 use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates_blocked::order::GroupOrdering;
@@ -63,7 +63,7 @@ pub(in crate::aggregates_blocked) struct FinalMarker;
 /// entry owns the `sum(v)` and `count(v)` state needed to compute the final
 /// average.
 ///
-/// Physically, the group keys and accumulators are backed by [`GroupValues`] and
+/// Physically, the group keys and accumulators are backed by [`BlockedGroupValues`] and
 /// [`GroupsAccumulator`]. Both use columnar storage so aggregation can stay
 /// vectorized.
 ///
@@ -460,14 +460,14 @@ pub(super) struct EvaluatedAggregateBatch {
 /// It accumulates input during aggregation and emits final results during the
 /// outputting stage.
 ///
-/// [`GroupValues`] stores the physical group-key layout, while
+/// [`BlockedGroupValues`] stores the physical group-key layout, while
 /// [`GroupsAccumulator`] stores per-group aggregate state.
 pub(super) struct AggregateHashTableBuffer {
     /// GROUP BY expressions evaluated for each input batch.
     pub(super) group_by: Arc<PhysicalGroupBy>,
 
     /// Interned group keys. Accumulator state is stored separately by group index.
-    pub(super) group_values: Box<dyn GroupValues>,
+    pub(super) group_values: Box<dyn BlockedGroupValues>,
 
     /// Group index for each row in the current input batch.
     ///

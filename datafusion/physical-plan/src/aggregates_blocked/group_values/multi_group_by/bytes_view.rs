@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates_blocked::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to,
+    BlockedGroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates_blocked::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
-/// An implementation of [`GroupColumn`] for binary view and utf8 view types.
+/// An implementation of [`BlockedGroupColumn`] for binary view and utf8 view types.
 ///
 /// Stores a collection of binary view or utf8 view group values in a buffer
 /// whose structure is similar to `GenericByteViewArray`, and we can get benefits:
@@ -527,7 +527,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     }
 }
 
-impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
+impl<B: ByteViewType> BlockedGroupColumn for ByteViewGroupValueBuilder<B> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         self.equal_to_inner(lhs_row, array, rhs_row)
     }
@@ -617,7 +617,7 @@ mod tests {
     };
     use arrow::datatypes::StringViewType;
 
-    use super::GroupColumn;
+    use super::BlockedGroupColumn;
 
     fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(n);

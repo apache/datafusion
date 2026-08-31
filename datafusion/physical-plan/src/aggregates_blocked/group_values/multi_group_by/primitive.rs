@@ -17,7 +17,7 @@
 
 use crate::aggregates_blocked::group_values::HashValue;
 use crate::aggregates_blocked::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to,
+    BlockedGroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates_blocked::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
@@ -34,7 +34,7 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use std::iter;
 use std::sync::Arc;
 
-/// An implementation of [`GroupColumn`] for primitive values
+/// An implementation of [`BlockedGroupColumn`] for primitive values
 ///
 /// Optimized to skip null buffer construction if the input is known to be non nullable
 ///
@@ -146,7 +146,7 @@ where
     }
 }
 
-impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
+impl<T: ArrowPrimitiveType, const NULLABLE: bool> BlockedGroupColumn
     for PrimitiveGroupValueBuilder<T, NULLABLE>
 where
     T::Native: HashValue,
@@ -300,7 +300,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Float32Type, Int32Type, Int64Type};
 
-    use super::GroupColumn;
+    use super::BlockedGroupColumn;
 
     fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(n);

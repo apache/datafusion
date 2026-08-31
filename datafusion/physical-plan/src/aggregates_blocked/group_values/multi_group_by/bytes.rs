@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates_blocked::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to,
+    BlockedGroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates_blocked::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
@@ -34,7 +34,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::vec;
 
-/// An implementation of [`GroupColumn`] for binary and utf8 types.
+/// An implementation of [`BlockedGroupColumn`] for binary and utf8 types.
 ///
 /// Stores a collection of binary or utf8 group values in a single buffer
 /// in a way that allows:
@@ -220,7 +220,7 @@ where
     }
 }
 
-impl<O> GroupColumn for ByteGroupValueBuilder<O>
+impl<O> BlockedGroupColumn for ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,
 {
@@ -434,7 +434,7 @@ mod tests {
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr::binary_map::OutputType;
 
-    use super::GroupColumn;
+    use super::BlockedGroupColumn;
 
     fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(n);

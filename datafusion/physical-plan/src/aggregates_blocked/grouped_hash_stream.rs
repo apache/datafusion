@@ -27,7 +27,7 @@ use super::skip_partial::SkipAggregationProbe;
 use super::{BlockedAggregateExec, format_human_display};
 use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
+    GroupByMetrics, BlockedGroupValues, new_group_values,
 };
 use crate::aggregates_blocked::order::GroupOrderingFull;
 use crate::aggregates_blocked::{
@@ -332,7 +332,7 @@ pub(crate) struct GroupedHashAggregateStream {
     // These fields will accumulate intermediate results during the execution.
     // ========================================================================
     /// An interning store of group keys
-    group_values: Box<dyn GroupValues>,
+    group_values: Box<dyn BlockedGroupValues>,
 
     /// scratch space for the current input [`RecordBatch`] being
     /// processed. Reused across batches here to avoid reallocations

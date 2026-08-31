@@ -18,14 +18,14 @@
 use std::sync::Arc;
 
 use crate::aggregates_blocked::group_values::multi_group_by::Nulls;
-use crate::aggregates_blocked::group_values::multi_group_by::{GroupColumn, nulls_equal_to};
+use crate::aggregates_blocked::group_values::multi_group_by::{BlockedGroupColumn, nulls_equal_to};
 use crate::aggregates_blocked::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
     Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
 };
 use datafusion_common::Result;
 
-/// An implementation of [`GroupColumn`] for booleans
+/// An implementation of [`BlockedGroupColumn`] for booleans
 ///
 /// Optimized to skip null buffer construction if the input is known to be non nullable
 ///
@@ -48,7 +48,7 @@ impl<const NULLABLE: bool> BooleanGroupValueBuilder<NULLABLE> {
     }
 }
 
-impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
+impl<const NULLABLE: bool> BlockedGroupColumn for BooleanGroupValueBuilder<NULLABLE> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         if NULLABLE {
             let exist_null = self.nulls.is_null(lhs_row);

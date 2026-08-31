@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`GroupValues`] trait for storing and interning group keys
+//! [`BlockedGroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
     Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
@@ -90,7 +90,7 @@ pub(crate) use metrics::{
 /// Each distinct group in a hash aggregation is identified by a unique group id
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
-pub trait GroupValues: Send {
+pub trait BlockedGroupValues: Send {
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
@@ -102,15 +102,15 @@ pub trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
-    /// Returns the number of bytes of memory used by this [`GroupValues`].
+    /// Returns the number of bytes of memory used by this [`BlockedGroupValues`].
     ///
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 
-    /// Returns true if this [`GroupValues`] is empty
+    /// Returns true if this [`BlockedGroupValues`] is empty
     fn is_empty(&self) -> bool;
 
-    /// The number of values (distinct group values) stored in this [`GroupValues`]
+    /// The number of values (distinct group values) stored in this [`BlockedGroupValues`]
     fn len(&self) -> usize;
 
     /// Emits the group values
@@ -120,12 +120,12 @@ pub trait GroupValues: Send {
     fn clear_shrink(&mut self, num_rows: usize);
 }
 
-/// Return a specialized implementation of [`GroupValues`] for the given schema.
+/// Return a specialized implementation of [`BlockedGroupValues`] for the given schema.
 ///
-/// [`GroupValues`] implementations choosing logic:
+/// [`BlockedGroupValues`] implementations choosing logic:
 ///
 ///   - If group by single column, and type of this column has
-///     the specific [`GroupValues`] implementation, such implementation
+///     the specific [`BlockedGroupValues`] implementation, such implementation
 ///     will be chosen.
 ///
 ///   - If group by multiple columns, and all column types have the specific
@@ -139,7 +139,7 @@ pub trait GroupValues: Send {
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
-) -> Result<Box<dyn GroupValues>> {
+) -> Result<Box<dyn BlockedGroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 

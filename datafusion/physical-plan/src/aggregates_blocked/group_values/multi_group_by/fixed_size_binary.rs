@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregates_blocked::group_values::multi_group_by::{
-    GroupColumn, Nulls, nulls_equal_to,
+    BlockedGroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates_blocked::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
@@ -29,7 +29,7 @@ use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
 use std::sync::Arc;
 
-/// An implementation of [`GroupColumn`] for `FixedSizeBinary` values
+/// An implementation of [`BlockedGroupColumn`] for `FixedSizeBinary` values
 ///
 /// Stores the group values in a single flat buffer, `byte_width` bytes per
 /// value, in a way that allows:
@@ -126,7 +126,7 @@ impl FixedSizeBinaryGroupValueBuilder {
     }
 }
 
-impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
+impl BlockedGroupColumn for FixedSizeBinaryGroupValueBuilder {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         self.do_equal_to_inner(lhs_row, array.as_fixed_size_binary(), rhs_row)
     }
@@ -243,7 +243,7 @@ mod tests {
     use crate::aggregates_blocked::group_values::multi_group_by::fixed_size_binary::FixedSizeBinaryGroupValueBuilder;
     use arrow::array::{ArrayRef, BooleanBufferBuilder, FixedSizeBinaryArray};
 
-    use super::GroupColumn;
+    use super::BlockedGroupColumn;
 
     fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(n);

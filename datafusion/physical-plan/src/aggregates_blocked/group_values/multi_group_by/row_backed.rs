@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A generic [`GroupColumn`] backed by the arrow row format.
+//! A generic [`BlockedGroupColumn`] backed by the arrow row format.
 //!
 //! Unlike the type-specialized builders in this module (primitive, byte,
 //! boolean, ...), [`RowsGroupColumn`] works for *any* data type that arrow's
@@ -27,7 +27,7 @@
 //! # Why this exists
 //!
 //! [`GroupValuesColumn`] can only be used when *every* column of the group-by
-//! key has a [`GroupColumn`] implementation; otherwise the whole aggregation
+//! key has a [`BlockedGroupColumn`] implementation; otherwise the whole aggregation
 //! falls back to the row-wise [`GroupValuesRows`], which is materially slower
 //! and heavier for the columns that *would* have qualified for the column-wise
 //! fast path. By providing a generic fallback `GroupColumn`, a schema like
@@ -46,7 +46,7 @@
 //! [`GroupValuesColumn`]: crate::aggregates_blocked::group_values::multi_group_by::GroupValuesColumn
 //! [`GroupValuesRows`]: crate::aggregates_blocked::group_values::GroupValuesRows
 
-use crate::aggregates_blocked::group_values::multi_group_by::GroupColumn;
+use crate::aggregates_blocked::group_values::multi_group_by::BlockedGroupColumn;
 use crate::aggregates_blocked::group_values::row::encode_array_if_necessary;
 
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
@@ -54,12 +54,12 @@ use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{DataFusionError, Result};
 
-/// A [`GroupColumn`] that stores group values for a single column in the arrow
+/// A [`BlockedGroupColumn`] that stores group values for a single column in the arrow
 /// [row format], backed by a single-field [`RowConverter`].
 ///
 /// # NULL semantics
 ///
-/// The [`GroupColumn`] contract treats two NULLs as equal. The row format
+/// The [`BlockedGroupColumn`] contract treats two NULLs as equal. The row format
 /// encodes NULL with a distinct sentinel, so `null`-row bytes compare equal to
 /// each other and unequal to any non-null row — matching the contract without
 /// special-casing.
@@ -232,7 +232,7 @@ impl RowsGroupColumn {
     }
 }
 
-impl GroupColumn for RowsGroupColumn {
+impl BlockedGroupColumn for RowsGroupColumn {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         // Scalar path (hash-collision remainder / streaming). Encode just the
         // single incoming row rather than the whole column. The vectorized

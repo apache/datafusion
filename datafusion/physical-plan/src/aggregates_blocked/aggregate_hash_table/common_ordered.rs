@@ -32,7 +32,7 @@ use crate::InputOrderMode;
 use crate::PhysicalExpr;
 use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
+    GroupByMetrics, BlockedGroupValues, new_group_values,
 };
 use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates_blocked::order::GroupOrdering;
@@ -150,7 +150,7 @@ pub(in crate::aggregates_blocked) struct OrderedAggregateTable<OrderedAggrMode> 
 /// input ordering proves those groups are complete.
 ///
 /// [`GroupOrdering`] tracks when and how to do early emit.
-/// [`GroupValues`] stores the physical group-key layout, while
+/// [`BlockedGroupValues`] stores the physical group-key layout, while
 /// [`datafusion_expr::GroupsAccumulator`] stores per-group aggregate state.
 pub(super) struct OrderedAggregateTableBuffer {
     /// GROUP BY expressions evaluated against input batches.
@@ -160,7 +160,7 @@ pub(super) struct OrderedAggregateTableBuffer {
     pub(super) group_ordering: GroupOrdering,
 
     /// Interned group keys, in the same group-id order used by accumulators.
-    pub(super) group_values: Box<dyn GroupValues>,
+    pub(super) group_values: Box<dyn BlockedGroupValues>,
 
     /// Scratch group id vector for the current input batch.
     pub(super) group_indices: Vec<usize>,
