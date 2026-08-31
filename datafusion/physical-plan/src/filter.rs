@@ -205,16 +205,23 @@ impl FilterExecBuilder {
         // Validate projection if provided
         can_project(&self.input.schema(), self.projection.as_deref())?;
 
+        // Simplify the predicate using input statistics: drop `col IS NOT NULL`
+        // conjuncts for columns whose input null_count is provably zero. Such
+        // conjuncts always evaluate to true, yet still cost a full evaluation
+        // and batch copy per input batch (measured 100% selectivity on
+        // join-key filters over NOT NULL data, e.g. TPC-H keys).
+        let predicate = simplify_not_null_conjuncts(self.predicate, &self.input);
+
         // Compute properties once with all parameters
         let cache = FilterExec::compute_properties(
             &self.input,
-            &self.predicate,
+            &predicate,
             self.default_selectivity,
             self.projection.as_deref(),
         )?;
 
         Ok(FilterExec {
-            predicate: self.predicate,
+            predicate,
             input: self.input,
             metrics: ExecutionPlanMetricsSet::new(),
             default_selectivity: self.default_selectivity,
@@ -1131,6 +1138,66 @@ fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize
     (eq_values.into_keys().collect(), infeasible)
 }
 
+/// Removes `col IS NOT NULL` conjuncts whose column is provably non-null in
+/// the input statistics (`null_count == Exact(0)`). Returns the original
+/// predicate (Arc clone) when nothing can be dropped.
+///
+/// This is the statistics-driven inverse of the null-rejecting analysis in
+/// `collect_null_rejecting_columns`: there, a surviving `IS NOT NULL` conjunct
+/// *derives* `null_count = Exact(0)` for the output; here, an input that
+/// already proves `Exact(0)` nulls makes the conjunct vacuously true, so
+/// evaluating it per batch is pure overhead (measured: 100% selectivity
+/// join-key filters over NOT NULL data still pay full evaluation + batch
+/// copy per scan).
+fn simplify_not_null_conjuncts(
+    predicate: Arc<dyn PhysicalExpr>,
+    input: &Arc<dyn ExecutionPlan>,
+) -> Arc<dyn PhysicalExpr> {
+    // Only worth consulting statistics when the predicate has a bare
+    // `Column IS NOT NULL` conjunct to drop.
+    let conjuncts = split_conjunction(&predicate);
+    let has_bare_not_null = conjuncts.iter().any(|e| {
+        e.downcast_ref::<IsNotNullExpr>()
+            .and_then(|n| n.arg().downcast_ref::<Column>())
+            .is_some()
+    });
+    if !has_bare_not_null {
+        return predicate;
+    }
+
+    // Global (all-partitions) statistics; per-partition refinement is not
+    // needed for a proof that holds across every partition.
+    let Ok(stats) = StatisticsContext::new().compute(input.as_ref(), &StatisticsArgs::new()) else {
+        return predicate;
+    };
+    let schema = input.schema();
+    let provably_non_null = |col: &Column| {
+        schema.index_of(col.name()).is_ok_and(|idx| {
+            stats
+                .column_statistics
+                .get(idx)
+                .is_some_and(|cs| matches!(cs.null_count, Precision::Exact(0)))
+        })
+    };
+
+    let mut kept: Vec<Arc<dyn PhysicalExpr>> = Vec::with_capacity(conjuncts.len());
+    for expr in conjuncts {
+        let drop = expr
+            .downcast_ref::<IsNotNullExpr>()
+            .and_then(|n| n.arg().downcast_ref::<Column>())
+            .is_some_and(provably_non_null);
+        if !drop {
+            kept.push(Arc::clone(expr));
+        }
+    }
+    match kept.len() {
+        0 => Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+        // Single conjunct: no need to re-conjoin
+        1 => kept.pop().expect("len checked"),
+        _ => conjunction(kept),
+    }
+}
+
 /// Collects columns that cannot be NULL in any surviving row.
 ///
 /// A filter keeps only rows where the predicate is TRUE, so a column is
@@ -1543,6 +1610,77 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+
+    fn stats_exec_with_null_count(schema: &Schema, null_counts: Vec<usize>) -> Arc<dyn ExecutionPlan> {
+        let stats = Statistics {
+            column_statistics: null_counts
+                .into_iter()
+                .map(|n| ColumnStatistics {
+                    null_count: Precision::Exact(n),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Statistics::new_unknown(schema)
+        };
+        Arc::new(StatisticsExec::new(stats, schema.clone()))
+    }
+
+    #[test]
+    fn not_null_conjunct_dropped_when_null_count_exact_zero() -> Result<()> {
+        // a IS NOT NULL AND a > 5, with input proving a has zero NULLs:
+        // the IS NOT NULL conjunct is vacuously true and must be dropped.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let input = stats_exec_with_null_count(&schema, vec![0]);
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(IsNotNullExpr::new(col("a", &schema)?)),
+            Operator::And,
+            binary(col("a", &schema)?, Operator::Gt, lit(5i64), &schema)?,
+        ));
+        let simplified = simplify_not_null_conjuncts(predicate, &input);
+        assert_eq!(
+            format!("{}", simplified),
+            "a@0 > 5",
+            "IS NOT NULL conjunct should be dropped, keeping the range predicate"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn not_null_whole_predicate_becomes_true_when_all_dropped() -> Result<()> {
+        // a IS NOT NULL with input proving zero NULLs: nothing left to check.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let input = stats_exec_with_null_count(&schema, vec![0]);
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNotNullExpr::new(col("a", &schema)?));
+        let simplified = simplify_not_null_conjuncts(predicate, &input);
+        // PhysicalExpr: Any（经裸 trait 对象直接 cast）
+        let any_ref = simplified.as_ref() as &dyn std::any::Any;
+        assert!(
+            any_ref.downcast_ref::<Literal>().is_some(),
+            "whole predicate should simplify to a literal (true), got {simplified}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn not_null_conjunct_kept_when_null_count_not_exact() -> Result<()> {
+        // null_count unknown/inexact: no proof, predicate must pass through.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let stats = Statistics {
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Absent,
+                ..Default::default()
+            }],
+            ..Statistics::new_unknown(&schema)
+        };
+        let input = Arc::new(StatisticsExec::new(stats, schema.clone()))
+            as Arc<dyn ExecutionPlan>;
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNotNullExpr::new(col("a", &schema)?));
+        let simplified = simplify_not_null_conjuncts(Arc::clone(&predicate), &input);
+        assert!(simplified.eq(&predicate), "must keep predicate unchanged");
+        Ok(())
+    }
 
     #[test]
     fn filter_rejects_zero_batch_size() -> Result<()> {
