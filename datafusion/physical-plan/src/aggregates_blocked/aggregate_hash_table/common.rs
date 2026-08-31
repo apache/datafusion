@@ -24,6 +24,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::BlocksIndex;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
@@ -214,10 +215,22 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         let _timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
-            let group_indices = &state.batch_group_indices;
+
+            // Scope to only have mutable flattened group indices in single defined place to avoid discrepancy
+            let group_indices_flattened = {
+                let mut group_indices_flattened = state.batch_group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
+
+
+                state
+                  .group_values
+                  .intern(group_values, &mut group_indices_flattened)?;
+
+                state.batch_group_indices = group_indices_flattened.iter().map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, self.batch_size)).collect::<Vec<_>>();
+
+                group_indices_flattened
+            };
+
+            let group_indices = &group_indices_flattened;
             let total_num_groups = state.group_values.len();
 
             for (idx, (acc, values)) in state
@@ -473,7 +486,7 @@ pub(super) struct AggregateHashTableBuffer {
     ///
     /// Each value indexes into `group_values`, and the same index is used by every
     /// accumulator to update that group's aggregate state.
-    pub(super) batch_group_indices: Vec<usize>,
+    pub(super) batch_group_indices: Vec<BlocksIndex>,
 
     /// One item per aggregate expression.
     ///

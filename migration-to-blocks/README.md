@@ -37,6 +37,10 @@ this is so the next steps of migrating streams one by one will be easier
 
 to avoid confusion
 
-### 7. Add `BlockedIndex` and `BlockedEmitTo`
+### 7. Add `BlocksIndex` and `BlockedEmitTo`
 
 this is not dependent on anything and it is a building block for everything else
+
+### 8. Change in group indices to be stored internally as `BlocksIndex` and not `usize`
+
+this is to prepare for next where we change the `BlockedGroupValues` and `BlockedGroupColumn` to work with `BlocksIndex`

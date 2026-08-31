@@ -27,7 +27,7 @@ use datafusion_common::Result;
 use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-
+use datafusion_expr_common::groups_accumulator::BlocksIndex;
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
 use crate::aggregates_blocked::group_values::{
@@ -163,7 +163,7 @@ pub(super) struct OrderedAggregateTableBuffer {
     pub(super) group_values: Box<dyn BlockedGroupValues>,
 
     /// Scratch group id vector for the current input batch.
-    pub(super) group_indices: Vec<usize>,
+    pub(super) group_indices: Vec<BlocksIndex>,
 
     /// One item per aggregate expression.
     ///
@@ -383,14 +383,24 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         for group_values in &evaluated_batch.grouping_set_args {
             let starting_num_groups = self.buffer.group_values.len();
-            self.buffer
-                .group_values
-                .intern(group_values, &mut self.buffer.group_indices)?;
+
+            // Scope to only have mutable flattened group indices in single defined place to avoid discrepancy
+            let group_indices_flattened = {
+                let mut group_indices_flattened = self.buffer.group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
+
+                self.buffer
+                  .group_values
+                  .intern(group_values, &mut group_indices_flattened)?;
+
+                self.buffer.group_indices = group_indices_flattened.iter().map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, self.batch_size)).collect::<Vec<_>>();
+
+                group_indices_flattened
+            };
             let total_num_groups = self.buffer.group_values.len();
             if total_num_groups > starting_num_groups {
                 self.buffer.group_ordering.new_groups(
                     group_values,
-                    &self.buffer.group_indices,
+                    &group_indices_flattened,
                     total_num_groups,
                 )?;
             }
@@ -407,7 +417,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                     aggregate_fn(
                         acc,
                         values,
-                        &self.buffer.group_indices,
+                        &group_indices_flattened,
                         total_num_groups,
                     )
                 })?;

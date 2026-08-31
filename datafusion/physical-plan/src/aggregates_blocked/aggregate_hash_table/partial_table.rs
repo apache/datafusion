@@ -23,7 +23,7 @@ use arrow::array::{ArrayRef, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
-
+use datafusion_expr_common::groups_accumulator::BlocksIndex;
 use crate::aggregates_blocked::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates_blocked::order::GroupOrdering;
 use crate::aggregates_blocked::{BlockedAggregateExec, group_id_array, max_duplicate_ordinal};
@@ -173,9 +173,17 @@ impl AggregateHashTable<PartialMarker> {
                 .collect();
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
-            state
-                .group_values
-                .intern(&cols, &mut state.batch_group_indices)?;
+            // Scope to only have mutable flattened group indices in single defined place to avoid discrepancy
+            {
+                let mut group_indices_flattened = state.batch_group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
+
+                state
+                  .group_values
+                  .intern(&cols, &mut group_indices_flattened)?;
+
+                state.batch_group_indices = group_indices_flattened.iter().map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, self.batch_size)).collect::<Vec<_>>();
+            };
+
             any_interned = true;
         }
 
