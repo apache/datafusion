@@ -979,9 +979,7 @@ impl GroupedHashAggregateStream {
                     )?;
                 }
             }
-            // Once per batch, after every accumulator ran: adding inside the loop
-            // would count accumulator k's elapsed time k times over, inflating the
-            // metric by up to (N+1)/2 on a node with N aggregate functions.
+            // Recorded once per grouping set, after all its accumulators ran
             self.group_by_metrics
                 .aggregation_time
                 .add_elapsed(agg_start_time);

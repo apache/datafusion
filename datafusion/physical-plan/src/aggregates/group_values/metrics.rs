@@ -519,18 +519,12 @@ mod tests {
             schema,
         )?);
 
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(64 * 1024 * 1024, 1.0)
-            .build_arc()?;
-        let task_ctx =
-            Arc::new(
-                TaskContext::default()
-                    .with_runtime(runtime)
-                    .with_session_config(SessionConfig::new().set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        false,
-                    )),
-            );
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", false),
+            ),
+        );
         let _result =
             collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
 
@@ -538,10 +532,6 @@ mod tests {
         let aggregation_time =
             metrics.sum_by_name("aggregation_time").unwrap().as_usize();
         let elapsed_compute = metrics.elapsed_compute().unwrap();
-        println!(
-            "aggregation_time={aggregation_time} elapsed_compute={elapsed_compute} ratio={:.2}",
-            aggregation_time as f64 / elapsed_compute as f64
-        );
         assert!(
             aggregation_time <= elapsed_compute,
             "aggregation_time {aggregation_time} exceeds elapsed_compute {elapsed_compute}"
