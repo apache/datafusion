@@ -234,9 +234,6 @@ COPY (SELECT arrow_cast(X'6865', 'Binary') AS payload FROM (VALUES (1), (2)))
 TO 'test_files/scratch/parquet_rle_to_dictionary/compat/binary_plain.parquet'
 STORED AS PARQUET OPTIONS ('format.dictionary_enabled' false);
 
-statement ok
-set datafusion.execution.parquet.enable_rle_to_dictionary = true;
-
 # Registering incompatible Dict Utf8 and plain Binary files must fail.
 statement error Arrow error: Schema error: Fail to merge schema field 'payload' because the from data_type = Dictionary\(Int32, Utf8\) does not equal Binary
 CREATE EXTERNAL TABLE mixed_str_binary
@@ -245,6 +242,3 @@ LOCATION 'test_files/scratch/parquet_rle_to_dictionary/compat/';
 
 statement ok
 reset datafusion.execution.parquet.enable_rle_to_dictionary;
-
-statement ok
-RESET datafusion.catalog.create_default_catalog_and_schema;
