@@ -27,7 +27,7 @@ use datafusion_common::Result;
 
 use crate::InputOrderMode;
 use crate::aggregates_blocked::aggregate_hash_table::FinalMarker;
-use crate::aggregates_blocked::{AggregateExec, AggregateMode, group_values::AccumulatorPhase};
+use crate::aggregates_blocked::{BlockedAggregateExec, AggregateMode, group_values::AccumulatorPhase};
 
 use super::common::HashAggregateAccumulator;
 use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
@@ -43,7 +43,7 @@ use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics}
 /// See comments at [`OrderedAggregateTable`] for details.
 impl OrderedAggregateTable<FinalMarker> {
     pub(in crate::aggregates_blocked) fn new_with_input_order(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
         batch_size: usize,

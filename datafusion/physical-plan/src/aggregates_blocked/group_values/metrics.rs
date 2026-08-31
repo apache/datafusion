@@ -173,7 +173,7 @@ impl GroupByMetrics {
 
 #[cfg(test)]
 mod tests {
-    use crate::aggregates_blocked::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use crate::aggregates_blocked::{BlockedAggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
@@ -326,7 +326,7 @@ mod tests {
             count_aggregate(&schema, "b", "COUNT(b)")?,
         ];
 
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
             aggregates,
@@ -391,7 +391,7 @@ mod tests {
             sum_aggregate(&schema, "b", "SUM(b)")?,
         ];
 
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
             aggregates,
@@ -448,7 +448,7 @@ mod tests {
             sum_aggregate(&schema, "a", "SUM(a)")?,
             sum_aggregate(&schema, "b", "SUM(b)")?,
         ];
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
             aggregates,
@@ -518,7 +518,7 @@ mod tests {
         ];
 
         // Create partial aggregate
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
+        let partial_aggregate = Arc::new(BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregates.clone(),
@@ -528,7 +528,7 @@ mod tests {
         )?);
 
         // Create final aggregate
-        let final_aggregate = Arc::new(AggregateExec::try_new(
+        let final_aggregate = Arc::new(BlockedAggregateExec::try_new(
             AggregateMode::Final,
             group_by.as_final(),
             aggregates,

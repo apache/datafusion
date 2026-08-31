@@ -33,7 +33,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
-use super::AggregateExec;
+use super::BlockedAggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
@@ -149,7 +149,7 @@ impl PartialReduceHashAggregateState {
 
 impl PartialReduceHashAggregateStream {
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {

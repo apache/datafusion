@@ -26,7 +26,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
-use super::AggregateExec;
+use super::BlockedAggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates_blocked::AggregateMode;
 use crate::aggregates_blocked::order::GroupOrdering;
@@ -121,7 +121,7 @@ pub(crate) struct OrderedPartialAggregateStream {
 
 impl OrderedPartialAggregateStream {
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {

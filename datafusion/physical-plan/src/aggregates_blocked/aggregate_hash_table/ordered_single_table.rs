@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates_blocked::aggregate_hash_table::SingleMarker;
-use crate::aggregates_blocked::{AggregateExec, AggregateMode, group_values::AccumulatorPhase};
+use crate::aggregates_blocked::{BlockedAggregateExec, AggregateMode, group_values::AccumulatorPhase};
 
 use super::common::HashAggregateAccumulator;
 use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
@@ -40,7 +40,7 @@ use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics}
 /// See comments at [`OrderedAggregateTable`] for details.
 impl OrderedAggregateTable<SingleMarker> {
     pub(in crate::aggregates_blocked) fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         partition: usize,
         output_schema: SchemaRef,
         state_schema: SchemaRef,

@@ -38,7 +38,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::AggregateExec;
+use super::BlockedAggregateExec;
 use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
@@ -282,7 +282,7 @@ fn prepend_grouping_id_column(
 impl AggregateStream {
     /// Create a new AggregateStream
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {

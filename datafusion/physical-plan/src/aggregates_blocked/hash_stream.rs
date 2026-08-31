@@ -40,7 +40,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
-use super::AggregateExec;
+use super::BlockedAggregateExec;
 use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
     PartialSkipMarker,
@@ -214,7 +214,7 @@ type PartialHashAggregateStateTransition = ControlFlow<
 /// merged and replayed after the original input ends.
 struct FinalSpillContext {
     /// Aggregate configuration used to construct the final replay stream.
-    final_agg: AggregateExec,
+    final_agg: BlockedAggregateExec,
     /// Task context.
     context: Arc<TaskContext>,
     /// Original partition index.
@@ -292,7 +292,7 @@ type FinalHashAggregateStateTransition = ControlFlow<
 
 impl FinalSpillContext {
     fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
@@ -426,7 +426,7 @@ impl FinalSpillContext {
 
 impl PartialHashAggregateStream {
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
@@ -1009,7 +1009,7 @@ impl RecordBatchStream for PartialHashAggregateStream {
 
 impl FinalHashAggregateStream {
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
@@ -1656,7 +1656,7 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode where the race condition occurs
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,
@@ -1800,7 +1800,7 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,

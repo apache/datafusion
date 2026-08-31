@@ -34,7 +34,7 @@ use crate::aggregates_blocked::group_values::{
 use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates_blocked::order::GroupOrdering;
 use crate::aggregates_blocked::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    BlockedAggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
 };
 
 use super::AggregateTableMetrics;
@@ -109,7 +109,7 @@ pub(in crate::aggregates_blocked) struct AggregateHashTable<AggrMode> {
 /// Methods shared by all aggregate hash table modes.
 impl<AggrMode> AggregateHashTable<AggrMode> {
     pub(super) fn new_with_filters(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         partition: usize,
         output_schema: SchemaRef,
         state_schema: SchemaRef,

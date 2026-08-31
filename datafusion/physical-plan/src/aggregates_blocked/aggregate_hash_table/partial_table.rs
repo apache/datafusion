@@ -26,7 +26,7 @@ use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use crate::aggregates_blocked::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates_blocked::order::GroupOrdering;
-use crate::aggregates_blocked::{AggregateExec, group_id_array, max_duplicate_ordinal};
+use crate::aggregates_blocked::{BlockedAggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
@@ -42,7 +42,7 @@ use super::common::{
 /// - Input rows: `k, x`
 impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates_blocked) fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         partition: usize,
         output_schema: SchemaRef,
         batch_size: usize,

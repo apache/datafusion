@@ -36,8 +36,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates_blocked::{
-    AggregateExec, AggregateMode, aggregate_hash_table::PartialMarker,
-    group_values::AccumulatorPhase,
+  BlockedAggregateExec, AggregateMode, aggregate_hash_table::PartialMarker,
+  group_values::AccumulatorPhase,
 };
 
 use super::common::HashAggregateAccumulator;
@@ -54,10 +54,10 @@ use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics}
 /// See comments at [`OrderedAggregateTable`] for details.
 impl OrderedAggregateTable<PartialMarker> {
     pub(in crate::aggregates_blocked) fn new(
-        agg: &AggregateExec,
-        partition: usize,
-        output_schema: SchemaRef,
-        batch_size: usize,
+      agg: &BlockedAggregateExec,
+      partition: usize,
+      output_schema: SchemaRef,
+      batch_size: usize,
     ) -> Result<Self> {
         let input_schema = agg.input().schema();
         let state_schema = Arc::clone(&output_schema);

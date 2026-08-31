@@ -19,3 +19,5 @@ otherwise when we need it later we would add it back and we would think that thi
 
 and it will be harder to understand from which commit what actual changes were made
 
+### 3. Rename `AggregateExec` in `aggregate_blocked` to `BlockedAggregateExec`
+just to avoid confusion, don't change the exec name so tests will still pass

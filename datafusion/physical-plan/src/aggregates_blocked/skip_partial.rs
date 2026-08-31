@@ -118,7 +118,7 @@ impl SkipAggregationProbe {
 mod tests {
     use super::*;
     use crate::aggregates_blocked::grouped_hash_stream::GroupedHashAggregateStream;
-    use crate::aggregates_blocked::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use crate::aggregates_blocked::{BlockedAggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
 
@@ -246,7 +246,7 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,

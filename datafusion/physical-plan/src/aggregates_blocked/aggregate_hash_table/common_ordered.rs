@@ -37,8 +37,8 @@ use crate::aggregates_blocked::group_values::{
 use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates_blocked::order::GroupOrdering;
 use crate::aggregates_blocked::{
-    AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by,
+  BlockedAggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
+  evaluate_group_by,
 };
 
 use super::AggregateTableMetrics;
@@ -55,7 +55,7 @@ pub(in crate::aggregates_blocked) struct OrderedAggregateTableMetrics {
 }
 
 impl OrderedAggregateTableMetrics {
-    pub(in crate::aggregates_blocked) fn new(agg: &AggregateExec, partition: usize) -> Self {
+    pub(in crate::aggregates_blocked) fn new(agg: &BlockedAggregateExec, partition: usize) -> Self {
         let metrics = AggregateTableMetrics::new(agg, partition);
         Self {
             group_by: metrics.group_by,
@@ -179,15 +179,15 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         reason = "keeps ordered single, partial and final table construction explicit"
     )]
     pub(super) fn new_for_mode(
-        agg: &AggregateExec,
-        input_schema: &SchemaRef,
-        output_schema: SchemaRef,
-        state_schema: SchemaRef,
-        batch_size: usize,
-        input_order_mode: &InputOrderMode,
-        aggregate_mode: &AggregateMode,
-        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        metrics: OrderedAggregateTableMetrics,
+      agg: &BlockedAggregateExec,
+      input_schema: &SchemaRef,
+      output_schema: SchemaRef,
+      state_schema: SchemaRef,
+      batch_size: usize,
+      input_order_mode: &InputOrderMode,
+      aggregate_mode: &AggregateMode,
+      filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+      metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         assert_or_internal_err!(
             batch_size > 0,

@@ -31,7 +31,7 @@ use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics,
 };
-use crate::aggregates_blocked::{AggregateExec, AggregateMode, aggregate_metric_label};
+use crate::aggregates_blocked::{BlockedAggregateExec, AggregateMode, aggregate_metric_label};
 
 pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
     match mode {
@@ -66,7 +66,7 @@ pub(super) struct AggregateTableMetrics {
 }
 
 impl AggregateTableMetrics {
-    pub(super) fn new(agg: &AggregateExec, partition: usize) -> Self {
+    pub(super) fn new(agg: &BlockedAggregateExec, partition: usize) -> Self {
         let aggregate_labels = agg
             .aggr_expr
             .iter()

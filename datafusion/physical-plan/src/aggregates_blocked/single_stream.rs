@@ -40,7 +40,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
 };
 use super::ordered_final_stream::OrderedFinalAggregateStream;
-use super::{AggregateExec, create_schema};
+use super::{BlockedAggregateExec, create_schema};
 use crate::aggregates_blocked::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
@@ -117,7 +117,7 @@ struct SingleSpillContext {
     /// expressions a second time. After the spill files are merged into ordered
     /// input, this configuration is used to construct an
     /// [`OrderedFinalAggregateStream`], and perform the final evaluation step.
-    final_agg: AggregateExec,
+    final_agg: BlockedAggregateExec,
     /// Task context.
     context: Arc<TaskContext>,
     /// Original partition index.
@@ -167,7 +167,7 @@ type SingleHashAggregateStateTransition = ControlFlow<
 
 impl SingleSpillContext {
     fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
@@ -312,7 +312,7 @@ impl SingleSpillContext {
 
 impl SingleHashAggregateStream {
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {

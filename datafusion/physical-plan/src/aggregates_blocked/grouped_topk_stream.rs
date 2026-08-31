@@ -22,7 +22,7 @@ use crate::aggregates_blocked::topk::priority_map::PriorityMap;
 #[cfg(debug_assertions)]
 use crate::aggregates_blocked::topk_types_supported;
 use crate::aggregates_blocked::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
+    BlockedAggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
     evaluate_group_by,
 };
 use crate::metrics::BaselineMetrics;
@@ -65,7 +65,7 @@ pub struct GroupedTopKAggregateStream {
 
 impl GroupedTopKAggregateStream {
     pub fn new(
-        aggr: &AggregateExec,
+        aggr: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         limit: usize,
@@ -361,7 +361,7 @@ mod tests {
                 .build()?,
         );
         let aggregate_exec = Arc::new(
-            AggregateExec::try_new(
+            BlockedAggregateExec::try_new(
                 AggregateMode::Single,
                 group_by,
                 vec![aggregate],

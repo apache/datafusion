@@ -24,7 +24,7 @@ use std::vec;
 use super::aggregate_hash_table::accumulator_phases;
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
-use super::{AggregateExec, format_human_display};
+use super::{BlockedAggregateExec, format_human_display};
 use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
@@ -390,7 +390,7 @@ pub(crate) struct GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Create a new GroupedHashAggregateStream
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
@@ -1564,7 +1564,7 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode where the race condition occurs
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,
@@ -1658,7 +1658,7 @@ mod tests {
 
         // GROUP BY sort_col, group_col with input sorted on sort_col
         // gives PartiallySorted([0])
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = BlockedAggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(vec![
                 (col("sort_col", &schema)?, "sort_col".to_string()),

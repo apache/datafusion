@@ -31,7 +31,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
-use super::AggregateExec;
+use super::BlockedAggregateExec;
 use super::aggregate_hash_table::{
     FinalMarker, OrderedAggregateTable, OrderedAggregateTableMetrics,
 };
@@ -78,7 +78,7 @@ pub(crate) struct OrderedFinalAggregateStream {
 /// merged and replayed after the original input ends.
 struct OrderedFinalSpillContext {
     /// Aggregate configuration
-    agg: AggregateExec,
+    agg: BlockedAggregateExec,
     /// Task context
     context: Arc<TaskContext>,
     /// Original partition index
@@ -128,7 +128,7 @@ type OrderedFinalAggregateStateTransition = ControlFlow<
 
 impl OrderedFinalSpillContext {
     fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
@@ -261,7 +261,7 @@ impl OrderedFinalSpillContext {
 
 impl OrderedFinalAggregateStream {
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
@@ -276,7 +276,7 @@ impl OrderedFinalAggregateStream {
     }
 
     pub(in crate::aggregates_blocked) fn new_with_input(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         input: SendableRecordBatchStream,
@@ -315,7 +315,7 @@ impl OrderedFinalAggregateStream {
     /// Replay callers pass a sibling of the reservation used by the merge input,
     /// keeping both components under one memory-consumer registration.
     pub(in crate::aggregates_blocked) fn new_with_input_and_metrics(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         input: SendableRecordBatchStream,

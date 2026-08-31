@@ -21,7 +21,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::aggregates_blocked::AggregateExec;
+use crate::aggregates_blocked::BlockedAggregateExec;
 use crate::aggregates_blocked::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, FinalMarker, HashAggregateAccumulator};
@@ -35,10 +35,10 @@ use super::common::{AggregateHashTable, FinalMarker, HashAggregateAccumulator};
 /// - Input rows: `k, sum(x), count(x)`
 impl AggregateHashTable<FinalMarker> {
     pub(in crate::aggregates_blocked) fn new(
-        agg: &AggregateExec,
-        partition: usize,
-        output_schema: SchemaRef,
-        batch_size: usize,
+      agg: &BlockedAggregateExec,
+      partition: usize,
+      output_schema: SchemaRef,
+      batch_size: usize,
     ) -> Result<Self> {
         Self::new_with_filters(
             agg,

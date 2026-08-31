@@ -35,7 +35,7 @@ use super::aggregate_hash_table::{
     OrderedAggregateTable, OrderedAggregateTableMetrics, SingleMarker,
 };
 use super::ordered_final_stream::OrderedFinalAggregateStream;
-use super::{AggregateExec, create_schema};
+use super::{BlockedAggregateExec, create_schema};
 use crate::aggregates_blocked::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
@@ -117,7 +117,7 @@ pub(crate) struct OrderedSingleAggregateStream {
 /// merged and replayed after the original input ends.
 struct OrderedSingleSpillContext {
     /// Aggregate configuration used to construct the final replay stream.
-    final_agg: AggregateExec,
+    final_agg: BlockedAggregateExec,
     /// Task context
     context: Arc<TaskContext>,
     /// Original partition index
@@ -171,7 +171,7 @@ type OrderedSingleAggregateStateTransition = ControlFlow<
 
 impl OrderedSingleSpillContext {
     fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
@@ -321,7 +321,7 @@ impl OrderedSingleSpillContext {
 
 impl OrderedSingleAggregateStream {
     pub fn new(
-        agg: &AggregateExec,
+        agg: &BlockedAggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
