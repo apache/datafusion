@@ -270,6 +270,22 @@ impl ProjectionExec {
         ))
     }
 
+    /// Returns whether this projection's output metadata differs from the
+    /// metadata derived from its expressions and input schema.
+    fn overrides_metadata(&self) -> Result<bool> {
+        let derived_schema = self
+            .projector
+            .projection()
+            .project_schema(self.input.schema().as_ref())?;
+        let output_schema = self.schema();
+        Ok(derived_schema.metadata() != output_schema.metadata()
+            || derived_schema
+                .fields()
+                .iter()
+                .zip(output_schema.fields())
+                .any(|(derived, output)| derived.metadata() != output.metadata()))
+    }
+
     /// Collect reverse alias mapping from projection expressions.
     /// The result hash map is a map from aliased Column in parent to original expr.
     fn collect_reverse_alias(
@@ -1014,6 +1030,10 @@ pub fn remove_unnecessary_projections(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let maybe_modified = if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        // Removing a projection with observable metadata can change query results.
+        if projection.overrides_metadata()? {
+            return Ok(Transformed::no(plan));
+        }
         // If the projection does not cause any change on the input, we can
         // safely remove it:
         if is_projection_removable(projection) {
@@ -1031,6 +1051,7 @@ pub fn remove_unnecessary_projections(
 
 /// Compare the inputs and outputs of the projection. All expressions must be
 /// columns without alias, and projection does not change the order of fields.
+/// The input and output schemas must also match exactly to preserve metadata.
 /// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
 /// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
@@ -1041,6 +1062,7 @@ fn is_projection_removable(projection: &ProjectionExec) -> bool {
         };
         col.name() == proj_expr.alias && col.index() == idx
     }) && exprs.len() == projection.input().schema().fields().len()
+        && projection.schema() == projection.input().schema()
 }
 
 /// Given the expression set of a projection, checks if the projection causes
@@ -1074,13 +1096,17 @@ pub fn new_projections_for_columns(
 }
 
 /// Creates a new [`ProjectionExec`] instance with the given child plan and
-/// projected expressions.
+/// projected expressions, preserving the original output metadata.
 pub fn make_with_child(
     projection: &ProjectionExec,
     child: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    ProjectionExec::try_new(projection.expr().to_vec(), Arc::clone(child))
-        .map(|e| Arc::new(e) as _)
+    ProjectionExec::try_new_with_schema_metadata(
+        projection.expr().to_vec(),
+        Arc::clone(child),
+        projection.schema().as_ref(),
+    )
+    .map(|e| Arc::new(e) as _)
 }
 
 /// Returns `true` if all the expressions in the argument are `Column`s.
@@ -1331,12 +1357,20 @@ pub fn update_join_filter(
 fn try_collapse_projection_chain(
     outer: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    if outer.overrides_metadata()? {
+        return Ok(None);
+    }
+
     let mut current_exprs: Vec<ProjectionExpr> = outer.expr().to_vec();
     let mut current_input: Arc<dyn ExecutionPlan> = Arc::clone(outer.input());
     let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
     let mut collapsed_any = false;
 
     'outer: while let Some(inner_proj) = current_input.downcast_ref::<ProjectionExec>() {
+        if inner_proj.overrides_metadata()? {
+            break;
+        }
+
         // Collect the column references usage in the outer projection.
         column_ref_map.clear();
         for proj_expr in &current_exprs {
@@ -1386,8 +1420,13 @@ fn try_collapse_projection_chain(
     }
 
     // To unify 3 or more sequential projections:
+    // Preserve the outer projection's output metadata.
     let unified: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(current_exprs, current_input)?);
+        Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            current_exprs,
+            current_input,
+            outer.schema().as_ref(),
+        )?);
     remove_unnecessary_projections(unified).data().map(Some)
 }
 
@@ -1517,11 +1556,14 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
+    use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
 
-    use datafusion_expr::Operator;
+    use datafusion_expr::{Operator, ScalarUDF};
+    use datafusion_functions::core::arrow_metadata::ArrowMetadataFunc;
+    use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{
         BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, lit,
     };
@@ -1563,6 +1605,91 @@ mod tests {
             schema_metadata,
         ));
         assert_eq!(projection.schema(), expected_schema);
+        Ok(())
+    }
+
+    fn identity_projection_with_metadata(
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let metadata_schema =
+            Schema::new_with_metadata(
+                vec![Field::new("i", DataType::Int32, true).with_metadata(
+                    HashMap::from([("event_field".to_string(), "true".to_string())]),
+                )],
+                HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+            );
+        Ok(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            [ProjectionExpr {
+                expr: Arc::new(Column::new("i", 0)),
+                alias: "i".to_string(),
+            }],
+            input,
+            &metadata_schema,
+        )?))
+    }
+
+    #[test]
+    fn test_metadata_projection_is_not_removable() -> Result<()> {
+        let projection = identity_projection_with_metadata(test::scan_partitioned(1))?;
+        let expected_schema = projection.schema();
+
+        let optimized = remove_unnecessary_projections(projection)?.data;
+
+        assert!(optimized.downcast_ref::<ProjectionExec>().is_some());
+        assert_eq!(optimized.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_with_child_preserves_output_metadata() -> Result<()> {
+        let projection = identity_projection_with_metadata(test::scan_partitioned(1))?;
+        let projection = projection
+            .downcast_ref::<ProjectionExec>()
+            .expect("test plan should be a ProjectionExec");
+
+        let rebuilt = make_with_child(projection, &test::scan_partitioned(1))?;
+
+        assert_eq!(rebuilt.schema(), projection.schema());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metadata_observing_parent_blocks_projection_collapse() -> Result<()> {
+        let inner = identity_projection_with_metadata(test::scan_partitioned(1))?;
+        let arrow_metadata = ScalarFunctionExpr::new(
+            "arrow_metadata",
+            Arc::new(ScalarUDF::new_from_impl(ArrowMetadataFunc::new())),
+            vec![
+                Arc::new(Column::new("i", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                    "event_field".to_string(),
+                )))),
+            ],
+            Arc::new(Field::new("arrow_metadata", DataType::Utf8, true)),
+            Arc::new(ConfigOptions::default()),
+        );
+        let outer: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [ProjectionExpr {
+                expr: Arc::new(arrow_metadata),
+                alias: "metadata".to_string(),
+            }],
+            inner,
+        )?);
+
+        let outer_projection = outer
+            .downcast_ref::<ProjectionExec>()
+            .expect("test plan should be a ProjectionExec");
+        assert!(try_collapse_projection_chain(outer_projection)?.is_none());
+
+        let optimized = remove_unnecessary_projections(outer)?.data;
+        let batches =
+            collect(optimized.execute(0, Arc::new(TaskContext::default()))?).await?;
+        let values = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("metadata expression should return Utf8");
+        assert_eq!(values.value(0), "true");
         Ok(())
     }
 
