@@ -978,10 +978,11 @@ impl GroupedHashAggregateStream {
                         || acc.merge_batch(values, group_indices, total_num_groups),
                     )?;
                 }
-                self.group_by_metrics
-                    .aggregation_time
-                    .add_elapsed(agg_start_time);
             }
+            // Recorded once per grouping set, after all its accumulators ran
+            self.group_by_metrics
+                .aggregation_time
+                .add_elapsed(agg_start_time);
         }
 
         Ok(())
