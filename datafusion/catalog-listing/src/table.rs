@@ -23,7 +23,7 @@ use crate::{ListingOptions, ListingTableConfig};
 use arrow::datatypes::{Field, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
     Constraints, DFSchema, SchemaExt, Statistics, internal_datafusion_err, plan_err,
     project_schema,
@@ -400,11 +400,7 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
     // Collect file orderings and track counts
     for group in file_groups {
         for file in group.iter() {
-            if file
-                .statistics
-                .as_ref()
-                .is_some_and(|statistics| statistics.num_rows == Precision::Exact(0))
-            {
+            if file.statistics.as_deref().is_some_and(is_known_empty) {
                 continue;
             }
             state = match (&state, &file.ordering) {
