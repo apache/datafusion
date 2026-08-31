@@ -28,7 +28,7 @@ use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion_common::{
     DataFusionError,
-    utils::hex::{HexCase, encode_bytes_to_slice},
+    utils::hex::{HexCase, encode_bytes_into_string},
 };
 use rand::prelude::IndexedRandom;
 use rand::rngs::StdRng;
@@ -217,6 +217,8 @@ pub(crate) fn make_data(
     let schema = test_schema(use_view);
     let mut partitions = vec![];
     let mut cur_time = 16909000000000i64;
+    let mut id_out = String::with_capacity(32);
+
     for _ in 0..partition_cnt {
         // Choose the appropriate builder based on use_view.
         let sample_cnt = sample_cnt as usize;
@@ -247,12 +249,9 @@ pub(crate) fn make_data(
                 *sample_cnt = gen_sample_cnt(&mut rng);
             }
 
-            let mut id_out = [0; 32];
-            encode_bytes_to_slice(trace_id, HexCase::Upper, &mut id_out).unwrap();
-            id_builder.append_value({
-                // SAFETY: `id_out` holds only ASCII hex digits, which are valid UTF-8.
-                unsafe { str::from_utf8_unchecked(&id_out) }
-            });
+            id_out.clear();
+            encode_bytes_into_string(trace_id, HexCase::Upper, &mut id_out);
+            id_builder.append_value(&id_out);
             ts_builder.append_value(cur_time);
 
             if asc {
