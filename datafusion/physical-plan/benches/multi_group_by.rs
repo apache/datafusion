@@ -30,7 +30,7 @@
 
 use arrow::array::{
     ArrayRef, Decimal256Array, DurationMicrosecondArray, Float16Array, Int32Array,
-    IntervalMonthDayNanoArray, ListArray, UInt32Array,
+    IntervalMonthDayNanoArray, ListArray, StringArray, UInt32Array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::take;
@@ -861,18 +861,125 @@ fn generate_list_batches(
         .collect()
 }
 
+fn make_list_utf8_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new_list("list", Field::new_list_field(DataType::Utf8, true), false),
+        Field::new("id", DataType::Int32, false),
+    ]))
+}
+
+/// Generate `(List<Utf8>, Int32)` batches with `num_distinct_groups` distinct
+/// keys.
+///
+/// Mirrors [`generate_list_batches`] but with a variable-width child, so the
+/// `ListGroupValueBuilder` drives a `ByteGroupValueBuilder` child instead of a
+/// fixed-width primitive one. Each distinct list is `["gN", "gN"]`.
+fn generate_list_utf8_batches(
+    num_distinct_groups: usize,
+    num_rows: usize,
+    batch_size: usize,
+) -> Vec<Vec<ArrayRef>> {
+    const SUBLIST_LEN: usize = 2;
+
+    // Pool of distinct strings, one per group, so string construction stays out
+    // of the measured loop.
+    let pool: Vec<String> = (0..num_distinct_groups).map(|g| format!("g{g}")).collect();
+
+    let num_full_batches = num_rows / batch_size;
+    let remainder = num_rows % batch_size;
+    let num_batches = num_full_batches + usize::from(remainder > 0);
+
+    (0..num_batches)
+        .map(|batch_idx| {
+            let batch_start = batch_idx * batch_size;
+            let current_batch_size = if batch_idx == num_batches - 1 && remainder > 0 {
+                remainder
+            } else {
+                batch_size
+            };
+
+            let group_ids: Vec<usize> = (0..current_batch_size)
+                .map(|row| (batch_start + row) % num_distinct_groups)
+                .collect();
+
+            let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(
+                SUBLIST_LEN,
+                current_batch_size,
+            ));
+            // `from_iter_values` needs an ExactSizeIterator, which `flat_map`
+            // is not.
+            let flat: Vec<&str> = group_ids
+                .iter()
+                .flat_map(|&g| std::iter::repeat_n(pool[g].as_str(), SUBLIST_LEN))
+                .collect();
+            let values = StringArray::from_iter_values(flat);
+            let list = ListArray::new(
+                Arc::new(Field::new_list_field(DataType::Utf8, true)),
+                offsets,
+                Arc::new(values),
+                None,
+            );
+            let id: Int32Array = group_ids.iter().map(|&g| g as i32).collect();
+
+            vec![Arc::new(list) as ArrayRef, Arc::new(id) as ArrayRef]
+        })
+        .collect()
+}
+
 /// Experiment 12: Group count sweep for a `(List<Int32>, Int32)` key.
 ///
-/// Exercises the `ListGroupValueBuilder` on the multi-column path (previously
-/// such a schema fell back to `GroupValuesRows`).
-fn bench_list(c: &mut Criterion) {
-    let mut group = c.benchmark_group("list");
+/// Exercises the `ListGroupValueBuilder` on the multi-column path. The
+/// `vectorized` baseline before this builder existed was the generic
+/// row-encoded `RowsGroupColumn` nested fallback, so this measures the
+/// specialized list builder against that.
+fn bench_list_int(c: &mut Criterion) {
+    let mut group = c.benchmark_group("list_int");
     group.sample_size(15);
 
     let schema = make_list_schema();
 
     for num_groups in [1_000, 1_000_000] {
         let batches = generate_list_batches(num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
+
+        for vectorized in [true, false] {
+            let label = if vectorized {
+                "vectorized"
+            } else {
+                "row_based"
+            };
+            group.bench_with_input(
+                BenchmarkId::new(label, format!("grp_{num_groups}")),
+                &batches,
+                |b, batches| {
+                    b.iter_batched_ref(
+                        || {
+                            (
+                                create_group_values(&schema, vectorized),
+                                Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                            )
+                        },
+                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        criterion::BatchSize::LargeInput,
+                    );
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+/// Experiment 13: Group count sweep for a `(List<Utf8>, Int32)` key.
+///
+/// The variable-width counterpart to [`bench_list_int`].
+fn bench_list_utf8(c: &mut Criterion) {
+    let mut group = c.benchmark_group("list_utf8");
+    group.sample_size(15);
+
+    let schema = make_list_utf8_schema();
+
+    for num_groups in [1_000, 1_000_000] {
+        let batches =
+            generate_list_utf8_batches(num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
 
         for vectorized in [true, false] {
             let label = if vectorized {
@@ -914,6 +1021,7 @@ criterion_group!(
     bench_duration,
     bench_interval,
     bench_decimal256,
-    bench_list,
+    bench_list_int,
+    bench_list_utf8,
 );
 criterion_main!(benches);
