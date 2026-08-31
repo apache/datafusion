@@ -21,3 +21,8 @@ and it will be harder to understand from which commit what actual changes were m
 
 ### 3. Rename `AggregateExec` in `aggregate_blocked` to `BlockedAggregateExec`
 just to avoid confusion, don't change the exec name so tests will still pass
+
+### 4. Change `try_new` in `AggregateExec` to return `BlockedAggregateExec` and not `AggregateExec` and have `actual_try_new` with the old code and change tests in `aggregate` module to call `actual_try_new`
+
+this is so all tests in the codebase will use the blocked aggregate already and so any bugs will surface.
+keeping the tests in `aggregate` module call `actual_try_new` is ok since those tests are also exists in the blocked version where it is against the new exec
