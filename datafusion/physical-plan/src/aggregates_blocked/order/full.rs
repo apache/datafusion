@@ -54,12 +54,12 @@ use std::mem::size_of;
 /// In this diagram, the current group is `13`, and thus groups
 /// `0..12` can be emitted. Note that `13` can not yet be emitted as
 /// there may be more values in the next batch with the same group_id.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GroupOrderingFull {
     state: State,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum State {
     /// Seen no input yet
     Start,
@@ -146,6 +146,24 @@ impl GroupOrderingFull {
 
     pub(crate) fn size(&self) -> usize {
         size_of::<Self>()
+    }
+}
+
+impl From<GroupOrderingFull> for crate::aggregates::order::GroupOrderingFull {
+    fn from(value: GroupOrderingFull) -> Self {
+        Self::new_from_state(value.state.into())
+    }
+}
+
+impl From<State> for crate::aggregates::order::full::State {
+    fn from(value: State) -> Self {
+        match value {
+            State::Start => Self::Start,
+            State::InProgress { current } => Self::InProgress {
+                current
+            },
+            State::Complete => Self::Complete
+        }
     }
 }
 

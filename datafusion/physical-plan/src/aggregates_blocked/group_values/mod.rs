@@ -28,21 +28,22 @@ use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;
 
-pub mod multi_group_by;
+// pub mod multi_group_by;
 
-mod row;
-pub use row::GroupValuesRows;
-mod single_group_by;
+// mod row;
+// pub use row::GroupValuesRows;
+// mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
-use multi_group_by::GroupValuesColumn;
-
-pub(crate) use single_group_by::primitive::HashValue;
+// use multi_group_by::GroupValuesColumn;
+//
+// pub(crate) use single_group_by::primitive::HashValue;
+pub(crate) use crate::aggregates::group_values::HashValue;
 
 use crate::aggregates_blocked::{
-    group_values::single_group_by::{
-        boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
-    },
+    // group_values::single_group_by::{
+    //     boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
+    //     bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+    // },
     order::GroupOrdering,
 };
 
@@ -120,6 +121,43 @@ pub trait BlockedGroupValues: Send {
     fn clear_shrink(&mut self, num_rows: usize);
 }
 
+
+pub struct BlockedGroupValuesAdapter {
+    inner: Box<dyn crate::aggregates::group_values::GroupValues>,
+}
+
+impl BlockedGroupValuesAdapter {
+    pub fn new(inner: Box<dyn crate::aggregates::group_values::GroupValues>) -> Self {
+        Self { inner }
+    }
+}
+
+impl BlockedGroupValues for BlockedGroupValuesAdapter {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.inner.intern(cols, groups)
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        self.inner.emit(emit_to)
+    }
+
+    fn clear_shrink(&mut self, num_rows: usize) {
+        self.inner.clear_shrink(num_rows)
+    }
+}
+
 /// Return a specialized implementation of [`BlockedGroupValues`] for the given schema.
 ///
 /// [`BlockedGroupValues`] implementations choosing logic:
@@ -140,78 +178,7 @@ pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn BlockedGroupValues>> {
-    if schema.fields.len() == 1 {
-        let d = schema.fields[0].data_type();
-
-        macro_rules! downcast_helper {
-            ($t:ty, $d:ident) => {
-                return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
-            };
-        }
-
-        downcast_primitive! {
-            d => (downcast_helper, d),
-            _ => {}
-        }
-
-        match d {
-            DataType::Date32 => {
-                downcast_helper!(Date32Type, d);
-            }
-            DataType::Date64 => {
-                downcast_helper!(Date64Type, d);
-            }
-            DataType::Time32(t) => match t {
-                TimeUnit::Second => downcast_helper!(Time32SecondType, d),
-                TimeUnit::Millisecond => downcast_helper!(Time32MillisecondType, d),
-                _ => {}
-            },
-            DataType::Time64(t) => match t {
-                TimeUnit::Microsecond => downcast_helper!(Time64MicrosecondType, d),
-                TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
-                _ => {}
-            },
-            DataType::Timestamp(t, _tz) => match t {
-                TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
-                TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
-                TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),
-                TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
-            },
-            DataType::Decimal128(_, _) => {
-                downcast_helper!(Decimal128Type, d);
-            }
-            DataType::Utf8 => {
-                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8)));
-            }
-            DataType::LargeUtf8 => {
-                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Utf8)));
-            }
-            DataType::Utf8View => {
-                return Ok(Box::new(GroupValuesBytesView::new(OutputType::Utf8View)));
-            }
-            DataType::Binary => {
-                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Binary)));
-            }
-            DataType::LargeBinary => {
-                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Binary)));
-            }
-            DataType::BinaryView => {
-                return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));
-            }
-            DataType::Boolean => {
-                return Ok(Box::new(GroupValuesBoolean::new()));
-            }
-            _ => {}
-        }
-    }
-
-    if multi_group_by::supported_schema(schema.as_ref()) {
-        if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
-        } else {
-            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
-        }
-    } else {
-        Ok(Box::new(GroupValuesRows::try_new(schema)?))
-    }
+    let mapped_group_ordering: crate::aggregates::order::GroupOrdering = group_ordering.clone().into();
+    let mapped = crate::aggregates::group_values::new_group_values(schema, &mapped_group_ordering)?;
+    Ok(Box::new(BlockedGroupValuesAdapter::new(mapped)))
 }

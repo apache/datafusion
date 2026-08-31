@@ -44,3 +44,10 @@ this is not dependent on anything and it is a building block for everything else
 ### 8. Change in group indices to be stored internally as `BlocksIndex` and not `usize`
 
 this is to prepare for next where we change the `BlockedGroupValues` and `BlockedGroupColumn` to work with `BlocksIndex`
+
+### 9. Remove all `BlockedGroupValues` impl and replace with adapter
+this should have been done earlier maybe
+
+this is so we can migrate one by one while adding required functions to the `BlockedGroupValues` trait
+
+this requires to expose some functions from aggregate for now

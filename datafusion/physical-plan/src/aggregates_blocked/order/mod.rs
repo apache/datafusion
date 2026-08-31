@@ -29,7 +29,9 @@ pub use full::GroupOrderingFull;
 pub use partial::GroupOrderingPartial;
 
 /// Ordering information for each group in the hash table
-#[derive(Debug)]
+///
+/// TODO - remove all derive clone here and children after finish migration
+#[derive(Debug, Clone)]
 pub enum GroupOrdering {
     /// Groups are not ordered
     None,
@@ -155,6 +157,16 @@ impl GroupOrdering {
                 GroupOrdering::Partial(partial) => partial.size(),
                 GroupOrdering::Full(full) => full.size(),
             }
+    }
+}
+
+impl From<GroupOrdering> for crate::aggregates::order::GroupOrdering {
+    fn from(value: GroupOrdering) -> Self {
+        match value {
+            GroupOrdering::None => Self::None,
+            GroupOrdering::Partial(partial) => Self::Partial(partial.into()),
+            GroupOrdering::Full(full) => Self::Full(full.into())
+        }
     }
 }
 

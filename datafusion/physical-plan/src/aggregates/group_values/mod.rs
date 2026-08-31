@@ -32,7 +32,7 @@ pub mod multi_group_by;
 
 mod row;
 pub use row::GroupValuesRows;
-mod single_group_by;
+pub(crate) mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
 

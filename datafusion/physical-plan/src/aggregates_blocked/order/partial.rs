@@ -62,7 +62,7 @@ use datafusion_expr::EmitTo;
 /// (in group value  group_values               current tracks the most
 ///      order)                                    recent group index
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GroupOrderingPartial {
     /// State machine
     state: State,
@@ -73,7 +73,7 @@ pub struct GroupOrderingPartial {
     order_indices: Vec<usize>,
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone)]
 enum State {
     /// The ordering was temporarily taken.  `Self::Taken` is left
     /// when state must be temporarily taken to satisfy the borrow
@@ -270,6 +270,25 @@ impl GroupOrderingPartial {
     /// Return the size of memory allocated by this structure
     pub(crate) fn size(&self) -> usize {
         size_of::<Self>() + self.order_indices.allocated_size() + self.state.size()
+    }
+}
+
+impl From<GroupOrderingPartial> for crate::aggregates::order::GroupOrderingPartial {
+    fn from(value: GroupOrderingPartial) -> Self {
+        Self::new_from_parts(value.state.into(), value.order_indices)
+    }
+}
+
+impl From<State> for crate::aggregates::order::partial::State {
+    fn from(value: State) -> Self {
+        match value {
+            State::Taken => Self::Taken,
+            State::Start => Self::Start,
+            State::InProgress { current_sort, current, sort_key, } => Self::InProgress {
+                current_sort, current, sort_key,
+            },
+            State::Complete => Self::Complete
+        }
     }
 }
 

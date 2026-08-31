@@ -512,36 +512,6 @@ impl<ID: KeyType> HashTableItem<ID> {
     }
 }
 
-impl HashValue for Option<String> {
-    fn hash(&self, state: &RandomState) -> u64 {
-        state.hash_one(self)
-    }
-}
-
-macro_rules! hash_float {
-    ($($t:ty),+) => {
-        $(impl HashValue for Option<$t> {
-            fn hash(&self, state: &RandomState) -> u64 {
-                self.map(|me| me.hash(state)).unwrap_or(0)
-            }
-        })+
-    };
-}
-
-macro_rules! has_integer {
-    ($($t:ty),+) => {
-        $(impl HashValue for Option<$t> {
-            fn hash(&self, state: &RandomState) -> u64 {
-                self.map(|me| me.hash(state)).unwrap_or(0)
-            }
-        })+
-    };
-}
-
-has_integer!(i8, i16, i32, i64, i128, i256);
-has_integer!(u8, u16, u32, u64);
-has_integer!(IntervalDayTime, IntervalMonthDayNano);
-hash_float!(f16, f32, f64);
 
 #[inline]
 fn some_value<'a, A>(array: &'a A, index: usize) -> Option<<&'a A as ArrayAccessor>::Item>
