@@ -206,7 +206,7 @@ mod tests {
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use crate::logical_plan::consumer::*;
-    use datafusion::common::DFSchema;
+    use datafusion::common::{DFSchema, assert_contains};
     use datafusion::logical_expr::Expr;
     use substrait::proto::Expression;
     use substrait::proto::expression::RexType;
@@ -269,5 +269,28 @@ mod tests {
         };
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_function_with_invalid_invocation() {
+        let substrait = Expression {
+            rex_type: Some(RexType::WindowFunction(
+                substrait::proto::expression::WindowFunction {
+                    function_reference: 0,
+                    invocation: 3,
+                    ..Default::default()
+                },
+            )),
+        };
+
+        let mut consumer = test_consumer();
+        let mut extensions = Extensions::default();
+        extensions.register_function("count");
+        consumer.extensions = &extensions;
+
+        let err = from_substrait_rex(&consumer, &substrait, &DFSchema::empty())
+            .await
+            .unwrap_err();
+        assert_contains!(err.to_string(), "Invalid window aggregation invocation 3");
     }
 }
