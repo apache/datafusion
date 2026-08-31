@@ -19,7 +19,7 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, GenericListArray,
-    OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, downcast_primitive,
+    OffsetSizeTrait, PrimitiveBuilder, downcast_primitive,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
@@ -225,23 +225,9 @@ fn try_primitive_array_min_max<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     is_min: bool,
 ) -> Option<Result<ArrayRef>> {
-    // Widen the offsets once so the kernel below takes `&[usize]` instead of
-    // being generic over `O`: it is then compiled once per element type rather
-    // than once per (element type, offset width) pair. Non-primitive element
-    // types waste this buffer, but their fallback path allocates a `ScalarValue`
-    // per row anyway.
-    let offsets: Vec<usize> = list_array.offsets().iter().map(|o| o.as_usize()).collect();
-    let values = list_array.values();
-    let list_nulls = list_array.nulls();
-
     macro_rules! helper {
         ($t:ty) => {
-            return Some(primitive_array_min_max(
-                values.as_primitive::<$t>(),
-                &offsets,
-                list_nulls,
-                is_min,
-            ))
+            return Some(primitive_array_min_max::<O, $t>(list_array, is_min))
         };
     }
     downcast_primitive! {
@@ -257,24 +243,22 @@ fn try_primitive_array_min_max<O: OffsetSizeTrait>(
 const ARROW_COMPUTE_THRESHOLD: usize = 32;
 
 /// Computes min or max for each row of a primitive ListArray.
-fn primitive_array_min_max<T: ArrowPrimitiveType>(
-    values_array: &PrimitiveArray<T>,
-    offsets: &[usize],
-    list_nulls: Option<&NullBuffer>,
+fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
+    list_array: &GenericListArray<O>,
     is_min: bool,
 ) -> Result<ArrayRef> {
+    let values_array = list_array.values().as_primitive::<T>();
     let values_slice = values_array.values();
     let values_nulls = values_array.nulls();
-    let num_rows = offsets.len() - 1;
-    let mut result_builder = PrimitiveBuilder::<T>::with_capacity(num_rows)
+    let mut result_builder = PrimitiveBuilder::<T>::with_capacity(list_array.len())
         .with_data_type(values_array.data_type().clone());
 
-    for (row, w) in offsets.windows(2).enumerate() {
-        let row_result = if list_nulls.is_some_and(|n| n.is_null(row)) {
+    for (row, w) in list_array.offsets().windows(2).enumerate() {
+        let row_result = if list_array.is_null(row) {
             None
         } else {
-            let start = w[0];
-            let end = w[1];
+            let start = w[0].as_usize();
+            let end = w[1].as_usize();
             let len = end - start;
 
             match len {
