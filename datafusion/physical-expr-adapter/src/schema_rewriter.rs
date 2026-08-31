@@ -486,8 +486,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(None);
         };
 
-        let cast_target_field = cast.target_field();
-        let DataType::Struct(logical_struct_fields) = cast_target_field.data_type()
+        let DataType::Struct(logical_struct_fields) = cast.target_field().data_type()
         else {
             return Ok(None);
         };
@@ -555,15 +554,14 @@ impl DefaultPhysicalExprAdapterRewriter {
                 || (!contains_type(source_type, &is_struct)
                     && !contains_type(target_type, &is_struct)))
         {
-            let cast_target_field = cast.target_field();
-            let Some(target_field) = retain_field_path(&cast_target_field, &field_path)
+            let Some(target_field) = retain_field_path(cast.target_field(), &field_path)
             else {
                 return Ok(None);
             };
             let mut args = get_field_expr.args().to_vec();
             args[0] = Arc::new(CastExpr::new_with_target_field(
                 Arc::clone(inner),
-                &target_field,
+                target_field,
                 Some(cast.cast_options().clone()),
             ));
             return Arc::clone(expr).with_new_children(args).map(Some);
@@ -591,7 +589,7 @@ impl DefaultPhysicalExprAdapterRewriter {
         }
         Ok(Some(Arc::new(CastExpr::new_with_target_field(
             extracted,
-            &logical_return_field,
+            logical_return_field,
             Some(cast.cast_options().clone()),
         ))))
     }
@@ -746,7 +744,7 @@ impl DefaultPhysicalExprAdapterRewriter {
 
         Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
             Arc::new(resolved_column),
-            &Arc::new(logical_field.clone()),
+            Arc::new(logical_field.clone()),
             None,
         ))))
     }
@@ -1149,7 +1147,7 @@ mod tests {
 
         let expected = Arc::new(CastExpr::new_with_target_field(
             Arc::new(Column::new("data", 0)),
-            &logical_field,
+            logical_field,
             None,
         )) as Arc<dyn PhysicalExpr>;
 

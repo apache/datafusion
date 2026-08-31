@@ -162,7 +162,7 @@ pub fn project_plan_to_schema(
             let expr = if !input_field.is_nullable() && expected_field.is_nullable() {
                 Arc::new(CastExpr::new_with_target_field(
                     column,
-                    expected_field,
+                    Arc::clone(expected_field),
                     None,
                 )) as _
             } else {

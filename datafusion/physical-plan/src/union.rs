@@ -114,8 +114,11 @@ fn coerce_schema(
             let expr = if input_field == target_field {
                 column
             } else {
-                Arc::new(CastExpr::new_with_target_field(column, target_field, None))
-                    as Arc<dyn PhysicalExpr>
+                Arc::new(CastExpr::new_with_target_field(
+                    column,
+                    Arc::clone(target_field),
+                    None,
+                )) as Arc<dyn PhysicalExpr>
             };
             Ok(ProjectionExpr {
                 expr,

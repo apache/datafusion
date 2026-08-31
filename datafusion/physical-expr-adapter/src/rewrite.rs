@@ -104,7 +104,7 @@ pub fn rewrite_file_row_index_expr(
         let target_field = Arc::new(Field::new("file_row_index", DataType::Int64, true));
         Ok(Arc::new(CastExpr::new_with_target_field(
             source,
-            &target_field,
+            target_field,
             None,
         )))
     })
@@ -306,9 +306,8 @@ mod tests {
             .downcast_ref::<CastExpr>()
             .expect("file row index expression should be a cast");
         assert_eq!(cast_expr.cast_type(), &DataType::Int64);
-        // Note: target_field() does not preserve the name since CastExpr only stores
-        // type, metadata, and nullability. The name comes from the source expression.
         let target_field = cast_expr.target_field();
+        assert_eq!(target_field.name(), "file_row_index");
         assert_eq!(target_field.data_type(), &DataType::Int64);
         assert!(target_field.is_nullable());
         assert!(target_field.metadata().is_empty());
