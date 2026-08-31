@@ -18,7 +18,7 @@
 //! Single-stage hash aggregation stream implementation.
 //!
 //! This stream is part of the incremental migration from
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
+//! [`crate::aggregates_blocked::grouped_hash_stream::GroupedHashAggregateStream`].
 //!
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
@@ -41,7 +41,7 @@ use super::aggregate_hash_table::{
 };
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, create_schema};
-use crate::aggregates::AggregateMode;
+use crate::aggregates_blocked::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};

@@ -38,7 +38,7 @@ use multi_group_by::GroupValuesColumn;
 
 pub(crate) use single_group_by::primitive::HashValue;
 
-use crate::aggregates::{
+use crate::aggregates_blocked::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
         bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
@@ -133,9 +133,9 @@ pub trait GroupValues: Send {
 ///
 ///   - Otherwise, the general implementation `GroupValuesRows` will be chosen.
 ///
-/// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
-/// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
-/// `GroupValuesRows`: crate::aggregates::group_values::GroupValuesRows
+/// `GroupColumn`:  crate::aggregates_blocked::group_values::multi_group_by::GroupColumn
+/// `GroupValuesColumn`: crate::aggregates_blocked::group_values::multi_group_by::GroupValuesColumn
+/// `GroupValuesRows`: crate::aggregates_blocked::group_values::GroupValuesRows
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,

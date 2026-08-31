@@ -17,11 +17,11 @@
 
 //! A memory-conscious aggregation implementation that limits group buckets to a fixed number
 
-use crate::aggregates::group_values::{AggregateArgumentMetrics, GroupByMetrics};
-use crate::aggregates::topk::priority_map::PriorityMap;
+use crate::aggregates_blocked::group_values::{AggregateArgumentMetrics, GroupByMetrics};
+use crate::aggregates_blocked::topk::priority_map::PriorityMap;
 #[cfg(debug_assertions)]
-use crate::aggregates::topk_types_supported;
-use crate::aggregates::{
+use crate::aggregates_blocked::topk_types_supported;
+use crate::aggregates_blocked::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, aggregate_metric_label,
     evaluate_group_by,
 };
@@ -325,7 +325,7 @@ impl Stream for GroupedTopKAggregateStream {
 mod tests {
     use super::*;
     use crate::ExecutionPlan;
-    use crate::aggregates::{AggregateMode, LimitOptions};
+    use crate::aggregates_blocked::{AggregateMode, LimitOptions};
     use crate::collect;
     use crate::metrics::MetricValue;
     use crate::test::TestMemoryExec;

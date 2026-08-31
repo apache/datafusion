@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::GroupColumn;
+use crate::aggregates_blocked::group_values::multi_group_by::GroupColumn;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, Int64Array,
     PrimitiveArray,
@@ -31,7 +31,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use crate::aggregates::AGGREGATION_HASH_SEED;
+use crate::aggregates_blocked::AGGREGATION_HASH_SEED;
 
 /// [`GroupColumn`] for dictionary-encoded columns with key type `K`.
 ///
@@ -570,7 +570,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregates::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
+    use crate::aggregates_blocked::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
     use arrow::array::{
         Array, ArrayRef, BooleanBufferBuilder, DictionaryArray, Int32Array, StringArray,
         UInt8Array,

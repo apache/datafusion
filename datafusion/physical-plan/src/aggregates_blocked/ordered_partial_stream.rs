@@ -28,8 +28,8 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
-use crate::aggregates::AggregateMode;
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates_blocked::AggregateMode;
+use crate::aggregates_blocked::order::GroupOrdering;
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{InputOrderMode, SendableRecordBatchStream, metrics};

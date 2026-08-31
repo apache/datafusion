@@ -17,7 +17,7 @@
 
 //! Aggregate without grouping columns
 
-use crate::aggregates::{
+use crate::aggregates_blocked::{
     AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
     DynamicFilterAggregateType, aggregate_expressions, create_accumulators,
     finalize_aggregation,

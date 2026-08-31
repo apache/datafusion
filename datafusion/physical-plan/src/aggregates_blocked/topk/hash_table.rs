@@ -17,8 +17,8 @@
 
 //! A wrapper around `hashbrown::HashTable` that allows entries to be tracked by index
 
-use crate::aggregates::group_values::HashValue;
-use crate::aggregates::topk::heap::Comparable;
+use crate::aggregates_blocked::group_values::HashValue;
+use crate::aggregates_blocked::topk::heap::Comparable;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, LargeStringArray, PrimitiveArray, StringArray,

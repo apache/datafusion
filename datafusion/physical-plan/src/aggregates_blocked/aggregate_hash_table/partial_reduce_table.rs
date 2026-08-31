@@ -21,14 +21,14 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::aggregates::AggregateExec;
-use crate::aggregates::group_values::AccumulatorPhase;
+use crate::aggregates_blocked::AggregateExec;
+use crate::aggregates_blocked::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, HashAggregateAccumulator, PartialReduceMarker};
 
 /// Methods specific to the aggregate hash table used in the partial-reduce stage.
 impl AggregateHashTable<PartialReduceMarker> {
-    pub(in crate::aggregates) fn new(
+    pub(in crate::aggregates_blocked) fn new(
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
@@ -50,7 +50,7 @@ impl AggregateHashTable<PartialReduceMarker> {
     ///
     /// Returns `Some(batch)` for each emitted batch, `None` when output is
     /// exhausted, and an internal error if polled in the `Building` state.
-    pub(in crate::aggregates) fn next_output_batch(
+    pub(in crate::aggregates_blocked) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         self.next_output_batch_inner(
@@ -61,7 +61,7 @@ impl AggregateHashTable<PartialReduceMarker> {
 
     /// Partial-reduce aggregation consumes partial aggregate states and merges
     /// them into the table's partial-state accumulators.
-    pub(in crate::aggregates) fn aggregate_batch(
+    pub(in crate::aggregates_blocked) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
@@ -72,7 +72,7 @@ impl AggregateHashTable<PartialReduceMarker> {
         )
     }
 
-    pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
+    pub(in crate::aggregates_blocked) fn start_output(&mut self) -> Result<()> {
         self.start_outputting();
         Ok(())
     }

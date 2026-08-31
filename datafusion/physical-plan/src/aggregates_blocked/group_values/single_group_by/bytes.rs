@@ -17,7 +17,7 @@
 
 use std::mem::size_of;
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::GroupValues;
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;

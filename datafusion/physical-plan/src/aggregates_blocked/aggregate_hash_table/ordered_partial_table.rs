@@ -35,7 +35,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::aggregates::{
+use crate::aggregates_blocked::{
     AggregateExec, AggregateMode, aggregate_hash_table::PartialMarker,
     group_values::AccumulatorPhase,
 };
@@ -53,7 +53,7 @@ use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics}
 ///
 /// See comments at [`OrderedAggregateTable`] for details.
 impl OrderedAggregateTable<PartialMarker> {
-    pub(in crate::aggregates) fn new(
+    pub(in crate::aggregates_blocked) fn new(
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
@@ -77,7 +77,7 @@ impl OrderedAggregateTable<PartialMarker> {
 
     /// Aggregates one raw input batch and updates ordering information for any
     /// newly observed groups.
-    pub(in crate::aggregates) fn aggregate_batch(
+    pub(in crate::aggregates_blocked) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
@@ -103,7 +103,7 @@ impl OrderedAggregateTable<PartialMarker> {
     ///
     /// This may output small batches. Avoiding tiny batches is left to future
     /// ordered-aggregation optimizations.
-    pub(in crate::aggregates) fn next_output_batch(
+    pub(in crate::aggregates_blocked) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         self.next_output_batch_inner(

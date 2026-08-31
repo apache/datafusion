@@ -36,7 +36,7 @@ use super::aggregate_hash_table::{
 };
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, create_schema};
-use crate::aggregates::AggregateMode;
+use crate::aggregates_blocked::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};

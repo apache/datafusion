@@ -43,11 +43,11 @@
 //! on group identity, values that this column considers equal must hash equal —
 //! see the float `-0.0` / `NaN` note on [`RowsGroupColumn`].
 //!
-//! [`GroupValuesColumn`]: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
-//! [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
+//! [`GroupValuesColumn`]: crate::aggregates_blocked::group_values::multi_group_by::GroupValuesColumn
+//! [`GroupValuesRows`]: crate::aggregates_blocked::group_values::GroupValuesRows
 
-use crate::aggregates::group_values::multi_group_by::GroupColumn;
-use crate::aggregates::group_values::row::encode_array_if_necessary;
+use crate::aggregates_blocked::group_values::multi_group_by::GroupColumn;
+use crate::aggregates_blocked::group_values::row::encode_array_if_necessary;
 
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::DataType;
@@ -74,7 +74,7 @@ use datafusion_common::{DataFusionError, Result};
 /// [`GroupValuesRows`] does). See the module docs.
 ///
 /// [row format]: arrow::row
-/// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
+/// [`GroupValuesRows`]: crate::aggregates_blocked::group_values::GroupValuesRows
 pub struct RowsGroupColumn {
     /// Single-field row converter for this column's data type.
     row_converter: RowConverter,
@@ -588,7 +588,7 @@ mod tests {
     }
 
     /// Regression test for the nested-container recursion in
-    /// [`crate::aggregates::group_values::row::encode_array_if_necessary`].
+    /// [`crate::aggregates_blocked::group_values::row::encode_array_if_necessary`].
     /// `RowConverter` flattens dictionary values on the way in, so a
     /// `List<Dict<Int32, Utf8>>` schema round-trips with `Utf8` values
     /// unless the helper re-encodes the leaf. Without that recursion,

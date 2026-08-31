@@ -24,9 +24,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
-use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
-use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
+use crate::aggregates_blocked::group_values::{AccumulatorPhase, new_group_values};
+use crate::aggregates_blocked::order::GroupOrdering;
+use crate::aggregates_blocked::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
@@ -41,7 +41,7 @@ use super::common::{
 /// - Aggregate table stores: `k, sum(x), count(x)`
 /// - Input rows: `k, x`
 impl AggregateHashTable<PartialMarker> {
-    pub(in crate::aggregates) fn new(
+    pub(in crate::aggregates_blocked) fn new(
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
@@ -63,7 +63,7 @@ impl AggregateHashTable<PartialMarker> {
     ///
     /// Returns `Some(batch)` for each emitted batch, `None` when output is
     /// exhausted, and an internal error if polled in the `Building` state.
-    pub(in crate::aggregates) fn next_output_batch(
+    pub(in crate::aggregates_blocked) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         self.next_output_batch_inner(
@@ -75,7 +75,7 @@ impl AggregateHashTable<PartialMarker> {
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
     /// partial stage, build a typed hash table only for aggregation state conversion
     /// row-by-row.
-    pub(in crate::aggregates) fn partial_skip_table(
+    pub(in crate::aggregates_blocked) fn partial_skip_table(
         &self,
     ) -> Result<AggregateHashTable<PartialSkipMarker>> {
         let state = self.state.building();
@@ -109,7 +109,7 @@ impl AggregateHashTable<PartialMarker> {
 
     /// Partial aggregation consumes raw input rows and updates the table's
     /// partial-state accumulators.
-    pub(in crate::aggregates) fn aggregate_batch(
+    pub(in crate::aggregates_blocked) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
@@ -120,7 +120,7 @@ impl AggregateHashTable<PartialMarker> {
         )
     }
 
-    pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
+    pub(in crate::aggregates_blocked) fn start_output(&mut self) -> Result<()> {
         self.init_empty_grouping_sets()?;
         self.start_outputting();
         Ok(())
@@ -199,7 +199,7 @@ impl AggregateHashTable<PartialMarker> {
 }
 
 impl AggregateHashTable<PartialSkipMarker> {
-    pub(in crate::aggregates) fn convert_batch_to_state(
+    pub(in crate::aggregates_blocked) fn convert_batch_to_state(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<RecordBatch> {

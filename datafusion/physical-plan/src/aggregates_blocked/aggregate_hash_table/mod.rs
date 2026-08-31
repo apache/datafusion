@@ -27,11 +27,11 @@ mod single_table;
 
 use std::sync::Arc;
 
-use crate::aggregates::group_values::{
+use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics,
 };
-use crate::aggregates::{AggregateExec, AggregateMode, aggregate_metric_label};
+use crate::aggregates_blocked::{AggregateExec, AggregateMode, aggregate_metric_label};
 
 pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
     match mode {
@@ -99,8 +99,8 @@ pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetr
 #[cfg(test)]
 mod tests {
     use super::accumulator_phases;
-    use crate::aggregates::AggregateMode;
-    use crate::aggregates::group_values::AccumulatorPhase;
+    use crate::aggregates_blocked::AggregateMode;
+    use crate::aggregates_blocked::group_values::AccumulatorPhase;
 
     #[test]
     fn accumulator_phases_match_aggregate_mode() {

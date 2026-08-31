@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::{
+use crate::aggregates_blocked::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
-use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
+use crate::aggregates_blocked::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeBinaryArray,
     NullBufferBuilder,
@@ -240,7 +240,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
 mod tests {
     use std::sync::Arc;
 
-    use crate::aggregates::group_values::multi_group_by::fixed_size_binary::FixedSizeBinaryGroupValueBuilder;
+    use crate::aggregates_blocked::group_values::multi_group_by::fixed_size_binary::FixedSizeBinaryGroupValueBuilder;
     use arrow::array::{ArrayRef, BooleanBufferBuilder, FixedSizeBinaryArray};
 
     use super::GroupColumn;

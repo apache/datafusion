@@ -173,7 +173,7 @@ impl GroupByMetrics {
 
 #[cfg(test)]
 mod tests {
-    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use crate::aggregates_blocked::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};

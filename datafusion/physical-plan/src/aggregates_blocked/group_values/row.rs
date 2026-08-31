@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::GroupValues;
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
     ListViewArray, MapArray, PrimitiveArray, RunArray, StructArray,
@@ -111,7 +111,7 @@ impl GroupValuesRows {
             group_values: None,
             hashes_buffer: Default::default(),
             rows_buffer,
-            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            random_state: crate::aggregates_blocked::AGGREGATION_HASH_SEED,
         })
     }
 }

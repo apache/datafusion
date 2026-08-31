@@ -147,7 +147,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::aggregates::{
+use crate::aggregates_blocked::{
     aggregate_stream::AggregateStream,
     grouped_hash_stream::GroupedHashAggregateStream,
     grouped_topk_stream::GroupedTopKAggregateStream,

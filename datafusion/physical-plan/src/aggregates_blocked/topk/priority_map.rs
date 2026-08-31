@@ -17,8 +17,8 @@
 
 //! A `Map<K, V>` / `PriorityQueue` combo that evicts the worst values after reaching `capacity`
 
-use crate::aggregates::topk::hash_table::{ArrowHashTable, InsertKind, new_hash_table};
-use crate::aggregates::topk::heap::{ArrowHeap, new_heap};
+use crate::aggregates_blocked::topk::hash_table::{ArrowHashTable, InsertKind, new_hash_table};
+use crate::aggregates_blocked::topk::heap::{ArrowHeap, new_heap};
 use arrow::array::{ArrayRef, new_null_array};
 use arrow::compute::concat;
 use arrow::datatypes::DataType;

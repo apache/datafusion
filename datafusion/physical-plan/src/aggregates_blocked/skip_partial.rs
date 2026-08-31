@@ -22,7 +22,7 @@ use crate::metrics;
 /// Tracks if the aggregate should skip partial aggregations
 ///
 /// See "partial aggregation" discussion on
-/// [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
+/// [`crate::aggregates_blocked::grouped_hash_stream::GroupedHashAggregateStream`].
 pub(super) struct SkipAggregationProbe {
     // ========================================================================
     // PROPERTIES:
@@ -117,8 +117,8 @@ impl SkipAggregationProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream;
-    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use crate::aggregates_blocked::grouped_hash_stream::GroupedHashAggregateStream;
+    use crate::aggregates_blocked::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
 

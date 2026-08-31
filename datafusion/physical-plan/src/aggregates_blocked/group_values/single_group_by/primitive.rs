@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::GroupValues;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -126,7 +126,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             map: HashTable::with_capacity(128),
             values: Vec::with_capacity(128),
             null_group: None,
-            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            random_state: crate::aggregates_blocked::AGGREGATION_HASH_SEED,
         }
     }
 }

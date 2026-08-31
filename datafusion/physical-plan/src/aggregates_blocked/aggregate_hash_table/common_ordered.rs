@@ -30,13 +30,13 @@ use datafusion_expr::EmitTo;
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{
+use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::grouped_hash_stream::create_group_accumulator;
-use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{
+use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
+use crate::aggregates_blocked::order::GroupOrdering;
+use crate::aggregates_blocked::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
     evaluate_group_by,
 };
@@ -48,14 +48,14 @@ use super::common::{
 };
 
 #[derive(Clone)]
-pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
+pub(in crate::aggregates_blocked) struct OrderedAggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
 }
 
 impl OrderedAggregateTableMetrics {
-    pub(in crate::aggregates) fn new(agg: &AggregateExec, partition: usize) -> Self {
+    pub(in crate::aggregates_blocked) fn new(agg: &AggregateExec, partition: usize) -> Self {
         let metrics = AggregateTableMetrics::new(agg, partition);
         Self {
             group_by: metrics.group_by,
@@ -64,7 +64,7 @@ impl OrderedAggregateTableMetrics {
         }
     }
 
-    pub(in crate::aggregates) fn from_hash_table<AggrMode>(
+    pub(in crate::aggregates_blocked) fn from_hash_table<AggrMode>(
         table: &AggregateHashTable<AggrMode>,
     ) -> Self {
         Self {
@@ -88,7 +88,7 @@ impl OrderedAggregateTableMetrics {
 /// The partial and final aggregate tables implement the two stages of grouped
 /// aggregation, while the single aggregate table implements both stages in one
 /// table. See
-/// [`OrderedPartialAggregateStream`](crate::aggregates::ordered_partial_stream::OrderedPartialAggregateStream)
+/// [`OrderedPartialAggregateStream`](crate::aggregates_blocked::ordered_partial_stream::OrderedPartialAggregateStream)
 /// for the high-level plan shape.
 ///
 /// Example: `AVG(v) FILTER (WHERE v>0) GROUP BY k`
@@ -118,7 +118,7 @@ impl OrderedAggregateTableMetrics {
 ///
 /// Shared methods live on `impl<T>`; single/partial/final behavior lives on
 /// marker-specific impls.
-pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
+pub(in crate::aggregates_blocked) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
 
@@ -272,27 +272,27 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     ///
     /// Updates the internal `GroupOrdering` so it can continue emitting until
     /// the buffer is empty.
-    pub(in crate::aggregates) fn input_done(&mut self) {
+    pub(in crate::aggregates_blocked) fn input_done(&mut self) {
         self.buffer.group_ordering.input_done();
     }
 
     /// Returns the ordering state used to decide how memory pressure is handled.
-    pub(in crate::aggregates) fn group_ordering(&self) -> &GroupOrdering {
+    pub(in crate::aggregates_blocked) fn group_ordering(&self) -> &GroupOrdering {
         &self.buffer.group_ordering
     }
 
     /// Number of groups currently buffered.
-    pub(in crate::aggregates) fn num_groups(&self) -> usize {
+    pub(in crate::aggregates_blocked) fn num_groups(&self) -> usize {
         self.buffer.group_values.len()
     }
 
     /// Check if there is zero groups accumulated so far.
-    pub(in crate::aggregates) fn is_empty(&self) -> bool {
+    pub(in crate::aggregates_blocked) fn is_empty(&self) -> bool {
         self.num_groups() == 0
     }
 
     /// All internal buffer's memory size.
-    pub(in crate::aggregates) fn memory_size(&self) -> usize {
+    pub(in crate::aggregates_blocked) fn memory_size(&self) -> usize {
         self.buffer
             .accumulators
             .iter()
@@ -303,7 +303,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_indices.allocated_size()
     }
 
-    pub(in crate::aggregates) fn metrics(&self) -> OrderedAggregateTableMetrics {
+    pub(in crate::aggregates_blocked) fn metrics(&self) -> OrderedAggregateTableMetrics {
         OrderedAggregateTableMetrics {
             group_by: self.group_by_metrics.clone(),
             aggregate_arguments: self.aggregate_argument_metrics.clone(),
@@ -318,7 +318,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// active (incomplete) groups. Partial aggregation can pass those states to
     /// its final stage, while single and final aggregation sort and spill them
     /// before replay.
-    pub(in crate::aggregates) fn take_state_batch(
+    pub(in crate::aggregates_blocked) fn take_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         if self.buffer.group_values.is_empty() {

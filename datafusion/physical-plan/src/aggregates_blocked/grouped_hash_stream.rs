@@ -25,12 +25,12 @@ use super::aggregate_hash_table::accumulator_phases;
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
-use crate::aggregates::group_values::{
+use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::order::GroupOrderingFull;
-use crate::aggregates::{
+use crate::aggregates_blocked::order::GroupOrderingFull;
+use crate::aggregates_blocked::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     aggregate_metric_label, create_schema, evaluate_group_by, evaluate_optional,
     group_id_array, max_duplicate_ordinal,
@@ -39,7 +39,7 @@ use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutpu
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::EmptyRecordBatchStream;
-use crate::{PhysicalExpr, aggregates, metrics};
+use crate::{PhysicalExpr, aggregates_blocked, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
@@ -426,13 +426,13 @@ impl GroupedHashAggregateStream {
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
-        let aggregate_arguments = aggregates::aggregate_expressions(
+        let aggregate_arguments = aggregates_blocked::aggregate_expressions(
             &agg.aggr_expr,
             &agg.mode,
             agg_group_by.num_group_exprs(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
-        let merging_aggregate_arguments = aggregates::aggregate_expressions(
+        let merging_aggregate_arguments = aggregates_blocked::aggregate_expressions(
             &agg.aggr_expr,
             &AggregateMode::Final,
             agg_group_by.num_group_exprs(),

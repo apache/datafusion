@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::GroupValues;
 use arrow::array::{Array, ArrayRef};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;

@@ -35,7 +35,7 @@ use super::AggregateExec;
 use super::aggregate_hash_table::{
     FinalMarker, OrderedAggregateTable, OrderedAggregateTableMetrics,
 };
-use crate::aggregates::AggregateMode;
+use crate::aggregates_blocked::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -275,7 +275,7 @@ impl OrderedFinalAggregateStream {
         Self::new_with_input(agg, context, partition, input, &agg.input_order_mode)
     }
 
-    pub(in crate::aggregates) fn new_with_input(
+    pub(in crate::aggregates_blocked) fn new_with_input(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
@@ -314,7 +314,7 @@ impl OrderedFinalAggregateStream {
     /// Builds the stream with the reservation of its logical aggregate operator.
     /// Replay callers pass a sibling of the reservation used by the merge input,
     /// keeping both components under one memory-consumer registration.
-    pub(in crate::aggregates) fn new_with_input_and_metrics(
+    pub(in crate::aggregates_blocked) fn new_with_input_and_metrics(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,

@@ -27,28 +27,28 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{
+use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::grouped_hash_stream::create_group_accumulator;
-use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{
+use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
+use crate::aggregates_blocked::order::GroupOrdering;
+use crate::aggregates_blocked::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
 };
 
 use super::AggregateTableMetrics;
 
 /// Marker for raw rows -> partial state aggregation.
-pub(in crate::aggregates) struct PartialMarker;
+pub(in crate::aggregates_blocked) struct PartialMarker;
 /// Marker for raw rows -> final value aggregation.
-pub(in crate::aggregates) struct SingleMarker;
+pub(in crate::aggregates_blocked) struct SingleMarker;
 /// Marker for partial state -> partial state aggregation.
-pub(in crate::aggregates) struct PartialReduceMarker;
+pub(in crate::aggregates_blocked) struct PartialReduceMarker;
 /// Marker for raw rows -> partial state conversion without aggregation.
-pub(in crate::aggregates) struct PartialSkipMarker;
+pub(in crate::aggregates_blocked) struct PartialSkipMarker;
 /// Marker for partial state -> final value aggregation.
-pub(in crate::aggregates) struct FinalMarker;
+pub(in crate::aggregates_blocked) struct FinalMarker;
 
 /// Grouped hash table shared by the partial and final paths.
 ///
@@ -76,7 +76,7 @@ pub(in crate::aggregates) struct FinalMarker;
 ///
 /// It is a zero-sized compile-time marker, so each stage keeps its update logic
 /// in a separate impl block, to make the behavior difference explicit.
-pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
+pub(in crate::aggregates_blocked) struct AggregateHashTable<AggrMode> {
     /// Grouping and accumulator-specific timing metrics.
     pub(super) group_by_metrics: GroupByMetrics,
 
@@ -296,7 +296,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         Ok(batch)
     }
 
-    pub(in crate::aggregates) fn memory_size(&self) -> usize {
+    pub(in crate::aggregates_blocked) fn memory_size(&self) -> usize {
         match &self.state {
             AggregateHashTableState::Building(state)
             | AggregateHashTableState::Outputting(state) => {
@@ -317,7 +317,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 
     /// Returns the number of distinct groups accumulated so far.
-    pub(in crate::aggregates) fn building_group_count(&self) -> usize {
+    pub(in crate::aggregates_blocked) fn building_group_count(&self) -> usize {
         self.state.building().group_values.len()
     }
 
@@ -327,7 +327,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Unlike normal single aggregation output, this materializes intermediate
     /// states rather than final values. The states can therefore be merged after
     /// spilling without finalizing the same group more than once.
-    pub(in crate::aggregates) fn take_state_batch(
+    pub(in crate::aggregates_blocked) fn take_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
@@ -359,11 +359,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         Ok(Some(batch))
     }
 
-    pub(in crate::aggregates) fn is_building(&self) -> bool {
+    pub(in crate::aggregates_blocked) fn is_building(&self) -> bool {
         matches!(self.state, AggregateHashTableState::Building(_))
     }
 
-    pub(in crate::aggregates) fn is_done(&self) -> bool {
+    pub(in crate::aggregates_blocked) fn is_done(&self) -> bool {
         matches!(self.state, AggregateHashTableState::Done)
     }
 

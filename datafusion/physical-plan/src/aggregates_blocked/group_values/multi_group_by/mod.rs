@@ -27,8 +27,8 @@ pub mod row_backed;
 
 use std::mem::{self, size_of};
 
-use crate::aggregates::group_values::GroupValues;
-use crate::aggregates::group_values::multi_group_by::{
+use crate::aggregates_blocked::group_values::GroupValues;
+use crate::aggregates_blocked::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder,
     fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
@@ -64,7 +64,7 @@ const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 /// (similar to various builders in Arrow-rs) that allow for quick comparison to
 /// incoming rows.
 ///
-/// [`GroupValuesColumn`]: crate::aggregates::group_values::GroupValuesColumn
+/// [`GroupValuesColumn`]: crate::aggregates_blocked::group_values::GroupValuesColumn
 pub trait GroupColumn: Send + Sync {
     /// Returns equal if the row stored in this builder at `lhs_row` is equal to
     /// the row in `array` at `rhs_row`
@@ -219,7 +219,7 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// more general purpose [`GroupValuesRows`]. See the ticket for details:
     /// <https://github.com/apache/datafusion/pull/12269>
     ///
-    /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
+    /// [`GroupValuesRows`]: crate::aggregates_blocked::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes
@@ -289,7 +289,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             map_size: 0,
             group_values,
             hashes_buffer: Default::default(),
-            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            random_state: crate::aggregates_blocked::AGGREGATION_HASH_SEED,
         })
     }
 
@@ -925,7 +925,7 @@ macro_rules! instantiate_primitive {
 /// [`GroupColumn`] builder in [`make_group_column`].
 ///
 /// This is the allow-list that gates the `GroupValuesRows` fallback in
-/// [`crate::aggregates::group_values::new_group_values`]: it must accept
+/// [`crate::aggregates_blocked::group_values::new_group_values`]: it must accept
 /// exactly the set of types that [`make_group_column`] constructs a
 /// builder for. The `group_column_supported_type_matches_make_group_column`
 /// test below pins this biconditional.
@@ -1353,7 +1353,7 @@ mod tests {
     use datafusion_common::utils::proxy::HashTableAllocExt;
     use datafusion_expr::EmitTo;
 
-    use crate::aggregates::group_values::{
+    use crate::aggregates_blocked::group_values::{
         GroupValues, multi_group_by::GroupValuesColumn,
     };
 
@@ -1372,7 +1372,7 @@ mod tests {
     /// column-wise path now uses less memory than the all-rows fallback.
     #[test]
     fn mixed_schema_column_path_uses_less_memory_than_rows_fallback() {
-        use crate::aggregates::group_values::GroupValuesRows;
+        use crate::aggregates_blocked::group_values::GroupValuesRows;
         use arrow::array::{FixedSizeListArray, Int64Array};
         use arrow::datatypes::Int64Type;
 
@@ -1496,7 +1496,7 @@ mod tests {
     /// jointly by hashing and the row format.
     #[test]
     fn nested_float_edge_cases_match_rows_fallback() {
-        use crate::aggregates::group_values::GroupValuesRows;
+        use crate::aggregates_blocked::group_values::GroupValuesRows;
         use arrow::array::{FixedSizeListArray, Float64Array};
 
         let item = Arc::new(Field::new("item", DataType::Float64, true));
@@ -1553,7 +1553,7 @@ mod tests {
     /// Equivalence across multiple `intern` batches and `EmitTo::First(n)`.
     #[test]
     fn multi_batch_and_emit_first_matches_rows_fallback() {
-        use crate::aggregates::group_values::GroupValuesRows;
+        use crate::aggregates_blocked::group_values::GroupValuesRows;
         use arrow::array::{FixedSizeListArray, Int32Array};
         use arrow::datatypes::Int32Type;
 
