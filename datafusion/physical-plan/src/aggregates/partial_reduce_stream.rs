@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
@@ -349,19 +349,6 @@ impl PartialReduceHashAggregateStream {
         };
 
         let (output_batch, next_state) = if batch.num_rows() <= self.batch_size {
-            // Last batch to output: the emitted states are no longer held by this
-            // stream, so the reservation can now drop to the emptied table's size.
-            let table_size = hash_table.memory_size();
-            let reserved = self.reservation.size();
-            if let Err(e) = self.reservation.try_resize(table_size) {
-                // The reservation only shrinks here, which cannot fail.
-                return Self::break_with_err(internal_datafusion_err!(
-                    "Partial-reduce hash aggregate failed to update its memory \
-                     reservation ({reserved} bytes) to the emptied table size \
-                     ({table_size} bytes) after early emission: {e}"
-                ));
-            }
-
             // Go back to `ReadingInput`
             (
                 batch,
