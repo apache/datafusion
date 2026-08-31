@@ -72,17 +72,28 @@ pub trait ExprSchemable {
 }
 
 /// Derives the output field for a cast expression from the source field.
+///
+/// The cast target's metadata is authoritative when it carries any; otherwise the
+/// source's metadata is inherited. This mirrors the physical `CastExpr`, whose
+/// target field is already authoritative when it is not the synthesized type-only
+/// field.
+///
 /// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
 fn cast_output_field(
     source_field: &FieldRef,
-    target_type: &DataType,
+    target_field: &FieldRef,
     force_nullable: bool,
 ) -> Arc<Field> {
+    let metadata = if target_field.metadata().is_empty() {
+        source_field.metadata().clone()
+    } else {
+        target_field.metadata().clone()
+    };
     let mut f = source_field
         .as_ref()
         .clone()
-        .with_data_type(target_type.clone())
-        .with_metadata(source_field.metadata().clone());
+        .with_data_type(target_field.data_type().clone())
+        .with_metadata(metadata);
     if force_nullable {
         f = f.with_nullable(true);
     }
@@ -623,20 +634,16 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), false)
-                })
-            }
+            Expr::Cast(Cast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, false)),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
-            Expr::TryCast(TryCast { expr, field }) => {
-                expr.to_field(schema).map(|(_table_ref, src)| {
-                    cast_output_field(&src, field.data_type(), true)
-                })
-            }
+            Expr::TryCast(TryCast { expr, field }) => expr
+                .to_field(schema)
+                .map(|(_table_ref, src)| cast_output_field(&src, field, true)),
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
@@ -1426,5 +1433,58 @@ mod tests {
         let schema = MockExprSchema::new();
 
         assert_eq!(meta, expr.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_cast_output_field_metadata() {
+        use crate::expr::{Cast, TryCast};
+
+        let source_meta =
+            HashMap::from([("source_key".to_string(), "source_value".to_string())]);
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::FixedSizeBinary(16))
+            .with_metadata(FieldMetadata::from(source_meta.clone()));
+
+        // A target field carrying metadata is authoritative: the source metadata
+        // does not leak into the output.
+        let target_meta =
+            HashMap::from([("target_key".to_string(), "target_value".to_string())]);
+        let target =
+            Arc::new(Field::new("", DataType::Utf8, true).with_metadata(target_meta));
+
+        for expr in [
+            Expr::Cast(Cast::new_from_field(
+                Box::new(col("foo")),
+                Arc::clone(&target),
+            )),
+            Expr::TryCast(TryCast::new_from_field(
+                Box::new(col("foo")),
+                Arc::clone(&target),
+            )),
+        ] {
+            let field = expr.to_field(&schema).unwrap().1;
+            assert_eq!(
+                field.metadata().get("target_key"),
+                Some(&"target_value".to_string())
+            );
+            assert!(field.metadata().get("source_key").is_none());
+        }
+
+        // A target field with no metadata inherits the source's, preserving the
+        // long-standing behaviour of a plain `CAST(expr AS type)`.
+        let bare = Arc::new(Field::new("", DataType::Utf8, true));
+        for expr in [
+            Expr::Cast(Cast::new_from_field(
+                Box::new(col("foo")),
+                Arc::clone(&bare),
+            )),
+            Expr::TryCast(TryCast::new_from_field(
+                Box::new(col("foo")),
+                Arc::clone(&bare),
+            )),
+        ] {
+            let field = expr.to_field(&schema).unwrap().1;
+            assert_eq!(field.metadata(), &source_meta);
+        }
     }
 }
