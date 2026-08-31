@@ -935,6 +935,7 @@ fn generate_list_utf8_batches(
 fn bench_list_int(c: &mut Criterion) {
     let mut group = c.benchmark_group("list_int");
     group.sample_size(15);
+    group.measurement_time(std::time::Duration::from_secs(10));
 
     let schema = make_list_int_schema();
 
@@ -975,6 +976,7 @@ fn bench_list_int(c: &mut Criterion) {
 fn bench_list_utf8(c: &mut Criterion) {
     let mut group = c.benchmark_group("list_utf8");
     group.sample_size(15);
+    group.measurement_time(std::time::Duration::from_secs(10));
 
     let schema = make_list_utf8_schema();
 
