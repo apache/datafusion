@@ -54,7 +54,7 @@ use datafusion_expr::{
     TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
-use std::{sync::Arc, vec};
+use std::{collections::HashSet, sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -451,6 +451,24 @@ impl Unparser<'_> {
         }
     }
 
+    /// Return the alias recursion would assign when `plan` must become a
+    /// derived relation below an already rendered projection.
+    fn derived_input_alias(plan: &LogicalPlan) -> Option<&'static str> {
+        match plan {
+            LogicalPlan::Projection(_) => Some("derived_projection"),
+            LogicalPlan::Limit(_) => Some("derived_limit"),
+            LogicalPlan::Sort(_) => Some("derived_sort"),
+            LogicalPlan::Distinct(_) => Some("derived_distinct"),
+            LogicalPlan::Filter(filter) => {
+                Self::derived_input_alias(filter.input.as_ref())
+            }
+            LogicalPlan::Repartition(repartition) => {
+                Self::derived_input_alias(repartition.input.as_ref())
+            }
+            _ => None,
+        }
+    }
+
     fn contains_aggregate_before_relation(plan: &LogicalPlan) -> bool {
         match plan {
             LogicalPlan::Aggregate(_) => true,
@@ -828,6 +846,61 @@ impl Unparser<'_> {
                         }),
                         columns,
                     );
+                }
+
+                let qualified_projection = p.expr.iter().try_fold(false, |found, expr| {
+                    if found {
+                        Ok(true)
+                    } else {
+                        expr.exists(|expr| {
+                            Ok(matches!(expr, Expr::Column(column) if column.relation.is_some()))
+                        })
+                    }
+                })?;
+                let mut input_names = HashSet::new();
+                let unique_input_names = p
+                    .input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .all(|field| input_names.insert(field.name()));
+                if let Some(input_alias) = Self::derived_input_alias(p.input.as_ref())
+                    && qualified_projection
+                    && unique_input_names
+                    && find_unnest_node_within_select(plan).is_none()
+                    && !select.inside_subquery_alias()
+                {
+                    // The input is about to enter a new SQL scope. Preserve that
+                    // boundary explicitly and make the outer expressions resolve
+                    // against the relation that will actually be visible there.
+                    let requires_alias = self.dialect.requires_derived_table_alias();
+                    let alias = requires_alias
+                        .then(|| self.new_table_alias(input_alias.to_string(), vec![]));
+                    self.derive(p.input.as_ref(), relation, alias, false)?;
+
+                    let items = p
+                        .expr
+                        .iter()
+                        .cloned()
+                        .map(|expr| {
+                            if requires_alias {
+                                let mut alias_rewriter = TableAliasRewriter {
+                                    table_schema: p.input.schema().as_ref(),
+                                    alias_name: TableReference::bare(input_alias),
+                                    rewrite_unqualified: false,
+                                };
+                                expr.rewrite(&mut alias_rewriter).data()
+                            } else {
+                                Self::strip_column_qualifiers_for_schema(
+                                    expr,
+                                    p.input.schema().as_ref(),
+                                )
+                            }
+                        })
+                        .map(|expr| self.select_item_to_sql(&expr?))
+                        .collect::<Result<Vec<_>>>()?;
+                    select.projection(items);
+                    return Ok(());
                 }
                 // For Snowflake FLATTEN: when the outer Projection has
                 // UNNEST(...) display-name columns (from SELECT * / SELECT
@@ -1537,7 +1610,8 @@ impl Unparser<'_> {
                     )]);
                 }
                 let plan = unparsed_table_scan.unwrap_or_else(|| plan.clone());
-                if !columns.is_empty()
+                select.enter_subquery_alias();
+                let recursive_result = if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
                     // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
@@ -1558,10 +1632,12 @@ impl Unparser<'_> {
                         query,
                         select,
                         relation,
-                    )?;
+                    )
                 } else {
-                    self.select_to_sql_recursively(&plan, query, select, relation)?;
-                }
+                    self.select_to_sql_recursively(&plan, query, select, relation)
+                };
+                select.exit_subquery_alias();
+                recursive_result?;
 
                 relation.alias(Some(
                     self.new_table_alias(plan_alias.alias.table().to_string(), columns),
