@@ -28,11 +28,11 @@
 //! `offsets[i+1] == offsets[i]`). No child slots are pushed for null rows.
 
 use crate::aggregates::group_values::multi_group_by::{GroupColumn, nulls_equal_to};
-use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait,
-    as_generic_list_array,
+    Array, ArrayRef, BooleanBufferBuilder, GenericListArray, NullBufferBuilder,
+    OffsetSizeTrait, as_generic_list_array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::FieldRef;
@@ -46,7 +46,7 @@ pub struct ListGroupValueBuilder<O: OffsetSizeTrait> {
     field: FieldRef,
     offsets: Vec<O>,
     child: Box<dyn GroupColumn>,
-    outer_nulls: MaybeNullBufferBuilder,
+    outer_nulls: NullBufferBuilder,
     outer_len: usize,
 }
 
@@ -56,7 +56,7 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
             field,
             offsets: vec![O::usize_as(0)],
             child,
-            outer_nulls: MaybeNullBufferBuilder::new(),
+            outer_nulls: NullBufferBuilder::empty(),
             outer_len: 0,
         }
     }
@@ -116,13 +116,13 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
         row: usize,
     ) -> Result<()> {
         if array.is_null(row) {
-            self.outer_nulls.append(true);
+            self.outer_nulls.append_null();
             // Zero-length range for null outer rows: do not push any child
             // elements, and the offset for the next row stays the same.
             let end = self.current_end();
             self.offsets.push(end);
         } else {
-            self.outer_nulls.append(false);
+            self.outer_nulls.append_non_null();
             let sublist: ArrayRef = array.value(row);
             let n = sublist.len();
             for j in 0..n {
