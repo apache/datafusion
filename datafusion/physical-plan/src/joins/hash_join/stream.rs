@@ -888,13 +888,28 @@ impl HashJoinStream {
             (left_indices, right_indices)
         };
 
-        // mark joined left-side indices as visited, if required by join type
+        // Mark joined build-side indices as visited, if the join type tracks
+        // them. A semi join emits a build row the first time it matches, so
+        // collect the rows whose bit flips here and emit those.
+        let mut first_matched = None;
         if need_produce_result_in_final(self.join_type) {
             let mut bitmap = build_side.left_data.visited_indices_bitmap().lock();
-            left_indices.iter().flatten().for_each(|x| {
-                bitmap.set_bit(x as usize, true);
-            });
+            if self.join_type == JoinType::LeftSemi {
+                let mut matched = Vec::new();
+                for index in left_indices.iter().flatten() {
+                    if !bitmap.get_bit(index as usize) {
+                        bitmap.set_bit(index as usize, true);
+                        matched.push(index);
+                    }
+                }
+                first_matched = Some(UInt64Array::from(matched));
+            } else {
+                left_indices.iter().flatten().for_each(|x| {
+                    bitmap.set_bit(x as usize, true);
+                });
+            }
         }
+        let semi_matched = first_matched;
 
         // The goals of index alignment for different join types are:
         //
@@ -927,13 +942,18 @@ impl HashJoinStream {
             last_joined_right_idx.map_or(0, |v| v + 1)
         };
 
-        let (left_indices, mut right_indices) = adjust_indices_by_join_type(
-            left_indices,
-            right_indices,
-            index_alignment_range_start..index_alignment_range_end,
-            self.join_type,
-            self.right_side_ordered,
-        )?;
+        let (left_indices, mut right_indices) = match semi_matched {
+            // A semi join emits each build row once, the first time it matches,
+            // so there is nothing left to align or to produce at the end.
+            Some(matched) => (matched, UInt32Array::from_iter_values(vec![])),
+            None => adjust_indices_by_join_type(
+                left_indices,
+                right_indices,
+                index_alignment_range_start..index_alignment_range_end,
+                self.join_type,
+                self.right_side_ordered,
+            )?,
+        };
 
         // If null-aware RightAnti join, we don't want to emit NULL probe keys
         if self.join_type == JoinType::RightAnti && self.null_aware {
@@ -1006,7 +1026,10 @@ impl HashJoinStream {
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let timer = self.join_metrics.join_time.timer();
 
-        if !need_produce_result_in_final(self.join_type) {
+        // `LeftSemi` has already emitted its matched rows while probing.
+        if !need_produce_result_in_final(self.join_type)
+            || self.join_type == JoinType::LeftSemi
+        {
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
         }
