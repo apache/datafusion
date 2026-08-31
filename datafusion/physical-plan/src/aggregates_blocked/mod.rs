@@ -175,7 +175,7 @@ use crate::{
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
 use std::collections::HashSet;
-
+use std::ops::Deref;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
@@ -419,6 +419,9 @@ pub struct BlockedAggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+
+    /// Fallback aggregate exec to be used in case not supported
+    fallback_agg_exec: Arc<crate::aggregates::AggregateExec>,
 }
 
 impl BlockedAggregateExec {
@@ -429,8 +432,10 @@ impl BlockedAggregateExec {
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
     ) -> Self {
+        let aggr_expr = aggr_expr.into();
+        let fallback_agg_exec = Arc::new(self.fallback_agg_exec.deref().clone().with_new_aggr_exprs(aggr_expr.clone()));
         Self {
-            aggr_expr: aggr_expr.into(),
+            aggr_expr,
             // clone the rest of the fields
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
@@ -444,11 +449,14 @@ impl BlockedAggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            fallback_agg_exec,
         }
     }
 
     /// Clone this exec, overriding only the limit hint.
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
+        let fallback_agg_exec = Arc::new(self.fallback_agg_exec.deref().clone().with_new_limit_options(limit_options));
+
         Self {
             limit_options,
             // clone the rest of the fields
@@ -464,6 +472,7 @@ impl BlockedAggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            fallback_agg_exec,
         }
     }
 
@@ -481,7 +490,19 @@ impl BlockedAggregateExec {
         input_schema: SchemaRef,
     ) -> Result<Self> {
         let group_by = group_by.into();
+
+        let fallback_agg_exec = crate::aggregates::AggregateExec::actual_try_new(
+            mode,
+            Arc::clone(&group_by),
+            aggr_expr.clone(),
+            filter_expr.clone(),
+            Arc::clone(&input),
+            Arc::clone(&input_schema),
+        )?;
+
         let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
+
+
 
         let schema = Arc::new(schema);
         BlockedAggregateExec::try_new_with_schema(
@@ -492,6 +513,7 @@ impl BlockedAggregateExec {
             input,
             input_schema,
             schema,
+            fallback_agg_exec
         )
     }
 
@@ -511,6 +533,7 @@ impl BlockedAggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
+        fallback_agg_exec: crate::aggregates::AggregateExec,
     ) -> Result<Self> {
         let group_by = group_by.into();
         let filter_expr = filter_expr.into();
@@ -609,6 +632,7 @@ impl BlockedAggregateExec {
             input_order_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
+            fallback_agg_exec: Arc::new(fallback_agg_exec),
         };
 
         exec.init_dynamic_filter();
@@ -624,6 +648,7 @@ impl BlockedAggregateExec {
     /// Set the limit options for this AggExec
     pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
         self.limit_options = limit_options;
+        self.fallback_agg_exec = Arc::new(self.fallback_agg_exec.as_ref().clone().with_limit_options(limit_options));
         self
     }
 
@@ -684,6 +709,8 @@ impl BlockedAggregateExec {
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
+        self.fallback_agg_exec = Arc::new(self.fallback_agg_exec.as_ref().clone().set_dynamic_filter(Arc::clone(&filter))?);
+
         // If there is no dynamic filter state initialized via `try_new`, then
         // we can safely assume that the aggregate does not support dynamic filtering.
         let Some(dyn_filter) = self.dynamic_filter.as_ref() else {
@@ -1655,10 +1682,13 @@ impl ExecutionPlan for BlockedAggregateExec {
         options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
+        let fallback = Arc::clone(&self.fallback_agg_exec).replace_children(children.clone(), options.clone())?;
+        let fallback = fallback.downcast_ref::<crate::aggregates::AggregateExec>().expect("must have AggregateExec").clone();
         match options.children_properties {
             ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
+                fallback_agg_exec: Arc::new(fallback),
                 ..Self::clone(&*self)
             })),
             ChildrenPropertiesMode::Recompute => {
@@ -1670,6 +1700,7 @@ impl ExecutionPlan for BlockedAggregateExec {
                     Arc::clone(&children[0]),
                     Arc::clone(&self.input_schema),
                     Arc::clone(&self.schema),
+                    fallback,
                 )?;
                 me.limit_options = self.limit_options;
                 me.dynamic_filter.clone_from(&self.dynamic_filter);
@@ -1852,6 +1883,7 @@ impl ExecutionPlan for BlockedAggregateExec {
                 // to `None`
                 let mut new_node = self.clone();
                 new_node.dynamic_filter = None;
+                new_node.fallback_agg_exec = Arc::new(new_node.fallback_agg_exec.as_ref().clone().unset_dynamic_filter());
 
                 result = result
                     .with_updated_node(Arc::new(new_node) as Arc<dyn ExecutionPlan>);
@@ -1891,6 +1923,7 @@ impl ExecutionPlan for BlockedAggregateExec {
             // Derived at construction by `Self::compute_properties`.
             cache: _,
             dynamic_filter,
+            fallback_agg_exec: _,
         } = self;
 
         let input = ctx.encode_child(input)?;
@@ -2215,6 +2248,15 @@ impl BlockedAggregateExec {
             PhysicalGroupBy::new(group_expr, null_expr, groups, *has_grouping_set);
         let aggregate = if let Some(schema) = schema {
             let schema = SchemaRef::new(schema.try_into()?);
+            let fallback = crate::aggregates::AggregateExec::try_new_with_schema(
+                mode,
+                group_by.clone(),
+                aggr_expr.clone(),
+                filter_expr.clone(),
+                Arc::clone(&input),
+                Arc::clone(&input_schema),
+                Arc::clone(&schema),
+            )?;
             BlockedAggregateExec::try_new_with_schema(
                 mode,
                 group_by,
@@ -2223,6 +2265,7 @@ impl BlockedAggregateExec {
                 input,
                 Arc::clone(&input_schema),
                 schema,
+                fallback,
             )
         } else {
             BlockedAggregateExec::try_new(
@@ -2260,6 +2303,7 @@ impl BlockedAggregateExec {
         } else {
             let mut aggregate = aggregate;
             aggregate.dynamic_filter = None;
+            aggregate.fallback_agg_exec = Arc::new(aggregate.fallback_agg_exec.as_ref().clone().unset_dynamic_filter());
             aggregate
         };
 

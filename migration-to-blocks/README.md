@@ -26,3 +26,9 @@ just to avoid confusion, don't change the exec name so tests will still pass
 
 this is so all tests in the codebase will use the blocked aggregate already and so any bugs will surface.
 keeping the tests in `aggregate` module call `actual_try_new` is ok since those tests are also exists in the blocked version where it is against the new exec
+
+### 5. Add `fallback_agg` to `BlockedAggregateExec` so when trying to migrate and some are still unsupported we can use that
+
+make sure that when `BlockedAggregateExec` the underlying `fallback_agg` also updates
+
+this is so the next steps of migrating streams one by one will be easier

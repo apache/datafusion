@@ -989,7 +989,7 @@ impl AggregateExec {
     /// a rule may re-write aggregate expressions (e.g. reverse them) during
     /// initialization, field names may change inadvertently if one re-creates
     /// the schema in such cases.
-    fn try_new_with_schema(
+    pub(crate) fn try_new_with_schema(
         mode: AggregateMode,
         group_by: impl Into<Arc<PhysicalGroupBy>>,
         mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
@@ -1166,7 +1166,7 @@ impl AggregateExec {
     ///
     /// Only used to restore the filter when decoding a serialized plan: every
     /// other code path creates the filter in [`AggregateExec::try_new`].
-    fn set_dynamic_filter(
+    pub(crate) fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -1197,6 +1197,12 @@ impl AggregateExec {
             supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
         }));
         Ok(self)
+    }
+
+    pub(crate) fn unset_dynamic_filter(mut self) -> Self {
+        self.dynamic_filter = None;
+
+        self
     }
 
     /// Input plan
