@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Development",
+    "url": "https://datafusion.apache.org/",
+    "version": "main"
+  },
+  {
+    "commit": "d5552342012888b7d1a3ab88d92e3d292fc0cde0",
+    "name": "55.0.0",
+    "tag": "55.0.0",
+    "url": "https://datafusion.apache.org/versions/55.0.0/",
+    "version": "55.0.0"
+  }
+]

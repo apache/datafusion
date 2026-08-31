@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "Apache DataFusion"
 copyright = "2019-2025, Apache Software Foundation"
 author = "Apache Software Foundation"
+version = release = "main"
 
 
 # -- General configuration ---------------------------------------------------
@@ -95,12 +96,18 @@ html_theme_options = {
     },
     "use_edit_page_button": True,
     "navbar_center": [],
-    "navbar_end": ["theme-switcher"],
+    "navbar_end": ["version-switcher", "theme-switcher"],
+    # The persistent production URL is intentionally not fetched at build time.
+    "check_switcher": False,
+    "switcher": {
+        "json_url": "https://datafusion.apache.org/_static/versions.json",
+        "version_match": version,
+    },
 }
 
 html_context = {
     "github_user": "apache",
-    "github_repo": "arrow-datafusion",
+    "github_repo": "datafusion",
     "github_version": "main",
     "doc_path": "docs/source",
 }
