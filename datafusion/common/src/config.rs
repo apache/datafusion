@@ -1112,11 +1112,8 @@ config_namespace! {
         /// We plan to make this the default in the future.
         pub use_row_number_estimates_to_optimize_partitioning: bool, default = false
 
-        /// Should DataFusion enforce batch size in joins or not. By default,
-        /// DataFusion will not enforce batch size in joins. Enforcing batch size
-        /// in joins can reduce memory usage when joining large
-        /// tables with a highly-selective join filter, but is also slightly slower.
-        pub enforce_batch_size_in_joins: bool, default = false
+        /// (Deprecated) Ignored: Symmetric Hash Join always splits output incrementally to `batch_size`. This setting is accepted for compatibility and will be removed in a future release.
+        pub enforce_batch_size_in_joins: bool, warn = "`enforce_batch_size_in_joins` is deprecated and ignored; Symmetric Hash Join always enforces batch size", default = false
 
         /// Size (bytes) of data buffer DataFusion uses when writing output files.
         /// This affects the size of the data chunks that are uploaded to remote

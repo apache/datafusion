@@ -41,7 +41,7 @@ use crate::joins::stream_join_utils::{
 };
 use crate::joins::utils::{
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
-    JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
+    JoinOnRef, StatefulStreamResult, apply_join_filter_to_indices,
     build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
     matchable_join_keys, symmetric_join_output_partitioning, update_hash,
 };
@@ -567,8 +567,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let right_stream = self.right.execute(partition, Arc::clone(&context))?;
 
         let batch_size = context.session_config().batch_size();
-        let enforce_batch_size_in_joins =
-            context.session_config().enforce_batch_size_in_joins();
 
         let reservation = Arc::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
@@ -578,47 +576,25 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             reservation.try_grow(g.size())?;
         }
 
-        if enforce_batch_size_in_joins {
-            Ok(Box::pin(SymmetricHashJoinStream {
-                left_stream,
-                right_stream,
-                schema: self.schema(),
-                filter: self.filter.clone(),
-                join_type: self.join_type,
-                random_state: self.random_state.clone(),
-                left: left_side_joiner,
-                right: right_side_joiner,
-                column_indices: self.column_indices.clone(),
-                metrics: StreamJoinMetrics::new(partition, &self.metrics),
-                graph,
-                left_sorted_filter_expr,
-                right_sorted_filter_expr,
-                null_equality: self.null_equality,
-                state: SHJStreamState::PullRight,
-                reservation,
-                batch_transformer: BatchSplitter::new(batch_size),
-            }))
-        } else {
-            Ok(Box::pin(SymmetricHashJoinStream {
-                left_stream,
-                right_stream,
-                schema: self.schema(),
-                filter: self.filter.clone(),
-                join_type: self.join_type,
-                random_state: self.random_state.clone(),
-                left: left_side_joiner,
-                right: right_side_joiner,
-                column_indices: self.column_indices.clone(),
-                metrics: StreamJoinMetrics::new(partition, &self.metrics),
-                graph,
-                left_sorted_filter_expr,
-                right_sorted_filter_expr,
-                null_equality: self.null_equality,
-                state: SHJStreamState::PullRight,
-                reservation,
-                batch_transformer: NoopBatchTransformer::new(),
-            }))
-        }
+        Ok(Box::pin(SymmetricHashJoinStream {
+            left_stream,
+            right_stream,
+            schema: self.schema(),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            random_state: self.random_state.clone(),
+            left: left_side_joiner,
+            right: right_side_joiner,
+            column_indices: self.column_indices.clone(),
+            metrics: StreamJoinMetrics::new(partition, &self.metrics),
+            graph,
+            left_sorted_filter_expr,
+            right_sorted_filter_expr,
+            null_equality: self.null_equality,
+            state: SHJStreamState::PullRight,
+            reservation,
+            batch_transformer: BatchSplitter::new(batch_size),
+        }))
     }
 
     /// Tries to swap the projection with its input [`SymmetricHashJoinExec`]. If it can be done,
@@ -2136,6 +2112,7 @@ mod tests {
         join_expr_tests_fixture_temporal, partitioned_hash_join_with_filter,
         partitioned_sym_join_with_filter, split_record_batches,
     };
+    use crate::joins::utils::NoopBatchTransformer;
     use crate::test::TestMemoryExec;
     use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::compute::SortOptions;
@@ -2501,34 +2478,23 @@ mod tests {
         )
     }
 
-    fn transformer_lifecycle_test_context(
-        runtime: Arc<RuntimeEnv>,
-        enforce_batch_size_in_joins: bool,
-    ) -> Arc<TaskContext> {
+    fn transformer_lifecycle_test_context(runtime: Arc<RuntimeEnv>) -> Arc<TaskContext> {
         Arc::new(
             TaskContext::default()
-                .with_session_config(
-                    SessionConfig::new()
-                        .with_batch_size(3)
-                        .with_enforce_batch_size_in_joins(enforce_batch_size_in_joins),
-                )
+                .with_session_config(SessionConfig::new().with_batch_size(3))
                 .with_runtime(runtime),
         )
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn symmetric_hash_join_updates_reservation_while_transforming_output(
-        #[values(false, true)] enforce_batch_size_in_joins: bool,
-    ) -> Result<()> {
+    async fn symmetric_hash_join_updates_reservation_while_transforming_output()
+    -> Result<()> {
         let pool = Arc::new(RecordingMemoryPool::default());
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
             .build_arc()?;
-        let mut stream = transformer_lifecycle_test_join()?.execute(
-            0,
-            transformer_lifecycle_test_context(runtime, enforce_batch_size_in_joins),
-        )?;
+        let mut stream = transformer_lifecycle_test_join()?
+            .execute(0, transformer_lifecycle_test_context(runtime))?;
 
         let first_batch = stream.next().await.transpose()?.unwrap();
         let retained_batch_size = first_batch.get_array_memory_size() as isize;
@@ -2537,28 +2503,17 @@ mod tests {
             changes_after_first_batch.contains(&retained_batch_size),
             "expected transformer retain reservation update: {changes_after_first_batch:?}"
         );
-        if enforce_batch_size_in_joins {
-            assert!(
-                !changes_after_first_batch.contains(&-retained_batch_size),
-                "splitter must retain the output batch after a non-final slice: {changes_after_first_batch:?}"
-            );
-        } else {
-            assert!(
-                changes_after_first_batch
-                    .windows(2)
-                    .any(|changes| changes == [retained_batch_size, -retained_batch_size]),
-                "expected Noop transformer release after emission: {changes_after_first_batch:?}"
-            );
-        }
+        assert!(
+            !changes_after_first_batch.contains(&-retained_batch_size),
+            "splitter must retain the output batch after a non-final slice: {changes_after_first_batch:?}"
+        );
 
         let remaining_batches = crate::common::collect(stream).await?;
         let changes_after_completion = pool.change_deltas();
-        if enforce_batch_size_in_joins {
-            assert!(
-                changes_after_completion.contains(&-retained_batch_size),
-                "expected splitter release after final slice: {changes_after_completion:?}"
-            );
-        }
+        assert!(
+            changes_after_completion.contains(&-retained_batch_size),
+            "expected splitter release after final slice: {changes_after_completion:?}"
+        );
         let output_rows = first_batch.num_rows()
             + remaining_batches
                 .iter()
@@ -2568,41 +2523,27 @@ mod tests {
         Ok(())
     }
 
-    #[rstest]
     #[tokio::test]
-    async fn symmetric_hash_join_transformer_retention_exhausts_bounded_pool(
-        #[values(false, true)] enforce_batch_size_in_joins: bool,
-    ) -> Result<()> {
+    async fn symmetric_hash_join_transformer_retention_exhausts_bounded_pool()
+    -> Result<()> {
         let calibration_pool = Arc::new(RecordingMemoryPool::default());
         let calibration_runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::clone(&calibration_pool) as Arc<dyn MemoryPool>)
             .build_arc()?;
-        let mut calibration_stream = transformer_lifecycle_test_join()?.execute(
-            0,
-            transformer_lifecycle_test_context(
-                calibration_runtime,
-                enforce_batch_size_in_joins,
-            ),
-        )?;
+        let mut calibration_stream = transformer_lifecycle_test_join()?
+            .execute(0, transformer_lifecycle_test_context(calibration_runtime))?;
 
         let first_batch = calibration_stream.next().await.transpose()?.unwrap();
         let retained_size = first_batch.get_array_memory_size() as isize;
         let changes = calibration_pool.change_deltas();
         let retain_index = changes
             .len()
-            .checked_sub(if enforce_batch_size_in_joins { 1 } else { 2 })
+            .checked_sub(1)
             .expect("transformer retain must update the stream reservation");
         assert_eq!(
             changes[retain_index], retained_size,
             "expected transformer retain reservation update: {changes:?}"
         );
-        if !enforce_batch_size_in_joins {
-            assert_eq!(
-                changes.last(),
-                Some(&-retained_size),
-                "Noop must release the retained batch before emitting it: {changes:?}"
-            );
-        }
         let pre_retain_size: isize = changes[..retain_index].iter().sum();
         assert!(
             pre_retain_size > 0,
@@ -2615,10 +2556,8 @@ mod tests {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit((pre_retain_size + retained_size) as usize - 1, 1.0)
             .build_arc()?;
-        let mut stream = transformer_lifecycle_test_join()?.execute(
-            0,
-            transformer_lifecycle_test_context(runtime, enforce_batch_size_in_joins),
-        )?;
+        let mut stream = transformer_lifecycle_test_join()?
+            .execute(0, transformer_lifecycle_test_context(runtime))?;
         let error = stream.next().await.transpose().unwrap_err();
         assert!(
             matches!(error.find_root(), DataFusionError::ResourcesExhausted(_)),

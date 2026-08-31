@@ -471,6 +471,10 @@ impl SessionConfig {
     }
 
     /// Enables or disables the enforcement of batch size in joins
+    #[deprecated(
+        since = "56.0.0",
+        note = "`enforce_batch_size_in_joins` is ignored; Symmetric Hash Join always splits output to `batch_size`"
+    )]
     pub fn with_enforce_batch_size_in_joins(
         mut self,
         enforce_batch_size_in_joins: bool,
@@ -481,6 +485,10 @@ impl SessionConfig {
     }
 
     /// Returns true if the joins will be enforced to output batches of the configured size
+    #[deprecated(
+        since = "56.0.0",
+        note = "`enforce_batch_size_in_joins` is ignored; Symmetric Hash Join always splits output to `batch_size`"
+    )]
     pub fn enforce_batch_size_in_joins(&self) -> bool {
         self.options.execution.enforce_batch_size_in_joins
     }
