@@ -17,12 +17,9 @@
 
 use crate::aggregates_blocked::group_values::GroupValues;
 use arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
-    ListViewArray, MapArray, PrimitiveArray, RunArray, StructArray,
-    downcast_run_end_index,
+    ArrayRef,
 };
-use arrow::compute::cast;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
@@ -33,7 +30,6 @@ use datafusion_expr::EmitTo;
 use hashbrown::hash_table::HashTable;
 use log::debug;
 use std::mem::size_of;
-use std::sync::Arc;
 
 /// A [`GroupValues`] making use of [`Rows`]
 ///
@@ -268,147 +264,4 @@ impl GroupValues for GroupValuesRows {
     }
 }
 
-/// Re-apply dictionary / run-end encoding to `array` so it matches `expected`.
-///
-/// Arrow's [`RowConverter`] flattens dictionary and run-end-encoded values to
-/// their plain value type during row encoding (at [`RowConverter::append`]),
-/// so any group-value array produced from the row format is in that plain
-/// type and must be re-encoded to match the schema's expected type before
-/// being returned. Shared with the generic row-backed `GroupColumn`.
-///
-/// [`RowConverter`]: arrow::row::RowConverter
-/// [`RowConverter::append`]: arrow::row::RowConverter::append
-pub(crate) fn encode_array_if_necessary(
-    array: &ArrayRef,
-    expected: &DataType,
-) -> Result<ArrayRef> {
-    match (expected, array.data_type()) {
-        (DataType::Struct(expected_fields), _) => {
-            let struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
-            let arrays = expected_fields
-                .iter()
-                .zip(struct_array.columns())
-                .map(|(expected_field, column)| {
-                    encode_array_if_necessary(column, expected_field.data_type())
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Arc::new(StructArray::try_new(
-                expected_fields.clone(),
-                arrays,
-                struct_array.nulls().cloned(),
-            )?))
-        }
-        (DataType::List(expected_field), &DataType::List(_)) => {
-            let list = array.as_any().downcast_ref::<ListArray>().unwrap();
-
-            Ok(Arc::new(ListArray::try_new(
-                Arc::<arrow::datatypes::Field>::clone(expected_field),
-                list.offsets().clone(),
-                encode_array_if_necessary(list.values(), expected_field.data_type())?,
-                list.nulls().cloned(),
-            )?))
-        }
-        (DataType::LargeList(expected_field), &DataType::LargeList(_)) => {
-            let list = array.as_any().downcast_ref::<LargeListArray>().unwrap();
-
-            Ok(Arc::new(LargeListArray::try_new(
-                Arc::<arrow::datatypes::Field>::clone(expected_field),
-                list.offsets().clone(),
-                encode_array_if_necessary(list.values(), expected_field.data_type())?,
-                list.nulls().cloned(),
-            )?))
-        }
-        (DataType::ListView(expected_field), &DataType::ListView(_)) => {
-            // arrow-row's `decode_list_view` applies the dictionary-flatten
-            // `corrected_type` to the child, so a `ListView<Dictionary<..>>`
-            // decodes as `ListView<value type>` and the child must be
-            // re-encoded here (same as `List` above, plus the `sizes`
-            // buffer that view-lists carry).
-            let list = array.as_any().downcast_ref::<ListViewArray>().unwrap();
-
-            Ok(Arc::new(ListViewArray::try_new(
-                Arc::<arrow::datatypes::Field>::clone(expected_field),
-                list.offsets().clone(),
-                list.sizes().clone(),
-                encode_array_if_necessary(list.values(), expected_field.data_type())?,
-                list.nulls().cloned(),
-            )?))
-        }
-        (DataType::LargeListView(expected_field), &DataType::LargeListView(_)) => {
-            let list = array.as_any().downcast_ref::<LargeListViewArray>().unwrap();
-
-            Ok(Arc::new(LargeListViewArray::try_new(
-                Arc::<arrow::datatypes::Field>::clone(expected_field),
-                list.offsets().clone(),
-                list.sizes().clone(),
-                encode_array_if_necessary(list.values(), expected_field.data_type())?,
-                list.nulls().cloned(),
-            )?))
-        }
-        (
-            DataType::FixedSizeList(expected_field, expected_size),
-            &DataType::FixedSizeList(_, _),
-        ) => {
-            let list = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-
-            Ok(Arc::new(FixedSizeListArray::try_new(
-                Arc::<arrow::datatypes::Field>::clone(expected_field),
-                *expected_size,
-                encode_array_if_necessary(list.values(), expected_field.data_type())?,
-                list.nulls().cloned(),
-            )?))
-        }
-        (DataType::Map(expected_entries_field, ordered), &DataType::Map(_, _)) => {
-            let map = array.as_any().downcast_ref::<MapArray>().unwrap();
-            // Re-encode the entries `StructArray` (which holds key/value
-            // columns) against the expected entries field's struct type.
-            let entries_as_ref: ArrayRef = Arc::new(map.entries().clone());
-            let entries = encode_array_if_necessary(
-                &entries_as_ref,
-                expected_entries_field.data_type(),
-            )?;
-            let entries = entries
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .expect("Map entries recurse must yield a StructArray")
-                .clone();
-            Ok(Arc::new(MapArray::try_new(
-                Arc::<arrow::datatypes::Field>::clone(expected_entries_field),
-                map.offsets().clone(),
-                entries,
-                map.nulls().cloned(),
-                *ordered,
-            )?))
-        }
-        (DataType::Dictionary(_, _), _) => Ok(cast(array.as_ref(), expected)?),
-        (
-            DataType::RunEndEncoded(run_ends_field, expected_values_field),
-            &DataType::RunEndEncoded(_, _),
-        ) => {
-            macro_rules! reencode_ree {
-                ($run_end_type:ty) => {{
-                    let run_array = array
-                        .as_any()
-                        .downcast_ref::<RunArray<$run_end_type>>()
-                        .unwrap();
-                    let values = encode_array_if_necessary(
-                        &(Arc::clone(run_array.values()) as ArrayRef),
-                        expected_values_field.data_type(),
-                    )?;
-                    let run_ends = PrimitiveArray::<$run_end_type>::new(
-                        run_array.run_ends().inner().clone(),
-                        None,
-                    );
-                    Ok(Arc::new(RunArray::try_new(&run_ends, &values)?))
-                }};
-            }
-            downcast_run_end_index! {
-                run_ends_field.data_type() => (reencode_ree),
-                _ => unreachable!("unsupported run end type: {}", run_ends_field.data_type()),
-            }
-        }
-        (DataType::RunEndEncoded(_, _), _) => Ok(cast(array.as_ref(), expected)?),
-        (_, _) => Ok(Arc::<dyn Array>::clone(array)),
-    }
-}
+pub(crate) use crate::aggregates::group_values::multi_group_by::row_backed::encode_array_if_necessary;

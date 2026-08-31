@@ -83,7 +83,7 @@ impl GroupedTopKAggregateStream {
                 .map(|agg_expr| aggregate_metric_label(agg_expr)),
         );
         let aggregate_arguments =
-            aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
+            aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr().len())?;
 
         let (expr, _) = &aggr.group_expr().expr()[0];
         let kt = expr.data_type(&aggr.input().schema())?;

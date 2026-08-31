@@ -174,11 +174,9 @@ use crate::{
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -188,7 +186,7 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryLimit;
-use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_expr::Accumulator;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
@@ -201,7 +199,6 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 
 use datafusion_expr::utils::AggregateOrderSensitivity;
-use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
@@ -230,433 +227,6 @@ mod topk;
 /// ```text
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
-}
-
-/// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
-    // This seed is chosen to be a large 64-bit number
-    datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
-
-/// Whether an aggregate stage consumes raw input data or intermediate
-/// accumulator state from a previous aggregation stage.
-///
-/// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
-/// for how this relates to aggregate modes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum AggregateInputMode {
-    /// The stage consumes raw, unaggregated input data and calls
-    /// [`Accumulator::update_batch`].
-    Raw,
-    /// The stage consumes intermediate accumulator state from a previous
-    /// aggregation stage and calls [`Accumulator::merge_batch`].
-    Partial,
-}
-
-/// Whether an aggregate stage produces intermediate accumulator state
-/// or final output values.
-///
-/// See the [table on `AggregateMode`](AggregateMode#variants-and-their-inputoutput-modes)
-/// for how this relates to aggregate modes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum AggregateOutputMode {
-    /// The stage produces intermediate accumulator state, serialized via
-    /// [`Accumulator::state`].
-    Partial,
-    /// The stage produces final output values via
-    /// [`Accumulator::evaluate`].
-    Final,
-}
-
-/// Aggregation modes
-///
-/// See [`Accumulator::state`] for background information on multi-phase
-/// aggregation and how these modes are used.
-///
-/// # Variants and their input/output modes
-///
-/// Each variant can be characterized by its [`AggregateInputMode`] and
-/// [`AggregateOutputMode`]:
-///
-/// ```text
-///                       | Input: Raw data           | Input: Partial state
-/// Output: Final values  | Single, SinglePartitioned | Final, FinalPartitioned
-/// Output: Partial state | Partial                   | PartialReduce
-/// ```
-///
-/// Use [`AggregateMode::input_mode`] and [`AggregateMode::output_mode`]
-/// to query these properties.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum AggregateMode {
-    /// One of multiple layers of aggregation, any input partitioning
-    ///
-    /// Partial aggregate that can be applied in parallel across input
-    /// partitions.
-    ///
-    /// This is the first phase of a multi-phase aggregation.
-    Partial,
-    /// *Final* of multiple layers of aggregation, in exactly one partition
-    ///
-    /// Final aggregate that produces a single partition of output by combining
-    /// the output of multiple partial aggregates.
-    ///
-    /// This is the second phase of a multi-phase aggregation.
-    ///
-    /// This mode requires that the input is a single partition
-    ///
-    /// Note: Adjacent `Partial` and `Final` mode aggregation is equivalent to a `Single`
-    /// mode aggregation node. The `Final` mode is required since this is used in an
-    /// intermediate step. The [`CombinePartialFinalAggregate`] physical optimizer rule
-    /// will replace this combination with `Single` mode for more efficient execution.
-    ///
-    /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
-    Final,
-    /// *Final* of multiple layers of aggregation, input is *Partitioned*
-    ///
-    /// Final aggregate that works on pre-partitioned data.
-    ///
-    /// This mode requires that all rows with a particular grouping key are in
-    /// the same partitions, such as is the case with Hash repartitioning on the
-    /// group keys. If a group key is duplicated, duplicate groups would be
-    /// produced
-    FinalPartitioned,
-    /// *Single* layer of Aggregation, input is exactly one partition
-    ///
-    /// Applies the entire logical aggregation operation in a single operator,
-    /// as opposed to Partial / Final modes which apply the logical aggregation using
-    /// two operators.
-    ///
-    /// This mode requires that the input is a single partition (like Final)
-    Single,
-    /// *Single* layer of Aggregation, input is *Partitioned*
-    ///
-    /// Applies the entire logical aggregation operation in a single operator,
-    /// as opposed to Partial / Final modes which apply the logical aggregation
-    /// using two operators.
-    ///
-    /// This mode requires that the input has more than one partition, and is
-    /// partitioned by group key (like FinalPartitioned).
-    SinglePartitioned,
-    /// Combine multiple partial aggregations to produce a new partial
-    /// aggregation.
-    ///
-    /// Input is intermediate accumulator state (like Final), but output is
-    /// also intermediate accumulator state (like Partial). This enables
-    /// tree-reduce aggregation strategies where partial results from
-    /// multiple workers are combined in multiple stages before a final
-    /// evaluation.
-    ///
-    /// ```text
-    ///               Final
-    ///            /        \
-    ///     PartialReduce   PartialReduce
-    ///     /         \      /         \
-    ///  Partial   Partial  Partial   Partial
-    /// ```
-    ///
-    /// # Motivation
-    ///
-    /// This reduces shuffling traffic in a distributed setting. See
-    /// <https://github.com/datafusion-contrib/datafusion-distributed/issues/360>
-    /// for details.
-    ///
-    /// # Best-Effort Reduction
-    ///
-    /// `PartialReduce` is meant as an optimization: it reduces the volume of
-    /// intermediate state (for example, before sending it over the network),
-    /// and thus its output may not be fully reduced. In particular, an
-    /// implementation may emit partially merged state, or pass its input
-    /// through unchanged (for example, under memory pressure), so the same
-    /// group key may appear in multiple output batches. Consumers must merge
-    /// the output of a `PartialReduce` aggregation exactly as they would
-    /// merge the output of a `Partial` aggregation.
-    PartialReduce,
-}
-
-impl AggregateMode {
-    /// Returns the [`AggregateInputMode`] for this mode: whether this
-    /// stage consumes raw input data or intermediate accumulator state.
-    ///
-    /// See the [table above](AggregateMode#variants-and-their-inputoutput-modes)
-    /// for details.
-    pub fn input_mode(&self) -> AggregateInputMode {
-        match self {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => AggregateInputMode::Raw,
-            AggregateMode::Final
-            | AggregateMode::FinalPartitioned
-            | AggregateMode::PartialReduce => AggregateInputMode::Partial,
-        }
-    }
-
-    /// Returns the [`AggregateOutputMode`] for this mode: whether this
-    /// stage produces intermediate accumulator state or final output values.
-    ///
-    /// See the [table above](AggregateMode#variants-and-their-inputoutput-modes)
-    /// for details.
-    pub fn output_mode(&self) -> AggregateOutputMode {
-        match self {
-            AggregateMode::Final
-            | AggregateMode::FinalPartitioned
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => AggregateOutputMode::Final,
-            AggregateMode::Partial | AggregateMode::PartialReduce => {
-                AggregateOutputMode::Partial
-            }
-        }
-    }
-}
-
-/// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
-/// In the case of a simple `GROUP BY a, b` clause, this will contain the expression [a, b]
-/// and a single group [false, false].
-/// In the case of `GROUP BY GROUPING SETS/CUBE/ROLLUP` the planner will expand the expression
-/// into multiple groups, using null expressions to align each group.
-/// For example, with a group by clause `GROUP BY GROUPING SETS ((a,b),(a),(b))` the planner should
-/// create a `PhysicalGroupBy` like
-/// ```text
-/// PhysicalGroupBy {
-///     expr: [(col(a), a), (col(b), b)],
-///     null_expr: [(NULL, a), (NULL, b)],
-///     groups: [
-///         [false, false], // (a,b)
-///         [false, true],  // (a) <=> (a, NULL)
-///         [true, false]   // (b) <=> (NULL, b)
-///     ]
-/// }
-/// ```
-#[derive(Clone, Debug, Default)]
-pub struct PhysicalGroupBy {
-    /// Distinct (Physical Expr, Alias) in the grouping set
-    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
-    /// Corresponding NULL expressions for expr
-    null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
-    /// Null mask for each group in this grouping set. Each group is
-    /// composed of either one of the group expressions in expr or a null
-    /// expression in null_expr. If `groups[i][j]` is true, then the
-    /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
-    groups: Vec<Vec<bool>>,
-    /// True when GROUPING SETS/CUBE/ROLLUP are used so `__grouping_id` should
-    /// be included in the output schema.
-    has_grouping_set: bool,
-}
-
-impl PhysicalGroupBy {
-    /// Create a new `PhysicalGroupBy`
-    pub fn new(
-        expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
-        null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
-        groups: Vec<Vec<bool>>,
-        has_grouping_set: bool,
-    ) -> Self {
-        Self {
-            expr,
-            null_expr,
-            groups,
-            has_grouping_set,
-        }
-    }
-
-    /// Create a GROUPING SET with only a single group. This is the "standard"
-    /// case when building a plan from an expression such as `GROUP BY a,b,c`
-    pub fn new_single(expr: Vec<(Arc<dyn PhysicalExpr>, String)>) -> Self {
-        let num_exprs = expr.len();
-        Self {
-            expr,
-            null_expr: vec![],
-            groups: vec![vec![false; num_exprs]],
-            has_grouping_set: false,
-        }
-    }
-
-    /// Calculate GROUP BY expressions nullable
-    pub fn exprs_nullable(&self) -> Vec<bool> {
-        let mut exprs_nullable = vec![false; self.expr.len()];
-        for group in self.groups.iter() {
-            group.iter().enumerate().for_each(|(index, is_null)| {
-                if *is_null {
-                    exprs_nullable[index] = true;
-                }
-            })
-        }
-        exprs_nullable
-    }
-
-    /// Returns true if this has no grouping at all (including no GROUPING SETS)
-    pub fn is_true_no_grouping(&self) -> bool {
-        self.is_empty() && !self.has_grouping_set
-    }
-
-    /// Returns the group expressions
-    pub fn expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
-        &self.expr
-    }
-
-    /// Returns the null expressions
-    pub fn null_expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
-        &self.null_expr
-    }
-
-    /// Returns the group null masks
-    pub fn groups(&self) -> &[Vec<bool>] {
-        &self.groups
-    }
-
-    /// Returns true if this grouping uses GROUPING SETS, CUBE or ROLLUP.
-    pub fn has_grouping_set(&self) -> bool {
-        self.has_grouping_set
-    }
-
-    /// Returns true if this `PhysicalGroupBy` has no group expressions
-    pub fn is_empty(&self) -> bool {
-        self.expr.is_empty()
-    }
-
-    /// Returns true if this is a "simple" GROUP BY (not using GROUPING SETS/CUBE/ROLLUP).
-    /// This determines whether the `__grouping_id` column is included in the output schema.
-    pub fn is_single(&self) -> bool {
-        !self.has_grouping_set
-    }
-
-    /// Calculate GROUP BY expressions according to input schema.
-    pub fn input_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.expr
-            .iter()
-            .map(|(expr, _alias)| Arc::clone(expr))
-            .collect()
-    }
-
-    /// The number of expressions in the output schema.
-    fn num_output_exprs(&self) -> usize {
-        let mut num_exprs = self.expr.len();
-        if self.has_grouping_set {
-            num_exprs += 1
-        }
-        num_exprs
-    }
-
-    /// Return grouping expressions as they occur in the output schema.
-    pub fn output_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let num_output_exprs = self.num_output_exprs();
-        let mut output_exprs = Vec::with_capacity(num_output_exprs);
-        output_exprs.extend(
-            self.expr
-                .iter()
-                .enumerate()
-                .take(num_output_exprs)
-                .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _),
-        );
-        if self.has_grouping_set {
-            output_exprs.push(Arc::new(Column::new(
-                Aggregate::INTERNAL_GROUPING_ID,
-                self.expr.len(),
-            )) as _);
-        }
-        output_exprs
-    }
-
-    /// Returns the number expression as grouping keys.
-    pub fn num_group_exprs(&self) -> usize {
-        self.expr.len() + usize::from(self.has_grouping_set)
-    }
-
-    /// Returns the Arrow data type of the `__grouping_id` column.
-    ///
-    /// The type is chosen to be wide enough to hold both the semantic bitmask
-    /// (in the low `n` bits, where `n` is the number of grouping expressions)
-    /// and the duplicate ordinal (in the high bits).
-    fn grouping_id_data_type(&self) -> DataType {
-        Aggregate::grouping_id_type(self.expr.len(), max_duplicate_ordinal(&self.groups))
-    }
-
-    pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
-        Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
-    }
-
-    /// Returns the fields that are used as the grouping keys.
-    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
-        let mut fields = Vec::with_capacity(self.num_group_exprs());
-        for ((expr, name), group_expr_nullable) in
-            self.expr.iter().zip(self.exprs_nullable())
-        {
-            fields.push(
-                Field::new(
-                    name,
-                    expr.data_type(input_schema)?,
-                    group_expr_nullable || expr.nullable(input_schema)?,
-                )
-                .with_metadata(expr.return_field(input_schema)?.metadata().clone())
-                .into(),
-            );
-        }
-        if self.has_grouping_set {
-            fields.push(
-                Field::new(
-                    Aggregate::INTERNAL_GROUPING_ID,
-                    self.grouping_id_data_type(),
-                    false,
-                )
-                .into(),
-            );
-        }
-        Ok(fields)
-    }
-
-    /// Returns the output fields of the group by.
-    ///
-    /// This might be different from the `group_fields` that might contain internal expressions that
-    /// should not be part of the output schema.
-    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
-        let mut fields = self.group_fields(input_schema)?;
-        fields.truncate(self.num_output_exprs());
-        Ok(fields)
-    }
-
-    /// Returns the `PhysicalGroupBy` for a final aggregation if `self` is used for a partial
-    /// aggregation.
-    pub fn as_final(&self) -> PhysicalGroupBy {
-        let expr: Vec<_> =
-            self.output_exprs()
-                .into_iter()
-                .zip(
-                    self.expr.iter().map(|t| t.1.clone()).chain(std::iter::once(
-                        Aggregate::INTERNAL_GROUPING_ID.to_owned(),
-                    )),
-                )
-                .collect();
-        let num_exprs = expr.len();
-        let groups = if self.expr.is_empty() && !self.has_grouping_set {
-            // No GROUP BY expressions - should have no groups
-            vec![]
-        } else {
-            vec![vec![false; num_exprs]]
-        };
-        Self {
-            expr,
-            null_expr: vec![],
-            groups,
-            has_grouping_set: false,
-        }
-    }
-}
-
-impl PartialEq for PhysicalGroupBy {
-    fn eq(&self, other: &PhysicalGroupBy) -> bool {
-        self.expr.len() == other.expr.len()
-            && self
-                .expr
-                .iter()
-                .zip(other.expr.iter())
-                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
-            && self.null_expr.len() == other.null_expr.len()
-            && self
-                .null_expr
-                .iter()
-                .zip(other.null_expr.iter())
-                .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
-            && self.groups == other.groups
-            && self.has_grouping_set == other.has_grouping_set
-    }
 }
 
 /// Streams used by [`AggregateExec`].
@@ -807,42 +377,6 @@ struct PerAccumulatorDynFilter {
 enum DynamicFilterAggregateType {
     Min,
     Max,
-}
-
-/// Configuration for limit-based optimizations in aggregation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LimitOptions {
-    /// The maximum number of rows to return
-    pub limit: usize,
-    /// Optional ordering direction (true = descending, false = ascending)
-    /// This is used for TopK aggregation to maintain a priority queue with the correct ordering
-    pub descending: Option<bool>,
-}
-
-impl LimitOptions {
-    /// Create a new LimitOptions with a limit and no specific ordering
-    pub fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            descending: None,
-        }
-    }
-
-    /// Create a new LimitOptions with a limit and ordering direction
-    pub fn new_with_order(limit: usize, descending: bool) -> Self {
-        Self {
-            limit,
-            descending: Some(descending),
-        }
-    }
-
-    pub fn limit(&self) -> usize {
-        self.limit
-    }
-
-    pub fn descending(&self) -> Option<bool> {
-        self.descending
-    }
 }
 
 /// Hash aggregate execution plan
@@ -1023,12 +557,12 @@ impl AggregateExec {
         // it is not null in every group
         let indices: Vec<usize> = indices
             .into_iter()
-            .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
+            .filter(|idx| group_by.groups().iter().all(|group| !group[*idx]))
             .collect();
 
         let mut input_order_mode = if indices.len() == groupby_exprs.len()
             && !indices.is_empty()
-            && group_by.groups.len() == 1
+            && group_by.groups().len() == 1
         {
             InputOrderMode::Sorted
         } else if !indices.is_empty() {
@@ -1045,7 +579,7 @@ impl AggregateExec {
 
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
-            ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
+            ProjectionMapping::try_new(group_by.expr().to_vec(), &input.schema())?;
 
         let cache = if group_by.has_grouping_set() {
             Self::compute_grouping_set_properties(&input, Arc::clone(&schema))
@@ -1554,7 +1088,7 @@ impl AggregateExec {
             // self.schema: [<group by exprs>, <aggregate exprs>]
             let mut column_statistics = Statistics::unknown_column(&self.schema());
 
-            for (idx, (expr, _)) in self.group_by.expr.iter().enumerate() {
+            for (idx, (expr, _)) in self.group_by.expr().iter().enumerate() {
                 if let Some(col) = expr.downcast_ref::<Column>() {
                     let child_col_stats =
                         &child_statistics.column_statistics[col.index()];
@@ -1646,7 +1180,7 @@ impl AggregateExec {
     fn output_rows_for_empty_input(&self, partition: Option<usize>) -> usize {
         let empty_grouping_sets = self
             .group_by
-            .groups
+            .groups()
             .iter()
             .filter(|nulls| nulls.iter().all(|is_null| *is_null))
             .count();
@@ -1680,7 +1214,7 @@ impl AggregateExec {
         let schema = self.schema();
         for (idx, column_stats) in column_statistics
             .iter_mut()
-            .take(self.group_by.expr.len())
+            .take(self.group_by.expr().len())
             .enumerate()
         {
             let typed_null = ScalarValue::try_from(schema.field(idx).data_type())
@@ -1708,8 +1242,8 @@ impl AggregateExec {
     fn logical_rows_without_group_exprs(&self) -> Option<usize> {
         if self.group_by.is_true_no_grouping() {
             Some(1)
-        } else if self.group_by.expr.is_empty() {
-            Some(self.group_by.groups.len())
+        } else if self.group_by.expr().is_empty() {
+            Some(self.group_by.groups().len())
         } else {
             None
         }
@@ -1722,7 +1256,7 @@ impl AggregateExec {
         child_statistics: &Statistics,
         partition: Option<usize>,
     ) -> Precision<usize> {
-        let ndv = if !self.group_by.expr.is_empty() {
+        let ndv = if !self.group_by.expr().is_empty() {
             self.compute_group_ndv(child_statistics)
         } else {
             None
@@ -1746,7 +1280,7 @@ impl AggregateExec {
                     .num_rows
                     .map(|_| self.output_rows_for_empty_input(partition))
             } else {
-                let grouping_set_num = self.group_by.groups.len();
+                let grouping_set_num = self.group_by.groups().len();
                 let mut num_rows =
                     child_statistics.num_rows.map(|x| x * grouping_set_num);
                 if let Some(limit) = limit {
@@ -1783,9 +1317,9 @@ impl AggregateExec {
     /// → total = 100 + 50 + 5,000 = 5,150
     fn compute_group_ndv(&self, child_statistics: &Statistics) -> Option<usize> {
         let mut total: usize = 0;
-        for group_mask in &self.group_by.groups {
+        for group_mask in self.group_by.groups() {
             let mut set_product: usize = 1;
-            for (j, (expr, _)) in self.group_by.expr.iter().enumerate() {
+            for (j, (expr, _)) in self.group_by.expr().iter().enumerate() {
                 if group_mask[j] {
                     continue;
                 }
@@ -1931,13 +1465,13 @@ impl DisplayAs for AggregateExec {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
-                        .expr
+                        .expr()
                         .iter()
                         .map(format_expr_with_alias)
                         .collect()
                 } else {
                     self.group_by
-                        .groups
+                        .groups()
                         .iter()
                         .map(|group| {
                             let terms = group
@@ -1946,10 +1480,10 @@ impl DisplayAs for AggregateExec {
                                 .map(|(idx, is_null)| {
                                     if *is_null {
                                         format_expr_with_alias(
-                                            &self.group_by.null_expr[idx],
+                                            &self.group_by.null_expr()[idx],
                                         )
                                     } else {
-                                        format_expr_with_alias(&self.group_by.expr[idx])
+                                        format_expr_with_alias(&self.group_by.expr()[idx])
                                     }
                                 })
                                 .collect::<Vec<String>>()
@@ -1988,13 +1522,13 @@ impl DisplayAs for AggregateExec {
 
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
-                        .expr
+                        .expr()
                         .iter()
                         .map(format_expr_with_alias)
                         .collect()
                 } else {
                     self.group_by
-                        .groups
+                        .groups()
                         .iter()
                         .map(|group| {
                             let terms = group
@@ -2003,10 +1537,10 @@ impl DisplayAs for AggregateExec {
                                 .map(|(idx, is_null)| {
                                     if *is_null {
                                         format_expr_with_alias(
-                                            &self.group_by.null_expr[idx],
+                                            &self.group_by.null_expr()[idx],
                                         )
                                     } else {
-                                        format_expr_with_alias(&self.group_by.expr[idx])
+                                        format_expr_with_alias(&self.group_by.expr()[idx])
                                     }
                                 })
                                 .collect::<Vec<String>>()
@@ -2827,11 +2361,6 @@ fn get_aggregate_expr_req(
     LexOrdering::new(sort_exprs)
 }
 
-/// Concatenates the given slices.
-pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
-    [lhs, rhs].concat()
-}
-
 // Determines if the candidate ordering is finer than the current ordering.
 // Returns `None` if they are incomparable, `Some(true)` if there is no current
 // ordering or candidate ordering is finer, and `Some(false)` otherwise.
@@ -3015,207 +2544,19 @@ pub fn create_accumulators(
         .collect()
 }
 
-/// returns a vector of ArrayRefs, where each entry corresponds to either the
-/// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
-pub fn finalize_aggregation(
-    accumulators: &mut [AccumulatorItem],
-    mode: &AggregateMode,
-) -> Result<Vec<ArrayRef>> {
-    match mode.output_mode() {
-        AggregateOutputMode::Final => {
-            // Merge the state to the final value
-            accumulators
-                .iter_mut()
-                .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
-                .collect()
-        }
-        AggregateOutputMode::Partial => {
-            // Build the vector of states
-            accumulators
-                .iter_mut()
-                .map(|accumulator| {
-                    accumulator.state().and_then(|e| {
-                        e.iter()
-                            .map(|v| v.to_array())
-                            .collect::<Result<Vec<ArrayRef>>>()
-                    })
-                })
-                .flatten_ok()
-                .collect()
-        }
-    }
-}
-
-/// Evaluates groups of expressions against a record batch.
-pub fn evaluate_many(
-    expr: &[Vec<Arc<dyn PhysicalExpr>>],
-    batch: &RecordBatch,
-) -> Result<Vec<Vec<ArrayRef>>> {
-    expr.iter()
-        .map(|expr| evaluate_expressions_to_arrays(expr, batch))
-        .collect()
-}
-
-fn evaluate_optional(
-    expr: &[Option<Arc<dyn PhysicalExpr>>],
-    batch: &RecordBatch,
-) -> Result<Vec<Option<ArrayRef>>> {
-    expr.iter()
-        .map(|expr| {
-            expr.as_ref()
-                .map(|expr| {
-                    expr.evaluate(batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
-                })
-                .transpose()
-        })
-        .collect()
-}
-
-/// Builds the internal `__grouping_id` array for a single grouping set.
-///
-/// The returned array packs two values into a single integer:
-///
-/// - Low `n` bits (positions 0 .. n-1): the semantic bitmask.  A `1` bit
-///   at position `i` means that the `i`-th grouping column (counting from the
-///   least significant bit, i.e. the *last* column in the `group` slice) is
-///   `NULL` for this grouping set.
-/// - High bits (positions n and above): the duplicate `ordinal`, which
-///   distinguishes multiple occurrences of the same grouping-set pattern.  The
-///   ordinal is `0` for the first occurrence, `1` for the second, and so on.
-///
-/// The integer type is chosen to be the smallest `UInt8 / UInt16 / UInt32 /
-/// UInt64` that can represent both parts.  It matches the type returned by
-/// [`Aggregate::grouping_id_type`].
-pub(crate) fn group_id_array(
-    group: &[bool],
-    ordinal: usize,
-    max_ordinal: usize,
-    num_rows: usize,
-) -> Result<ArrayRef> {
-    let n = group.len();
-    if n > 64 {
-        return not_impl_err!(
-            "Grouping sets with more than 64 columns are not supported"
-        );
-    }
-    let ordinal_bits = usize::BITS as usize - max_ordinal.leading_zeros() as usize;
-    let total_bits = n + ordinal_bits;
-    if total_bits > 64 {
-        return not_impl_err!(
-            "Grouping sets with {n} columns and a maximum duplicate ordinal of \
-             {max_ordinal} require {total_bits} bits, which exceeds 64"
-        );
-    }
-    let semantic_id = group
-        .iter()
-        .fold(0u64, |acc, &is_null| (acc << 1) | u64::from(is_null));
-    let full_id = semantic_id | ((ordinal as u64) << n);
-    if total_bits <= 8 {
-        Ok(Arc::new(UInt8Array::from(vec![full_id as u8; num_rows])))
-    } else if total_bits <= 16 {
-        Ok(Arc::new(UInt16Array::from(vec![full_id as u16; num_rows])))
-    } else if total_bits <= 32 {
-        Ok(Arc::new(UInt32Array::from(vec![full_id as u32; num_rows])))
-    } else {
-        Ok(Arc::new(UInt64Array::from(vec![full_id; num_rows])))
-    }
-}
-
-/// Returns the highest duplicate ordinal across all grouping sets.
-///
-/// At the call-site, the ordinal is the 0-based index assigned to each
-/// occurrence of a repeated grouping-set pattern: the first occurrence gets
-/// ordinal 0, the second gets 1, and so on.  If the same `Vec<bool>` appears
-/// three times the ordinals are 0, 1, 2 and this function returns 2.
-/// Returns 0 when no grouping set is duplicated.
-pub(crate) fn max_duplicate_ordinal(groups: &[Vec<bool>]) -> usize {
-    let mut counts: HashMap<&[bool], usize> = HashMap::new();
-    for group in groups {
-        *counts.entry(group).or_insert(0) += 1;
-    }
-    counts.into_values().max().unwrap_or(0).saturating_sub(1)
-}
-
-/// Evaluate a group by expression against a `RecordBatch`
-///
-/// Arguments:
-/// - `group_by`: the expression to evaluate
-/// - `batch`: the `RecordBatch` to evaluate against
-///
-/// Returns: A Vec of Vecs of Array of results
-/// The outer Vec appears to be for grouping sets
-/// The inner Vec contains the results per expression
-/// The inner-inner Array contains the results per row
-///
-/// For example, for `GROUP BY GROUPING SETS ((a, b), (a))` with input:
-///
-/// ```text
-/// a  b
-/// 1  1
-/// 1  2
-/// 2  1
-/// ```
-///
-/// The output is:
-///
-/// ```text
-/// [
-///   [
-///     a:           [1, 1, 2]
-///     b:           [1, 2, 1]
-///     grouping_id: [0, 0, 0]
-///   ],
-///   [
-///     a:           [1, 1, 2]
-///     b:           [NULL, NULL, NULL]
-///     grouping_id: [1, 1, 1]
-///   ]
-/// ]
-/// ```
-pub fn evaluate_group_by(
-    group_by: &PhysicalGroupBy,
-    batch: &RecordBatch,
-) -> Result<Vec<Vec<ArrayRef>>> {
-    let max_ordinal = max_duplicate_ordinal(&group_by.groups);
-    let mut ordinal_per_pattern: HashMap<&[bool], usize> = HashMap::new();
-    let exprs = evaluate_expressions_to_arrays(
-        group_by.expr.iter().map(|(expr, _)| expr),
-        batch,
-    )?;
-    let null_exprs = evaluate_expressions_to_arrays(
-        group_by.null_expr.iter().map(|(expr, _)| expr),
-        batch,
-    )?;
-
-    group_by
-        .groups
-        .iter()
-        .map(|group| {
-            let ordinal = ordinal_per_pattern.entry(group).or_insert(0);
-            let current_ordinal = *ordinal;
-            *ordinal += 1;
-
-            let mut group_values = Vec::with_capacity(group_by.num_group_exprs());
-            group_values.extend(group.iter().enumerate().map(|(idx, is_null)| {
-                if *is_null {
-                    Arc::clone(&null_exprs[idx])
-                } else {
-                    Arc::clone(&exprs[idx])
-                }
-            }));
-            if !group_by.is_single() {
-                group_values.push(group_id_array(
-                    group,
-                    current_ordinal,
-                    max_ordinal,
-                    batch.num_rows(),
-                )?);
-            }
-            Ok(group_values)
-        })
-        .collect()
-}
+pub use crate::aggregates::PhysicalGroupBy;
+pub(crate) use crate::aggregates::AGGREGATION_HASH_SEED;
+pub use crate::aggregates::AggregateInputMode;
+pub use crate::aggregates::AggregateOutputMode;
+pub use crate::aggregates::AggregateMode;
+pub use crate::aggregates::LimitOptions;
+pub use crate::aggregates::finalize_aggregation;
+pub use crate::aggregates::concat_slices;
+pub use crate::aggregates::evaluate_group_by;
+pub use crate::aggregates::evaluate_many;
+pub(crate) use crate::aggregates::max_duplicate_ordinal;
+pub(crate) use crate::aggregates::group_id_array;
+use crate::aggregates::evaluate_optional;
 
 #[cfg(test)]
 mod tests {
@@ -3238,12 +2579,13 @@ mod tests {
         BlockingExec, StatisticsExec, assert_strong_count_converges_to_zero,
     };
 
+    use arrow::record_batch::RecordBatch;
     use arrow::array::{
-        BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
+        ArrayRef, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
         Int64Array, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Field, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;

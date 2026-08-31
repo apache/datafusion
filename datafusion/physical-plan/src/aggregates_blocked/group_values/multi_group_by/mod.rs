@@ -114,19 +114,7 @@ pub trait GroupColumn: Send + Sync {
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
-/// Determines if the nullability of the existing and new input array can be used
-/// to short-circuit the comparison of the two values.
-///
-/// Returns `Some(result)` if the result of the comparison can be determined
-/// from the nullness of the two values, and `None` if the comparison must be
-/// done on the values themselves.
-pub fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
-    match (lhs_null, rhs_null) {
-        (true, true) => Some(true),
-        (false, true) | (true, false) => Some(false),
-        _ => None,
-    }
-}
+pub use crate::aggregates::group_values::multi_group_by::nulls_equal_to;
 
 /// The view of indices pointing to the actual values in `GroupValues`
 ///

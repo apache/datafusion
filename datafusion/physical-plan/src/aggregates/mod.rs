@@ -233,7 +233,7 @@ pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool 
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
+pub(crate) const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number
     datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
 
@@ -527,7 +527,7 @@ impl PhysicalGroupBy {
     }
 
     /// The number of expressions in the output schema.
-    fn num_output_exprs(&self) -> usize {
+    pub(crate) fn num_output_exprs(&self) -> usize {
         let mut num_exprs = self.expr.len();
         if self.has_grouping_set {
             num_exprs += 1
@@ -606,7 +606,7 @@ impl PhysicalGroupBy {
     ///
     /// This might be different from the `group_fields` that might contain internal expressions that
     /// should not be part of the output schema.
-    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
+    pub(crate) fn output_fields(&self, input_schema: &Schema) -> Result<Vec<FieldRef>> {
         let mut fields = self.group_fields(input_schema)?;
         fields.truncate(self.num_output_exprs());
         Ok(fields)
@@ -3056,7 +3056,7 @@ pub fn evaluate_many(
         .collect()
 }
 
-fn evaluate_optional(
+pub(crate) fn evaluate_optional(
     expr: &[Option<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Option<ArrayRef>>> {
