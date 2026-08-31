@@ -57,17 +57,3 @@ pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::Full | JoinType::Left)
 }
-
-// Returns boolean for whether or not we need to build the buffered side
-// bitmap for marking matched rows on the buffered side.
-//
-// The Semi/Anti joins are absent on purpose. `LeftSemi`/`LeftAnti` only ever mark a
-// contiguous suffix of the buffered side, so they track the boundary as a single index
-// (`BufferedSideData::existence_min_marked`); `RightSemi`/`RightAnti` mark the streamed
-// side and never touch the buffered side at all.
-pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Full | JoinType::Left | JoinType::LeftMark | JoinType::RightMark
-    )
-}

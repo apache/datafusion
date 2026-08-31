@@ -22,8 +22,10 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
+mod view_spill_compaction;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
@@ -941,11 +943,10 @@ impl TestCase {
 
         match df.collect().await {
             Ok(_batches) => {
-                if !expected_success {
-                    panic!(
-                        "Unexpected success when running, expected memory limit failure"
-                    )
-                }
+                assert!(
+                    expected_success,
+                    "Unexpected success when running, expected memory limit failure"
+                );
             }
             Err(e) => {
                 if expected_success {

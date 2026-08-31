@@ -620,14 +620,11 @@ impl DefaultPhysicalPlanner {
                             .await?;
                     }
 
-                    let plan = match maybe_plan {
-                        Some(plan) => plan,
-                        None => {
-                            return plan_err!(
-                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
-                                scan.table_name
-                            );
-                        }
+                    let Some(plan) = maybe_plan else {
+                        return plan_err!(
+                            "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                            scan.table_name
+                        );
                     };
 
                     self.ensure_schema_matches(projected_schema, &plan, || {
@@ -1221,7 +1218,8 @@ impl DefaultPhysicalPlanner {
                     .config()
                     .options()
                     .optimizer
-                    .default_filter_selectivity;
+                    .default_filter_selectivity
+                    .get();
                 let filter_exec: Arc<dyn ExecutionPlan> =
                     Arc::new(filter.with_default_selectivity(selectivity)?);
                 filter_exec
@@ -1243,9 +1241,7 @@ impl DefaultPhysicalPlanner {
                     physical_partitioning,
                 )?)
             }
-            LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
-            }) => {
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let sort_exprs = create_physical_sort_exprs(
@@ -2055,7 +2051,9 @@ fn create_cube_physical_expr(
     for null_count in 1..=num_of_exprs {
         for null_idx in (0..num_of_exprs).combinations(null_count) {
             let mut next_group: Vec<bool> = vec![false; num_of_exprs];
-            null_idx.into_iter().for_each(|i| next_group[i] = true);
+            for i in null_idx {
+                next_group[i] = true;
+            }
             groups.push(next_group);
         }
     }
@@ -2559,7 +2557,7 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
@@ -2586,7 +2584,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 }
 
 /// Create an aggregate expression from a logical expression or an alias
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
@@ -2664,6 +2662,10 @@ impl DefaultPhysicalPlanner {
         let explain_format = &e.explain_format;
         // Statement-level override wins over session config for show_statistics.
         let show_statistics = e.show_statistics.unwrap_or(config.show_statistics);
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
 
         if !e.logical_optimization_succeeded {
             return Ok(Arc::new(ExplainExec::new(
@@ -2727,6 +2729,15 @@ impl DefaultPhysicalPlanner {
         }
 
         if !config.logical_plan_only && e.logical_optimization_succeeded {
+            let render_indent =
+                |plan: &dyn ExecutionPlan, show_statistics: bool, show_schema: bool| {
+                    displayable(plan)
+                        .set_show_statistics(show_statistics)
+                        .set_statistics_registry(statistics_registry.clone())
+                        .set_show_schema(show_schema)
+                        .indent(e.verbose)
+                        .to_string()
+                };
             match self
                 .create_initial_plan(e.plan.as_ref(), session_state)
                 .await
@@ -2735,11 +2746,11 @@ impl DefaultPhysicalPlanner {
                     // Include statistics / schema if enabled
                     stringified_plans.push(StringifiedPlan::new(
                         InitialPhysicalPlan,
-                        displayable(input.as_ref())
-                            .set_show_statistics(show_statistics)
-                            .set_show_schema(config.show_schema)
-                            .indent(e.verbose)
-                            .to_string(),
+                        render_indent(
+                            input.as_ref(),
+                            show_statistics,
+                            config.show_schema,
+                        ),
                     ));
 
                     // Show statistics + schema in verbose output even if not
@@ -2748,15 +2759,14 @@ impl DefaultPhysicalPlanner {
                         if !show_statistics {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithStats,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(true)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(input.as_ref(), true, false),
                             ));
                         }
                         if !config.show_schema {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithSchema,
+                                // Schema only: statistics are off, so this
+                                // renders without the registry.
                                 displayable(input.as_ref())
                                     .set_show_schema(true)
                                     .indent(e.verbose)
@@ -2773,11 +2783,7 @@ impl DefaultPhysicalPlanner {
                             let plan_type = OptimizedPhysicalPlan { optimizer_name };
                             stringified_plans.push(StringifiedPlan::new(
                                 plan_type,
-                                displayable(plan)
-                                    .set_show_statistics(show_statistics)
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(plan, show_statistics, config.show_schema),
                             ));
                         },
                     );
@@ -2786,11 +2792,11 @@ impl DefaultPhysicalPlanner {
                             // This plan will includes statistics if show_statistics is on
                             stringified_plans.push(StringifiedPlan::new(
                                 FinalPhysicalPlan,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(show_statistics)
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(
+                                    input.as_ref(),
+                                    show_statistics,
+                                    config.show_schema,
+                                ),
                             ));
 
                             // Show statistics + schema in verbose output even if not
@@ -2799,10 +2805,7 @@ impl DefaultPhysicalPlanner {
                                 if !show_statistics {
                                     stringified_plans.push(StringifiedPlan::new(
                                         FinalPhysicalPlanWithStats,
-                                        displayable(input.as_ref())
-                                            .set_show_statistics(true)
-                                            .indent(e.verbose)
-                                            .to_string(),
+                                        render_indent(input.as_ref(), true, false),
                                     ));
                                 }
                                 if !config.show_schema {
@@ -2866,11 +2869,16 @@ impl DefaultPhysicalPlanner {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
         Ok(Arc::new(
             AnalyzeExec::builder(a.verbose, show_statistics, input, schema)
                 .with_metric_types(metric_types)
                 .with_metric_categories(metric_categories)
                 .with_format(a.format.clone())
+                .with_statistics_registry(statistics_registry)
                 .build(),
         ))
     }

@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
+use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
+use arrow::compute::nullif;
 use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
@@ -31,7 +33,8 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
 use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::file::metadata::RowGroupMetaData;
+use parquet::basic::ColumnOrder;
+use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::schema::types::SchemaDescriptor;
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
@@ -44,6 +47,22 @@ use parquet::schema::types::SchemaDescriptor;
 pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
+}
+
+/// Returns true if this row group belongs to `range`.
+///
+/// A row group belongs to the range containing its first dictionary/data page,
+/// so the ranges a file is split into for parallelism partition its row groups
+/// with none shared and none left over.
+///
+/// Note: don't use the location of metadata
+/// <https://github.com/apache/datafusion/issues/5995>
+pub(crate) fn row_group_in_range(metadata: &RowGroupMetaData, range: &FileRange) -> bool {
+    let col = metadata.column(0);
+    let offset = col
+        .dictionary_page_offset()
+        .unwrap_or_else(|| col.data_page_offset());
+    range.contains(offset)
 }
 
 impl RowGroupAccessPlanFilter {
@@ -233,16 +252,7 @@ impl RowGroupAccessPlanFilter {
                 continue;
             }
 
-            // Skip the row group if the first dictionary/data page are not
-            // within the range.
-            //
-            // note don't use the location of metadata
-            // <https://github.com/apache/datafusion/issues/5995>
-            let col = metadata.column(0);
-            let offset = col
-                .dictionary_page_offset()
-                .unwrap_or_else(|| col.data_page_offset());
-            if !range.contains(offset) {
+            if !row_group_in_range(metadata, range) {
                 self.access_plan.skip(idx);
             }
         }
@@ -252,8 +262,10 @@ impl RowGroupAccessPlanFilter {
     ///
     /// Updates this set to mark row groups that should not be scanned
     ///
-    /// Note: This method currently ignores ColumnOrder
-    /// <https://github.com/apache/datafusion/issues/8335>
+    /// This method has no file footer, so it cannot establish the sort order
+    /// of string or binary min/max statistics. Such bounds are ignored. Use
+    /// [`Self::prune_by_statistics_with_metadata`] when the full metadata is
+    /// available. Null counts and other columns' statistics remain usable.
     ///
     /// # Panics
     /// if `groups.len() != self.len()`
@@ -262,6 +274,51 @@ impl RowGroupAccessPlanFilter {
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
         groups: &[RowGroupMetaData],
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+    ) {
+        self.prune_by_statistics_inner(
+            arrow_schema,
+            parquet_schema,
+            groups,
+            None,
+            predicate,
+            metrics,
+        );
+    }
+
+    /// Prune row groups using statistics and the comparison orders recorded
+    /// in the Parquet file footer.
+    ///
+    /// Unlike [`Self::prune_by_statistics`], this method can use string and
+    /// binary bounds when their ordering is known to match Arrow's ordering.
+    ///
+    /// # Panics
+    /// if `metadata.num_row_groups() != self.len()`
+    pub fn prune_by_statistics_with_metadata(
+        &mut self,
+        arrow_schema: &Schema,
+        metadata: &ParquetMetaData,
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+    ) {
+        let file_metadata = metadata.file_metadata();
+        self.prune_by_statistics_inner(
+            arrow_schema,
+            file_metadata.schema_descr(),
+            metadata.row_groups(),
+            file_metadata.column_orders().map(Vec::as_slice),
+            predicate,
+            metrics,
+        );
+    }
+
+    fn prune_by_statistics_inner(
+        &mut self,
+        arrow_schema: &Schema,
+        parquet_schema: &SchemaDescriptor,
+        groups: &[RowGroupMetaData],
+        column_orders: Option<&[ColumnOrder]>,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
@@ -278,6 +335,7 @@ impl RowGroupAccessPlanFilter {
 
         let pruning_stats = RowGroupPruningStatistics {
             parquet_schema,
+            column_orders,
             row_group_metadatas,
             arrow_schema,
             // Preserve the existing row-group pruning behavior. This path only
@@ -304,8 +362,7 @@ impl RowGroupAccessPlanFilter {
                 // Check if any of the matched row groups are fully contained by the predicate
                 self.identify_fully_matched_row_groups(
                     &fully_contained_candidates_original_idx,
-                    arrow_schema,
-                    parquet_schema,
+                    &pruning_stats,
                     groups,
                     predicate,
                     metrics,
@@ -330,8 +387,7 @@ impl RowGroupAccessPlanFilter {
     fn identify_fully_matched_row_groups(
         &mut self,
         candidate_row_group_indices: &[usize],
-        arrow_schema: &Schema,
-        parquet_schema: &SchemaDescriptor,
+        pruning_stats: &RowGroupPruningStatistics<'_>,
         groups: &[RowGroupMetaData],
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
@@ -339,6 +395,7 @@ impl RowGroupAccessPlanFilter {
         if candidate_row_group_indices.is_empty() {
             return;
         }
+        let arrow_schema = pruning_stats.arrow_schema;
 
         let mut inverted_expr: Arc<dyn PhysicalExpr> =
             Arc::new(NotExpr::new(Arc::clone(predicate.orig_expr())));
@@ -381,7 +438,8 @@ impl RowGroupAccessPlanFilter {
         };
 
         let inverted_pruning_stats = RowGroupPruningStatistics {
-            parquet_schema,
+            parquet_schema: pruning_stats.parquet_schema,
+            column_orders: pruning_stats.column_orders,
             row_group_metadatas: candidate_row_group_indices
                 .iter()
                 .map(|&i| &groups[i])
@@ -472,6 +530,7 @@ impl RowGroupAccessPlanFilter {
 /// duplicating the statistics-to-`PruningStatistics` plumbing.
 pub(crate) struct RowGroupPruningStatistics<'a> {
     pub(crate) parquet_schema: &'a SchemaDescriptor,
+    pub(crate) column_orders: Option<&'a [ColumnOrder]>,
     pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
     pub(crate) arrow_schema: &'a Schema,
     pub(crate) missing_null_counts_as_zero: bool,
@@ -479,14 +538,11 @@ pub(crate) struct RowGroupPruningStatistics<'a> {
 
 impl<'a> RowGroupPruningStatistics<'a> {
     /// Return an iterator over the row group metadata
-    fn metadata_iter(&'a self) -> impl Iterator<Item = &'a RowGroupMetaData> + 'a {
+    fn metadata_iter(&self) -> impl Iterator<Item = &'a RowGroupMetaData> + '_ {
         self.row_group_metadatas.iter().copied()
     }
 
-    fn statistics_converter<'b>(
-        &'a self,
-        column: &'b Column,
-    ) -> Result<StatisticsConverter<'a>> {
+    fn statistics_converter(&self, column: &Column) -> Result<StatisticsConverter<'a>> {
         Ok(StatisticsConverter::try_new(
             &column.name,
             self.arrow_schema,
@@ -494,19 +550,53 @@ impl<'a> RowGroupPruningStatistics<'a> {
         )?
         .with_missing_null_counts_as_zero(self.missing_null_counts_as_zero))
     }
+
+    fn min_max_statistics_converter(
+        &self,
+        column: &Column,
+    ) -> Option<StatisticsConverter<'a>> {
+        let converter = self.statistics_converter(column).ok()?;
+        let parquet_index = converter.parquet_column_index();
+        if parquet_index.is_some_and(|index| {
+            has_untrusted_min_max_order(self.parquet_schema, self.column_orders, index)
+        }) {
+            return None;
+        }
+        Some(converter)
+    }
+
+    fn mask_untrusted_byte_array_stats(
+        &self,
+        parquet_index: Option<usize>,
+        values: ArrayRef,
+    ) -> Option<ArrayRef> {
+        if !has_untrusted_byte_array_stats(
+            self.parquet_schema,
+            parquet_index,
+            self.metadata_iter(),
+        ) {
+            return Some(values);
+        }
+        // A file may mix legacy and modern row-group statistics. Keep the
+        // modern bounds usable rather than discarding this entire column.
+        let mask = BooleanArray::from_iter(self.metadata_iter().map(|group| {
+            has_untrusted_byte_array_stats(self.parquet_schema, parquet_index, [group])
+        }));
+        nullif(values.as_ref(), &mask).ok()
+    }
 }
 
 impl PruningStatistics for RowGroupPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.statistics_converter(column)
-            .and_then(|c| Ok(c.row_group_mins(self.metadata_iter())?))
-            .ok()
+        let converter = self.min_max_statistics_converter(column)?;
+        let values = converter.row_group_mins(self.metadata_iter()).ok()?;
+        self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.statistics_converter(column)
-            .and_then(|c| Ok(c.row_group_maxes(self.metadata_iter())?))
-            .ok()
+        let converter = self.min_max_statistics_converter(column)?;
+        let values = converter.row_group_maxes(self.metadata_iter()).ok()?;
+        self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
     }
 
     fn num_containers(&self) -> usize {

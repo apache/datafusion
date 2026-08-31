@@ -75,8 +75,8 @@
 //!
 //! Marking only ever covers a suffix, and each mark lowers the watermark to its own start,
 //! so the matched set is always exactly `[min_marked, buffered_len)`. A bitmap would be a
-//! less compact encoding of that one index, so none is allocated (see
-//! `build_visited_indices_map`).
+//! less compact encoding of that one index, so none is allocated. `ClassicPWMJStream` marks
+//! the same way, which is why the watermark lives in `BufferedSideData` rather than here.
 //!
 //! Once every streamed partition has been consumed, the last one to finish slices the
 //! buffered batch: `LeftSemi` takes `[min_marked, len)`, `LeftAnti` the complementary
@@ -257,9 +257,7 @@ impl ExistencePWMJStream {
     /// lets every other partition stop too.
     fn nothing_left_to_mark(&self) -> Result<bool> {
         let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
-        let min_marked = buffered_data
-            .existence_min_marked
-            .load(AtomicOrdering::SeqCst);
+        let min_marked = buffered_data.min_marked.load(AtomicOrdering::SeqCst);
         let buffered_values = buffered_data.values();
 
         Ok(min_marked.min(buffered_values.len()) <= buffered_values.null_count())
@@ -309,7 +307,7 @@ impl ExistencePWMJStream {
             // watermark: that bounds the comparisons this batch performs, not just the
             // bits it writes.
             let scan_limit = buffered_data
-                .existence_min_marked
+                .min_marked
                 .load(AtomicOrdering::SeqCst)
                 .min(buffered_len);
 
@@ -367,7 +365,7 @@ impl ExistencePWMJStream {
                 if buffer_idx < scan_limit {
                     // Everything from `buffer_idx` on matches, so lowering the
                     // watermark to it records the match: the marked set is exactly
-                    // `[existence_min_marked, buffered_len)` and needs no bitmap.
+                    // `[min_marked, buffered_len)` and needs no bitmap.
                     //
                     // INVARIANT: sound only because the buffered side and each
                     // streamed batch are sorted the same way for this operator
@@ -378,7 +376,7 @@ impl ExistencePWMJStream {
                     // order, which is why the watermark takes a `min` rather than just
                     // decreasing.
                     buffered_data
-                        .existence_min_marked
+                        .min_marked
                         .fetch_min(buffer_idx, AtomicOrdering::SeqCst);
                 }
             }
@@ -403,7 +401,7 @@ impl ExistencePWMJStream {
             // `k`, so the union is `[k, len)`. The result is therefore a slice, with no
             // index array to materialize and no `take`.
             let min_marked = buffered_data
-                .existence_min_marked
+                .min_marked
                 .load(AtomicOrdering::SeqCst)
                 .min(buffered_len);
 

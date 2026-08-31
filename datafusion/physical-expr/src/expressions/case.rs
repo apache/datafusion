@@ -1253,57 +1253,52 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        let nullable_then = self
-            .body
-            .when_then_expr
-            .iter()
-            .filter_map(|(w, t)| {
-                let is_nullable = match t.nullable(input_schema) {
-                    // Pass on error determining nullability verbatim
-                    Err(e) => return Some(Err(e)),
-                    Ok(n) => n,
-                };
+        let nullable_then = self.body.when_then_expr.iter().find_map(|(w, t)| {
+            let is_nullable = match t.nullable(input_schema) {
+                // Pass on error determining nullability verbatim
+                Err(e) => return Some(Err(e)),
+                Ok(n) => n,
+            };
 
-                // Branches with a then expression that is not nullable do not impact the
-                // nullability of the case expression.
-                if !is_nullable {
-                    return None;
-                }
+            // Branches with a then expression that is not nullable do not impact the
+            // nullability of the case expression.
+            if !is_nullable {
+                return None;
+            }
 
-                // For case-with-expression assume all 'then' expressions are reachable
-                if self.body.expr.is_some() {
-                    return Some(Ok(()));
-                }
+            // For case-with-expression assume all 'then' expressions are reachable
+            if self.body.expr.is_some() {
+                return Some(Ok(()));
+            }
 
-                // For branches with a nullable 'then' expression, try to determine
-                // if the 'then' expression is ever reachable in the situation where
-                // it would evaluate to null.
+            // For branches with a nullable 'then' expression, try to determine
+            // if the 'then' expression is ever reachable in the situation where
+            // it would evaluate to null.
 
-                // Replace the `then` expression with `NULL` in the `when` expression
-                let with_null = match replace_with_null(
-                    w,
-                    unwrap_certainly_null_expr(t.as_ref()),
-                    input_schema,
-                ) {
-                    Err(e) => return Some(Err(e)),
-                    Ok(e) => e,
-                };
+            // Replace the `then` expression with `NULL` in the `when` expression
+            let with_null = match replace_with_null(
+                w,
+                unwrap_certainly_null_expr(t.as_ref()),
+                input_schema,
+            ) {
+                Err(e) => return Some(Err(e)),
+                Ok(e) => e,
+            };
 
-                // Try to const evaluate the modified `when` expression.
-                let predicate_result = match evaluate_predicate(&with_null) {
-                    Err(e) => return Some(Err(e)),
-                    Ok(b) => b,
-                };
+            // Try to const evaluate the modified `when` expression.
+            let predicate_result = match evaluate_predicate(&with_null) {
+                Err(e) => return Some(Err(e)),
+                Ok(b) => b,
+            };
 
-                match predicate_result {
-                    // Evaluation was inconclusive or true, so the 'then' expression is reachable
-                    None | Some(true) => Some(Ok(())),
-                    // Evaluation proves the branch will never be taken.
-                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                    Some(false) => None,
-                }
-            })
-            .next();
+            match predicate_result {
+                // Evaluation was inconclusive or true, so the 'then' expression is reachable
+                None | Some(true) => Some(Ok(())),
+                // Evaluation proves the branch will never be taken.
+                // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                Some(false) => None,
+            }
+        });
 
         if let Some(nullable_then) = nullable_then {
             // There is at least one reachable nullable 'then' expression, so the case
@@ -1424,16 +1419,26 @@ impl PhysicalExpr for CaseExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            body,
+            // Derived from `body` by `try_new` on decode.
+            eval_method: _,
+        } = self;
+        let CaseBody {
+            expr,
+            when_then_expr,
+            else_expr,
+        } = body;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Case(Box::new(
                 protobuf::PhysicalCaseNode {
-                    expr: self
-                        .expr()
+                    expr: expr
+                        .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
-                    when_then_expr: self
-                        .when_then_expr()
+                    when_then_expr: when_then_expr
                         .iter()
                         .map(|(when_expr, then_expr)| {
                             Ok(protobuf::PhysicalWhenThen {
@@ -1442,8 +1447,8 @@ impl PhysicalExpr for CaseExpr {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?,
-                    else_expr: self
-                        .else_expr()
+                    else_expr: else_expr
+                        .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
                 },
@@ -1467,30 +1472,36 @@ impl CaseExpr {
             protobuf::physical_expr_node::ExprType::Case,
             "CaseExpr",
         );
+        let protobuf::PhysicalCaseNode {
+            expr,
+            when_then_expr,
+            else_expr,
+        } = &**case;
 
         Ok(Arc::new(CaseExpr::try_new(
-            case.expr
-                .as_deref()
-                .map(|expr| ctx.decode(expr))
-                .transpose()?,
-            case.when_then_expr
+            expr.as_deref().map(|expr| ctx.decode(expr)).transpose()?,
+            when_then_expr
                 .iter()
                 .map(|when_then| {
+                    let protobuf::PhysicalWhenThen {
+                        when_expr,
+                        then_expr,
+                    } = when_then;
                     Ok((
                         ctx.decode_required_expression(
-                            when_then.when_expr.as_ref(),
+                            when_expr.as_ref(),
                             "CaseExpr",
                             "when_expr",
                         )?,
                         ctx.decode_required_expression(
-                            when_then.then_expr.as_ref(),
+                            then_expr.as_ref(),
                             "CaseExpr",
                             "then_expr",
                         )?,
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?,
-            case.else_expr
+            else_expr
                 .as_deref()
                 .map(|expr| ctx.decode(expr))
                 .transpose()?,
@@ -3422,6 +3433,26 @@ mod proto_tests {
         assert!(case_node.when_then_expr[0].when_expr.is_some());
         assert!(case_node.when_then_expr[0].then_expr.is_some());
         assert!(case_node.else_expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_distinguishes_optional_case_exprs() {
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        for (expr, else_expr) in [(None, Some(lit(0_i32))), (Some(lit(true)), None)] {
+            let case = CaseExpr::try_new(expr, vec![(lit(true), lit(1_i32))], else_expr)
+                .unwrap();
+            let node = case.try_to_proto(&ctx).unwrap().unwrap();
+            let Some(protobuf::physical_expr_node::ExprType::Case(case_node)) =
+                node.expr_type
+            else {
+                panic!("expected a CaseExpr node");
+            };
+
+            assert_eq!(case_node.expr.is_some(), case.expr().is_some());
+            assert_eq!(case_node.else_expr.is_some(), case.else_expr().is_some());
+        }
     }
 
     #[test]

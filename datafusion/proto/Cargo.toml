@@ -83,6 +83,7 @@ serde_json = { workspace = true, optional = true }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = [
     "sql",
+    "compression",
     "datetime_expressions",
     "nested_expressions",
     "unicode_expressions",
@@ -91,5 +92,7 @@ datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 doc-comment = { workspace = true }
+flate2 = { workspace = true }
 pretty_assertions = "1.4"
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
