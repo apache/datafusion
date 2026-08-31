@@ -46,8 +46,6 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, Statistics, validate_child_count,
 };
 
-#[cfg(test)]
-use arrow::array::Array;
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
@@ -564,6 +562,24 @@ impl RepartitionExecState {
             );
         }
 
+        let range_router = if let Partitioning::Range(range_partitioning) = &partitioning
+        {
+            let ordering = range_partitioning.ordering();
+            let sort_options: Vec<SortOptions> =
+                ordering.iter().map(|e| e.options).collect();
+            let data_types = ordering
+                .iter()
+                .map(|e| e.expr.data_type(input.schema().as_ref()))
+                .collect::<Result<Vec<_>>>()?;
+            Some(Arc::new(RangeRouter::try_new_with_data_types(
+                &sort_options,
+                range_partitioning.split_points(),
+                &data_types,
+            )?))
+        } else {
+            None
+        };
+
         // launch one async task per *input* partition
         let mut spawned_tasks = Vec::with_capacity(num_input_partitions);
         for (i, (stream, metrics)) in
@@ -597,6 +613,7 @@ impl RepartitionExecState {
                 stream,
                 txs,
                 partitioning.clone(),
+                range_router.clone(),
                 metrics,
                 // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
@@ -641,7 +658,7 @@ enum BatchPartitionerState {
         /// Ordered partitioning key.
         ordering: LexOrdering,
         /// Router for partition assignment.
-        router: RangeRouter,
+        router: Arc<RangeRouter>,
         /// Row indices grouped by output partition
         indices: Vec<Vec<u32>>,
     },
@@ -992,6 +1009,7 @@ impl BatchPartitioner {
     /// # Panics
     /// Panics if the range partitioning is invalid or cannot construct a range router.
     /// Prefer [`Self::try_new_range_partitioner`] for fallible construction.
+    #[deprecated(since = "55.0.0", note = "Use try_new_range_partitioner instead")]
     pub fn new_range_partitioner(
         range_partitioning: &RangePartitioning,
         timer: metrics::Time,
@@ -1012,17 +1030,40 @@ impl BatchPartitioner {
         let ordering = range_partitioning.ordering().clone();
         let num_partitions = range_partitioning.partition_count();
         let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
-        let router =
-            RangeRouter::try_new(&sort_options, range_partitioning.split_points())?;
+        let router = Arc::new(RangeRouter::try_new(
+            &sort_options,
+            range_partitioning.split_points(),
+        )?);
 
-        Ok(Self {
+        Ok(Self::new_range_partitioner_with_router(
+            ordering,
+            router,
+            num_partitions,
+            timer,
+        ))
+    }
+
+    /// Create a new [`BatchPartitioner`] for range-based repartitioning using a pre-constructed [`RangeRouter`].
+    ///
+    /// # Parameters
+    /// - `ordering`: Lexical ordering expressions for range partitioning.
+    /// - `router`: Shared [`RangeRouter`] reference.
+    /// - `num_partitions`: Total number of output partitions.
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    pub(crate) fn new_range_partitioner_with_router(
+        ordering: LexOrdering,
+        router: Arc<RangeRouter>,
+        num_partitions: usize,
+        timer: metrics::Time,
+    ) -> Self {
+        Self {
             state: BatchPartitionerState::Range {
                 ordering,
                 router,
                 indices: vec![vec![]; num_partitions],
             },
             timer,
-        })
+        }
     }
 
     /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
@@ -2119,16 +2160,29 @@ impl RepartitionExec {
         mut stream: SendableRecordBatchStream,
         mut output_channels: HashMap<usize, OutputChannel>,
         partitioning: Partitioning,
+        range_router: Option<Arc<RangeRouter>>,
         metrics: RepartitionMetrics,
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
-        let mut partitioner = BatchPartitioner::try_new(
-            partitioning,
-            metrics.repartition_time.clone(),
-            input_partition,
-            num_input_partitions,
-        )?;
+        let mut partitioner = match (partitioning, range_router) {
+            (Partitioning::Range(range_partitioning), Some(router)) => {
+                let ordering = range_partitioning.ordering().clone();
+                let num_partitions = range_partitioning.partition_count();
+                BatchPartitioner::new_range_partitioner_with_router(
+                    ordering,
+                    router,
+                    num_partitions,
+                    metrics.repartition_time.clone(),
+                )
+            }
+            (partitioning, _) => BatchPartitioner::try_new(
+                partitioning,
+                metrics.repartition_time.clone(),
+                input_partition,
+                num_input_partitions,
+            )?,
+        };
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
@@ -2484,8 +2538,11 @@ mod tests {
         {collect, expressions::col},
     };
 
-    use arrow::array::{ArrayRef, StringArray, UInt32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        Array, ArrayRef, Decimal128Array, Int64Array, StringArray,
+        TimestampNanosecondArray, UInt32Array,
+    };
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_string_array, as_uint32_array};
     use datafusion_common::exec_err;
@@ -2493,7 +2550,9 @@ mod tests {
     use datafusion_common_runtime::JoinSet;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
+    use datafusion_physical_expr::{
+        LexOrdering, PhysicalSortExpr, RangePartitioning, SplitPoint,
+    };
     use insta::assert_snapshot;
 
     #[derive(Debug)]
@@ -2990,6 +3049,101 @@ mod tests {
             vec!["foo", "qux"],
             collect_partition_string_values(&partition_1)
         );
+
+        Ok(())
+    }
+
+    /// Split points are not required to carry the key's exact type: `compare_rows`,
+    /// the routing function the range router replaced, compares `Decimal128` on
+    /// scale alone and ignores precision. Routing must not depend on the split
+    /// point's precision matching the column's.
+    #[tokio::test]
+    async fn range_repartition_routes_decimal_with_wider_column_precision() -> Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "k",
+            DataType::Decimal128(20, 2),
+            true,
+        )]));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("k", &schema)?,
+            SortOptions::default(),
+        )])
+        .unwrap();
+        // Split point is Decimal128(10, 2); the column is Decimal128(20, 2).
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Decimal128(
+                Some(1000),
+                10,
+                2,
+            )])],
+        )?);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(
+                Decimal128Array::from(vec![Some(500i128), Some(2000i128)])
+                    .with_precision_and_scale(20, 2)?,
+            )],
+        )?;
+
+        let output_partitions =
+            repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(2, output_partitions.len());
+        assert_eq!(1, partition_row_count(&output_partitions[0]));
+        assert_eq!(1, partition_row_count(&output_partitions[1]));
+
+        Ok(())
+    }
+
+    /// Same contract for timestamps: `compare_rows` ignores the timezone, since
+    /// the underlying values are UTC either way. A tz-less split point must
+    /// still route a `Timestamp(ns, "UTC")` column — including when the key is
+    /// compound, where the single-column fast path does not apply.
+    #[tokio::test]
+    async fn range_repartition_routes_compound_timestamp_key_ignoring_timezone()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "t",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("i", DataType::Int64, true),
+        ]));
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new(col("t", &schema)?, SortOptions::default()),
+            PhysicalSortExpr::new(col("i", &schema)?, SortOptions::default()),
+        ])
+        .unwrap();
+        // Split point timestamp carries no timezone; the column carries "UTC".
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![
+                ScalarValue::TimestampNanosecond(Some(100), None),
+                ScalarValue::Int64(Some(0)),
+            ])],
+        )?);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(
+                    TimestampNanosecondArray::from(vec![Some(50i64), Some(200)])
+                        .with_timezone("UTC"),
+                ),
+                Arc::new(Int64Array::from(vec![Some(1i64), Some(2)])),
+            ],
+        )?;
+
+        let output_partitions =
+            repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(2, output_partitions.len());
+        assert_eq!(1, partition_row_count(&output_partitions[0]));
+        assert_eq!(1, partition_row_count(&output_partitions[1]));
 
         Ok(())
     }

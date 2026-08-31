@@ -393,10 +393,11 @@ fn bench_range_partitioner_construction(c: &mut Criterion) {
             &num_partitions,
             |b, _| {
                 b.iter(|| {
-                    let partitioner = BatchPartitioner::new_range_partitioner(
+                    let partitioner = BatchPartitioner::try_new_range_partitioner(
                         black_box(&range_part),
                         Time::default(),
-                    );
+                    )
+                    .unwrap();
                     black_box(partitioner);
                 });
             },

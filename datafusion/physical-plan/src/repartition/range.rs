@@ -23,15 +23,17 @@ use std::sync::Arc;
 use arrow::array::*;
 use arrow::compute::SortOptions;
 use arrow::datatypes::*;
-use arrow::row::{OwnedRow, RowConverter, SortField};
+use arrow::row::{Row, RowConverter, Rows, SortField};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, not_impl_err, validate_range_split_points,
+    DataFusionError, Result, ScalarValue, exec_err, not_impl_err, plan_err,
+    validate_range_split_points,
 };
 use datafusion_physical_expr::SplitPoint;
 
 /// A router for assigning rows to range partitions.
 #[derive(Debug, Clone)]
 pub(crate) struct RangeRouter {
+    data_types: Vec<DataType>,
     split_points: Vec<SplitPoint>,
     sort_options: Vec<SortOptions>,
     inner: RangeRouterInner,
@@ -46,29 +48,94 @@ enum RangeRouterInner {
 }
 
 impl RangeRouter {
-    /// Constructs the best router for the given sort options and split points.
+    /// Constructs the best router for the given sort options and split points,
+    /// inferring key data types from the split points.
     pub(crate) fn try_new(
         sort_options: &[SortOptions],
         split_points: &[SplitPoint],
     ) -> Result<Self> {
+        let data_types: Option<Vec<DataType>> = if !split_points.is_empty() {
+            Some(
+                (0..sort_options.len())
+                    .map(|col_idx| split_points[0].values()[col_idx].data_type())
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        Self::try_new_with_optional_data_types(
+            sort_options,
+            split_points,
+            data_types.as_deref(),
+        )
+    }
+
+    /// Constructs the best router for the given sort options, split points, and target data types,
+    /// coercing split point values to the target data types.
+    pub(crate) fn try_new_with_data_types(
+        sort_options: &[SortOptions],
+        split_points: &[SplitPoint],
+        data_types: &[DataType],
+    ) -> Result<Self> {
+        Self::try_new_with_optional_data_types(
+            sort_options,
+            split_points,
+            Some(data_types),
+        )
+    }
+
+    fn try_new_with_optional_data_types(
+        sort_options: &[SortOptions],
+        split_points: &[SplitPoint],
+        data_types: Option<&[DataType]>,
+    ) -> Result<Self> {
         validate_range_split_points(split_points, sort_options)?;
 
-        let data_types: Vec<DataType> = if !split_points.is_empty() {
-            (0..sort_options.len())
+        let (data_types, split_points) = if let Some(target_dts) = data_types {
+            if target_dts.len() != sort_options.len() {
+                return plan_err!(
+                    "Range partitioning expected {} data types for sort options, but got {}",
+                    sort_options.len(),
+                    target_dts.len()
+                );
+            }
+            let coerced_split_points = split_points
+                .iter()
+                .map(|sp| {
+                    let vals = sp
+                        .values()
+                        .iter()
+                        .zip(target_dts)
+                        .map(|(val, target_dt)| {
+                            if val.data_type() == *target_dt {
+                                Ok(val.clone())
+                            } else {
+                                val.cast_to(target_dt)
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(SplitPoint::new(vals))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (target_dts.to_vec(), coerced_split_points)
+        } else if !split_points.is_empty() {
+            let dts: Vec<DataType> = (0..sort_options.len())
                 .map(|col_idx| split_points[0].values()[col_idx].data_type())
-                .collect()
+                .collect();
+            (dts, split_points.to_vec())
         } else {
-            vec![]
+            (vec![], vec![])
         };
 
         // Try single-column primitive fast path
         if data_types.len() == 1
             && !sort_options.is_empty()
             && let Some(primitive_router) =
-                PrimitiveRangeRouter::try_new(split_points, sort_options[0])
+                PrimitiveRangeRouter::try_new(&split_points, sort_options[0])
         {
             return Ok(Self {
-                split_points: split_points.to_vec(),
+                data_types,
+                split_points,
                 sort_options: sort_options.to_vec(),
                 inner: RangeRouterInner::Primitive(primitive_router),
             });
@@ -76,12 +143,19 @@ impl RangeRouter {
 
         // Try RowConverter path
         let row_router =
-            RowConverterRangeRouter::try_new(&data_types, sort_options, split_points)?;
+            RowConverterRangeRouter::try_new(&data_types, sort_options, &split_points)?;
         Ok(Self {
-            split_points: split_points.to_vec(),
+            data_types,
+            split_points,
             sort_options: sort_options.to_vec(),
             inner: RangeRouterInner::Row(row_router),
         })
+    }
+
+    /// Data types configured in this router.
+    #[cfg(test)]
+    pub(crate) fn data_types(&self) -> &[DataType] {
+        &self.data_types
     }
 
     /// Split points configured in this router.
@@ -110,6 +184,23 @@ impl RangeRouter {
                 emit(row_idx, 0);
             }
             return Ok(());
+        }
+
+        if arrays.len() != self.data_types.len() {
+            return exec_err!(
+                "Range partitioning expected {} columns, but got {}",
+                self.data_types.len(),
+                arrays.len()
+            );
+        }
+
+        for (i, (arr, expected_dt)) in arrays.iter().zip(&self.data_types).enumerate() {
+            if arr.data_type() != expected_dt {
+                return exec_err!(
+                    "Range partitioning expected column {i} to be of type {expected_dt:?}, but got {:?}",
+                    arr.data_type()
+                );
+            }
         }
 
         match &self.inner {
@@ -435,7 +526,7 @@ impl_float_values_router!(f64, Float64Array);
 #[derive(Debug, Clone)]
 struct RowConverterRangeRouter {
     converter: Arc<RowConverter>,
-    split_point_rows: Vec<OwnedRow>,
+    split_point_rows: Option<Rows>,
 }
 
 impl RowConverterRangeRouter {
@@ -461,7 +552,7 @@ impl RowConverterRangeRouter {
         let num_cols = data_types.len();
 
         let split_point_rows = if split_points.is_empty() {
-            vec![]
+            None
         } else {
             let split_point_arrays = (0..num_cols)
                 .map(|col_idx| {
@@ -471,11 +562,7 @@ impl RowConverterRangeRouter {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            row_converter
-                .convert_columns(&split_point_arrays)?
-                .iter()
-                .map(|r| r.owned())
-                .collect()
+            Some(row_converter.convert_columns(&split_point_arrays)?)
         };
 
         Ok(Self {
@@ -490,14 +577,33 @@ impl RowConverterRangeRouter {
         mut emit: E,
     ) -> Result<()> {
         let rows = self.converter.convert_columns(arrays)?;
-        let sp_rows = &self.split_point_rows;
-
-        for (row_idx, row) in rows.iter().enumerate() {
-            let partition = sp_rows.partition_point(|sp| sp.as_ref() <= row.as_ref());
-            emit(row_idx, partition);
+        if let Some(sp_rows) = &self.split_point_rows {
+            for (row_idx, row) in rows.iter().enumerate() {
+                let partition = partition_point_rows(sp_rows, &row);
+                emit(row_idx, partition);
+            }
+        } else {
+            for row_idx in 0..rows.num_rows() {
+                emit(row_idx, 0);
+            }
         }
         Ok(())
     }
+}
+
+#[inline]
+fn partition_point_rows(sp_rows: &Rows, row: &Row<'_>) -> usize {
+    let mut left = 0;
+    let mut right = sp_rows.num_rows();
+    while left < right {
+        let mid = left + (right - left) / 2;
+        if sp_rows.row(mid) <= *row {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    left
 }
 
 #[cfg(test)]
@@ -716,5 +822,86 @@ mod tests {
 
         let input = Arc::new(Int64Array::from(vec![10, 20, 30])) as ArrayRef;
         assert_routing(&router, &[input], &[0, 0, 0], Some(&[vec![0, 1, 2]]))
+    }
+
+    #[test]
+    fn test_router_decimal_precision_widening() -> Result<()> {
+        // Split point defined with precision 10, scale 2
+        let split_points = vec![SplitPoint::new(vec![ScalarValue::Decimal128(
+            Some(1000),
+            10,
+            2,
+        )])];
+        let sort_options = vec![SortOptions::default()];
+        let target_data_types = vec![DataType::Decimal128(20, 2)];
+
+        let router = RangeRouter::try_new_with_data_types(
+            &sort_options,
+            &split_points,
+            &target_data_types,
+        )?;
+        assert_eq!(router.data_types(), &target_data_types);
+
+        // Column array is Decimal128(20, 2)
+        let array = Arc::new(
+            Decimal128Array::from(vec![Some(500i128), Some(1000i128), Some(2000i128)])
+                .with_precision_and_scale(20, 2)?,
+        ) as ArrayRef;
+
+        assert_routing(&router, &[array], &[0, 1, 1], Some(&[vec![0], vec![1, 2]]))
+    }
+
+    #[test]
+    fn test_router_timestamp_timezone_coercion() -> Result<()> {
+        // Split point defined without timezone
+        let split_points = vec![SplitPoint::new(vec![
+            ScalarValue::TimestampNanosecond(Some(100), None),
+            ScalarValue::Int64(Some(0)),
+        ])];
+        let sort_options = vec![SortOptions::default(), SortOptions::default()];
+        let target_data_types = vec![
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            DataType::Int64,
+        ];
+
+        let router = RangeRouter::try_new_with_data_types(
+            &sort_options,
+            &split_points,
+            &target_data_types,
+        )?;
+        assert_eq!(router.data_types(), &target_data_types);
+
+        let col1 = Arc::new(
+            TimestampNanosecondArray::from(vec![Some(50i64), Some(200i64)])
+                .with_timezone("UTC"),
+        ) as ArrayRef;
+        let col2 = Arc::new(Int64Array::from(vec![Some(1i64), Some(2i64)])) as ArrayRef;
+
+        assert_routing(&router, &[col1, col2], &[0, 1], Some(&[vec![0], vec![1]]))
+    }
+
+    #[test]
+    fn test_router_type_mismatch_error() -> Result<()> {
+        let split_points = make_split_points_1d(vec![ScalarValue::Int64(Some(10))]);
+        let sort_options = vec![SortOptions::default()];
+
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
+
+        // Pass Float64Array instead of Int64Array
+        let invalid_input = Arc::new(Float64Array::from(vec![5.0, 15.0])) as ArrayRef;
+        let err = router.route_with(&[invalid_input], |_, _| {}).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Range partitioning expected column 0 to be of type Int64")
+        );
+
+        // Pass wrong column count
+        let err = router.route_with(&[], |_, _| {}).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Range partitioning expected 1 columns, but got 0")
+        );
+
+        Ok(())
     }
 }
