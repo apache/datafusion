@@ -4578,7 +4578,7 @@ mod tests {
     -> Result<()> {
         let num_input_batches = 3;
         let partial_reduce =
-            partial_reduce_test_aggregate_rows_group_values(num_input_batches)?;
+            partial_reduce_test_aggregate_rows_multi_group_keys(num_input_batches)?;
 
         // Pin the representation: this is exactly the condition
         // `new_group_values` uses to pick `GroupValuesRows` over
