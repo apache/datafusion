@@ -398,7 +398,7 @@ mod tests {
         test_function!(
             InitcapFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                "".to_string()
+                String::new()
             )))],
             Ok(Some("")),
             &str,
