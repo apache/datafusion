@@ -17,12 +17,13 @@
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::{DataType, DecimalType};
+use arrow::datatypes::{DataType, DecimalType, Field};
 use arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -67,6 +68,26 @@ macro_rules! get_optimal_return_type {
             })
         }
     };
+}
+
+/// Returns the field metadata shared by every argument that can contribute a
+/// value to a conditional function's result.
+///
+/// Fields with a `Null` data type (untyped NULL literals) carry no metadata
+/// and are ignored. If the remaining fields disagree on metadata, the result
+/// carries none: propagating one argument's metadata (e.g. an Arrow extension
+/// type name) would claim a type identity for values that other arguments may
+/// supply without it.
+pub(crate) fn unanimous_metadata<'a>(
+    fields: impl Iterator<Item = &'a Field>,
+) -> HashMap<String, String> {
+    let mut candidates = fields.filter(|f| !f.data_type().is_null());
+    match candidates.next() {
+        Some(first) if candidates.all(|f| f.metadata() == first.metadata()) => {
+            first.metadata().clone()
+        }
+        _ => HashMap::new(),
+    }
 }
 
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.

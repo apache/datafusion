@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::unanimous_metadata;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::{
@@ -94,7 +95,15 @@ impl ScalarUDFImpl for NVL2Func {
         let nullable =
             args.arg_fields[1].is_nullable() || args.arg_fields[2].is_nullable();
         let return_type = args.arg_fields[1].data_type().clone();
-        Ok(Field::new(self.name(), return_type, nullable).into())
+        // The result value comes from the second or third argument; propagate
+        // field metadata (e.g. Arrow extension types) only when they agree on
+        // it. The first argument is only tested for NULL and does not
+        // contribute a value.
+        let metadata =
+            unanimous_metadata(args.arg_fields[1..3].iter().map(|f| f.as_ref()));
+        Ok(Field::new(self.name(), return_type, nullable)
+            .with_metadata(metadata)
+            .into())
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -143,5 +152,58 @@ impl ScalarUDFImpl for NVL2Func {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    const EXTENSION_KEY: &str = "ARROW:extension:name";
+
+    fn ext_field(name: &str, dt: DataType, extension_name: &str) -> FieldRef {
+        Arc::new(Field::new(name, dt, true).with_metadata(HashMap::from([(
+            EXTENSION_KEY.to_string(),
+            extension_name.to_string(),
+        )])))
+    }
+
+    fn return_field(arg_fields: &[FieldRef]) -> FieldRef {
+        let scalars = vec![None; arg_fields.len()];
+        NVL2Func::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields,
+                scalar_arguments: &scalars,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn propagates_metadata_from_value_arguments() {
+        // The first argument is only tested for NULL; its metadata must not
+        // leak into the result even when the value arguments agree.
+        let ret = return_field(&[
+            ext_field("test", DataType::Binary, "unrelated.type"),
+            ext_field("if_non_null", DataType::Binary, "geoarrow.wkb"),
+            ext_field("if_null", DataType::Binary, "geoarrow.wkb"),
+        ]);
+        assert_eq!(ret.data_type(), &DataType::Binary);
+        assert_eq!(
+            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
+            Some("geoarrow.wkb")
+        );
+    }
+
+    #[test]
+    fn drops_metadata_when_value_arguments_disagree() {
+        let ret = return_field(&[
+            Arc::new(Field::new("test", DataType::Boolean, true)),
+            ext_field("if_non_null", DataType::Binary, "geoarrow.wkb"),
+            Arc::new(Field::new("if_null", DataType::Binary, true)),
+        ]);
+        assert_eq!(ret.data_type(), &DataType::Binary);
+        assert!(ret.metadata().is_empty());
     }
 }
