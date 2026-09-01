@@ -1765,7 +1765,7 @@ mod tests {
             let mut inner = Some(self.inner.read_stream()?);
             Ok(Box::pin(
                 futures::stream::once(tokio::time::sleep(delay))
-                    .flat_map(move |_| inner.take().expect("polled once")),
+                    .flat_map(move |()| inner.take().expect("polled once")),
             ))
         }
 

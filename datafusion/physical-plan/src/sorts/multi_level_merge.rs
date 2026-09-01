@@ -565,7 +565,7 @@ impl MultiLevelMergeBuilder {
                 try_grow_reservation_to_at_least(reservation, total_needed)
             };
             match admission {
-                Ok(_) => {
+                Ok(()) => {
                     number_of_spills_to_read_for_current_phase += 1;
                     accepted_memory = total_needed;
                 }
