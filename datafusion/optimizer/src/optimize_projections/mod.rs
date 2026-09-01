@@ -24,7 +24,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    Column, DFSchema, DFSchemaRef, HashMap, JoinType, Result, assert_eq_or_internal_err,
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
@@ -843,9 +843,23 @@ fn rewrite_projection_given_requirements(
     config: &dyn OptimizerConfig,
     indices: &RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    let Projection { expr, input, .. } = proj;
+    let Projection {
+        expr,
+        input,
+        schema,
+        ..
+    } = proj;
 
     let exprs_used = indices.get_at_indices(&expr);
+
+    // The retained expressions are a subset of the original projection's
+    // expressions, so their output fields are unchanged by pruning unreferenced
+    // sibling columns. Derive the pruned output schema by selecting those fields
+    // from the existing projection schema instead of recomputing every field's
+    // type/nullability via `Expr::to_field` (see `projection_schema`), which is
+    // quadratic in the schema width. This mirrors the schema reuse already
+    // performed in `merge_consecutive_projections`.
+    let projected_schema = project_schema_by_indices(&schema, indices.indices())?;
 
     let required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
@@ -857,11 +871,53 @@ fn rewrite_projection_given_requirements(
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
             } else {
-                Projection::try_new(exprs_used, Arc::new(input))
-                    .map(LogicalPlan::Projection)
-                    .map(Transformed::yes)
+                Projection::try_new_with_schema(
+                    exprs_used,
+                    Arc::new(input),
+                    Arc::clone(&projected_schema),
+                )
+                .map(LogicalPlan::Projection)
+                .map(Transformed::yes)
             }
         })
+}
+
+/// Builds the output schema of a projection that keeps only the fields at
+/// `indices` (a sorted, deduplicated subset produced by [`RequiredIndices`]) of
+/// `schema`, reusing the already-computed fields instead of recomputing each
+/// field's type/nullability from the expressions.
+///
+/// Pruning unreferenced sibling columns cannot change the retained fields, so
+/// the sliced schema is identical to the one [`projection_schema`] would
+/// recompute, at O(k) instead of O(exprs * schema_width).
+///
+/// [`projection_schema`]: datafusion_expr::logical_plan::projection_schema
+fn project_schema_by_indices(
+    schema: &DFSchemaRef,
+    indices: &[usize],
+) -> Result<DFSchemaRef> {
+    // Nothing pruned: the output schema is unchanged, reuse it as-is.
+    if indices.len() == schema.fields().len() {
+        return Ok(Arc::clone(schema));
+    }
+
+    let qualified_fields = indices
+        .iter()
+        .map(|&i| {
+            let (qualifier, field) = schema.qualified_field(i);
+            (qualifier.cloned(), Arc::clone(field))
+        })
+        .collect::<Vec<_>>();
+
+    let func_deps = schema
+        .functional_dependencies()
+        .project_functional_dependencies(indices, indices.len());
+
+    let projected =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
+            .with_functional_dependencies(func_deps)?;
+
+    Ok(Arc::new(projected))
 }
 
 /// Projection is unnecessary, when
@@ -905,7 +961,7 @@ mod tests {
     use crate::{OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
+        Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
@@ -1173,6 +1229,107 @@ mod tests {
         fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
             write!(f, "OpaqueRequirementsUserDefined")
         }
+    }
+
+    /// `project_schema_by_indices` must produce exactly the schema that
+    /// recomputing it from scratch (`projection_schema`) would, for every subset
+    /// of a projection's expressions. This is the correctness invariant that lets
+    /// `rewrite_projection_given_requirements` reuse the parent schema instead of
+    /// re-deriving each field's type via `Expr::to_field`.
+    #[test]
+    fn project_schema_by_indices_matches_recompute() -> Result<()> {
+        use super::project_schema_by_indices;
+        use datafusion_expr::logical_plan::projection_schema;
+
+        let input = Arc::new(test_table_scan()?); // columns: a, b, c (UInt32, NOT NULL)
+
+        // A deliberately mixed expression list: plain column, computed binary
+        // expr, alias, nullable literal, and a qualified column. Every input
+        // column is NOT NULL, so the NULL literal is what makes nullability
+        // actually vary across the schema.
+        let exprs = vec![
+            col("a"),
+            binary_expr(col("b"), Operator::Plus, col("c")),
+            col("c").alias("c_alias"),
+            lit(ScalarValue::Int64(None)).alias("null_one"),
+            Expr::Column(Column::new(Some(TableReference::bare("test")), "b")),
+        ];
+
+        let full_schema =
+            Arc::clone(&Projection::try_new(exprs.clone(), Arc::clone(&input))?.schema);
+
+        // Guard the premise above: if this ever stops holding, the subsets below
+        // would no longer exercise nullability propagation at all.
+        assert!(
+            full_schema.field(3).is_nullable(),
+            "the literal must be nullable for this test to cover nullability"
+        );
+        assert!(
+            !full_schema.field(0).is_nullable(),
+            "input columns are expected to be NOT NULL"
+        );
+
+        // Every sorted, deduplicated subset RequiredIndices could produce,
+        // including the "nothing pruned" identity case.
+        let subsets: Vec<Vec<usize>> = vec![
+            vec![0, 1, 2, 3, 4], // identity (SELECT * fast path)
+            vec![0],
+            vec![1], // computed expr only
+            vec![2], // alias only
+            vec![3], // literal only
+            vec![0, 2],
+            vec![1, 3],
+            vec![0, 1, 4],
+            vec![2, 3, 4],
+        ];
+
+        for indices in subsets {
+            let exprs_used: Vec<Expr> =
+                indices.iter().map(|&i| exprs[i].clone()).collect();
+
+            let reused = project_schema_by_indices(&full_schema, &indices)?;
+            let recomputed = projection_schema(input.as_ref(), &exprs_used)?;
+
+            // Output fields (name, data type, nullability, field metadata) must
+            // match the from-scratch computation exactly.
+            assert_eq!(
+                reused.fields(),
+                recomputed.fields(),
+                "fields differ for indices {indices:?}"
+            );
+
+            // Column qualifiers (table references) must be preserved too.
+            let reused_quals: Vec<_> = reused.iter().map(|(q, _)| q.cloned()).collect();
+            let recomputed_quals: Vec<_> =
+                recomputed.iter().map(|(q, _)| q.cloned()).collect();
+            assert_eq!(
+                reused_quals, recomputed_quals,
+                "qualifiers differ for indices {indices:?}"
+            );
+
+            // `project_schema_by_indices` also carries over schema-level
+            // metadata and projects functional dependencies through the kept
+            // indices, so both must match the from-scratch computation as well.
+            assert_eq!(
+                reused.metadata(),
+                recomputed.metadata(),
+                "schema metadata differs for indices {indices:?}"
+            );
+            assert_eq!(
+                reused.functional_dependencies(),
+                recomputed.functional_dependencies(),
+                "functional dependencies differ for indices {indices:?}"
+            );
+        }
+
+        // The identity subset must reuse the very same Arc, not rebuild it.
+        let identity = project_schema_by_indices(&full_schema, &[0, 1, 2, 3, 4])?;
+        assert!(
+            Arc::ptr_eq(&identity, &full_schema),
+            "identity projection should reuse the existing schema Arc"
+        );
+
+        Ok(())
     }
 
     #[test]
