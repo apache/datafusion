@@ -30,7 +30,7 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::{Result, not_impl_err};
-use datafusion_expr_common::casts::cast_output_field;
+use datafusion_expr_common::casts::{cast_output_field, is_type_only_cast_target};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -157,6 +157,13 @@ impl CastExpr {
     /// logical `Expr::Cast` uses to derive its output field, so the two layers
     /// agree by construction.
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        // An explicit target fully determines the output field, so do not resolve
+        // the child in that case: it may not be resolvable against this schema.
+        // `rewrite_file_row_index_expr` relies on this, wrapping a `Column` whose
+        // index is deliberately outside the schema the cast is asked about.
+        if !is_type_only_cast_target(&self.target_field) {
+            return Ok(Arc::clone(&self.target_field));
+        }
         let source_field = self.expr.return_field(input_schema)?;
         Ok(cast_output_field(&source_field, &self.target_field, false))
     }
