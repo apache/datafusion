@@ -1244,7 +1244,7 @@ mod tests {
         let placeholder_meta = FieldMetadata::from(placeholder_meta);
 
         let expr = Expr::Placeholder(Placeholder::new_with_field(
-            "".to_string(),
+            String::new(),
             Some(
                 Field::new("", DataType::Utf8, true)
                     .with_metadata(placeholder_meta.to_hashmap())
@@ -1269,7 +1269,7 @@ mod tests {
 
         // Non-nullable placeholder field should remain non-nullable
         let expr = Expr::Placeholder(Placeholder::new_with_field(
-            "".to_string(),
+            String::new(),
             Some(Field::new("", DataType::Utf8, false).into()),
         ));
         let expr_field = expr.to_field(&schema).unwrap().1;

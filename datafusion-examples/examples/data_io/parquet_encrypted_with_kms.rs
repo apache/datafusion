@@ -200,7 +200,7 @@ async fn read_encrypted_with_sql(ctx: &SessionContext, table_path: &str) -> Resu
 extensions_options! {
     struct EncryptionConfig {
         /// Comma-separated list of columns to encrypt
-        pub encrypted_columns: String, default = "".to_owned()
+        pub encrypted_columns: String, default = String::new()
     }
 }
 

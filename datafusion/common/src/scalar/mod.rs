@@ -1703,9 +1703,9 @@ impl ScalarValue {
             | DataType::Date64 => ScalarValue::new_zero(datatype),
 
             // String types
-            DataType::Utf8 => Ok(ScalarValue::Utf8(Some("".to_string()))),
-            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some("".to_string()))),
-            DataType::Utf8View => Ok(ScalarValue::Utf8View(Some("".to_string()))),
+            DataType::Utf8 => Ok(ScalarValue::Utf8(Some(String::new()))),
+            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(String::new()))),
+            DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(String::new()))),
 
             // Binary types
             DataType::Binary => Ok(ScalarValue::Binary(Some(vec![]))),
@@ -5650,7 +5650,7 @@ impl fmt::Display for ScalarValue {
                     match epoch.checked_add_signed(Duration::try_days(v as i64).unwrap())
                     {
                         Some(date) => date.to_string(),
-                        None => "".to_string(),
+                        None => String::new(),
                     }
                 })
             )?,
@@ -5661,7 +5661,7 @@ impl fmt::Display for ScalarValue {
                     match epoch.checked_add_signed(Duration::try_milliseconds(v).unwrap())
                     {
                         Some(date) => date.to_string(),
-                        None => "".to_string(),
+                        None => String::new(),
                     }
                 })
             )?,
@@ -10640,11 +10640,11 @@ mod tests {
         // Test string types
         assert_eq!(
             ScalarValue::new_default(&DataType::Utf8).unwrap(),
-            ScalarValue::Utf8(Some("".to_string()))
+            ScalarValue::Utf8(Some(String::new()))
         );
         assert_eq!(
             ScalarValue::new_default(&DataType::LargeUtf8).unwrap(),
-            ScalarValue::LargeUtf8(Some("".to_string()))
+            ScalarValue::LargeUtf8(Some(String::new()))
         );
 
         // Test binary types

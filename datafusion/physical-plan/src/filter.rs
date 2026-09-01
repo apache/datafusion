@@ -521,11 +521,11 @@ impl DisplayAs for FilterExec {
                             .join(", ")
                     )
                 } else {
-                    "".to_string()
+                    String::new()
                 };
                 let fetch = self
                     .fetch
-                    .map_or_else(|| "".to_string(), |f| format!(", fetch={f}"));
+                    .map_or_else(String::new, |f| format!(", fetch={f}"));
                 write!(
                     f,
                     "FilterExec: {}{}{}",
