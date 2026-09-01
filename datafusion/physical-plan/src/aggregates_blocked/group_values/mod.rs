@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::{assert_ne_or_internal_err, Result, assert_or_internal_err, unwrap_or_internal_err, assert_eq_or_internal_err};
 
 use datafusion_expr::EmitTo;
-use datafusion_expr_common::groups_accumulator::BlockedEmitTo;
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
 // pub mod multi_group_by;
 
 // mod row;
@@ -103,7 +103,7 @@ pub trait BlockedGroupValues: Send {
     /// If a row has the same value as a previous row, the same group id is
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<BlocksIndex>) -> Result<()>;
 
     /// Returns the number of bytes of memory used by this [`BlockedGroupValues`].
     ///
@@ -192,8 +192,13 @@ impl BlockedGroupValues for BlockedGroupValuesAdapter {
         self.block_size
     }
 
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        self.inner.intern(cols, groups)
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<BlocksIndex>) -> Result<()> {
+        let block_size = self.block_size;
+        let mut group_indices_flattened = groups.iter().map(|i| i.into_index_in_fixed_block_size(block_size)).collect::<Vec<_>>();
+        self.inner.intern(cols, &mut group_indices_flattened)?;
+        *groups = group_indices_flattened.iter().map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, block_size)).collect::<Vec<_>>();
+
+        Ok(())
     }
 
     fn size(&self) -> usize {

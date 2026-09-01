@@ -173,16 +173,9 @@ impl AggregateHashTable<PartialMarker> {
                 .collect();
             cols.push(group_id_array(group, ordinal, max_ordinal, 1)?);
 
-            // Scope to only have mutable flattened group indices in single defined place to avoid discrepancy
-            {
-                let mut group_indices_flattened = state.batch_group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
-
-                state
-                  .group_values
-                  .intern(&cols, &mut group_indices_flattened)?;
-
-                state.batch_group_indices = group_indices_flattened.iter().map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, self.batch_size)).collect::<Vec<_>>();
-            };
+            state
+              .group_values
+              .intern(&cols, &mut state.batch_group_indices)?;
 
             any_interned = true;
         }

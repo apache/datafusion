@@ -410,18 +410,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         for group_values in &evaluated_batch.grouping_set_args {
             let starting_num_groups = self.buffer.group_values.len();
 
-            // Scope to only have mutable flattened group indices in single defined place to avoid discrepancy
-            let group_indices_flattened = {
-                let mut group_indices_flattened = self.buffer.group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
-
-                self.buffer
-                  .group_values
-                  .intern(group_values, &mut group_indices_flattened)?;
-
-                self.buffer.group_indices = group_indices_flattened.iter().map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, self.batch_size)).collect::<Vec<_>>();
-
-                group_indices_flattened
-            };
+            self.buffer
+              .group_values
+              .intern(group_values, &mut self.buffer.group_indices)?;
+            let group_indices_flattened = self.buffer.group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
             let total_num_groups = self.buffer.group_values.len();
             if total_num_groups > starting_num_groups {
                 self.buffer.group_ordering.new_groups(
