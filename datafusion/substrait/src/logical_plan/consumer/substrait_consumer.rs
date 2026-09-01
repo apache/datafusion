@@ -40,8 +40,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 use substrait::proto::expression as substrait_expression;
 use substrait::proto::expression::{
-    Enum, FieldReference, IfThen, Literal, MultiOrList, Nested, ScalarFunction,
-    SingularOrList, SwitchExpression, WindowFunction,
+    FieldReference, IfThen, Literal, MultiOrList, Nested, ScalarFunction, SingularOrList,
+    SwitchExpression, WindowFunction,
 };
 use substrait::proto::{self, Type};
 use substrait::proto::{
@@ -386,14 +386,6 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         input_schema: &DFSchema,
     ) -> datafusion::common::Result<Expr> {
         from_nested(self, expr, input_schema).await
-    }
-
-    async fn consume_enum(
-        &self,
-        _expr: &Enum,
-        _input_schema: &DFSchema,
-    ) -> datafusion::common::Result<Expr> {
-        not_impl_err!("Enum expression not supported")
     }
 
     async fn consume_dynamic_parameter(

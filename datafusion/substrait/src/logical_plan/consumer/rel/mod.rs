@@ -134,6 +134,8 @@ fn retrieve_rel_common(rel: &Rel) -> Option<&RelCommon> {
     match rel.rel_type.as_ref() {
         None => None,
         Some(rt) => match rt {
+            RelType::LateralJoin(l) => l.common.as_ref(),
+            RelType::TopN(t) => t.common.as_ref(),
             RelType::Read(r) => r.common.as_ref(),
             RelType::Filter(f) => f.common.as_ref(),
             RelType::Fetch(f) => f.common.as_ref(),

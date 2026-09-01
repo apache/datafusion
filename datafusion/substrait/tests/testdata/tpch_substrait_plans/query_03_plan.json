@@ -602,36 +602,7 @@
                         }
                       },
                       "groupings": [{
-                        "groupingExpressions": [{
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 1
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 2
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }]
+                        "expressionReferences": [0, 1, 2]
                       }],
                       "measures": [{
                         "measure": {
@@ -658,6 +629,36 @@
                               }
                             }
                           }]
+                        }
+                      }],
+                      "groupingExpressions": [{
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 2
+                            }
+                          },
+                          "rootReference": {
+                          }
                         }
                       }]
                     }
@@ -733,7 +734,11 @@
               }]
             }
           },
-          "count": "10"
+          "countExpr": {
+            "literal": {
+              "i64": "10"
+            }
+          }
         }
       },
       "names": ["L_ORDERKEY", "REVENUE", "O_ORDERDATE", "O_SHIPPRIORITY"]

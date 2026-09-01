@@ -27,11 +27,14 @@ use datafusion::logical_expr::expr::WindowFunctionParams;
 use datafusion::logical_expr::{
     Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, expr,
 };
+use substrait::proto::Expression;
 use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::expression::WindowFunction;
+use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::window_function::{Bound, BoundsType};
 use substrait::proto::expression::{
-    window_function::bound as SubstraitBound, window_function::bound::Kind as BoundKind,
+    Literal, RexType, window_function::bound as SubstraitBound,
+    window_function::bound::Kind as BoundKind,
 };
 
 pub async fn from_window_function(
@@ -85,8 +88,8 @@ pub async fn from_window_function(
     };
     let window_frame = datafusion::logical_expr::WindowFrame::new_bounds(
         bound_units,
-        from_substrait_bound(window.lower_bound.as_ref(), true)?,
-        from_substrait_bound(window.upper_bound.as_ref(), false)?,
+        from_substrait_bound(window.lower_bound.as_deref(), true)?,
+        from_substrait_bound(window.upper_bound.as_deref(), false)?,
     );
 
     window_frame.regularize_order_bys(&mut order_by)?;
@@ -139,20 +142,26 @@ fn from_substrait_bound(
                 BoundKind::CurrentRow(SubstraitBound::CurrentRow {}) => {
                     Ok(WindowFrameBound::CurrentRow)
                 }
-                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => {
-                    if *offset <= 0 {
+                BoundKind::Preceding(bound) => {
+                    #[expect(deprecated)]
+                    let offset =
+                        bound_offset(bound.offset, bound.offset_expr.as_deref())?;
+                    if offset <= 0 {
                         return plan_err!("Preceding bound must be positive");
                     }
                     Ok(WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
-                        *offset as u64,
+                        offset as u64,
                     ))))
                 }
-                BoundKind::Following(SubstraitBound::Following { offset }) => {
-                    if *offset <= 0 {
+                BoundKind::Following(bound) => {
+                    #[expect(deprecated)]
+                    let offset =
+                        bound_offset(bound.offset, bound.offset_expr.as_deref())?;
+                    if offset <= 0 {
                         return plan_err!("Following bound must be positive");
                     }
                     Ok(WindowFrameBound::Following(ScalarValue::UInt64(Some(
-                        *offset as u64,
+                        offset as u64,
                     ))))
                 }
                 BoundKind::Unbounded(SubstraitBound::Unbounded {}) => {
@@ -172,5 +181,29 @@ fn from_substrait_bound(
                 Ok(WindowFrameBound::Following(ScalarValue::Null))
             }
         }
+    }
+}
+
+/// Reads the distance of a window frame bound.
+///
+/// The specification requires a consumer to use `offset_expr` when it is set and
+/// to ignore `offset`. DataFusion frame bounds hold a literal, so an expression
+/// that is not an int64 literal cannot be represented.
+fn bound_offset(
+    offset: i64,
+    offset_expr: Option<&Expression>,
+) -> datafusion::common::Result<i64> {
+    match offset_expr {
+        Some(Expression {
+            rex_type:
+                Some(RexType::Literal(Literal {
+                    literal_type: Some(LiteralType::I64(value)),
+                    ..
+                })),
+        }) => Ok(*value),
+        Some(_) => not_impl_err!(
+            "Window frame bound offsets other than int64 literals are not supported"
+        ),
+        None => Ok(offset),
     }
 }

@@ -27,14 +27,12 @@ use crate::variation_const::{
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
-    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
 use datafusion::arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema,
 };
 use datafusion::common::datatype::DataTypeExt;
 use datafusion::common::{
@@ -106,28 +104,6 @@ pub fn from_substrait_type(
             },
             r#type::Kind::Fp32(_) => Ok(DataType::Float32),
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
-            #[expect(deprecated)]
-            r#type::Kind::Timestamp(ts) => {
-                // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-                #[expect(deprecated)]
-                match ts.type_variation_reference {
-                    TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                        Ok(DataType::Timestamp(TimeUnit::Second, None))
-                    }
-                    TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                        Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
-                    }
-                    TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                        Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-                    }
-                    TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                        Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-                    }
-                    v => not_impl_err!(
-                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                    ),
-                }
-            }
             r#type::Kind::PrecisionTimestamp(pts) => {
                 let unit = from_substrait_precision(pts.precision, "PrecisionTimestamp")?;
                 Ok(DataType::Timestamp(unit, None))
@@ -368,13 +344,7 @@ fn type_is_nullable(dt: &Type) -> datafusion::common::Result<bool> {
         r#type::Kind::I64(integer) => integer.nullability,
         r#type::Kind::Fp32(float) => float.nullability,
         r#type::Kind::Fp64(float) => float.nullability,
-        #[expect(deprecated)]
-        r#type::Kind::Timestamp(timestamp) => timestamp.nullability,
         r#type::Kind::Date(date) => date.nullability,
-        #[expect(deprecated)]
-        r#type::Kind::Time(time) => time.nullability,
-        #[expect(deprecated)]
-        r#type::Kind::TimestampTz(timestamp) => timestamp.nullability,
         r#type::Kind::IntervalYear(interval) => interval.nullability,
         r#type::Kind::IntervalDay(interval) => interval.nullability,
         r#type::Kind::IntervalCompound(interval) => interval.nullability,
@@ -393,8 +363,7 @@ fn type_is_nullable(dt: &Type) -> datafusion::common::Result<bool> {
         r#type::Kind::Map(map) => map.nullability,
         r#type::Kind::Func(func) => func.nullability,
         r#type::Kind::UserDefined(user_defined) => user_defined.nullability,
-        #[expect(deprecated)]
-        r#type::Kind::UserDefinedTypeReference(_) => r#type::Nullability::Required as i32,
+        r#type::Kind::Unbound(_) => r#type::Nullability::Nullable as i32,
         r#type::Kind::Alias(alias) => alias.nullability,
     };
 
@@ -412,18 +381,6 @@ fn is_nullable(nullability: i32) -> datafusion::common::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use substrait::proto::r#type::Kind;
-
-    #[test]
-    fn type_is_nullable_user_defined_type_reference_is_required() {
-        // The deprecated `UserDefinedTypeReference` variant doesn't carry a
-        // nullability field; the consumer hardcodes Required (non-null).
-        #[expect(deprecated)]
-        let dt = Type {
-            kind: Some(Kind::UserDefinedTypeReference(0)),
-        };
-        assert!(!type_is_nullable(&dt).unwrap());
-    }
 
     #[test]
     fn type_is_nullable_missing_kind_defaults_to_nullable() {

@@ -52,43 +52,27 @@
                   "input": {
                     "read": {
                       "common": {
-                        "direct": {}
+                        "direct": {
+                        }
                       },
                       "baseSchema": {
-                        "names": [
-                          "product"
-                        ],
+                        "names": ["product"],
                         "struct": {
-                          "types": [
-                            {
-                              "string": {
-                                "nullability": "NULLABILITY_REQUIRED"
-                              }
+                          "types": [{
+                            "string": {
+                              "nullability": "NULLABILITY_REQUIRED"
                             }
-                          ],
+                          }],
                           "nullability": "NULLABILITY_REQUIRED"
                         }
                       },
                       "namedTable": {
-                        "names": [
-                          "sales"
-                        ]
+                        "names": ["sales"]
                       }
                     }
                   },
                   "groupings": [{
-                    "groupingExpressions": [{
-                      "selection": {
-                        "directReference": {
-                          "structField": {
-                            "field": 0
-                          }
-                        },
-                        "rootReference": {
-                        }
-                      }
-                    }],
-                    "expressionReferences": []
+                    "expressionReferences": [0]
                   }],
                   "measures": [{
                     "measure": {
@@ -119,22 +103,21 @@
                       "options": []
                     }
                   }],
-                  "groupingExpressions": []
+                  "groupingExpressions": [{
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0
+                        }
+                      },
+                      "rootReference": {
+                      }
+                    }
+                  }]
                 }
               },
               "groupings": [{
-                "groupingExpressions": [{
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                        "field": 0
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }],
-                "expressionReferences": []
+                "expressionReferences": [0]
               }],
               "measures": [{
                 "measure": {
@@ -165,7 +148,17 @@
                   "options": []
                 }
               }],
-              "groupingExpressions": []
+              "groupingExpressions": [{
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 0
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }]
             }
           },
           "expressions": [{
