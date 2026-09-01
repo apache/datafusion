@@ -87,9 +87,10 @@ impl DefaultTableFactory {
             }
         }
 
-        match unbounded {
-            true => self.stream.create(state, cmd).await,
-            false => self.listing.create(state, cmd).await,
+        if unbounded {
+            self.stream.create(state, cmd).await
+        } else {
+            self.listing.create(state, cmd).await
         }
     }
 }

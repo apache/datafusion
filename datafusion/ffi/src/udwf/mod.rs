@@ -350,11 +350,12 @@ impl WindowUDFImpl for ForeignWindowUDF {
             ))?;
             let schema: SchemaRef = schema.into();
 
-            match schema.fields().is_empty() {
-                true => ffi_err!(
+            if schema.fields().is_empty() {
+                ffi_err!(
                     "Unable to retrieve field in WindowUDF via FFI - schema has no fields"
-                ),
-                false => Ok(schema.field(0).to_owned().into()),
+                )
+            } else {
+                Ok(schema.field(0).to_owned().into())
             }
         }
     }

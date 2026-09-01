@@ -4256,9 +4256,10 @@ impl ScalarValue {
                 };
                 ScalarValue::FixedSizeBinary(
                     size,
-                    match array.is_null(index) {
-                        true => None,
-                        false => Some(array.value(index).into()),
+                    if array.is_null(index) {
+                        None
+                    } else {
+                        Some(array.value(index).into())
                     },
                 )
             }

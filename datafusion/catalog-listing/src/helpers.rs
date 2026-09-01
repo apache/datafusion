@@ -213,12 +213,14 @@ pub async fn list_partitions(
                 depth: depth + 1,
                 files: None,
             };
-            match depth < max_depth {
-                true => match futures.len() < CONCURRENCY_LIMIT {
-                    true => futures.push(child.list(store)),
-                    false => pending.push(child.list(store)),
-                },
-                false => out.push(child),
+            if depth < max_depth {
+                if futures.len() < CONCURRENCY_LIMIT {
+                    futures.push(child.list(store))
+                } else {
+                    pending.push(child.list(store))
+                }
+            } else {
+                out.push(child)
             }
         }
     }
