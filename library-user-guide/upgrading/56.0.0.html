@@ -456,6 +456,17 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="groupcolumn-now-requires-values-preserving">
+<h3><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code><a class="headerlink" href="#groupcolumn-now-requires-values-preserving" title="Link to this heading">#</a></h3>
+<p>Custom implementations of the public <code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> trait must implement
+<code class="docutils literal notranslate"><span class="pre">values_preserving</span></code>. This method returns selected rows without changing the stored
+values or their group indices. It preserves the requested order and supports
+repeated indices.</p>
+<p><strong>Migration guide:</strong></p>
+<p>Implement <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code>, call
+<code class="docutils literal notranslate"><span class="pre">selection.validate_num_groups(self.len())?</span></code> before reading, and return rows in
+<code class="docutils literal notranslate"><span class="pre">selection.iter()</span></code> order without changing the builder state.</p>
+</section>
 <section id="datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> config flag is deprecated and
@@ -563,6 +574,7 @@ terminal provider instead (the walk falls back on its own).</p></li>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
