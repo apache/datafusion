@@ -101,9 +101,8 @@ query TT
 EXPLAIN SELECT DISTINCT p.x FROM t_pk p LEFT JOIN t_orders o ON p.x = o.x;
 ----
 logical_plan
-01)Aggregate: groupBy=[[p.x]], aggr=[[]]
-02)--SubqueryAlias: p
-03)----TableScan: t_pk projection=[x]
+01)SubqueryAlias: p
+02)--TableScan: t_pk projection=[x]
 
 statement ok
 drop table t_orders;
@@ -169,9 +168,7 @@ logical_plan
 query TT
 EXPLAIN SELECT x FROM t_pk GROUP BY x, y;
 ----
-logical_plan
-01)Aggregate: groupBy=[[t_pk.x]], aggr=[[]]
-02)--TableScan: t_pk projection=[x]
+logical_plan TableScan: t_pk projection=[x]
 
 # 3.2 Nullable UNIQUE: grouping by `x, y` is NOT the same as grouping by
 # `x` -- two NULL rows differ in `y` and belong in separate groups.
@@ -213,9 +210,7 @@ SELECT x, y FROM t_pk GROUP BY x;
 query TT
 EXPLAIN SELECT x, y FROM t_pk GROUP BY x;
 ----
-logical_plan
-01)Aggregate: groupBy=[[t_pk.x, t_pk.y]], aggr=[[]]
-02)--TableScan: t_pk projection=[x, y]
+logical_plan TableScan: t_pk projection=[x, y]
 
 # 4.2 Nullable UNIQUE: `x` does NOT determine `y`, so there is no
 # well-defined `y` for the `x = NULL` group.
@@ -295,6 +290,130 @@ drop table t_null;
 
 statement ok
 drop table t_probe;
+
+##########
+## Aggregate elimination
+##########
+
+# GROUP BY covers a unique key, so every group holds one row and each aggregate
+# takes that row's value. The aggregate is replaced by a projection.
+statement ok
+CREATE TABLE t_agg (k INT, v INT, s TEXT, PRIMARY KEY (k)) AS VALUES
+(1, 10, 'a'),
+(2, NULL, NULL),
+(3, 30, 'c');
+
+query TT
+EXPLAIN SELECT k, sum(v), min(v), max(s), avg(v), count(*), count(v) FROM t_agg GROUP BY k;
+----
+logical_plan
+01)Projection: t_agg.k, CAST(t_agg.v AS Int64) AS sum(t_agg.v), t_agg.v AS min(t_agg.v), t_agg.s AS max(t_agg.s), CAST(t_agg.v AS Float64) AS avg(t_agg.v), Int64(1) AS count(*), CASE WHEN t_agg.v IS NULL THEN Int64(0) ELSE Int64(1) END AS count(t_agg.v)
+02)--TableScan: t_agg projection=[k, v, s]
+
+# NULLs keep the semantics of each aggregate: count skips them, the rest return
+# NULL.
+query IIITRII
+SELECT k, sum(v), min(v), max(s), avg(v), count(*), count(v) FROM t_agg GROUP BY k ORDER BY k;
+----
+1 10 10 a 10 1 1
+2 NULL NULL NULL NULL 1 0
+3 30 30 c 30 1 1
+
+# Extra grouping expressions beyond the key only split groups further, and they
+# are already single rows.
+query TT
+EXPLAIN SELECT k, v, count(*) FROM t_agg GROUP BY k, v;
+----
+logical_plan
+01)Projection: t_agg.k, t_agg.v, Int64(1) AS count(*)
+02)--TableScan: t_agg projection=[k, v]
+
+# A FILTER can exclude the single row, leaving the aggregate with no input at
+# all, so the aggregate stays.
+query TT
+EXPLAIN SELECT k, count(*) FILTER (WHERE v > 20) FROM t_agg GROUP BY k;
+----
+logical_plan
+01)Projection: t_agg.k, count(Int64(1)) FILTER (WHERE t_agg.v > Int64(20)) AS count(*) FILTER (WHERE t_agg.v > Int64(20))
+02)--Aggregate: groupBy=[[t_agg.k]], aggr=[[count(Int64(1)) FILTER (WHERE t_agg.v > Int32(20)) AS count(Int64(1)) FILTER (WHERE t_agg.v > Int64(20))]]
+03)----TableScan: t_agg projection=[k, v]
+
+# Grouping sets do not group by every expression at once, so a key among them
+# proves nothing.
+query TT
+EXPLAIN SELECT k, v, count(*) FROM t_agg GROUP BY ROLLUP(k, v);
+----
+logical_plan
+01)Projection: t_agg.k, t_agg.v, count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[ROLLUP (t_agg.k, t_agg.v)]], aggr=[[count(Int64(1))]]
+03)----TableScan: t_agg projection=[k, v]
+
+# An aggregate whose single-row value cannot be written as an expression keeps
+# the aggregate.
+query TT
+EXPLAIN SELECT k, array_agg(v) FROM t_agg GROUP BY k;
+----
+logical_plan
+01)Aggregate: groupBy=[[t_agg.k]], aggr=[[array_agg(t_agg.v)]]
+02)--TableScan: t_agg projection=[k, v]
+
+# Grouping by a non-key column keeps the aggregate.
+query TT
+EXPLAIN SELECT v, count(*) FROM t_agg GROUP BY v;
+----
+logical_plan
+01)Projection: t_agg.v, count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[t_agg.v]], aggr=[[count(Int64(1))]]
+03)----TableScan: t_agg projection=[v]
+
+statement ok
+drop table t_agg;
+
+##########
+## Unnest
+##########
+
+# Unnesting a list turns one row into several, so the key of the input no
+# longer identifies a row of the output. Trusting it here made the join below
+# a semi join, which dropped the repeated rows.
+statement ok
+CREATE TABLE t_list (k INT, vals INT[], PRIMARY KEY (k)) AS VALUES (1, [10, 20, 30]), (2, [40]);
+
+statement ok
+CREATE TABLE t_join (k INT) AS VALUES (1), (2);
+
+query II
+SELECT u.k, u.v FROM (SELECT k, unnest(vals) AS v FROM t_list) u
+JOIN t_join j ON u.k = j.k
+ORDER BY u.k, u.v;
+----
+1 10
+1 20
+1 30
+2 40
+
+# Unnesting a struct keeps one row per input row, so the key still holds.
+statement ok
+CREATE TABLE t_struct (k INT, s STRUCT<a INT, b INT>, PRIMARY KEY (k)) AS VALUES (1, {'a': 1, 'b': 2}), (2, {'a': 3, 'b': 4});
+
+query TT
+EXPLAIN SELECT DISTINCT k FROM (SELECT k, unnest(s) FROM t_struct) t;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: t_struct.k
+03)----Unnest: lists[] structs[__unnest_placeholder(t_struct.s)]
+04)------Projection: t_struct.k, t_struct.s AS __unnest_placeholder(t_struct.s)
+05)--------TableScan: t_struct projection=[k, s]
+
+statement ok
+drop table t_list;
+
+statement ok
+drop table t_join;
+
+statement ok
+drop table t_struct;
 
 ##########
 ## Cleanup
