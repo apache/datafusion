@@ -215,30 +215,18 @@ impl AggregateHashTable<PartialSkipMarker> {
         );
         let mut output = grouping_set_args.into_iter().next().unwrap_or_default();
 
-        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
-        let accumulator_args = state
-            .accumulators
-            .iter()
-            .enumerate()
-            .map(|(idx, acc)| {
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        for (idx, acc) in state.accumulators.iter().enumerate() {
+            let values = {
+                let _timer = self.group_by_metrics.aggregate_arguments_time.timer();
                 self.aggregate_argument_metrics
                     .time(idx, || acc.evaluate_row_aligned_args(batch))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        drop(timer);
+            }?;
 
-        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        let state = self.state.building();
-        for (idx, (acc, values)) in state
-            .accumulators
-            .iter()
-            .zip(accumulator_args.iter())
-            .enumerate()
-        {
             output.extend(accumulator_metrics.time(
                 idx,
                 AccumulatorPhase::ConvertToState,
-                || acc.convert_to_state(values),
+                || acc.convert_to_state(&values),
             )?);
         }
 
