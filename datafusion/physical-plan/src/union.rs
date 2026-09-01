@@ -394,9 +394,8 @@ impl ExecutionPlan for UnionExec {
                     baseline_metrics,
                     None,
                 )));
-            } else {
-                partition -= input.output_partitioning().partition_count();
             }
+            partition -= input.output_partitioning().partition_count();
         }
 
         warn!("Error in Union: Partition {partition} not found");

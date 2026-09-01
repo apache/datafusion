@@ -1069,12 +1069,11 @@ impl Stream for PanicStream {
                 self.ready = false;
                 let batch = RecordBatch::new_empty(Arc::clone(&self.schema));
                 return Poll::Ready(Some(Ok(batch)));
-            } else {
-                self.ready = true;
-                // get called again
-                cx.waker().wake_by_ref();
-                return Poll::Pending;
             }
+            self.ready = true;
+            // get called again
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
         }
         panic!("PanickingStream did panic: {}", self.partition)
     }
