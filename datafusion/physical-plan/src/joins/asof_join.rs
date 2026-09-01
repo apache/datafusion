@@ -169,6 +169,10 @@ impl AsOfJoinExec {
     /// floating-point equality keys are not supported because Arrow sorting
     /// distinguishes signed zero while SQL equality does not. Projection indices
     /// refer to the full left-then-right join schema.
+    ///
+    /// The logical ASOF constructor validates the corresponding pre-coercion
+    /// contract. Keep the shared operator, side-ownership, and determinism checks
+    /// aligned across both public entry points.
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
