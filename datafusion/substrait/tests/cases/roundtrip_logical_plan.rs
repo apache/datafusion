@@ -333,8 +333,13 @@ async fn simple_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_distinct_with_having() -> Result<()> {
-    roundtrip("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100")
-        .await
+    let ctx = create_context_without_single_distinct_to_group_by().await?;
+    roundtrip_with_ctx(
+        "SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100",
+        ctx,
+    )
+    .await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -2933,6 +2938,31 @@ async fn roundtrip_all_types(sql: &str) -> Result<()> {
 
 async fn create_context() -> Result<SessionContext> {
     create_context_with_dialect(None).await
+}
+
+/// [`create_context`] with `single_distinct_aggregation_to_group_by` removed from
+/// the optimizer.
+///
+/// That rule rewrites a single `AGG(DISTINCT x)` into a two phase group by whose
+/// inner aggregate aliases its grouping and measure expressions (`alias1`,
+/// `alias2`). Substrait carries no names for those expressions, so the consumer
+/// derives them from the expressions themselves and a rewritten plan does not
+/// round trip to an identical plan. That holds for every output of the rule, not
+/// only for the query under test.
+async fn create_context_without_single_distinct_to_group_by() -> Result<SessionContext> {
+    let ctx = create_context().await?;
+    let rules = ctx
+        .state()
+        .optimizer()
+        .rules
+        .iter()
+        .filter(|rule| rule.name() != "single_distinct_aggregation_to_group_by")
+        .cloned()
+        .collect();
+    let state = SessionStateBuilder::new_from_existing(ctx.state())
+        .with_optimizer_rules(rules)
+        .build();
+    Ok(SessionContext::new_with_state(state))
 }
 
 async fn create_context_with_dialect(dialect: Option<Dialect>) -> Result<SessionContext> {
