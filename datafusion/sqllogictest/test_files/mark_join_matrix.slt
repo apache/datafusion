@@ -118,13 +118,12 @@ WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r_nn r);
 4 40
 NULL 50
 
-# https://github.com/apache/datafusion/issues/24854
-# query II rowsort
-# SELECT l.k, l.v FROM mk_l l
-# WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r r);
-# ----
-# 4 40
-# NULL 50
+query II rowsort
+SELECT l.k, l.v FROM mk_l l
+WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r r);
+----
+4 40
+NULL 50
 
 # Empty subquery: EXISTS is always false, so the result is just the predicate.
 query II rowsort
