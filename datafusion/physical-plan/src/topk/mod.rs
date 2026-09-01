@@ -815,13 +815,12 @@ impl TopK {
                     (&batch).record_output(&metrics.baseline);
                     batches.push(Ok(batch));
                     break;
-                } else {
-                    let head = batch.slice(0, batch_size);
-                    (&head).record_output(&metrics.baseline);
-                    batches.push(Ok(head));
-                    let remaining_length = batch.num_rows() - batch_size;
-                    batch = batch.slice(batch_size, remaining_length);
                 }
+                let head = batch.slice(0, batch_size);
+                (&head).record_output(&metrics.baseline);
+                batches.push(Ok(head));
+                let remaining_length = batch.num_rows() - batch_size;
+                batch = batch.slice(batch_size, remaining_length);
             }
         }
         Ok(Box::pin(RecordBatchStreamAdapter::new(

@@ -1174,9 +1174,8 @@ impl OptimizerRule for PushDownFilter {
                 {
                     filter.input = Arc::new(LogicalPlan::TableScan(scan));
                     return Ok(Transformed::no(LogicalPlan::Filter(filter)));
-                } else {
-                    scan.filters = new_scan_filters;
                 }
+                scan.filters = new_scan_filters;
 
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
                 // and also include volatile and subquery-containing filters

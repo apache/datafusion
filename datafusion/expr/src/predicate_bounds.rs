@@ -158,11 +158,11 @@ impl PredicateBoundsEvaluator<'_> {
     fn is_null(&self, expr: &Expr) -> NullableInterval {
         // Fast path for literals
         if let Expr::Literal(scalar, _) = expr {
-            if scalar.is_null() {
-                return NullableInterval::TRUE;
+            return if scalar.is_null() {
+                NullableInterval::TRUE
             } else {
-                return NullableInterval::FALSE;
-            }
+                NullableInterval::FALSE
+            };
         }
 
         // If `expr` is not nullable, we can be certain `expr` is not null

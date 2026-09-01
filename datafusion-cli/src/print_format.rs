@@ -128,10 +128,9 @@ fn format_batches_with_maxrows<W: std::io::Write>(
                     filtered_batches.push(sliced_batch);
                     over_limit = true;
                     break;
-                } else {
-                    filtered_batches.push(batch.clone());
-                    row_count += batch.num_rows();
                 }
+                filtered_batches.push(batch.clone());
+                row_count += batch.num_rows();
             }
 
             let formatted =
