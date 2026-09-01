@@ -154,6 +154,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::large_digit_groups,
+        reason = "the single `_` marks the decimal point of the fixed-point literal"
+    )]
+
     use super::*;
     use arrow::array::{
         Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,

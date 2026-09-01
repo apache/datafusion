@@ -257,8 +257,11 @@ unsafe extern "C" fn try_encode_udwf_fn_wrapper(
 
 unsafe extern "C" fn release_fn_wrapper(codec: &mut FFI_PhysicalExtensionCodec) {
     unsafe {
-        let private_data =
-            Box::from_raw(codec.private_data as *mut PhysicalExtensionCodecPrivateData);
+        let private_data = Box::from_raw(
+            codec
+                .private_data
+                .cast::<PhysicalExtensionCodecPrivateData>(),
+        );
         drop(private_data);
     }
 }
@@ -319,7 +322,7 @@ impl FFI_PhysicalExtensionCodec {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: crate::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

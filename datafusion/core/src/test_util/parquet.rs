@@ -110,7 +110,7 @@ impl TestParquetFile {
             canonical_path = canonical_path
                 .to_str()
                 .unwrap()
-                .replace("\\", "/")
+                .replace('\\', "/")
                 .strip_prefix("//?/")
                 .unwrap()
                 .into();

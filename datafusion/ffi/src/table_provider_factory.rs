@@ -126,7 +126,7 @@ impl FFI_TableProviderFactory {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -235,7 +235,8 @@ unsafe extern "C" fn clone_fn_wrapper(
     let private_data = Box::into_raw(Box::new(FactoryPrivateData {
         factory: old_factory,
         runtime,
-    })) as *mut c_void;
+    }))
+    .cast::<c_void>();
 
     FFI_TableProviderFactory {
         create: create_fn_wrapper,
@@ -251,7 +252,8 @@ unsafe extern "C" fn clone_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(factory: &mut FFI_TableProviderFactory) {
     unsafe {
         debug_assert!(!factory.private_data.is_null());
-        let private_data = Box::from_raw(factory.private_data as *mut FactoryPrivateData);
+        let private_data =
+            Box::from_raw(factory.private_data.cast::<FactoryPrivateData>());
         drop(private_data);
         factory.private_data = std::ptr::null_mut();
     }

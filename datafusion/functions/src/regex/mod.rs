@@ -166,7 +166,7 @@ pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowErr
     let pattern = match flags {
         None | Some("") => regex.to_string(),
         Some(flags) => {
-            if flags.contains("g") {
+            if flags.contains('g') {
                 return Err(ArrowError::ComputeError(
                     "regexp_count()/regexp_instr() does not support the global flag"
                         .to_string(),
