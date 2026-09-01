@@ -30,7 +30,7 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::{Result, not_impl_err};
-use datafusion_expr_common::casts::{cast_output_field, is_type_only_cast_target};
+use datafusion_expr_common::casts::cast_output_field;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -374,10 +374,13 @@ pub fn cast_with_options(
 /// preserving any explicit field semantics such as name, nullability, and
 /// metadata.
 ///
-/// If the input expression already has the same data type, this helper still
-/// preserves an explicit `target_field` by constructing a field-aware
-/// [`CastExpr`]. Only the default synthesized field created by the legacy
-/// type-only API is elided back to the original child expression.
+/// The cast is elided only when it would be a genuine no-op, that is when the
+/// field it produces (see [`cast_output_field`]) is already the field `expr`
+/// has. Matching data types are not enough: a cast target's metadata is
+/// authoritative, so `CAST(uuid_val AS FixedSizeBinary(16))` still *does*
+/// something - it strips `ARROW:extension:name` - even though `uuid_val` is
+/// already a `FixedSizeBinary(16)`. Eliding it there would leave the physical
+/// plan reporting metadata that the logical plan has already dropped.
 pub fn cast_with_target_field(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
@@ -386,8 +389,11 @@ pub fn cast_with_target_field(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     let cast_type = target_field.data_type();
-    if expr_type == *cast_type && is_type_only_cast_target(&target_field) {
-        return Ok(Arc::clone(&expr));
+    if expr_type == *cast_type {
+        let source_field = expr.return_field(input_schema)?;
+        if cast_output_field(&source_field, &target_field, false) == source_field {
+            return Ok(Arc::clone(&expr));
+        }
     }
 
     let can_build_cast = if requires_nested_struct_cast(&expr_type, cast_type) {
@@ -1047,6 +1053,48 @@ mod tests {
         let expr = CastExpr::new(col("a", &schema)?, FixedSizeBinary(16), None);
         let field = expr.return_field(&schema)?;
         assert!(field.metadata().is_empty(), "{:?}", field.metadata());
+
+        Ok(())
+    }
+
+    #[test]
+    fn same_type_cast_is_only_elided_when_it_is_a_no_op() -> Result<()> {
+        // Matching data types are not enough to drop a cast: the target's
+        // metadata is authoritative, so `CAST(uuid AS FixedSizeBinary(16))`
+        // still strips `ARROW:extension:name`. Eliding it would leave the
+        // physical plan reporting metadata the logical plan already dropped.
+        let metadata = HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "arrow.uuid".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", FixedSizeBinary(16), true).with_metadata(metadata),
+            Field::new("b", FixedSizeBinary(16), true),
+        ]);
+
+        let kept = cast_with_target_field(
+            col("a", &schema)?,
+            &schema,
+            FixedSizeBinary(16).into_nullable_field_ref(),
+            None,
+        )?;
+        assert!(
+            kept.downcast_ref::<CastExpr>().is_some(),
+            "a metadata-stripping cast must survive, got {kept}"
+        );
+        assert!(kept.return_field(&schema)?.metadata().is_empty());
+
+        // `b` has nothing to strip, so the cast really is a no-op
+        let elided = cast_with_target_field(
+            col("b", &schema)?,
+            &schema,
+            FixedSizeBinary(16).into_nullable_field_ref(),
+            None,
+        )?;
+        assert!(
+            elided.downcast_ref::<CastExpr>().is_none(),
+            "a no-op cast should be elided, got {elided}"
+        );
 
         Ok(())
     }
