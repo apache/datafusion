@@ -127,12 +127,12 @@ fn run_test(wait_time: u64, store: Arc<dyn ObjectStore>) -> Result<Duration> {
                 let store = Arc::clone(&store);
                 tokio::select! {
                     biased;
-                    _ = async move {
+                    () = async move {
                         datafusion(store).await.unwrap();
                     } => {
                         println!("matched case doing work");
                     },
-                    _ = captured_token.cancelled() => {
+                    () = captured_token.cancelled() => {
                         println!("Received shutdown request");
                         return;
                     },
