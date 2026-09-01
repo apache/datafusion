@@ -1999,6 +1999,7 @@ fn count_retained_batch_memory(
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 /// A batch transformer that does nothing.
 pub(crate) struct NoopBatchTransformer {
@@ -2006,12 +2007,14 @@ pub(crate) struct NoopBatchTransformer {
     batch: Option<RecordBatch>,
 }
 
+#[cfg(test)]
 impl NoopBatchTransformer {
     pub fn new() -> Self {
         Self { batch: None }
     }
 }
 
+#[cfg(test)]
 impl BatchTransformer for NoopBatchTransformer {
     fn set_batch(&mut self, batch: RecordBatch) {
         self.batch = Some(batch);
