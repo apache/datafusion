@@ -823,9 +823,9 @@ impl Unparser<'_> {
                         "derived_projection",
                         plan,
                         relation,
-                        unnest_input_type
-                            .filter(|t| matches!(t, UnnestInputType::OuterReference))
-                            .is_some(),
+                        unnest_input_type.is_some_and(|t| {
+                            matches!(t, UnnestInputType::OuterReference)
+                        }),
                         columns,
                     );
                 }
@@ -2047,7 +2047,7 @@ impl Unparser<'_> {
 
         let mut flatten = FlattenRelationBuilder::default();
         flatten.input_expr(input_expr);
-        flatten.outer(unnest.options.preserve_nulls);
+        flatten.outer(unnest.options.preserve_nulls());
 
         Ok(Some(flatten))
     }

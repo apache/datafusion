@@ -20,10 +20,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    bounded_window_exec_with_can_repartition, check_integrity, coalesce_partitions_exec,
-    parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec, schema, sort_exec,
-    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
-    sort_preserving_merge_exec, union_exec,
+    RequirementsTestExec, bounded_window_exec_with_can_repartition, check_integrity,
+    coalesce_partitions_exec, parquet_exec_with_sort, parquet_exec_with_stats,
+    repartition_exec, schema, sort_exec, sort_exec_with_preserve_partitioning,
+    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::array::{RecordBatch, UInt8Array, UInt64Array};
@@ -40,7 +40,9 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
@@ -72,7 +74,8 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    PlanProperties, ReplaceChildrenOptions, displayable,
 };
 use insta::Settings;
 
@@ -191,9 +194,10 @@ impl ExecutionPlan for SortRequiredExec {
         vec![Some(OrderingRequirements::from(self.expr.clone()))]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().unwrap();
@@ -201,6 +205,23 @@ impl ExecutionPlan for SortRequiredExec {
             child,
             self.expr.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(
@@ -281,13 +302,31 @@ impl ExecutionPlan for SinglePartitionMaintainsOrderExec {
         vec![false]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().unwrap();
         Ok(Arc::new(Self::new(child)))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(
@@ -747,6 +786,93 @@ impl TestConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ExpectedPlan {
+    Reuse,
+    Hash,
+}
+
+#[test]
+fn range_satisfaction_config_matrix() -> Result<()> {
+    const INPUT_PARTITIONS: usize = 4;
+    const MET: usize = INPUT_PARTITIONS;
+    const NOT_MET: usize = INPUT_PARTITIONS + 1;
+    const DISABLED: usize = 0;
+    const EQUAL: usize = INPUT_PARTITIONS;
+    const GREATER: usize = INPUT_PARTITIONS + 1;
+    use ExpectedPlan::{Hash, Reuse};
+
+    let config_cases = [
+        // subset  preserve  target   exact  subset  incompatible
+        (NOT_MET, DISABLED, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, DISABLED, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, NOT_MET, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, NOT_MET, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, MET, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, MET, GREATER, [Reuse, Reuse, Hash]),
+        (MET, DISABLED, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, DISABLED, GREATER, [Reuse, Reuse, Hash]),
+        (MET, NOT_MET, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, NOT_MET, GREATER, [Reuse, Reuse, Hash]),
+        (MET, MET, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, MET, GREATER, [Reuse, Reuse, Hash]),
+    ];
+    for (subset_threshold, preserve_file_partitions, target_partitions, expected) in
+        config_cases
+    {
+        let key_cases = [
+            ("exact", vec![col("a", &schema())?], expected[0]),
+            (
+                "subset",
+                vec![col("a", &schema())?, col("b", &schema())?],
+                expected[1],
+            ),
+            ("incompatible", vec![col("b", &schema())?], expected[2]),
+        ];
+        for (key_match, partition_keys, expected_plan) in key_cases {
+            let input = parquet_exec_with_output_partitioning(range_partitioning(
+                "a",
+                [10, 20, 30],
+                SortOptions::default(),
+            )?);
+            let requirement = RequirementsTestExec::new(input)
+                .with_required_input_distribution(Distribution::KeyPartitioned(
+                    partition_keys,
+                ))
+                .into_arc();
+
+            let mut config =
+                TestConfig::default().with_query_execution_partitions(target_partitions);
+            config.config.optimizer.subset_repartition_threshold = subset_threshold;
+            config.config.optimizer.preserve_file_partitions = preserve_file_partitions;
+
+            let plan = config.to_plan(requirement, &DISTRIB_DISTRIB_SORT);
+            let plan = displayable(plan.as_ref()).indent(true).to_string();
+            let repartitions = plan
+                .lines()
+                .filter(|line| line.contains("RepartitionExec:"))
+                .collect::<Vec<_>>();
+
+            let matches_expected = match expected_plan {
+                Reuse => repartitions.is_empty(),
+                Hash => matches!(
+                    repartitions.as_slice(),
+                    [repartition] if repartition.contains("partitioning=Hash")
+                ),
+            };
+            assert!(
+                matches_expected,
+                "unexpected optimized plan for key_match={key_match}, \
+                 subset_threshold={subset_threshold}, \
+                 preserve_file_partitions={preserve_file_partitions}, \
+                 target_partitions={target_partitions}:\n{plan}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[test]
 fn range_aggregate_reuses_range_partitioning() -> Result<()> {
     let input = parquet_exec_with_output_partitioning(range_partitioning(
@@ -898,6 +1024,104 @@ fn range_right_mark_hash_join_reuses_range_partitioning() -> Result<()> {
     HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(a@0, a@0)]
       DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
       DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_hash_join_repartitions_unsatisfied_side_to_match_range() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "b",
+        [100, 200, 300],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+      RepartitionExec: partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), input_partitions=4
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([b@1 ASC], [(100), (200), (300)], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()> {
+    let left = parquet_exec();
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+      RepartitionExec: partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_hash_join_rehashes_incompatible_data_type() -> Result<()> {
+    let left = parquet_exec();
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("d", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(d@3, a@0)]
+      RepartitionExec: partitioning=Hash([d@3], 4), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
     "
     );
 

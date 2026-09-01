@@ -77,7 +77,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 +-----------------------------------------------+
 > SELECT array_agg(DISTINCT column_name ORDER BY column_name) FROM table_name;
 +--------------------------------------------------------+
-| array_agg(DISTINCT column_name ORDER BY column_name)  |
+| array_agg(DISTINCT column_name ORDER BY column_name)   |
 +--------------------------------------------------------+
 | [element1, element2, element3]                         |
 +--------------------------------------------------------+
@@ -1741,15 +1741,17 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 282);
+        assert_eq!(acc1.size(), 174);
 
         Ok(())
     }
     #[test]
     fn does_not_over_account_memory_distinct() -> Result<()> {
-        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
-            .distinct()
-            .build_two()?;
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::new(DataType::List(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+        ))
+        .distinct()
+        .build_two()?;
 
         acc1.update_batch(&[string_list_data([
             vec!["a", "b", "c"],
@@ -1765,9 +1767,11 @@ mod tests {
 
     #[test]
     fn does_not_over_account_memory_ordered() -> Result<()> {
-        let mut acc = ArrayAggAccumulatorBuilder::string()
-            .order_by_col("col", SortOptions::new(false, false))
-            .build()?;
+        let mut acc = ArrayAggAccumulatorBuilder::new(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Utf8, true),
+        )))
+        .order_by_col("col", SortOptions::new(false, false))
+        .build()?;
 
         acc.update_batch(&[string_list_data([
             vec!["a", "b", "c"],
@@ -1777,6 +1781,122 @@ mod tests {
 
         // without compaction, the size is 17112
         assert_eq!(acc.size(), 2224);
+
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_aggregate_nested_nullability_mismatch_issue_24022() -> Result<()> {
+        use arrow::array::{Int32Array, Int64Array, StructArray};
+        use datafusion_physical_expr::expressions::Column;
+
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let ordering_dtype = DataType::Int64;
+        let schema = Schema::new(vec![
+            Field::new("val", requested_element_type.clone(), true),
+            Field::new("ord", DataType::Int64, true),
+        ]);
+        let ord_expr = Arc::new(
+            Column::new_with_schema("ord", &schema).expect("column not in schema"),
+        ) as Arc<dyn PhysicalExpr>;
+
+        let asc_opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let asc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::clone(&ord_expr),
+            asc_opts,
+        )])
+        .unwrap();
+
+        let mut acc = OrderSensitiveArrayAggAccumulator::try_new(
+            &requested_element_type,
+            std::slice::from_ref(&ordering_dtype),
+            asc_ordering,
+            /*is_input_pre_ordered=*/ true,
+            /*reverse=*/ false,
+            /*ignore_nulls=*/ false,
+        )?;
+
+        let value_arr = Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])) as ArrayRef;
+
+        let ord_arr = Arc::new(Int64Array::from(vec![0i64])) as ArrayRef;
+
+        acc.update_batch(&[value_arr, ord_arr])?;
+
+        let evaluated = acc.evaluate()?;
+
+        if let ScalarValue::List(arr) = evaluated {
+            assert_eq!(
+                arr.data_type(),
+                &DataType::List(Arc::new(Field::new_list_field(
+                    requested_element_type.clone(),
+                    true
+                )))
+            );
+
+            let expected_struct_array = StructArray::from(vec![(
+                Arc::new(Field::new("n", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            )]);
+            let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+            assert_eq!(&arr.value(0), &expected_array);
+        } else {
+            panic!("Expected ScalarValue::List");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_aggregate_nested_nullability_mismatch_issue_24022() -> Result<()> {
+        use arrow::array::{Int32Array, StructArray};
+        use datafusion_common::ScalarValue;
+
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let mut acc = DistinctArrayAggAccumulator::try_new(
+            &requested_element_type,
+            None,
+            /*ignore_nulls=*/ false,
+        )?;
+
+        let value_arr = Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])) as ArrayRef;
+
+        acc.update_batch(&[value_arr])?;
+
+        let evaluated = acc.evaluate()?;
+
+        if let ScalarValue::List(arr) = evaluated {
+            assert_eq!(
+                arr.data_type(),
+                &DataType::List(Arc::new(Field::new_list_field(
+                    requested_element_type.clone(),
+                    true
+                )))
+            );
+
+            let expected_struct_array = StructArray::from(vec![(
+                Arc::new(Field::new("n", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            )]);
+            let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+            assert_eq!(&arr.value(0), &expected_array);
+        } else {
+            panic!("Expected ScalarValue::List");
+        }
 
         Ok(())
     }
@@ -1904,15 +2024,19 @@ mod tests {
 
         fn new(data_type: DataType) -> Self {
             Self {
-                return_field: Field::new("f", data_type.clone(), true).into(),
+                return_field: Field::new(
+                    "f",
+                    DataType::List(Arc::new(Field::new_list_field(
+                        data_type.clone(),
+                        true,
+                    ))),
+                    true,
+                )
+                .into(),
                 distinct: false,
                 order_bys: vec![],
                 schema: Schema {
-                    fields: Fields::from(vec![Field::new(
-                        "col",
-                        DataType::new_list(data_type, true),
-                        true,
-                    )]),
+                    fields: Fields::from(vec![Field::new("col", data_type, true)]),
                     metadata: Default::default(),
                 },
             }

@@ -69,6 +69,11 @@ pub mod dml {
     pub use crate::logical_plan::dml::*;
 }
 pub mod planner;
+/// Protobuf conversions for [`WindowFrame`], [`WindowFrameBound`],
+/// [`WindowFrameUnits`], [`MergeIntoClauseKind`](dml::MergeIntoClauseKind) and
+/// [`NullTreatment`](expr::NullTreatment), gated on the `proto` feature.
+#[cfg(feature = "proto")]
+mod proto;
 pub mod registry;
 pub mod simplify;
 pub mod sort_properties {
@@ -131,9 +136,14 @@ pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
     AggregateUDF, AggregateUDFImpl, ReversedUDAF, SetMonotonicity, StatisticsArgs,
-    udaf_default_display_name, udaf_default_human_display, udaf_default_return_field,
-    udaf_default_schema_name, udaf_default_window_function_display_name,
-    udaf_default_window_function_schema_name,
+    UdafDisplayNameBuilder, UdafHumanDisplayBuilder, UdafSchemaNameBuilder,
+    UdafWindowFunctionDisplayNameBuilder, UdafWindowFunctionSchemaNameBuilder,
+    udaf_default_return_field,
+};
+#[expect(deprecated)]
+pub use udaf::{
+    udaf_default_display_name, udaf_default_human_display, udaf_default_schema_name,
+    udaf_default_window_function_display_name, udaf_default_window_function_schema_name,
 };
 pub use udf::{
     ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, StructFieldMapping,

@@ -670,10 +670,56 @@ pub struct ColumnUnnestListRecursion {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
-    #[prost(bool, tag = "1")]
-    pub preserve_nulls: bool,
+    #[prost(enumeration = "unnest_options::NullHandling", tag = "3")]
+    pub null_handling: i32,
     #[prost(message, repeated, tag = "2")]
     pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
+}
+/// Nested message and enum types in `UnnestOptions`.
+pub mod unnest_options {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum NullHandling {
+        /// Preserve nulls; empty lists produce no rows. The historical default.
+        Preserve = 0,
+        /// Drop both null and empty lists from the output.
+        Drop = 1,
+        /// Preserve nulls, and additionally expand empty lists into a single
+        /// NULL output row (outer-unnest semantics).
+        PreserveAndExpandEmpty = 2,
+    }
+    impl NullHandling {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Preserve => "PRESERVE",
+                Self::Drop => "DROP",
+                Self::PreserveAndExpandEmpty => "PRESERVE_AND_EXPAND_EMPTY",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "PRESERVE" => Some(Self::Preserve),
+                "DROP" => Some(Self::Drop),
+                "PRESERVE_AND_EXPAND_EMPTY" => Some(Self::PreserveAndExpandEmpty),
+                _ => None,
+            }
+        }
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RecursionUnnestOption {
@@ -963,6 +1009,10 @@ pub struct NegativeNode {
 pub struct Unnest {
     #[prost(message, repeated, tag = "1")]
     pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// When true, this Unnest expression has outer-unnest semantics: NULL and
+    /// empty input lists both produce a single NULL output row.
+    #[prost(bool, tag = "2")]
+    pub outer: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InListNode {
@@ -1292,7 +1342,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1378,6 +1428,10 @@ pub mod physical_plan_node {
         ArrowScan(super::ArrowScanExecNode),
         #[prost(message, tag = "39")]
         ScalarSubquery(::prost::alloc::boxed::Box<super::ScalarSubqueryExecNode>),
+        #[prost(message, tag = "40")]
+        PiecewiseMergeJoin(
+            ::prost::alloc::boxed::Box<super::PiecewiseMergeJoinExecNode>,
+        ),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1507,7 +1561,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1570,6 +1624,12 @@ pub mod physical_expr_node {
         Lambda(::prost::alloc::boxed::Box<super::PhysicalLambdaExprNode>),
         #[prost(message, tag = "26")]
         LambdaVariable(super::PhysicalLambdaVariableExprNode),
+        #[prost(message, tag = "27")]
+        RangeExpr(super::PhysicalRangeExprNode),
+        #[prost(message, tag = "28")]
+        SqlSimilarToPattern(
+            ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
+        ),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1584,6 +1644,11 @@ pub struct PhysicalDynamicFilterNode {
     pub inner_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(bool, tag = "5")]
     pub is_complete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalSqlSimilarToPatternNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {
@@ -1637,6 +1702,8 @@ pub struct PhysicalAggregateExprNode {
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(string, tag = "8")]
     pub human_display: ::prost::alloc::string::String,
+    #[prost(bool, tag = "9")]
+    pub is_reversed: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
@@ -1809,6 +1876,13 @@ pub struct PhysicalHashExprNode {
     pub description: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangeExprNode {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -1877,6 +1951,14 @@ pub struct FileScanExecConf {
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
     #[prost(message, optional, tag = "15")]
     pub output_partitioning: ::core::option::Option<Partitioning>,
+    /// Compression used by formats such as CSV and JSON. Absent means uncompressed
+    /// for compatibility with payloads written before this field existed.
+    #[prost(
+        enumeration = "super::datafusion_common::CompressionTypeVariant",
+        optional,
+        tag = "16"
+    )]
+    pub file_compression_type: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1903,6 +1985,9 @@ pub struct CsvScanExecNode {
     pub newlines_in_values: bool,
     #[prost(bool, tag = "8")]
     pub truncate_rows: bool,
+    /// Custom one-byte line terminator. Absent means the default newline terminator.
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -1925,6 +2010,9 @@ pub mod csv_scan_exec_node {
 pub struct JsonScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+    /// Absent means newline-delimited JSON for compatibility with older payloads.
+    #[prost(bool, optional, tag = "2")]
+    pub newline_delimited: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {
@@ -1935,6 +2023,8 @@ pub struct AvroScanExecNode {
 pub struct ArrowScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+    #[prost(enumeration = "ArrowIpcFormat", tag = "2")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MemoryScanExecNode {
@@ -1979,6 +2069,15 @@ pub struct HashJoinExecNode {
     /// Optional dynamic filter expression for pushing down to the probe side.
     #[prost(message, optional, tag = "11")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Optional row limit pushed into the join by the `limit_pushdown` rule.
+    ///
+    /// This is presence-tracked (`optional`) on purpose: messages produced by
+    /// versions predating this field carry no `fetch` at all, and a plain proto3
+    /// scalar would decode that absence as `0`, i.e. "fetch 0 rows", silently
+    /// turning old plans into empty results. With `optional`, absent decodes to
+    /// `None`, which is the correct reading of an older message.
+    #[prost(uint64, optional, tag = "12")]
+    pub fetch: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -2038,6 +2137,12 @@ pub struct AnalyzeExecNode {
     pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "7")]
     pub format: i32,
+    /// Whether metric_types is present. False means use SUMMARY and DEV.
+    #[prost(bool, tag = "8")]
+    pub has_metric_types: bool,
+    /// Types of metrics to display.
+    #[prost(enumeration = "super::datafusion_common::MetricType", repeated, tag = "9")]
+    pub metric_types: ::prost::alloc::vec::Vec<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {
@@ -2171,6 +2276,9 @@ pub struct AggregateExecNode {
     /// Optional dynamic filter expression for pushing down to the child.
     #[prost(message, optional, tag = "13")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Output schema preserved by physical optimizer rewrites.
+    #[prost(message, optional, tag = "14")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -2182,6 +2290,9 @@ pub struct GlobalLimitExecNode {
     /// Maximum number of rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "4")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocalLimitExecNode {
@@ -2189,6 +2300,9 @@ pub struct LocalLimitExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub fetch: u32,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "3")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExecNode {
@@ -2469,6 +2583,27 @@ pub struct SortMergeJoinExecNode {
     pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
     pub null_equality: i32,
+    #[prost(uint32, repeated, tag = "8")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PiecewiseMergeJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub buffered: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub streamed: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    /// The buffered-side and streamed-side halves of the single range predicate.
+    #[prost(message, optional, tag = "3")]
+    pub on_buffered: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub on_streamed: ::core::option::Option<PhysicalExprNode>,
+    /// `Operator` variant name, e.g. "Lt". Must be one of Lt/LtEq/Gt/GtEq.
+    #[prost(string, tag = "5")]
+    pub operator: ::prost::alloc::string::String,
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "6")]
+    pub join_type: i32,
+    #[prost(uint64, tag = "7")]
+    pub num_partitions: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncFuncExecNode {
@@ -2711,6 +2846,36 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+/// Identifies which Arrow IPC format an ArrowScanExecNode reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ArrowIpcFormat {
+    /// Arrow IPC file format (with footer, supports range-based parallel reading).
+    /// This is the default for payloads encoded before the format field existed.
+    File = 0,
+    /// Arrow IPC stream format (without footer, sequential reading only)
+    Stream = 1,
+}
+impl ArrowIpcFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::File => "ARROW_IPC_FORMAT_FILE",
+            Self::Stream => "ARROW_IPC_FORMAT_STREAM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ARROW_IPC_FORMAT_FILE" => Some(Self::File),
+            "ARROW_IPC_FORMAT_STREAM" => Some(Self::Stream),
             _ => None,
         }
     }

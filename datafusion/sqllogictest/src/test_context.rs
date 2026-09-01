@@ -54,12 +54,15 @@ use datafusion::{
 use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
-use range_partitioning::register_range_partitioned_table;
+use range_partitioning::{
+    register_range_partitioned_table, register_range_sorted_time_bin_table,
+};
 
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
@@ -130,6 +133,15 @@ impl TestContext {
                 state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
         }
 
+        if matches!(
+            relative_path.file_name().and_then(|name| name.to_str()),
+            Some("statistics_registry.slt")
+        ) {
+            state_builder = state_builder.with_statistics_registry(
+                StatisticsRegistry::default_with_builtin_providers(),
+            );
+        }
+
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
@@ -179,9 +191,14 @@ impl TestContext {
                 info!("Registering range partitioned table");
                 register_range_partitioned_table(test_ctx.session_ctx());
             }
+            "range_sorted_time_bin_agg.slt" => {
+                info!("Registering range-sorted time-bin table");
+                register_range_sorted_time_bin_table(test_ctx.session_ctx());
+            }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx());
+                register_conflicting_metadata_tables(test_ctx.session_ctx())
             }
             "union_function.slt" => {
                 info!("Registering table with union column");
@@ -224,6 +241,35 @@ impl TestContext {
     /// Returns a reference to the internal SessionContext
     pub fn session_ctx(&self) -> &SessionContext {
         &self.ctx
+    }
+
+    /// Apply `key = value` config overrides to the `SessionContext` in place,
+    /// used by the runner to sweep `# configMatrix:` directives.
+    ///
+    /// Each override runs as `SET <key> = '<value>'`, the same path an in-file
+    /// `SET` takes, so it accepts any key `SET` does: `datafusion.runtime.*` keys
+    /// reach the runtime environment and config-dependent UDFs are refreshed.
+    /// Values are single-quoted (embedded quotes doubled) so strings like
+    /// timezones and `100M` parse as literals.
+    ///
+    /// `origin` labels error messages, typically the test file path.
+    pub async fn apply_config_overrides(
+        &self,
+        overrides: &[(String, String)],
+        origin: &Path,
+    ) -> Result<()> {
+        for (key, value) in overrides {
+            // Single-quote as a string literal, doubling embedded quotes.
+            let escaped = value.replace('\'', "''");
+            let sql = format!("SET {key} = '{escaped}'");
+            self.ctx.sql(&sql).await.map_err(|e| {
+                e.context(format!(
+                    "configMatrix in {}: failed to set `{key}` = `{value}`",
+                    origin.display()
+                ))
+            })?;
+        }
+        Ok(())
     }
 }
 
@@ -387,7 +433,7 @@ pub fn register_temp_table(ctx: &SessionContext) {
         async fn scan(
             &self,
             _state: &dyn Session,
-            _: Option<&Vec<usize>>,
+            _: Option<&[usize]>,
             _: &[Expr],
             _: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
@@ -572,14 +618,17 @@ fn register_union_table(ctx: &SessionContext) {
             ],
         )
         .unwrap(),
-        ScalarBuffer::from(vec![3, 1, 3]),
+        ScalarBuffer::from(vec![3, 1, 3, 3, 1, 3]),
         None,
         vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 1, 5, 3])),
             Arc::new(StringArray::from(vec![
                 Some("foo"),
                 Some("bar"),
                 Some("baz"),
+                Some("qux"),
+                Some("bar"),
+                Some("quux"),
             ])),
         ],
     )
@@ -764,4 +813,101 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+fn register_conflicting_metadata_tables(ctx: &SessionContext) {
+    let schema_left =
+        Schema::new(vec![Field::new("a", DataType::Int32, false)]).with_metadata(
+            HashMap::from([(String::from("metadata_key"), String::from("left"))]),
+        );
+    let data_left =
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])) as ArrayRef;
+
+    let batch_left =
+        RecordBatch::try_new(Arc::new(schema_left), vec![Arc::new(data_left)]).unwrap();
+    ctx.register_batch("larger_table", batch_left).unwrap();
+
+    let schema_right =
+        Schema::new(vec![Field::new("b", DataType::Int32, false)]).with_metadata(
+            HashMap::from([(String::from("metadata_key"), String::from("right"))]),
+        );
+    let data_right = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+
+    let batch_right =
+        RecordBatch::try_new(Arc::new(schema_right), vec![Arc::new(data_right)]).unwrap();
+    ctx.register_batch("smaller_table", batch_right).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::execution::memory_pool::MemoryConsumer;
+
+    /// Non-runtime keys land on `ConfigOptions`, same as a plain `SET`.
+    #[tokio::test]
+    async fn apply_config_overrides_sets_config_options() {
+        let test_ctx = TestContext::new(SessionContext::new());
+        test_ctx
+            .apply_config_overrides(
+                &[(
+                    "datafusion.execution.batch_size".to_string(),
+                    "1234".to_string(),
+                )],
+                Path::new("test.slt"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            test_ctx
+                .session_ctx()
+                .state()
+                .config()
+                .options()
+                .execution
+                .batch_size
+                .to_string(),
+            "1234"
+        );
+    }
+
+    /// `datafusion.runtime.*` keys reach the runtime environment, not just
+    /// `ConfigOptions` (a direct write would reject `runtime` keys).
+    #[tokio::test]
+    async fn apply_config_overrides_routes_runtime_keys() {
+        let test_ctx = TestContext::new(SessionContext::new());
+        test_ctx
+            .apply_config_overrides(
+                &[(
+                    "datafusion.runtime.memory_limit".to_string(),
+                    "100M".to_string(),
+                )],
+                Path::new("test.slt"),
+            )
+            .await
+            .unwrap();
+
+        // The override took effect: the pool now caps reservations at 100M.
+        let pool = Arc::clone(&test_ctx.session_ctx().runtime_env().memory_pool);
+        let reservation = MemoryConsumer::new("test").register(&pool);
+        assert!(reservation.try_grow(50 * 1024 * 1024).is_ok());
+        assert!(reservation.try_grow(100 * 1024 * 1024).is_err());
+    }
+
+    /// An unknown key still fails fast, naming the originating file.
+    #[tokio::test]
+    async fn apply_config_overrides_reports_invalid_key() {
+        let test_ctx = TestContext::new(SessionContext::new());
+        let err = test_ctx
+            .apply_config_overrides(
+                &[("datafusion.does.not.exist".to_string(), "1".to_string())],
+                Path::new("bad.slt"),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("bad.slt"), "got {err}");
+        assert!(err.contains("datafusion.does.not.exist"), "got {err}");
+    }
 }

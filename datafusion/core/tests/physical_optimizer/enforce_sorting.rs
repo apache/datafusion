@@ -34,7 +34,7 @@ use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{create_array, DataFusionError, NullEquality, Result, TableReference};
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, SortExpr};
@@ -57,6 +57,8 @@ use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
+use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
@@ -233,6 +235,40 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
     Optimized Plan:
     SortPreservingMergeExec: [a@2 ASC]
       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]
+        RepartitionExec: partitioning=Hash([col_a@0], 10), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0]
+        RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_propagate_in_right_mark_join() -> Result<()> {
+    let left_schema = create_test_schema2()?;
+    let right_schema = create_test_schema3()?;
+    let left_input = memory_exec(&left_schema);
+    let parquet_ordering = [sort_expr("a", &right_schema)].into();
+    let right_input =
+        parquet_exec_with_sort(right_schema.clone(), vec![parquet_ordering]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("col_a", &left_schema)?) as _,
+        Arc::new(Column::new_with_schema("c", &right_schema)?) as _,
+    )];
+    let join = hash_join_exec(left_input, right_input, on, None, &JoinType::RightMark)?;
+    let physical_plan = sort_exec([sort_expr("a", &join.schema())].into(), join);
+
+    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+      HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(col_a@0, c@2)]
+        DataSourceExec: partitions=1, partition_sizes=[0]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+
+    Optimized Plan:
+    SortPreservingMergeExec: [a@0 ASC]
+      HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(col_a@0, c@2)]
         RepartitionExec: partitioning=Hash([col_a@0], 10), input_partitions=1
           DataSourceExec: partitions=1, partition_sizes=[0]
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
@@ -2293,6 +2329,55 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
     Optimized Plan:
     DataSourceExec: partitions=1, partition_sizes=[0]
     ");
+
+    Ok(())
+}
+
+#[test]
+fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
+    let schema = create_test_schema()?;
+    let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
+    let source = parquet_exec_with_sort(Arc::clone(&schema), vec![ordering.clone()]);
+    let projection = projection_exec(
+        vec![
+            (col("nullable_col", &schema)?, "nullable_col".to_string()),
+            (
+                col("non_nullable_col", &schema)?,
+                "non_nullable_col".to_string(),
+            ),
+        ],
+        source,
+    )?;
+    let plan = sort_preserving_merge_exec_with_fetch(ordering.clone(), projection, 100);
+
+    let optimized = PlanWithCorrespondingSort::new_default(plan)
+        .transform_up(ensure_sorting)?
+        .data;
+    let optimized = check_integrity(optimized)?.plan;
+    let limit = optimized
+        .downcast_ref::<LocalLimitExec>()
+        .expect("SPM fetch should become a local limit");
+    assert_eq!(limit.fetch(), 100);
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+
+    let config = ConfigOptions::new();
+    let optimized = ProjectionPushdown::new().optimize(optimized, &config)?;
+    let limit = optimized
+        .downcast_ref::<LocalLimitExec>()
+        .expect("projection rewrite should retain the local limit");
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+    assert!(limit.input().is::<DataSourceExec>());
+
+    let optimized = LimitPushdown::new().optimize(optimized, &config)?;
+    let source = optimized
+        .downcast_ref::<DataSourceExec>()
+        .expect("limit should be pushed into the parquet scan");
+    let config = source
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("parquet scan should use FileScanConfig");
+    assert_eq!(config.limit, Some(100));
+    assert!(config.preserve_order);
 
     Ok(())
 }

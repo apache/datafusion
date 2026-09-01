@@ -6409,6 +6409,9 @@ impl serde::Serialize for ParquetOptions {
         if self.max_row_group_size != 0 {
             len += 1;
         }
+        if self.max_in_list_size != 0 {
+            len += 1;
+        }
         if !self.created_by.is_empty() {
             len += 1;
         }
@@ -6528,6 +6531,11 @@ impl serde::Serialize for ParquetOptions {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maxRowGroupSize", ToString::to_string(&self.max_row_group_size).as_str())?;
+        }
+        if self.max_in_list_size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("maxInListSize", ToString::to_string(&self.max_in_list_size).as_str())?;
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
@@ -6687,6 +6695,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "dataPageRowCountLimit",
             "max_row_group_size",
             "maxRowGroupSize",
+            "max_in_list_size",
+            "maxInListSize",
             "created_by",
             "createdBy",
             "content_defined_chunking",
@@ -6739,6 +6749,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
+            MaxInListSize,
             CreatedBy,
             ContentDefinedChunking,
             MetadataSizeHint,
@@ -6795,6 +6806,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
+                            "maxInListSize" | "max_in_list_size" => Ok(GeneratedField::MaxInListSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
@@ -6849,6 +6861,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
+                let mut max_in_list_size__ = None;
                 let mut created_by__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
@@ -7000,6 +7013,14 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::MaxInListSize => {
+                            if max_in_list_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxInListSize"));
+                            }
+                            max_in_list_size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                         GeneratedField::CreatedBy => {
                             if created_by__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createdBy"));
@@ -7113,6 +7134,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
+                    max_in_list_size: max_in_list_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,

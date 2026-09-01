@@ -22,6 +22,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::string_in_list::StringInListPruningExpr;
+
 use arrow::array::AsArray;
 use arrow::{
     array::{ArrayRef, BooleanArray, new_null_array},
@@ -36,7 +38,9 @@ use log::{debug, trace};
 
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{TransformedResult, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, assert_eq_or_internal_err};
+use datafusion_common::{
+    _internal_datafusion_err, Column, DFSchema, assert_eq_or_internal_err,
+};
 use datafusion_common::{
     ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
@@ -106,7 +110,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// C: true  (rows might match x = 5)
 /// ```
 ///
-/// See [`PruningPredicate::try_new`] and [`PruningPredicate::prune`] for more information.
+/// See [`PruningPredicateBuilder`] and [`PruningPredicate::prune`] for more information.
 ///
 /// # Background
 ///
@@ -388,18 +392,162 @@ pub fn build_pruning_predicate(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
-        Ok(pruning_predicate) => {
-            if !pruning_predicate.always_true() {
-                return Some(Arc::new(pruning_predicate));
-            }
-        }
-        Err(e) => {
-            debug!("Could not create pruning predicate for: {e}");
-            predicate_creation_errors.add(1);
+    PruningPredicateBuilder::new()
+        .with_file_schema(Arc::clone(file_schema))
+        .with_error_counter(predicate_creation_errors)
+        .build(predicate)
+}
+
+/// Builder for a [`PruningPredicate`]. Groups optional configuration —
+/// `IN (...)` rewrite cap, error counter — so future additions do not
+/// churn the top-level API.
+///
+/// The two entry points are:
+///  - [`Self::build`]: convenience for scan sites that already track a
+///    `predicate_creation_errors` counter. Returns `Some(Arc<..>)` when the
+///    resulting predicate can actually prune, `None` when it is trivially
+///    true or when construction failed (in which case the error counter is
+///    incremented if one was supplied).
+///  - [`Self::try_build`]: returns a raw `Result<PruningPredicate>` for
+///    callers that want to surface errors themselves.
+///
+#[derive(Default)]
+pub struct PruningPredicateBuilder<'a> {
+    file_schema: Option<SchemaRef>,
+    error_counter: Option<&'a Count>,
+    max_in_list_size: usize,
+}
+
+impl<'a> PruningPredicateBuilder<'a> {
+    /// Create a new builder with the default pruning predicate configuration.
+    pub fn new() -> Self {
+        Self {
+            file_schema: None,
+            error_counter: None,
+            max_in_list_size: MAX_IN_LIST_SIZE,
         }
     }
-    None
+
+    /// Set the schema of the container that will be pruned (typically the
+    /// parquet file schema).
+    pub fn with_file_schema(mut self, file_schema: SchemaRef) -> Self {
+        self.file_schema = Some(file_schema);
+        self
+    }
+
+    /// Metric counter incremented once per predicate that fails to build.
+    /// Only consulted by [`Self::build`]; [`Self::try_build`] surfaces the
+    /// error directly.
+    pub fn with_error_counter(mut self, error_counter: &'a Count) -> Self {
+        self.error_counter = Some(error_counter);
+        self
+    }
+
+    /// Cap on the input length of `IN (...)` lists eligible for min/max pruning.
+    ///
+    /// For a nonempty list of `N` values (before deduplication) and cap `C`:
+    ///
+    /// | Condition | Pruning representation |
+    /// | --- | --- |
+    /// | `N <= min(20, C)` | Existing per-value rewrite |
+    /// | `20 < N <= C`, positive, non-null literal strings on a string column | Compact sorted domain |
+    /// | `20 < N <= C`, other lists | Existing per-value rewrite |
+    /// | `N > C` | Unhandled-predicate hook, normally "keep the container" |
+    ///
+    /// Empty lists also use the unhandled-predicate hook. A cap of zero disables
+    /// this `IN` min/max rewrite, not other predicates or literal/containment
+    /// pruning (such as Bloom filters). The default cap is [`MAX_IN_LIST_SIZE`]
+    /// (20), so the compact path requires an explicitly raised cap.
+    ///
+    /// Raising the cap can still build large comparison trees for non-string
+    /// lists, `NOT IN`, or lists containing NULL; their handling is unchanged.
+    ///
+    /// Query engines typically pass
+    /// `datafusion.execution.parquet.max_in_list_size` here.
+    pub fn with_max_in_list_size(mut self, max_in_list_size: usize) -> Self {
+        self.max_in_list_size = max_in_list_size;
+        self
+    }
+
+    /// Build a [`PruningPredicate`] wrapped in `Some(Arc<..>)` when it can
+    /// prune, `None` when it is trivially true or when construction fails.
+    /// If [`Self::with_error_counter`] was set, construction failures are
+    /// recorded there.
+    pub fn build(
+        self,
+        predicate: Arc<dyn PhysicalExpr>,
+    ) -> Option<Arc<PruningPredicate>> {
+        let error_counter = self.error_counter;
+        match self.try_build(predicate) {
+            Ok(pruning_predicate) => {
+                if !pruning_predicate.always_true() {
+                    return Some(Arc::new(pruning_predicate));
+                }
+            }
+            Err(e) => {
+                debug!("Could not create pruning predicate for: {e}");
+                if let Some(counter) = error_counter {
+                    counter.add(1);
+                }
+            }
+        }
+        None
+    }
+
+    /// Build a [`PruningPredicate`], returning the construction error
+    /// directly. Callers that want the always-true predicate elided or
+    /// errors folded into a counter should use [`Self::build`] instead.
+    pub fn try_build(
+        self,
+        mut predicate: Arc<dyn PhysicalExpr>,
+    ) -> Result<PruningPredicate> {
+        let file_schema = self.file_schema.ok_or_else(|| {
+            _internal_datafusion_err!(
+                "PruningPredicateBuilder requires a file schema (call `with_file_schema`)"
+            )
+        })?;
+
+        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
+        // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
+        // so that PruningPredicate can work with a static expression.
+        let tf = snapshot_physical_expr_opt(predicate)?;
+        if tf.transformed {
+            // If we had an expression such as Dynamic(part_col < 5 and col < 10)
+            // (this could come from something like `select * from t order by part_col, col, limit 10`)
+            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
+            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
+            // the expression we have now is `8 < 5 and col < 10`.
+            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
+            let simplifier = PhysicalExprSimplifier::new(&file_schema);
+            predicate = simplifier.simplify(tf.data)?;
+        } else {
+            predicate = tf.data;
+        }
+        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
+
+        // build predicate expression once
+        let mut required_columns = RequiredColumns::new();
+        let predicate_expr = build_predicate_expression(
+            &predicate,
+            &file_schema,
+            &mut required_columns,
+            &unhandled_hook,
+            self.max_in_list_size,
+        );
+        let predicate_schema = required_columns.schema();
+        // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
+        let predicate_expr =
+            PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
+        let literal_guarantees = LiteralGuarantee::analyze(&predicate);
+
+        Ok(PruningPredicate {
+            schema: file_schema,
+            predicate_expr,
+            required_columns,
+            orig_expr: predicate,
+            literal_guarantees,
+        })
+    }
 }
 
 /// Rewrites predicates that [`PredicateRewriter`] can not handle, e.g. certain
@@ -461,46 +609,13 @@ impl PruningPredicate {
     /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
-    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
-        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
-        // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
-        // so that PruningPredicate can work with a static expression.
-        let tf = snapshot_physical_expr_opt(expr)?;
-        if tf.transformed {
-            // If we had an expression such as Dynamic(part_col < 5 and col < 10)
-            // (this could come from something like `select * from t order by part_col, col, limit 10`)
-            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
-            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
-            // the expression we have now is `8 < 5 and col < 10`.
-            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
-            let simplifier = PhysicalExprSimplifier::new(&schema);
-            expr = simplifier.simplify(tf.data)?;
-        } else {
-            expr = tf.data;
-        }
-        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-
-        // build predicate expression once
-        let mut required_columns = RequiredColumns::new();
-        let predicate_expr = build_predicate_expression(
-            &expr,
-            &schema,
-            &mut required_columns,
-            &unhandled_hook,
-        );
-        let predicate_schema = required_columns.schema();
-        // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
-        let predicate_expr =
-            PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
-        let literal_guarantees = LiteralGuarantee::analyze(&expr);
-
-        Ok(Self {
-            schema,
-            predicate_expr,
-            required_columns,
-            orig_expr: expr,
-            literal_guarantees,
-        })
+    ///
+    /// Use [`PruningPredicateBuilder`] to construct new pruning predicates.
+    #[deprecated(since = "55.0.0", note = "Use PruningPredicateBuilder instead")]
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+        PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)
     }
 
     /// For each set of statistics, evaluates the pruning predicate
@@ -657,7 +772,7 @@ impl BoolVecBuilder {
             // `false` for this conjunct means we know for sure no rows could
             // pass the predicate and thus we set the corresponding container
             // location to false.
-            if let Some(false) = new {
+            if new == Some(false) {
                 *cur = false;
             }
         }
@@ -697,14 +812,12 @@ impl BoolVecBuilder {
 
 fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.downcast_ref::<phys_expr::Literal>()
-        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(true))))
-        .unwrap_or_default()
+        .is_some_and(|l| *l.value() == ScalarValue::Boolean(Some(true)))
 }
 
 fn is_always_false(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.downcast_ref::<phys_expr::Literal>()
-        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(false))))
-        .unwrap_or_default()
+        .is_some_and(|l| *l.value() == ScalarValue::Boolean(Some(false)))
 }
 
 /// Describes which columns statistics are necessary to evaluate a
@@ -1014,11 +1127,8 @@ impl<'a> PruningExpressionBuilder<'a> {
             scalar_expr,
             df_schema,
         )?;
-        let field = match schema.column_with_name(column.name()) {
-            Some((_, f)) => f,
-            _ => {
-                return plan_err!("Field not found in schema");
-            }
+        let Some((_, field)) = schema.column_with_name(column.name()) else {
+            return plan_err!("Field not found in schema");
         };
 
         Ok(Self {
@@ -1360,20 +1470,67 @@ fn build_is_null_column_expr(
     }
 }
 
-/// The maximum number of entries in an `InList` that might be rewritten into
-/// an OR chain
-const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
+/// Keep large literal string domains compact instead of building an OR tree.
+fn build_string_in_list_expr(
+    in_list: &phys_expr::InListExpr,
+    schema: &Schema,
+    required_columns: &mut RequiredColumns,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    if in_list.negated() {
+        return None;
+    }
+    let column = in_list.expr().downcast_ref::<phys_expr::Column>()?;
+    let field = schema.fields().get(column.index())?;
+    let data_type = match field.data_type() {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        data_type => data_type,
+    };
+    if field.name() != column.name() || !data_type.is_string() {
+        return None;
+    }
+    // NULLs must remain unhandled: the inverse predicate is also used to prove
+    // that every row matches, and IN (..., NULL) can evaluate to UNKNOWN.
+    let values = in_list
+        .list()
+        .iter()
+        .map(|expr| extract_string_literal(expr).map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    let min = required_columns
+        .min_column_expr(column, in_list.expr(), field)
+        .ok()?;
+    let max = required_columns
+        .max_column_expr(column, in_list.expr(), field)
+        .ok()?;
+    let non_null =
+        build_is_null_column_expr(in_list.expr(), schema, required_columns, true)?;
+    let intersects = Arc::new(StringInListPruningExpr::new(min, max, values));
+    Some(Arc::new(phys_expr::BinaryExpr::new(
+        non_null,
+        Operator::And,
+        intersects,
+    )))
+}
+
+/// Default maximum number of entries in an `IN (...)` list eligible for
+/// statistics pruning. Eligible positive literal string lists above this
+/// threshold use a compact sorted domain instead of per-value min/max checks.
+/// Callers can raise the cap via [`PredicateRewriter::with_max_in_list_size`], and
+/// query engines can wire it from the
+/// `datafusion.execution.parquet.max_in_list_size` config option.
+pub const MAX_IN_LIST_SIZE: usize = 20;
 
 /// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
 /// for use as a [`PruningPredicate`].
 pub struct PredicateRewriter {
     unhandled_hook: Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
 }
 
 impl Default for PredicateRewriter {
     fn default() -> Self {
         Self {
             unhandled_hook: Arc::new(ConstantUnhandledPredicateHook::default()),
+            max_in_list_size: MAX_IN_LIST_SIZE,
         }
     }
 }
@@ -1386,10 +1543,25 @@ impl PredicateRewriter {
 
     /// Set the unhandled hook to be used when a predicate can not be rewritten
     pub fn with_unhandled_hook(
-        self,
+        mut self,
         unhandled_hook: Arc<dyn UnhandledPredicateHook>,
     ) -> Self {
-        Self { unhandled_hook }
+        self.unhandled_hook = unhandled_hook;
+        self
+    }
+
+    /// Set the maximum input length of an `IN (...)` list eligible for min/max
+    /// pruning. See [`PruningPredicateBuilder::with_max_in_list_size`] for the
+    /// exact boundaries and representations. Longer lists fall back to the
+    /// unhandled-predicate hook (typically "keep the container"); this skips
+    /// only that `IN` min/max rewrite, not all container-level pruning.
+    ///
+    /// The default (see [`MAX_IN_LIST_SIZE`]) preserves the
+    /// historical behaviour. Callers wiring config through can override via
+    /// `datafusion.execution.parquet.max_in_list_size`.
+    pub fn with_max_in_list_size(mut self, max_in_list_size: usize) -> Self {
+        self.max_in_list_size = max_in_list_size;
+        self
     }
 
     /// Translate logical filter expression into pruning predicate
@@ -1400,7 +1572,8 @@ impl PredicateRewriter {
     ///
     /// Returns the pruning predicate as an [`PhysicalExpr`]
     ///
-    /// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
+    /// Notice: `IN (...)` lists longer than `max_in_list_size` (default
+    /// [`MAX_IN_LIST_SIZE`]) fall back to calling `unhandled_hook`.
     pub fn rewrite_predicate_to_statistics_predicate(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -1412,6 +1585,7 @@ impl PredicateRewriter {
             &Arc::new(schema.clone()),
             &mut required_columns,
             &self.unhandled_hook,
+            self.max_in_list_size,
         )
     }
 }
@@ -1424,12 +1598,16 @@ impl PredicateRewriter {
 ///
 /// Returns the pruning predicate as an [`PhysicalExpr`]
 ///
-/// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
+/// `max_in_list_size` is the largest `IN (...)` list eligible for statistics
+/// pruning. Large positive literal string lists use a compact sorted domain;
+/// other eligible lists use per-value checks. Longer lists fall back to
+/// `unhandled_hook`.
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
     required_columns: &mut RequiredColumns,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
 ) -> Arc<dyn PhysicalExpr> {
     if is_always_false(expr) {
         // Shouldn't return `unhandled_hook.handle(expr)`
@@ -1464,9 +1642,17 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
-        if !in_list.list().is_empty()
-            && in_list.list().len() <= MAX_LIST_VALUE_SIZE_REWRITE
+        // Keep the existing expression shape for lists of at most 20 values.
+        // This lower bound is a scope/compatibility choice, not a measured
+        // performance threshold; compact pruning is opt-in via a raised cap.
+        if in_list.list().len() > MAX_IN_LIST_SIZE
+            && in_list.list().len() <= max_in_list_size
+            && let Some(pruning_expr) =
+                build_string_in_list_expr(in_list, schema, required_columns)
         {
+            return pruning_expr;
+        }
+        if !in_list.list().is_empty() && in_list.list().len() <= max_in_list_size {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
             } else {
@@ -1494,6 +1680,7 @@ fn build_predicate_expression(
                 schema,
                 required_columns,
                 unhandled_hook,
+                max_in_list_size,
             );
         } else {
             return unhandled_hook.handle(expr);
@@ -1528,10 +1715,20 @@ fn build_predicate_expression(
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr =
-            build_predicate_expression(&left, schema, required_columns, unhandled_hook);
-        let right_expr =
-            build_predicate_expression(&right, schema, required_columns, unhandled_hook);
+        let left_expr = build_predicate_expression(
+            &left,
+            schema,
+            required_columns,
+            unhandled_hook,
+            max_in_list_size,
+        );
+        let right_expr = build_predicate_expression(
+            &right,
+            schema,
+            required_columns,
+            unhandled_hook,
+            max_in_list_size,
+        );
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, right)
@@ -2055,8 +2252,12 @@ mod tests {
 
     use arrow::array::Decimal128Array;
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
-        datatypes::TimeUnit,
+        array::{
+            BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+            UInt64Array,
+        },
+        buffer::NullBuffer,
+        datatypes::{Int32Type, TimeUnit},
     };
     use datafusion_expr::expr::InList;
     use datafusion_expr::{BinaryExpr, Expr, cast, is_null, try_cast};
@@ -2172,10 +2373,10 @@ mod tests {
                 .map(|(_values, contained)| Arc::new(contained.clone()) as ArrayRef);
 
             [
-                self.min.as_ref().cloned(),
-                self.max.as_ref().cloned(),
-                self.null_counts.as_ref().cloned(),
-                self.row_counts.as_ref().cloned(),
+                self.min.clone(),
+                self.max.clone(),
+                self.null_counts.clone(),
+                self.row_counts.clone(),
             ]
             .into_iter()
             .flatten()
@@ -2456,7 +2657,10 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(expr)
+            .unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -2468,11 +2672,10 @@ mod tests {
         let mut fields = HashSet::new();
         for (_col, _ty, field) in p.required_columns().iter() {
             let was_new = fields.insert(field);
-            if !was_new {
-                panic!(
-                    "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
-                );
-            }
+            assert!(
+                was_new,
+                "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
+            )
         }
     }
 
@@ -3096,8 +3299,10 @@ mod tests {
             dynamic_phys_expr.with_new_children(remapped_expr).unwrap();
         // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
         let expected = &[false];
-        let p =
-            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(dynamic_filter_expr)
+            .unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -3314,7 +3519,7 @@ mod tests {
     fn row_group_predicate_in_list_to_many_values() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         // test c1 in(1..21)
-        // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
+        // in pruning.rs has MAX_IN_LIST_SIZE = 20, more than this value will be rewrite
         // always true
         let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
 
@@ -3323,6 +3528,440 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
+        Ok(())
+    }
+
+    // With the configurable cap, a caller that raises
+    // `max_in_list_size` above the default gets the IN list rewritten
+    // into a per-value min/max chain instead of falling through to `true`.
+    // This verifies both `PredicateRewriter::with_max_in_list_size` and the
+    // recursive OR path inside `build_predicate_expression`.
+    #[test]
+    fn row_group_predicate_in_list_rewritten_at_raised_cap() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        // 25 items — above the default 20, below a raised cap of 32.
+        let expr = col("c1").in_list((1..=25).map(lit).collect(), false);
+        let physical = logical2physical(&expr, &schema);
+        let rewriter = PredicateRewriter::new().with_max_in_list_size(32);
+        let predicate_expr =
+            rewriter.rewrite_predicate_to_statistics_predicate(&physical, &schema);
+        // At the raised cap, IN is rewritten into per-value min/max checks
+        // OR'd together; the resulting predicate must not collapse to
+        // `true` (which is what the default cap produces).
+        assert_ne!(
+            predicate_expr.to_string(),
+            "true",
+            "IN(25) with raised cap must rewrite into a statistics-based predicate, not fall through to `true`"
+        );
+        // Sanity: the rewritten predicate references per-value literals.
+        assert!(
+            predicate_expr.to_string().contains(" <= 1 ")
+                && predicate_expr.to_string().contains(" <= 25 "),
+            "rewritten predicate should include per-value bounds for each IN entry, got: {predicate_expr}"
+        );
+        Ok(())
+    }
+
+    // Guard: when the cap is 0 (opt-out) the IN branch is skipped entirely
+    // regardless of list length, so even a small IN falls through to the
+    // unhandled hook.
+    #[test]
+    fn row_group_predicate_in_list_disabled_at_zero_cap() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = col("c1").in_list(vec![lit(1), lit(2), lit(3)], false);
+        let physical = logical2physical(&expr, &schema);
+        let rewriter = PredicateRewriter::new().with_max_in_list_size(0);
+        let predicate_expr =
+            rewriter.rewrite_predicate_to_statistics_predicate(&physical, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "true",
+            "cap=0 must skip IN rewrite even for small lists"
+        );
+        Ok(())
+    }
+
+    // The high-level [`PruningPredicateBuilder`] should thread
+    // `max_in_list_size` all the way through: a 25-item IN with the default
+    // cap must fall through to the unhandled hook (`predicate_expr = true`),
+    // while a raised cap produces a real per-value statistics predicate.
+    #[test]
+    fn pruning_predicate_builder_threads_max_in_list_size() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = col("c1").in_list((1..=25).map(lit).collect(), false);
+        let physical = logical2physical(&expr, &schema);
+
+        // With the default cap the IN branch bails out and the pruning
+        // predicate expression collapses to `true` (i.e., no container
+        // pruning based on stats).
+        let default_pp = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(Arc::clone(&physical))?;
+        assert_eq!(
+            default_pp.predicate_expr().to_string(),
+            "true",
+            "default cap must fall through to `true` for 25-item IN"
+        );
+
+        // Raising the cap produces a real statistics predicate with per-
+        // value bounds.
+        let raised_pp = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_max_in_list_size(32)
+            .try_build(physical)?;
+        let raised_expr = raised_pp.predicate_expr().to_string();
+        assert_ne!(
+            raised_expr, "true",
+            "raised cap must produce a real statistics predicate for 25-item IN"
+        );
+        assert!(
+            raised_expr.contains(" <= 1 ") && raised_expr.contains(" <= 25 "),
+            "raised-cap predicate should include per-value bounds, got: {raised_expr}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn deprecated_try_new_delegates_to_builder() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = logical2physical(&col("c1").eq(lit(1)), &schema);
+
+        let deprecated =
+            PruningPredicate::try_new(Arc::clone(&expr), Arc::clone(&schema))?;
+        let builder = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)?;
+
+        assert_eq!(
+            deprecated.predicate_expr().to_string(),
+            builder.predicate_expr().to_string()
+        );
+        assert_eq!(
+            deprecated.required_columns().schema(),
+            builder.required_columns().schema()
+        );
+        Ok(())
+    }
+
+    fn large_string_pruning_predicate(
+        expr: PhysicalExprRef,
+        schema: SchemaRef,
+    ) -> Result<PruningPredicate> {
+        PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .with_max_in_list_size(10_000)
+            .try_build(expr)
+    }
+
+    #[test]
+    fn large_string_in_list_prunes_exact_intervals() -> Result<()> {
+        let types = [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        ];
+        for count in [20, 21, 256, 10_000] {
+            for data_type in &types {
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "c1",
+                    data_type.clone(),
+                    true,
+                )]));
+                let values = (0..count)
+                    .map(|i| {
+                        let value = ScalarValue::from(format!("k{:06}", i * 10))
+                            .cast_to(data_type)?;
+                        Ok(Arc::new(phys_expr::Literal::new(value)) as PhysicalExprRef)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let expr = phys_expr::in_list(
+                    Arc::new(phys_expr::Column::new("c1", 0)),
+                    values,
+                    &false,
+                    &schema,
+                )?;
+                let predicate =
+                    large_string_pruning_predicate(Arc::clone(&expr), schema)?;
+                let last_value = format!("k{:06}", (count - 1) * 10);
+                let stats = TestStatistics::new().with(
+                    "c1",
+                    ContainerStats::new_utf8(
+                        [
+                            Some("k000000"),
+                            Some("k000001"),
+                            Some("k000010"),
+                            Some("j"),
+                            Some("z"),
+                            None,
+                            Some("k000020"),
+                            Some("k000005"),
+                            // Single bounds exclude the domain, but equality
+                            // with either endpoint must remain eligible.
+                            Some("z"),
+                            None,
+                            Some(last_value.as_str()),
+                            None,
+                        ],
+                        [
+                            Some("k000000"),
+                            Some("k000009"),
+                            Some("k000010"),
+                            Some("j9"),
+                            Some("z9"),
+                            Some("k000010"),
+                            None,
+                            Some("k000015"),
+                            None,
+                            Some("j9"),
+                            None,
+                            Some("k000000"),
+                        ],
+                    )
+                    .with_null_counts([Some(0); 12])
+                    .with_row_counts([Some(1); 12]),
+                );
+                assert_eq!(
+                    predicate.prune(&stats)?,
+                    [
+                        true, false, true, false, false, true, true, true, false, false,
+                        true, true,
+                    ],
+                    "count={count}, type={data_type:?}"
+                );
+                assert!(Arc::ptr_eq(predicate.orig_expr(), &expr));
+                assert_eq!(predicate.literal_guarantees().len(), 1);
+                assert_eq!(predicate.literal_guarantees()[0].literals.len(), count);
+                assert_eq!(
+                    predicate.required_columns().single_column().unwrap().name(),
+                    "c1"
+                );
+                if count > MAX_IN_LIST_SIZE {
+                    // The expression and statistics schema do not grow with the domain.
+                    assert_eq!(predicate.required_columns.columns.len(), 4);
+                    let mut nodes = 0;
+                    predicate.predicate_expr().apply(|_| {
+                        nodes += 1;
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+                    assert_eq!(nodes, 7);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_preserves_dictionary_nulls() -> Result<()> {
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", data_type.clone(), true)]));
+        let values = (0..21)
+            .map(|i| {
+                let value = ScalarValue::from(format!("k{i:06}")).cast_to(&data_type)?;
+                Ok(Arc::new(phys_expr::Literal::new(value)) as PhysicalExprRef)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expr = phys_expr::in_list(
+            Arc::new(phys_expr::Column::new("c1", 0)),
+            values,
+            &false,
+            &schema,
+        )?;
+        let predicate = large_string_pruning_predicate(expr, schema)?;
+        // NULL dictionary values can have nonempty payloads. Neither payload
+        // may become a bound when a valid key references the NULL value.
+        let (offsets, values, _) =
+            StringArray::from(vec!["z", "zz", "", "", "k000010", "x"]).into_parts();
+        let dictionary_values: ArrayRef = Arc::new(StringArray::new(
+            offsets,
+            values,
+            Some(NullBuffer::from(vec![false, true, false, true, true, true])),
+        ));
+        let bounds = |keys: Vec<Option<i32>>| -> Result<ArrayRef> {
+            Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(&dictionary_values),
+            )?))
+        };
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new()
+                .with_min(bounds(vec![
+                    Some(0), // NULL with payload "z"
+                    Some(3), // empty string
+                    Some(4), // matching singleton
+                    Some(5), // disjoint singleton
+                    None,    // NULL keys
+                    Some(2), // NULL values in both bounds
+                    Some(1), // inverted known bounds
+                ])?)
+                .with_max(bounds(vec![
+                    Some(1),
+                    Some(2),
+                    Some(4),
+                    Some(5),
+                    None,
+                    Some(2),
+                    Some(3),
+                ])?)
+                .with_null_counts([Some(0); 7])
+                .with_row_counts([Some(1); 7]),
+        );
+        assert_eq!(
+            predicate.prune(&stats)?,
+            [true, true, true, false, true, true, true]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_handles_unicode_and_unknown_bounds() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let mut values = (0..21).map(|i| lit(format!("m{i:03}"))).collect::<Vec<_>>();
+        values.extend([
+            lit(""),
+            lit("az"),
+            lit("aé"),
+            lit("aé"),
+            lit("é"),
+            lit("🦀"),
+        ]);
+        let expr = col("c1").in_list(values, false);
+        let predicate =
+            large_string_pruning_predicate(logical2physical(&expr, &schema), schema)?;
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_utf8(
+                [
+                    Some(""),
+                    Some("az"),
+                    Some("a{"),
+                    Some("aé"),
+                    Some("ê"),
+                    Some("z"),
+                    None,
+                    None,
+                ],
+                [
+                    Some(""),
+                    Some("az"),
+                    Some("aè"),
+                    Some("aé"),
+                    Some("🦀"),
+                    Some("m"),
+                    Some("z"),
+                    None,
+                ],
+            )
+            .with_null_counts([
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(1),
+            ])
+            .with_row_counts([Some(1); 8]),
+        );
+        assert_eq!(
+            predicate.prune(&stats)?,
+            [true, true, false, true, true, true, true, false]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_respects_configured_limit() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let values = (0..21).map(|i| lit(format!("a{i:03}"))).collect::<Vec<_>>();
+        let expr = logical2physical(&col("c1").in_list(values, false), &schema);
+
+        for (limit, compact) in [(0, false), (20, false), (21, true), (32, true)] {
+            let predicate = PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(&schema))
+                .with_max_in_list_size(limit)
+                .try_build(Arc::clone(&expr))?;
+            assert_eq!(
+                predicate
+                    .predicate_expr()
+                    .to_string()
+                    .contains("IN_SET_INTERSECTS"),
+                compact,
+                "limit={limit}"
+            );
+            assert_eq!(is_always_true(predicate.predicate_expr()), !compact);
+        }
+
+        let default = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)?;
+        assert!(is_always_true(default.predicate_expr()));
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_in_list_keeps_null_and_not_in_semantics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
+        let values = (0..21).map(|i| lit(format!("a{i:03}"))).collect::<Vec<_>>();
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_utf8(
+                [Some("middle"), Some("other")],
+                [Some("middle"), Some("other")],
+            )
+            .with_null_counts([Some(0); 2])
+            .with_row_counts([Some(1); 2]),
+        );
+        let positive = col("c1").in_list(values.clone(), false);
+        let predicate = large_string_pruning_predicate(
+            logical2physical(&positive.or(col("c1").eq(lit("middle"))), &schema),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(predicate.prune(&stats)?, [true, false]);
+
+        let mut with_null = values.clone();
+        with_null.push(lit(ScalarValue::Utf8(None)));
+        for expr in [
+            col("c1").in_list(values, true),
+            col("c1").in_list(with_null.clone(), false),
+            col("c1").in_list(with_null.clone(), true),
+        ] {
+            let physical = logical2physical(&expr, &schema);
+            let default = PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(&schema))
+                .try_build(Arc::clone(&physical))?;
+            assert!(is_always_true(default.predicate_expr()), "{expr}");
+            assert_eq!(default.prune(&stats)?, [true, true]);
+
+            // Raising the cap retains the existing per-value rewrite for
+            // NOT IN and lists containing NULL; neither uses the new path.
+            let raised = large_string_pruning_predicate(physical, Arc::clone(&schema))?;
+            assert!(
+                !raised
+                    .predicate_expr()
+                    .to_string()
+                    .contains("IN_SET_INTERSECTS"),
+                "{expr}"
+            );
+        }
+
+        // Inverting NOT IN (..., NULL) must not prove a full match and bypass
+        // the original row filter, which returns UNKNOWN for both rows.
+        let not_in = logical2physical(&col("c1").in_list(with_null, true), &schema);
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec!["middle", "other"]))],
+        )?;
+        assert_eq!(not_in.evaluate(&batch)?.into_array(2)?.null_count(), 2);
         Ok(())
     }
 
@@ -5712,7 +6351,10 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::<Schema>::clone(schema))
+            .try_build(expr)
+            .unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5727,7 +6369,10 @@ mod tests {
         let expr = logical2physical(&expr, schema);
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::<Schema>::clone(schema))
+            .try_build(expr)
+            .unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5760,6 +6405,7 @@ mod tests {
             &Arc::new(schema.clone()),
             required_columns,
             &unhandled_hook,
+            MAX_IN_LIST_SIZE,
         )
     }
 
