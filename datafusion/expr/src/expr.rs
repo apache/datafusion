@@ -2611,10 +2611,12 @@ impl NormalizeEq for Expr {
                         .iter()
                         .zip(other_args.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_partition_by.len() == other_partition_by.len()
                     && self_partition_by
                         .iter()
                         .zip(other_partition_by.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_order_by.len() == other_order_by.len()
                     && self_order_by
                         .iter()
                         .zip(other_order_by.iter())
@@ -3831,6 +3833,7 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
+    use crate::test::function_stub::max_udaf;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
         lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
@@ -4344,6 +4347,32 @@ mod test {
 
     use super::*;
     use crate::logical_plan::{EmptyRelation, LogicalPlan};
+
+    #[test]
+    fn normalize_eq_window_function_over_clause_lengths() {
+        let window = |partition_by: Vec<Expr>, order_by: Vec<Sort>| {
+            let mut window = WindowFunction::new(max_udaf(), vec![col("value")]);
+            window.params.partition_by = partition_by;
+            window.params.order_by = order_by;
+            Expr::from(window)
+        };
+        let base = window(vec![col("a")], vec![Sort::new(col("a"), true, true)]);
+
+        let extra_partition = window(
+            vec![col("a"), col("b")],
+            vec![Sort::new(col("a"), true, true)],
+        );
+        assert!(!base.normalize_eq(&extra_partition));
+
+        let extra_order = window(
+            vec![col("a")],
+            vec![
+                Sort::new(col("a"), true, true),
+                Sort::new(col("b"), true, true),
+            ],
+        );
+        assert!(!base.normalize_eq(&extra_order));
+    }
 
     #[test]
     fn test_display_wildcard() {
