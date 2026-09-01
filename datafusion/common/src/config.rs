@@ -1116,6 +1116,7 @@ config_namespace! {
         /// DataFusion will not enforce batch size in joins. Enforcing batch size
         /// in joins can reduce memory usage when joining large
         /// tables with a highly-selective join filter, but is also slightly slower.
+        /// Note: this option currently only applies to the symmetric hash join.
         pub enforce_batch_size_in_joins: bool, default = false
 
         /// Size (bytes) of data buffer DataFusion uses when writing output files.
