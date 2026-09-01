@@ -235,17 +235,52 @@ FROM (
         SELECT i + 1 AS i
         FROM (
             SELECT i + 1 AS i
-            FROM nested_projection
+            FROM (
+                SELECT i + 1 AS i
+                FROM (
+                    SELECT i + 1 AS i
+                    FROM (
+                        SELECT i + 1 AS i
+                        FROM nested_projection
+                    )
+                )
+            )
         )
     )
 )
 ----
-6
-7
-8
+10
+11
+9
 
 statement ok
 RESET datafusion.optimizer.max_passes;
+
+query I rowsort
+SELECT i
+FROM (
+    SELECT i + 1 AS i
+    FROM (
+        SELECT i + 1 AS i
+        FROM (
+            SELECT i + 1 AS i
+            FROM (
+                SELECT i + 1 AS i
+                FROM (
+                    SELECT i + 1 AS i
+                    FROM (
+                        SELECT i + 1 AS i
+                        FROM nested_projection
+                    )
+                )
+            )
+        )
+    )
+)
+----
+10
+11
+9
 
 statement ok
 DROP TABLE nested_projection;
