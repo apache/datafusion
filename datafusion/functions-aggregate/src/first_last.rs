@@ -599,10 +599,7 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
             let is_valid = self.extreme_of_each_group_buf.1.get_bit(group_idx);
 
-            if !is_valid {
-                self.extreme_of_each_group_buf.1.set_bit(group_idx, true);
-                self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
-            } else {
+            if is_valid {
                 let ordering = comparator
                     .compare(self.extreme_of_each_group_buf.0[group_idx], idx_in_val);
 
@@ -611,6 +608,9 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
                 {
                     self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
                 }
+            } else {
+                self.extreme_of_each_group_buf.1.set_bit(group_idx, true);
+                self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
             }
         }
 

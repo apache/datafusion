@@ -1368,9 +1368,7 @@ impl PhysicalExpr for CaseExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if children.len() != self.children().len() {
-            internal_err!("CaseExpr: Wrong number of children")
-        } else {
+        if children.len() == self.children().len() {
             let (expr, when_then_expr, else_expr) =
                 match (self.expr().is_some(), self.body.else_expr.is_some()) {
                     (true, true) => (
@@ -1393,6 +1391,8 @@ impl PhysicalExpr for CaseExpr {
                 when_then_expr.iter().cloned().tuples().collect(),
                 else_expr.cloned(),
             )?))
+        } else {
+            internal_err!("CaseExpr: Wrong number of children")
         }
     }
 

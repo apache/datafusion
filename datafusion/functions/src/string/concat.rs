@@ -389,15 +389,15 @@ pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
         }
     }
 
-    if !args.eq(&new_args) {
+    if args.eq(&new_args) {
+        Ok(ExprSimplifyResult::Original(args))
+    } else {
         Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
             ScalarFunction {
                 func: concat(),
                 args: new_args,
             },
         )))
-    } else {
-        Ok(ExprSimplifyResult::Original(args))
     }
 }
 

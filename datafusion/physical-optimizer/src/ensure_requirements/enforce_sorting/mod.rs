@@ -411,10 +411,10 @@ pub fn ensure_sorting(
         return Ok(Transformed::no(requirements));
     }
     let maybe_requirements = analyze_immediate_sort_removal(requirements)?;
-    requirements = if !maybe_requirements.transformed {
-        maybe_requirements.data
-    } else {
+    requirements = if maybe_requirements.transformed {
         return Ok(maybe_requirements);
+    } else {
+        maybe_requirements.data
     };
 
     let plan = &requirements.plan;

@@ -571,9 +571,7 @@ impl MemorySourceConfig {
         target_partitions: usize,
         output_ordering: LexOrdering,
     ) -> Result<Option<Vec<Vec<RecordBatch>>>> {
-        if !self.eq_properties().ordering_satisfy(output_ordering)? {
-            Ok(None)
-        } else {
+        if self.eq_properties().ordering_satisfy(output_ordering)? {
             let total_num_batches =
                 self.partitions.iter().map(|b| b.len()).sum::<usize>();
             if total_num_batches < target_partitions {
@@ -639,6 +637,8 @@ impl MemorySourceConfig {
             let partitions = partitions.into_iter().map(|rep| rep.batches).collect_vec();
 
             Ok(Some(partitions))
+        } else {
+            Ok(None)
         }
     }
 

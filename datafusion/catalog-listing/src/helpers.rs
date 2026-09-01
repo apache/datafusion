@@ -392,10 +392,10 @@ pub async fn pruned_partition_list<'a>(
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
-    let prefix = if !partition_cols.is_empty() {
-        evaluate_partition_prefix(partition_cols, filters)
-    } else {
+    let prefix = if partition_cols.is_empty() {
         None
+    } else {
+        evaluate_partition_prefix(partition_cols, filters)
     };
 
     let objects = table_path

@@ -394,10 +394,10 @@ fn get_exprs_except_skipped(
             .columns()
             .iter()
             .filter_map(|c| {
-                if !columns_to_skip.contains(c) {
-                    Some(Expr::Column(c.clone()))
-                } else {
+                if columns_to_skip.contains(c) {
                     None
+                } else {
+                    Some(Expr::Column(c.clone()))
                 }
             })
             .collect::<Vec<Expr>>()

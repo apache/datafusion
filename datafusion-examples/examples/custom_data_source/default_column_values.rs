@@ -317,11 +317,11 @@ impl PhysicalExprAdapter for DefaultValuePhysicalExprAdapter {
         }
 
         // Replace columns with their default literals if any
-        let rewritten = if !replacements.is_empty() {
+        let rewritten = if replacements.is_empty() {
+            expr
+        } else {
             let refs: HashMap<_, _> = replacements.iter().map(|(k, v)| (*k, v)).collect();
             replace_columns_with_literals(expr, &refs)?
-        } else {
-            expr
         };
 
         // Apply the default adapter as a fallback for other schema adaptations

@@ -920,13 +920,13 @@ async fn collect_results(ctx: &SessionContext, original: &str) -> TestCaseResult
         };
     }
 
-    if expected != actual {
+    if expected == actual {
+        TestCaseResult::Success
+    } else {
         TestCaseResult::ResultsMismatch {
             original: original.to_string(),
             unparsed,
         }
-    } else {
-        TestCaseResult::Success
     }
 }
 

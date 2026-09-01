@@ -807,10 +807,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                         "Protobuf deserialization error, CreateExternalTableNode was missing required table constraints."
                     )
                 })?;
-                let definition = if !create_extern_table.definition.is_empty() {
-                    Some(create_extern_table.definition.clone())
-                } else {
+                let definition = if create_extern_table.definition.is_empty() {
                     None
+                } else {
+                    Some(create_extern_table.definition.clone())
                 };
 
                 let mut order_exprs = vec![];
@@ -874,10 +874,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input."
                 ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
-                let definition = if !create_view.definition.is_empty() {
-                    Some(create_view.definition.clone())
-                } else {
+                let definition = if create_view.definition.is_empty() {
                     None
+                } else {
+                    Some(create_view.definition.clone())
                 };
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
@@ -1136,10 +1136,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(scan.input, ctx, extension_codec)?;
 
-                let definition = if !scan.definition.is_empty() {
-                    Some(scan.definition.clone())
-                } else {
+                let definition = if scan.definition.is_empty() {
                     None
+                } else {
+                    Some(scan.definition.clone())
                 };
 
                 let provider = ViewTable::new(input, definition);

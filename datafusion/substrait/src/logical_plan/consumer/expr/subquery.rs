@@ -51,11 +51,7 @@ pub async fn from_subquery(
     match &subquery.subquery_type {
         Some(subquery_type) => match subquery_type {
             SubqueryType::InPredicate(in_predicate) => {
-                if in_predicate.needles.len() != 1 {
-                    substrait_err!(
-                        "InPredicate Subquery type must have exactly one Needle expression"
-                    )
-                } else {
+                if in_predicate.needles.len() == 1 {
                     let needle_expr = &in_predicate.needles[0];
                     let haystack_expr = &in_predicate.haystack;
                     if let Some(haystack_expr) = haystack_expr {
@@ -81,6 +77,10 @@ pub async fn from_subquery(
                             "InPredicate Subquery type must have a Haystack expression"
                         )
                     }
+                } else {
+                    substrait_err!(
+                        "InPredicate Subquery type must have exactly one Needle expression"
+                    )
                 }
             }
             SubqueryType::Scalar(query) => {

@@ -237,10 +237,10 @@ impl FileScanConfig {
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;
 
-        let decoded_object_store_url = if !object_store_url.is_empty() {
-            ObjectStoreUrl::parse(object_store_url)?
-        } else {
+        let decoded_object_store_url = if object_store_url.is_empty() {
             ObjectStoreUrl::local_filesystem()
+        } else {
+            ObjectStoreUrl::parse(object_store_url)?
         };
 
         let mut decoded_output_ordering = vec![];

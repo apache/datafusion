@@ -1263,7 +1263,9 @@ impl DisplayAs for SortExec {
                         {
                             write!(f, ", filter=[{current}]")?;
                         }
-                        if !self.common_sort_prefix.is_empty() {
+                        if self.common_sort_prefix.is_empty() {
+                            Ok(())
+                        } else {
                             write!(f, ", sort_prefix=[")?;
                             let mut first = true;
                             for sort_expr in &self.common_sort_prefix {
@@ -1275,8 +1277,6 @@ impl DisplayAs for SortExec {
                                 write!(f, "{sort_expr}")?;
                             }
                             write!(f, "]")
-                        } else {
-                            Ok(())
                         }
                     }
                     None => write!(

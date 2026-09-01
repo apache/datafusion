@@ -709,10 +709,10 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         // - ignore nulls mode and current value is null and is within window bounds
         // .unwrap() is safe here as there is a none check in front
         #[expect(clippy::unnecessary_unwrap)]
-        if !(idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap()))) {
-            ScalarValue::try_from_array(array, idx.unwrap())
-        } else {
+        if idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap())) {
             Ok(self.default_value.clone())
+        } else {
+            ScalarValue::try_from_array(array, idx.unwrap())
         }
     }
 
@@ -723,15 +723,15 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     ) -> Result<ArrayRef> {
         // LEAD, LAG window functions take single column, values will have size 1
         let value = &values[0];
-        if !self.ignore_nulls {
-            shift_with_default_value(value, self.shift_offset, &self.default_value)
-        } else {
+        if self.ignore_nulls {
             evaluate_all_with_ignore_null(
                 value,
                 self.shift_offset,
                 &self.default_value,
                 self.is_lag(),
             )
+        } else {
+            shift_with_default_value(value, self.shift_offset, &self.default_value)
         }
     }
 

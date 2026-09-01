@@ -82,7 +82,11 @@ impl ParseUrl {
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         let url: std::result::Result<Url, ParseError> = Url::parse(value);
         if url == Err(ParseError::RelativeUrlWithoutBase) {
-            return if !value.contains("://") {
+            return if value.contains("://") {
+                Err(exec_datafusion_err!(
+                    "The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"
+                ))
+            } else {
                 // Schemeless URLs are treated as relative URIs (like java.net.URI).
                 // Manually parse path, query, and fragment components.
                 let (without_fragment, fragment) = match value.split_once('#') {
@@ -107,10 +111,6 @@ impl ParseUrl {
                     // HOST, PROTOCOL, AUTHORITY, USERINFO → NULL
                     _ => None,
                 })
-            } else {
-                Err(exec_datafusion_err!(
-                    "The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"
-                ))
             };
         }
         url.map_err(|e| exec_datafusion_err!("{e:?}"))

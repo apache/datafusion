@@ -223,10 +223,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 for (expr, new_expr) in projection.expr.iter().zip(rewrite_exprs) {
                     let old_expr_name = expr.schema_name().to_string();
                     let new_expr_name = new_expr.schema_name().to_string();
-                    if new_expr_name != old_expr_name {
-                        proj_exprs.push(new_expr.alias(old_expr_name))
-                    } else {
+                    if new_expr_name == old_expr_name {
                         proj_exprs.push(new_expr);
+                    } else {
+                        proj_exprs.push(new_expr.alias(old_expr_name))
                     }
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)

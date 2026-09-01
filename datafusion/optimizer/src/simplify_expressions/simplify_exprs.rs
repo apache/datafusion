@@ -205,10 +205,10 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
         let new_plan = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
             input, group_expr, aggr_expr, schema,
         )?);
-        return if !rewrote_aggs {
-            Ok(Transformed::no(new_plan))
-        } else {
+        return if rewrote_aggs {
             Ok(Transformed::yes(new_plan))
+        } else {
+            Ok(Transformed::no(new_plan))
         };
     }
 

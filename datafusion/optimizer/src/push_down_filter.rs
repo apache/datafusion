@@ -1229,10 +1229,10 @@ impl OptimizerRule for PushDownFilter {
                     .into_iter()
                     .zip(split_conjunction_owned(filter.predicate))
                 {
-                    if !push {
-                        keep_predicates.push(expr);
-                    } else {
+                    if push {
                         push_predicates.push(expr);
+                    } else {
+                        keep_predicates.push(expr);
                     }
                 }
 

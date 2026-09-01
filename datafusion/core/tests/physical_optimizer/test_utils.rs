@@ -919,7 +919,9 @@ pub struct TestScan {
 impl TestScan {
     /// Create a new TestScan with the given schema and output ordering
     pub fn new(schema: SchemaRef, output_ordering: Vec<LexOrdering>) -> Self {
-        let eq_properties = if !output_ordering.is_empty() {
+        let eq_properties = if output_ordering.is_empty() {
+            EquivalenceProperties::new(Arc::clone(&schema))
+        } else {
             // Convert Vec<LexOrdering> to the format expected by new_with_orderings
             // We need to extract the inner Vec<PhysicalSortExpr> from each LexOrdering
             let orderings: Vec<Vec<PhysicalSortExpr>> = output_ordering
@@ -931,8 +933,6 @@ impl TestScan {
                 .collect();
 
             EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
-        } else {
-            EquivalenceProperties::new(Arc::clone(&schema))
         };
 
         let plan_properties = PlanProperties::new(

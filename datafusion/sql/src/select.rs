@@ -520,7 +520,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         // DISTRIBUTE BY
-        let plan = if !select.distribute_by.is_empty() {
+        let plan = if select.distribute_by.is_empty() {
+            plan
+        } else {
             let x = select
                 .distribute_by
                 .iter()
@@ -535,8 +537,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
                 .build()?
-        } else {
-            plan
         };
 
         let plan = self.order_by(plan, order_by_rex)?;

@@ -202,7 +202,9 @@ fn lpad_scalar_ascii<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     // With a scalar `target_len` and `fill`, we can precompute a padding
     // buffer of `target_len` fill characters repeated cyclically.
-    let padding_buf = if !fill.is_empty() {
+    let padding_buf = if fill.is_empty() {
+        String::new()
+    } else {
         let mut buf = String::with_capacity(target_len);
         while buf.len() < target_len {
             let remaining = target_len - buf.len();
@@ -213,8 +215,6 @@ fn lpad_scalar_ascii<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
             }
         }
         buf
-    } else {
-        String::new()
     };
 
     // Each output row is exactly `target_len` ASCII bytes (padding + string).
@@ -254,7 +254,9 @@ fn lpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
     // of `target_len` fill characters repeated cyclically. Because Unicode
     // characters are variable-width, we build a byte-offset table to map from
     // character count to the corresponding byte position in the padding buffer.
-    let (padding_buf, char_byte_offsets) = if !fill_chars.is_empty() {
+    let (padding_buf, char_byte_offsets) = if fill_chars.is_empty() {
+        (String::new(), vec![0])
+    } else {
         let mut buf = String::new();
         let mut offsets = Vec::with_capacity(target_len + 1);
         offsets.push(0usize);
@@ -263,8 +265,6 @@ fn lpad_scalar_unicode<'a, V: StringArrayType<'a> + Copy, T: OffsetSizeTrait>(
             offsets.push(buf.len());
         }
         (buf, offsets)
-    } else {
-        (String::new(), vec![0])
     };
 
     // Each output row is `target_len` chars; multiply by 4 (max UTF-8 bytes

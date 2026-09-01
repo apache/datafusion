@@ -441,13 +441,13 @@ fn build_join(
             .map(|(_, c)| Expr::Column(c))
             .collect();
 
-        let right_projected = if !right_proj_exprs.is_empty() {
+        let right_projected = if right_proj_exprs.is_empty() {
+            // Degenerate case: no right columns referenced by the predicate(s)
+            sub_query_alias.clone()
+        } else {
             LogicalPlanBuilder::from(sub_query_alias.clone())
                 .project(right_proj_exprs)?
                 .build()?
-        } else {
-            // Degenerate case: no right columns referenced by the predicate(s)
-            sub_query_alias.clone()
         };
 
         let mark_filter_is_hashable_only =

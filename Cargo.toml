@@ -282,7 +282,6 @@ explicit_into_iter_loop = "allow"            # 55 hits
 explicit_iter_loop = "allow"                 # 189 hits
 float_cmp = "allow"                          # 8 hits; exact float comparisons are often intentional here
 from_iter_instead_of_collect = "allow"       # 51 hits
-if_not_else = "allow"                        # 133 hits
 implicit_clone = "allow"                     # 198 hits
 implicit_hasher = "allow"                    # 17 hits; some sites feed arrow APIs that require the default hasher
 inline_always = "allow"                      # 45 hits
