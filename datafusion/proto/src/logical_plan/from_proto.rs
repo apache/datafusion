@@ -205,7 +205,7 @@ pub fn parse_expr(
                     let window_frame = WindowFrame::try_from(window_frame.clone())?;
                     window_frame
                         .regularize_order_bys(&mut order_by)
-                        .map(|_| window_frame)
+                        .map(|()| window_frame)
                 })
                 .transpose()?
                 .ok_or_else(|| {
