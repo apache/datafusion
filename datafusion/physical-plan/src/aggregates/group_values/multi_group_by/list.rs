@@ -128,10 +128,11 @@ impl<O: OffsetSizeTrait> ListGroupValueBuilder<O> {
             self.outer_nulls.append_non_null();
             let values = array.values();
             let rhs_range = array.element_range(row);
-            for j in rhs_range.start..rhs_range.end {
+            let rhs_len = rhs_range.end - rhs_range.start;
+            for j in rhs_range {
                 self.child.append_val(values, j)?;
             }
-            self.push_offset(rhs_range.end - rhs_range.start)?;
+            self.push_offset(rhs_len)?;
         }
         self.outer_len += 1;
         Ok(())
