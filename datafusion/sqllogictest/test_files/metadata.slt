@@ -167,6 +167,24 @@ no_baz
 no_foo
 NULL
 
+# Regression test: a UNION branch that has to be coerced to the union's output
+# type keeps the metadata that output schema advertises. The coercion inserts a
+# CAST, and a cast target's metadata is authoritative, so the cast has to be
+# built against the destination *field* rather than just its data type -
+# otherwise the coerced branch drops metadata the Union schema still claims and
+# the physical plan no longer matches the logical one.
+query TT
+select name, arrow_metadata(name, 'metadata_key') from (
+  SELECT nonnull_name as name FROM "table_with_metadata"
+  UNION ALL
+  SELECT NULL::string as name
+) order by name;
+----
+no_bar the nonnull_name field
+no_baz the nonnull_name field
+no_foo the nonnull_name field
+NULL the nonnull_name field
+
 # Regression test: missing schema metadata from union when schema with metadata isn't the first one
 # and also ensure it works fine with multiple unions
 query T
@@ -218,33 +236,35 @@ FROM table_with_metadata;
 2020-09-08
 2020-09-08
 
-# Regression test: CAST should preserve source field metadata
+# A CAST does not inherit the source field's metadata: the metadata describes
+# one particular storage type, and the cast produces a different one.
+# See https://github.com/apache/datafusion/issues/22079
 query DT
 SELECT
     CAST(ts AS DATE) as casted,
     arrow_metadata(CAST(ts AS DATE), 'metadata_key')
 FROM table_with_metadata;
 ----
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
+2020-09-08 NULL
+2020-09-08 NULL
+2020-09-08 NULL
 
-# Regression test: CAST preserves metadata on integer column
+# ... and that holds for a widening cast between integer types too
 query IT
 SELECT
     CAST(id AS BIGINT) as casted,
     arrow_metadata(CAST(id AS BIGINT), 'metadata_key')
 FROM table_with_metadata;
 ----
-1 the id field
-NULL the id field
-3 the id field
+1 NULL
+NULL NULL
+3 NULL
 
 # Regression test: CAST with single-argument arrow_metadata (returns full map)
 query ?
 select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
-{metadata_key: the id field}
+{}
 
 # Regression test: distinct with cast
 query D
@@ -373,44 +393,45 @@ select arrow_metadata(id) from table_with_metadata limit 1;
 ----
 {metadata_key: the id field}
 
-# Regression test: TRY_CAST should preserve source field metadata
+# TRY_CAST follows the same rule as CAST: the source's metadata is not
+# inherited by the result.
 query DT
 SELECT
     TRY_CAST(ts AS DATE) as try_casted,
     arrow_metadata(TRY_CAST(ts AS DATE), 'metadata_key')
 FROM table_with_metadata;
 ----
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
+2020-09-08 NULL
+2020-09-08 NULL
+2020-09-08 NULL
 
-# Regression test: TRY_CAST preserves metadata on integer column
+# ... including on an integer column
 query IT
 SELECT
     TRY_CAST(id AS BIGINT) as try_casted,
     arrow_metadata(TRY_CAST(id AS BIGINT), 'metadata_key')
 FROM table_with_metadata;
 ----
-1 the id field
-NULL the id field
-3 the id field
+1 NULL
+NULL NULL
+3 NULL
 
-# Regression test: TRY_CAST preserves metadata even when cast fails (returns NULL)
+# ... and when the cast fails and the value itself is NULL
 query IT
 SELECT
     TRY_CAST(name AS INT) as try_casted,
     arrow_metadata(TRY_CAST(name AS INT), 'metadata_key')
 FROM table_with_metadata;
 ----
-NULL the name field
-NULL the name field
-NULL the name field
+NULL NULL
+NULL NULL
+NULL NULL
 
 # Regression test: TRY_CAST with single-argument arrow_metadata (returns full map)
 query ?
 select arrow_metadata(TRY_CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
-{metadata_key: the id field}
+{}
 
 # with_metadata: attach a single key and read it back
 query T

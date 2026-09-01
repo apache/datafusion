@@ -23,10 +23,13 @@
 
 use std::cmp::Ordering;
 
+use std::sync::Arc;
+
 use arrow::datatypes::{
-    DataType, MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
-    MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
-    MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION, TimeUnit,
+    DataType, FieldRef, MAX_DECIMAL32_FOR_EACH_PRECISION,
+    MAX_DECIMAL64_FOR_EACH_PRECISION, MAX_DECIMAL128_FOR_EACH_PRECISION,
+    MIN_DECIMAL32_FOR_EACH_PRECISION, MIN_DECIMAL64_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, TimeUnit,
 };
 use arrow::temporal_conversions::{
     MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
@@ -532,12 +535,158 @@ fn try_cast_binary(
     }
 }
 
+/// Is `field` the synthesized, type-only target of a cast?
+///
+/// `CAST(expr AS <type>)` only names a [`DataType`], so the `FieldRef` that
+/// carries it is synthesized with an empty name, no metadata, and the default
+/// nullability. Such a field says nothing about the output beyond its data
+/// type, and [`cast_output_field`] therefore takes the output's name and
+/// nullability from the expression being cast instead.
+///
+/// A target field that is *not* type-only came from somewhere that knows more
+/// than the data type - a `TypePlanner` resolving an extension type, or a
+/// schema the expression is being coerced to - and is authoritative.
+pub fn is_type_only_cast_target(field: &FieldRef) -> bool {
+    field.name().is_empty() && field.is_nullable() && field.metadata().is_empty()
+}
+
+/// Derive the output field of a cast from the field being cast and the cast's
+/// target field.
+///
+/// Both the logical (`Expr::Cast` / `Expr::TryCast`) and the physical
+/// (`CastExpr` / `TryCastExpr`) representations of a cast pair a source field -
+/// the field of the expression being cast - with a target field describing the
+/// destination. This function is the single definition of how those two are
+/// combined, so that the logical and physical layers cannot drift apart the way
+/// they did in <https://github.com/apache/datafusion/issues/24724>.
+///
+/// The rule is:
+///
+/// * the **data type** always comes from `target_field`
+/// * the **metadata** always comes from `target_field`, *including* when it is
+///   empty
+/// * the **name** and **nullability** come from `target_field` when it carries
+///   more than a data type (see [`is_type_only_cast_target`]), and from
+///   `source_field` otherwise
+///
+/// Metadata is never inherited from the source. A cast changes the storage type
+/// of a value, while metadata such as `ARROW:extension:name` describes how to
+/// interpret one particular storage type; carrying it across produces a field
+/// claiming to be an extension type that it is not (see
+/// <https://github.com/apache/datafusion/issues/22079>). A caller that wants the
+/// source's metadata on the result has to say so, by putting it on
+/// `target_field`.
+///
+/// `force_nullable` is set for `TRY_CAST`, which yields `NULL` rather than an
+/// error when the cast fails and so is always nullable.
+pub fn cast_output_field(
+    source_field: &FieldRef,
+    target_field: &FieldRef,
+    force_nullable: bool,
+) -> FieldRef {
+    let base = if is_type_only_cast_target(target_field) {
+        source_field
+    } else {
+        target_field
+    };
+    let mut f = base
+        .as_ref()
+        .clone()
+        .with_data_type(target_field.data_type().clone())
+        .with_metadata(target_field.metadata().clone());
+    if force_nullable {
+        f = f.with_nullable(true);
+    }
+    Arc::new(f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn field(name: &str, data_type: DataType, nullable: bool) -> FieldRef {
+        Arc::new(Field::new(name, data_type, nullable))
+    }
+
+    fn with_meta(f: FieldRef, key: &str, value: &str) -> FieldRef {
+        Arc::new(
+            f.as_ref()
+                .clone()
+                .with_metadata(HashMap::from([(key.to_string(), value.to_string())])),
+        )
+    }
+
+    #[test]
+    fn type_only_cast_target_is_recognised() {
+        assert!(is_type_only_cast_target(&field("", DataType::Int64, true)));
+        // a name, a non-default nullability, or metadata all make the target
+        // carry more than a data type
+        assert!(!is_type_only_cast_target(&field(
+            "uuid",
+            DataType::Int64,
+            true
+        )));
+        assert!(!is_type_only_cast_target(&field(
+            "",
+            DataType::Int64,
+            false
+        )));
+        assert!(!is_type_only_cast_target(&with_meta(
+            field("", DataType::Int64, true),
+            "k",
+            "v"
+        )));
+    }
+
+    #[test]
+    fn cast_output_field_does_not_inherit_source_metadata() {
+        let source = with_meta(
+            field("id", DataType::FixedSizeBinary(16), false),
+            "ARROW:extension:name",
+            "arrow.uuid",
+        );
+        let target = field("", DataType::Binary, true);
+
+        let out = cast_output_field(&source, &target, false);
+
+        // the type-only target contributes the data type and (empty) metadata,
+        // the source contributes name and nullability
+        assert_eq!(out.data_type(), &DataType::Binary);
+        assert!(out.metadata().is_empty(), "{:?}", out.metadata());
+        assert_eq!(out.name(), "id");
+        assert!(!out.is_nullable());
+    }
+
+    #[test]
+    fn cast_output_field_takes_an_explicit_target_verbatim() {
+        let source = with_meta(
+            field("id", DataType::FixedSizeBinary(16), false),
+            "source_key",
+            "source_value",
+        );
+        let target = with_meta(
+            field("uuid", DataType::FixedSizeBinary(16), true),
+            "ARROW:extension:name",
+            "arrow.uuid",
+        );
+
+        let out = cast_output_field(&source, &target, false);
+
+        assert_eq!(out.as_ref(), target.as_ref());
+        assert!(out.metadata().get("source_key").is_none());
+    }
+
+    #[test]
+    fn cast_output_field_force_nullable_is_for_try_cast() {
+        let source = field("id", DataType::Int32, false);
+        let target = field("", DataType::Int64, true);
+
+        assert!(!cast_output_field(&source, &target, false).is_nullable());
+        assert!(cast_output_field(&source, &target, true).is_nullable());
+    }
     use arrow::compute::{CastOptions, cast_with_options};
     use arrow::datatypes::{Field, Fields};
-    use std::sync::Arc;
+    use std::collections::HashMap;
 
     #[derive(Debug, Clone)]
     enum ExpectedCast {

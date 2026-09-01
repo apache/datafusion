@@ -22,9 +22,11 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, Unnest};
+use crate::expr::{Alias, Cast, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+
+use arrow::datatypes::Field;
 
 use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
@@ -255,11 +257,11 @@ fn coerce_exprs_for_schema(
         .into_iter()
         .enumerate()
         .map(|(idx, expr)| {
-            let new_type = dst_schema.field(idx).data_type();
-            if new_type != &expr.get_type(src_schema)? {
+            let dst_field = dst_schema.field(idx);
+            if dst_field.data_type() != &expr.get_type(src_schema)? {
                 match expr {
                     Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                        Ok(cast_expr_to_field(*expr, dst_field, src_schema)?.alias(name))
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
@@ -270,9 +272,10 @@ fn coerce_exprs_for_schema(
                             // (see: https://github.com/apache/datafusion/issues/18818)
                             Expr::Column(ref column) => {
                                 let name = column.name().to_owned();
-                                Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                                Ok(cast_expr_to_field(expr, dst_field, src_schema)?
+                                    .alias(name))
                             }
-                            _ => Ok(expr.cast_to(new_type, src_schema)?),
+                            _ => cast_expr_to_field(expr, dst_field, src_schema),
                         }
                     }
                 }
@@ -281,6 +284,44 @@ fn coerce_exprs_for_schema(
             }
         })
         .collect::<Result<_>>()
+}
+
+/// Cast `expr` so that it matches `dst_field` - its data type *and* its metadata.
+///
+/// [`ExprSchemable::cast_to`] only takes a `DataType`, so the cast it builds
+/// carries a type-only target field. The cast target's metadata is
+/// authoritative (see [`cast_output_field`]), so a type-only target would drop
+/// whatever metadata `expr` had, leaving the coerced branch inconsistent with
+/// the schema it was coerced *to* - which is precisely the metadata `dst_field`
+/// advertises. Re-target the cast at `dst_field` instead.
+///
+/// Only the destination's data type and metadata are taken; the name and
+/// nullability stay those of `expr`, so that the cast target is still described
+/// relative to the expression being cast.
+///
+/// [`cast_output_field`]: datafusion_expr_common::casts::cast_output_field
+fn cast_expr_to_field(
+    expr: Expr,
+    dst_field: &Field,
+    src_schema: &DFSchema,
+) -> Result<Expr> {
+    let (_, src_field) = expr.to_field(src_schema)?;
+    // Delegate to `cast_to` so that cast validity checks and the
+    // `ScalarSubquery` special case keep applying, then re-target the cast it
+    // produced at the destination field.
+    Ok(match expr.cast_to(dst_field.data_type(), src_schema)? {
+        Expr::Cast(Cast { expr, field }) => {
+            let target = Arc::new(
+                src_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(field.data_type().clone())
+                    .with_metadata(dst_field.metadata().clone()),
+            );
+            Expr::Cast(Cast::new_from_field(expr, target))
+        }
+        other => other,
+    })
 }
 
 /// Recursively un-alias an expressions

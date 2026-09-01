@@ -22,12 +22,13 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, FieldRef, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr_common::casts::cast_output_field;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
 #[derive(Debug, Eq)]
@@ -94,10 +95,16 @@ impl PhysicalExpr for TryCastExpr {
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        self.expr
-            .return_field(input_schema)
-            .map(|f| f.as_ref().clone().with_data_type(self.cast_type.clone()))
-            .map(Arc::new)
+        // `TryCastExpr` only knows a target `DataType`, so it stands in for a
+        // type-only cast target: the output keeps the source's name and
+        // nullability but not its metadata.  Deriving that through the shared
+        // helper keeps it identical to what the logical `Expr::TryCast` reports.
+        let source_field = self.expr.return_field(input_schema)?;
+        Ok(cast_output_field(
+            &source_field,
+            &Field::new("", self.cast_type.clone(), true).into(),
+            false,
+        ))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -619,6 +626,30 @@ mod tests {
             .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap()
+    }
+
+    #[test]
+    fn try_cast_does_not_inherit_source_metadata() -> Result<()> {
+        // `TRY_CAST` follows the same rule as `CAST`: the source's metadata
+        // describes the source's storage type and is not carried across.
+        // See https://github.com/apache/datafusion/issues/22079
+        let metadata = std::collections::HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "arrow.uuid".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::FixedSizeBinary(16), false)
+                .with_metadata(metadata.clone()),
+        ]);
+
+        let expr = try_cast(col("a", &schema)?, &schema, DataType::Binary)?;
+        let field = expr.return_field(&schema)?;
+
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.metadata().is_empty(), "{:?}", field.metadata());
+
+        Ok(())
     }
 
     #[test]

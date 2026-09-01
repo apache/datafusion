@@ -38,6 +38,7 @@ use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
 };
+use datafusion_expr_common::casts::cast_output_field;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::sync::Arc;
@@ -69,35 +70,6 @@ pub trait ExprSchemable {
     )]
     fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
     -> Result<(DataType, bool)>;
-}
-
-/// Derives the output field for a cast expression from the source field.
-///
-/// The cast target's metadata is authoritative when it carries any; otherwise the
-/// source's metadata is inherited. This mirrors the physical `CastExpr`, whose
-/// target field is already authoritative when it is not the synthesized type-only
-/// field.
-///
-/// For `TryCast`, `force_nullable` is `true` since a failed cast returns NULL.
-fn cast_output_field(
-    source_field: &FieldRef,
-    target_field: &FieldRef,
-    force_nullable: bool,
-) -> Arc<Field> {
-    let metadata = if target_field.metadata().is_empty() {
-        source_field.metadata().clone()
-    } else {
-        target_field.metadata().clone()
-    };
-    let mut f = source_field
-        .as_ref()
-        .clone()
-        .with_data_type(target_field.data_type().clone())
-        .with_metadata(metadata);
-    if force_nullable {
-        f = f.with_nullable(true);
-    }
-    Arc::new(f)
 }
 
 fn scalar_arguments_for_fields(
@@ -1165,11 +1137,13 @@ mod tests {
             .with_data_type(DataType::Int32)
             .with_metadata(meta.clone());
 
-        // col, alias, and cast should be metadata-preserving
+        // col and alias should be metadata-preserving
         assert_eq!(meta, expr.metadata(&schema).unwrap());
         assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
+        // a cast, on the other hand, is not: the cast target says what metadata
+        // the result carries, and a type-only cast target carries none
         assert_eq!(
-            meta,
+            FieldMetadata::default(),
             expr.clone()
                 .cast_to(&DataType::Int64, &schema)
                 .unwrap()
@@ -1470,8 +1444,10 @@ mod tests {
             assert!(field.metadata().get("source_key").is_none());
         }
 
-        // A target field with no metadata inherits the source's, preserving the
-        // long-standing behaviour of a plain `CAST(expr AS type)`.
+        // A target field with no metadata is authoritative too: the source's
+        // metadata describes `FixedSizeBinary(16)` and must not ride along onto
+        // the `Utf8` the cast produces.
+        // See https://github.com/apache/datafusion/issues/22079
         let bare = Arc::new(Field::new("", DataType::Utf8, true));
         for expr in [
             Expr::Cast(Cast::new_from_field(
@@ -1484,7 +1460,12 @@ mod tests {
             )),
         ] {
             let field = expr.to_field(&schema).unwrap().1;
-            assert_eq!(field.metadata(), &source_meta);
+            assert!(
+                field.metadata().is_empty(),
+                "expected no metadata, got {:?}",
+                field.metadata()
+            );
         }
+        assert!(!source_meta.is_empty());
     }
 }

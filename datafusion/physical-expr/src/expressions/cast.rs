@@ -30,6 +30,7 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::{Result, not_impl_err};
+use datafusion_expr_common::casts::{cast_output_field, is_type_only_cast_target};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -150,19 +151,14 @@ impl CastExpr {
         &self.cast_options
     }
 
+    /// The field this cast produces.
+    ///
+    /// Delegates to the shared [`cast_output_field`], which is also what the
+    /// logical `Expr::Cast` uses to derive its output field, so the two layers
+    /// agree by construction.
     fn resolved_target_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        if is_default_target_field(&self.target_field) {
-            self.expr.return_field(input_schema).map(|field| {
-                Arc::new(
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(self.cast_type().clone()),
-                )
-            })
-        } else {
-            Ok(Arc::clone(&self.target_field))
-        }
+        let source_field = self.expr.return_field(input_schema)?;
+        Ok(cast_output_field(&source_field, &self.target_field, false))
     }
 
     /// Check if casting from the specified source type to the target type is a
@@ -189,12 +185,6 @@ impl CastExpr {
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
         Self::check_bigger_cast(self.cast_type(), src)
     }
-}
-
-fn is_default_target_field(target_field: &FieldRef) -> bool {
-    target_field.name().is_empty()
-        && target_field.is_nullable()
-        && target_field.metadata().is_empty()
 }
 
 pub(crate) fn is_order_preserving_cast_family(
@@ -396,7 +386,7 @@ pub fn cast_with_target_field(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     let cast_type = target_field.data_type();
-    if expr_type == *cast_type && is_default_target_field(&target_field) {
+    if expr_type == *cast_type && is_type_only_cast_target(&target_field) {
         return Ok(Arc::clone(&expr));
     }
 
@@ -1028,6 +1018,35 @@ mod tests {
         assert_eq!(field.data_type(), &Int64);
         assert!(!field.is_nullable());
         assert!(!expr.nullable(&schema)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn type_only_cast_does_not_inherit_source_metadata() -> Result<()> {
+        // The source's metadata describes the source's storage type; a cast
+        // produces a different one, so the metadata must not ride along.
+        // See https://github.com/apache/datafusion/issues/22079
+        let metadata = HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "arrow.uuid".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", FixedSizeBinary(16), false).with_metadata(metadata.clone()),
+        ]);
+
+        let expr = CastExpr::new(col("a", &schema)?, Binary, None);
+        let field = expr.return_field(&schema)?;
+
+        assert_eq!(field.name(), "a");
+        assert_eq!(field.data_type(), &Binary);
+        assert!(field.metadata().is_empty(), "{:?}", field.metadata());
+
+        // ... and the same holds for a cast that does not change the type: it
+        // is the only way to spell "drop this metadata".
+        let expr = CastExpr::new(col("a", &schema)?, FixedSizeBinary(16), None);
+        let field = expr.return_field(&schema)?;
+        assert!(field.metadata().is_empty(), "{:?}", field.metadata());
 
         Ok(())
     }
