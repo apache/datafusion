@@ -288,8 +288,8 @@ impl PartialReduceHashAggregateStream {
     ///
     /// The reservation is left at its pre-emission size while the states are being
     /// emitted, because the cleared states are still held in memory as
-    /// `remaining_groups`. [`Self::handle_emitting_on_memory_pressure`] updates the
-    /// reservation once the last slice has been emitted.
+    /// `remaining_groups`. The reservation will be reset after exiting the
+    /// `EmittingOnMemoryPressure` state.
     ///
     /// # Implementation Note
     /// All accumulated states are materialized at once, and then sliced into
