@@ -386,6 +386,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             self.buffer
                 .group_values
                 .intern(group_values, &mut self.buffer.group_indices)?;
+            // Group values and ordering always observe the full input. Each filtered
+            // aggregate compacts these IDs independently immediately before update.
             let total_num_groups = self.buffer.group_values.len();
             if total_num_groups > starting_num_groups {
                 self.buffer.group_ordering.new_groups(

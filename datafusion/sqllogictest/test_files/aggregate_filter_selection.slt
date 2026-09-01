@@ -44,8 +44,80 @@ ORDER BY g;
 3 NULL
 4 2
 
+# Each aggregate must compact group indices using its own FILTER. Cover both
+# primitive and boolean group accumulators, including groups rejected by both.
+query IIB
+SELECT g,
+  SUM(v) FILTER (WHERE v = 2),
+  BOOL_AND(v > 0) FILTER (WHERE v = 5)
+FROM aggregate_filter_selection
+GROUP BY g
+ORDER BY g;
+----
+1 NULL NULL
+2 2 NULL
+3 NULL NULL
+4 NULL true
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query I
+COPY (
+  SELECT *
+  FROM (VALUES
+    (1, 10, 0),
+    (1, 10, 2),
+    (1, 11, 5),
+    (2, 20, 0),
+    (2, 21, 4)
+  ) AS t(sort_col, group_col, v)
+  ORDER BY sort_col, group_col
+)
+TO 'test_files/scratch/aggregate_filter_selection/ordered.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_filter_selection_ordered (
+  sort_col INT,
+  group_col INT,
+  v BIGINT
+)
+STORED AS PARQUET
+WITH ORDER (sort_col)
+LOCATION 'test_files/scratch/aggregate_filter_selection';
+
+# Ordered single aggregation must also apply FILTER before evaluating arguments.
+query III
+SELECT sort_col, group_col, SUM(10 / v) FILTER (WHERE v <> 0)
+FROM aggregate_filter_selection_ordered
+GROUP BY sort_col, group_col
+ORDER BY sort_col, group_col;
+----
+1 10 5
+1 11 2
+2 20 NULL
+2 21 2
+
 statement ok
 SET datafusion.execution.target_partitions = 2;
+
+# Repartitioning ordered input selects ordered partial aggregation.
+query III
+SELECT sort_col, group_col, SUM(10 / v) FILTER (WHERE v <> 0)
+FROM aggregate_filter_selection_ordered
+GROUP BY sort_col, group_col
+ORDER BY sort_col, group_col;
+----
+1 10 5
+1 11 2
+2 20 NULL
+2 21 2
+
+statement ok
+DROP TABLE aggregate_filter_selection_ordered;
 
 statement ok
 SET datafusion.execution.batch_size = 1;

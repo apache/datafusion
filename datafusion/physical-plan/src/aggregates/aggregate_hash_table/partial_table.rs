@@ -19,14 +19,16 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanArray, new_null_array};
+use arrow::array::{ArrayRef, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
+use crate::aggregates::{
+    AggregateExec, evaluate_group_by, group_id_array, max_duplicate_ordinal,
+};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
@@ -137,9 +139,8 @@ impl AggregateHashTable<PartialMarker> {
     /// GROUP BY GROUPING SETS (());
     /// ```
     ///
-    /// The synthetic row is filtered out before accumulator update so aggregates
-    /// see the same state they would see for an empty input, rather than a real
-    /// null-valued row.
+    /// Accumulators receive zero argument rows and zero group IDs, together with the
+    /// full registered group count, so they produce the same state as empty input.
     fn init_empty_grouping_sets(&mut self) -> Result<()> {
         let state = self.state.building_mut();
         if !state.group_by.has_grouping_set() || !state.group_values.is_empty() {
@@ -181,15 +182,14 @@ impl AggregateHashTable<PartialMarker> {
 
         if any_interned {
             let total_groups = state.group_values.len();
-            let false_filter = BooleanArray::from(vec![false]);
             for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                let null_args = acc.null_arguments(&self.input_schema)?;
+                let null_args = acc.null_arguments(&self.input_schema, 0)?;
                 let values = EvaluatedAccumulatorArgs {
                     arguments: null_args,
-                    filter: Some(Arc::new(false_filter.clone())),
+                    filter: None,
                 };
                 accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
-                    acc.update_batch(&values, &[0], total_groups)
+                    acc.update_batch(&values, &[], total_groups)
                 })?;
             }
         }
@@ -203,31 +203,26 @@ impl AggregateHashTable<PartialSkipMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<RecordBatch> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
+        let state = self.state.building();
+        let timer = self.group_by_metrics.time_calculating_group_ids.timer();
+        let grouping_set_args = evaluate_group_by(&state.group_by, batch)?;
+        drop(timer);
 
         assert_eq_or_internal_err!(
-            evaluated_batch.grouping_set_args.len(),
+            grouping_set_args.len(),
             1,
             "group_values expected to have single element"
         );
-        let mut output = evaluated_batch
-            .grouping_set_args
-            .into_iter()
-            .next()
-            .unwrap_or_default();
+        let mut output = grouping_set_args.into_iter().next().unwrap_or_default();
 
-        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
-        let state = self.state.building_mut();
-        for (idx, (acc, values)) in state
-            .accumulators
-            .iter_mut()
-            .zip(evaluated_batch.accumulator_args.iter())
-            .enumerate()
-        {
-            output.extend(accumulator_metrics.time(
+        let state = self.state.building();
+        for (idx, acc) in state.accumulators.iter().enumerate() {
+            output.extend(acc.convert_to_state(
+                batch,
                 idx,
-                AccumulatorPhase::ConvertToState,
-                || acc.convert_to_state(values),
+                &self.group_by_metrics,
+                &self.aggregate_argument_metrics,
+                &self.aggregate_accumulator_metrics,
             )?);
         }
 
