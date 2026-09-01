@@ -53,7 +53,7 @@ use datafusion_common::project_schema;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
-    plan_err,
+    not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -154,6 +154,11 @@ impl SortMergeJoinExec {
         sort_options: Vec<SortOptions>,
         null_equality: NullEquality,
     ) -> Result<Self> {
+        if join_type.is_single() {
+            return not_impl_err!(
+                "Join type {join_type} is currently not supported for SortMergeJoinExec"
+            );
+        }
         let left_schema = left.schema();
         let right_schema = right.schema();
 
@@ -243,13 +248,15 @@ impl SortMergeJoinExec {
             JoinType::Right
             | JoinType::RightSemi
             | JoinType::RightAnti
-            | JoinType::RightMark => JoinSide::Right,
+            | JoinType::RightMark
+            | JoinType::RightSingle => JoinSide::Right,
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
             | JoinType::LeftAnti
             | JoinType::LeftSemi
-            | JoinType::LeftMark => JoinSide::Left,
+            | JoinType::LeftMark
+            | JoinType::LeftSingle => JoinSide::Left,
         }
     }
 

@@ -30,11 +30,16 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
+use datafusion_common::{
+    Column, Dependency, Result, ScalarValue, assert_or_internal_err, plan_err,
+};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::conjunction;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
+use datafusion_expr::utils::{conjunction, split_conjunction};
+use datafusion_expr::{
+    BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
+    correlated_scalar_subquery_yields_single_row, lit, not, when,
+};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
 /// additional projection on top of the filter to preserve the original schema.
@@ -342,6 +347,68 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 /// column to its `CASE WHEN __always_true IS NULL THEN ... END` compensation
 /// expression, which the caller must substitute into any expression that
 /// references those columns.
+/// Returns true if the decorrelated subquery cannot match more than one row per
+/// set of outer values, because it is already unique on the columns the join
+/// compares with the outer plan.
+///
+/// This covers uniqueness that
+/// [`correlated_scalar_subquery_yields_single_row`] cannot see, such as a
+/// declared constraint or an aggregate further down the subquery.
+///
+/// Only equality conjuncts count as join keys. Uniqueness on `(a, b)` says
+/// nothing about how many rows `sub.a = outer.a AND sub.b > outer.b` matches.
+fn subquery_unique_on_join_keys(
+    subquery: &LogicalPlan,
+    join_filter: &Expr,
+    subquery_alias: &str,
+) -> bool {
+    let schema = subquery.schema();
+    let mut join_key_indices = Vec::new();
+
+    for conjunct in split_conjunction(join_filter) {
+        let Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        }) = conjunct
+        else {
+            continue;
+        };
+        for (side, other) in [(left, right), (right, left)] {
+            let Some(column) = side.try_as_col() else {
+                continue;
+            };
+            // The other side must come from the outer plan. An equality
+            // between two subquery columns is not a join key.
+            let is_join_key = qualified_by(column, subquery_alias)
+                && !other
+                    .column_refs()
+                    .iter()
+                    .any(|column| qualified_by(column, subquery_alias));
+            if is_join_key && let Some(index) = schema.maybe_index_of_column(column) {
+                join_key_indices.push(index);
+            }
+        }
+    }
+
+    // A nullable determinant is still enough. The join uses
+    // `NullEquality::NullEqualsNothing`, so a NULL key matches nothing.
+    schema.functional_dependencies().iter().any(|dependency| {
+        dependency.mode == Dependency::Single
+            && dependency
+                .source_indices
+                .iter()
+                .all(|index| join_key_indices.contains(index))
+    })
+}
+
+fn qualified_by(column: &Column, alias: &str) -> bool {
+    column
+        .relation
+        .as_ref()
+        .is_some_and(|relation| relation.table() == alias)
+}
+
 fn build_join(
     subquery: &Subquery,
     outer_input: &LogicalPlan,
@@ -384,10 +451,37 @@ fn build_join(
     // the decorrelated subquery still yields at most one row per outer row
     // because its aggregate is grouped by the (empty) set of correlated inner
     // columns.
-    let join_filter = join_filter_opt.or_else(|| Some(lit(true)));
+    let join_filter = join_filter_opt.unwrap_or_else(|| lit(true));
+
+    // A subquery that cannot return more than one row per set of outer values
+    // uses a plain LEFT JOIN. The rest need a single join, which returns an
+    // error at run time when a second row matches. Only correlated subqueries
+    // can be ambiguous here. An uncorrelated one is checked by
+    // `ScalarSubqueryExec`, or, when this rule rewrites it, joined on
+    // Boolean(true) against a plan that already returns a single row.
+    //
+    // Using a plain join where possible matters for more than the run-time
+    // check. The optimizer can make a LEFT JOIN inner when a predicate above it
+    // rejects nulls, fold a comparison into a second join key, and turn the
+    // result into a semi join. None of these are correct for a single join,
+    // because all three change how many rows match, which is what the single
+    // join has to observe.
+    //
+    // A single join only sees the outer rows that reach it, so an outer row
+    // removed by a pushed-down filter cannot trigger the error. Whether the
+    // error is reported therefore depends on the plan, as it does in other
+    // engines.
+    let join_type = if subquery.outer_ref_columns.is_empty()
+        || correlated_scalar_subquery_yields_single_row(subquery_plan)?
+        || subquery_unique_on_join_keys(&aliased_subquery, &join_filter, subquery_alias)
+    {
+        JoinType::Left
+    } else {
+        JoinType::LeftSingle
+    };
 
     let new_plan = LogicalPlanBuilder::from(outer_input.clone())
-        .join_on(aliased_subquery, JoinType::Left, join_filter)?
+        .join_on(aliased_subquery, join_type, Some(join_filter))?
         .build()?;
 
     // Add count-bug compensation for each of the subquery's projected

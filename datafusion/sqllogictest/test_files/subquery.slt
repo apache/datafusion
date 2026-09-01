@@ -432,8 +432,20 @@ SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t
 statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: In/Exist/SetComparison subquery can only be used in Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
 SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 WHERE t1.t1_id > t1.t1_int)
 
+# A correlated scalar subquery with no aggregate decorrelates into a single
+# join, which fails when a second row matches.
 #non_aggregated_correlated_scalar_subquery
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
+query TT
+explain SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int) as t2_int from t1
+----
+logical_plan
+01)Projection: t1.t1_id, __scalar_sq_1.t2_int AS t2_int
+02)--LeftSingle Join: t1.t1_int = __scalar_sq_1.t2_int
+03)----TableScan: t1 projection=[t1_id, t1_int]
+04)----SubqueryAlias: __scalar_sq_1
+05)------TableScan: t2 projection=[t2_int]
+
+statement error DataFusion error: Execution error: Scalar subquery returned more than one row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int) as t2_int from t1
 
 #non_aggregated_correlated_scalar_subquery_unique
@@ -446,12 +458,21 @@ SELECT t1_id, (SELECT t3_int FROM t3 WHERE t3.t3_id = t1.t1_id) as t3_int from t
 44 3
 
 
-#non_aggregated_correlated_scalar_subquery
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
+# A GROUP BY on the correlated column returns at most one row per outer row, so
+# this keeps the plain left join.
+#non_aggregated_correlated_scalar_subquery_with_group_by
+query II rowsort
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1_int group by t2_int) as t2_int from t1
+----
+11 1
+22 NULL
+33 3
+44 NULL
 
+# A LIMIT above the correlated predicate blocks decorrelation, so it is only
+# allowed when the subquery is limited to a single row.
 #non_aggregated_correlated_scalar_subquery_with_limit
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery with a LIMIT must be limited to a single row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 2) as t2_int from t1
 
 #non_aggregated_correlated_scalar_subquery_with_single_row
@@ -513,9 +534,16 @@ logical_plan
 06)----------TableScan: t2
 07)--TableScan: t1 projection=[t1_id]
 
+# A GROUP BY on a column the correlated predicate does not fix can produce more
+# than one row per outer row, so this uses a single join.
 #aggregated_correlated_scalar_subquery_with_extra_group_by_columns
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns
+query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id group by t2_name) as t2_sum from t1
+----
+11 3
+22 1
+33 NULL
+44 3
 
 #support_agg_correlated_columns
 query TT
@@ -2737,3 +2765,198 @@ b 400
 
 statement ok
 DROP TABLE metrics;
+
+##########
+## Single join
+##########
+
+# A correlated scalar subquery that is not already known to return at most one
+# row decorrelates into a single join, which checks that at run time. These
+# queries need no aggregate at all.
+
+statement ok
+CREATE TABLE sj_fact(id INT, dim_id INT) AS VALUES
+(1, 10),
+(2, 20),
+(3, 30),
+(4, NULL);
+
+statement ok
+CREATE TABLE sj_dim(dim_id INT, name TEXT) AS VALUES
+(10, 'ten'),
+(20, 'twenty');
+
+statement ok
+CREATE TABLE sj_dup(dim_id INT, name TEXT) AS VALUES
+(10, 'ten'),
+(10, 'ten again');
+
+# An attribute lookup needs no aggregate. Outer rows with no match get NULL,
+# like the left join it lowers to.
+query IT rowsort
+SELECT id, (SELECT name FROM sj_dim WHERE sj_dim.dim_id = sj_fact.dim_id) AS name
+FROM sj_fact
+----
+1 ten
+2 twenty
+3 NULL
+4 NULL
+
+query TT
+EXPLAIN SELECT id, (SELECT name FROM sj_dim WHERE sj_dim.dim_id = sj_fact.dim_id) AS name
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.name AS name
+02)--LeftSingle Join: sj_fact.dim_id = __scalar_sq_1.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: sj_dim.name, sj_dim.dim_id
+06)--------TableScan: sj_dim projection=[dim_id, name]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftSingle, on=[(dim_id@1, dim_id@1)], projection=[id@0, name@2]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A second matching row makes the subquery non-scalar, which is an error. It is
+# the same error an uncorrelated scalar subquery returns.
+statement error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT id, (SELECT name FROM sj_dup WHERE sj_dup.dim_id = sj_fact.dim_id) AS name
+FROM sj_fact
+
+# The same in a filter rather than a projection.
+query I rowsort
+SELECT id FROM sj_fact
+WHERE (SELECT name FROM sj_dim WHERE sj_dim.dim_id = sj_fact.dim_id) = 'ten'
+----
+1
+
+statement error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT id FROM sj_fact
+WHERE (SELECT name FROM sj_dup WHERE sj_dup.dim_id = sj_fact.dim_id) = 'ten'
+
+# A correlation with no equijoin key runs as a nested loop single join.
+query IT rowsort
+SELECT id, (SELECT name FROM sj_dim WHERE sj_dim.dim_id > sj_fact.dim_id + 5) AS name
+FROM sj_fact
+----
+1 twenty
+2 NULL
+3 NULL
+4 NULL
+
+statement error DataFusion error: Execution error: Scalar subquery returned more than one row
+SELECT id, (SELECT name FROM sj_dim WHERE sj_dim.dim_id >= sj_fact.dim_id) AS name
+FROM sj_fact
+
+# A subquery that is known to return at most one row keeps its plain left join,
+# so the run-time check is only used where it is needed.
+query TT
+EXPLAIN SELECT id, (SELECT max(name) FROM sj_dup WHERE sj_dup.dim_id = sj_fact.dim_id) AS name
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.max(sj_dup.name) AS name
+02)--Left Join: sj_fact.dim_id = __scalar_sq_1.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: max(sj_dup.name), sj_dup.dim_id
+06)--------Aggregate: groupBy=[[sj_dup.dim_id]], aggr=[[max(sj_dup.name)]]
+07)----------TableScan: sj_dup projection=[dim_id, name]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, max(sj_dup.name)@1 as name]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(dim_id@1, dim_id@1)], projection=[id@0, max(sj_dup.name)@2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----ProjectionExec: expr=[max(sj_dup.name)@1 as max(sj_dup.name), dim_id@0 as dim_id]
+05)------AggregateExec: mode=FinalPartitioned, gby=[dim_id@0 as dim_id], aggr=[max(sj_dup.name)]
+06)--------RepartitionExec: partitioning=Hash([dim_id@0], 4), input_partitions=1
+07)----------AggregateExec: mode=Partial, gby=[dim_id@0 as dim_id], aggr=[max(sj_dup.name)]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Uniqueness the subquery inherits also counts, not just an aggregate the rule
+# can see. A declared key still applies when the correlated predicate has an
+# extra condition, so this keeps the plain left join and the rewrites that a
+# single join would block.
+statement ok
+CREATE TABLE sj_dim_pk(dim_id INT PRIMARY KEY, name TEXT, ok BOOLEAN) AS VALUES
+(10, 'ten', true),
+(20, 'twenty', false);
+
+query TT
+EXPLAIN SELECT id, (SELECT name FROM sj_dim_pk WHERE sj_dim_pk.dim_id = sj_fact.dim_id AND ok) AS name
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.name AS name
+02)--Left Join: sj_fact.dim_id = __scalar_sq_1.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: sj_dim_pk.name, sj_dim_pk.dim_id
+06)--------Filter: sj_dim_pk.ok
+07)----------TableScan: sj_dim_pk projection=[dim_id, name, ok]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(dim_id@1, dim_id@1)], projection=[id@2, name@0]
+02)--FilterExec: ok@2, projection=[name@1, dim_id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IT rowsort
+SELECT id, (SELECT name FROM sj_dim_pk WHERE sj_dim_pk.dim_id = sj_fact.dim_id AND ok) AS name
+FROM sj_fact
+----
+1 ten
+2 NULL
+3 NULL
+4 NULL
+
+# Grouping by the correlated column makes the subquery unique on the join key,
+# even with no aggregate.
+query TT
+EXPLAIN SELECT id, (SELECT dim_id FROM sj_dup WHERE sj_dup.dim_id = sj_fact.dim_id GROUP BY dim_id) AS dim_id
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.dim_id AS dim_id
+02)--Left Join: sj_fact.dim_id = __scalar_sq_1.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Aggregate: groupBy=[[sj_dup.dim_id]], aggr=[[]]
+06)--------TableScan: sj_dup projection=[dim_id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(dim_id@0, dim_id@1)], projection=[id@1, dim_id@0]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=FinalPartitioned, gby=[dim_id@0 as dim_id], aggr=[]
+04)------RepartitionExec: partitioning=Hash([dim_id@0], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[dim_id@0 as dim_id], aggr=[]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A unique key does not help when the correlated predicate is an inequality,
+# because many rows can still match one outer row.
+query TT
+EXPLAIN SELECT id, (SELECT name FROM sj_dim_pk WHERE sj_dim_pk.dim_id > sj_fact.dim_id) AS name
+FROM sj_fact
+----
+logical_plan
+01)Projection: sj_fact.id, __scalar_sq_1.name AS name
+02)--LeftSingle Join:  Filter: __scalar_sq_1.dim_id > sj_fact.dim_id
+03)----TableScan: sj_fact projection=[id, dim_id]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: sj_dim_pk.name, sj_dim_pk.dim_id
+06)--------TableScan: sj_dim_pk projection=[dim_id, name]
+physical_plan
+01)NestedLoopJoinExec: join_type=LeftSingle, filter=dim_id@1 > dim_id@0, projection=[id@0, name@2]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE sj_fact;
+
+statement ok
+DROP TABLE sj_dim;
+
+statement ok
+DROP TABLE sj_dup;
+
+statement ok
+DROP TABLE sj_dim_pk;

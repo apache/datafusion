@@ -135,7 +135,12 @@ fn try_push_down_join_filter(
     let new_lhs_length = lhs_rewrite.data.0.schema().fields.len();
     let projections = match projections.as_ref() {
         None => match join.join_type() {
-            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+            JoinType::Inner
+            | JoinType::Left
+            | JoinType::Right
+            | JoinType::Full
+            | JoinType::LeftSingle
+            | JoinType::RightSingle => {
                 // Build projections that ignore the newly projected columns.
                 let mut projections = Vec::new();
                 projections.extend(0..original_lhs_length);

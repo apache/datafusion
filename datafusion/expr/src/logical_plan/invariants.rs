@@ -169,31 +169,22 @@ pub fn check_subquery_expr(
                 subquery.subquery.schema().field_names().join(", ")
             );
         }
-        // Correlated scalar subquery must be aggregated to return at most one row
+        // A correlated scalar subquery must return at most one row per set of
+        // outer values. Subqueries that do not guarantee this are still valid:
+        // `ScalarSubqueryToJoin` decorrelates them with a single join, which
+        // returns an error at run time if a second row matches.
+        //
+        // Decorrelation pulls the correlated predicate above the subquery,
+        // which is not correct if a LIMIT sits in between. Such a subquery is
+        // only usable if it returns a single row to begin with.
         if !subquery.outer_ref_columns.is_empty() {
-            match strip_inner_query(inner_plan) {
-                LogicalPlan::Aggregate(agg) => {
-                    check_aggregation_in_scalar_subquery(inner_plan, agg)
-                }
-                LogicalPlan::Filter(Filter { input, .. })
-                    if matches!(input.as_ref(), LogicalPlan::Aggregate(_)) =>
-                {
-                    if let LogicalPlan::Aggregate(agg) = input.as_ref() {
-                        check_aggregation_in_scalar_subquery(inner_plan, agg)
-                    } else {
-                        Ok(())
-                    }
-                }
-                _ => {
-                    if inner_plan.max_rows().is_some_and(|max_row| max_row <= 1) {
-                        Ok(())
-                    } else {
-                        plan_err!(
-                            "Correlated scalar subquery must be aggregated to return at most one row"
-                        )
-                    }
-                }
-            }?;
+            if correlation_is_below_limit(inner_plan)
+                && inner_plan.max_rows().is_none_or(|rows| rows > 1)
+            {
+                return plan_err!(
+                    "Correlated scalar subquery with a LIMIT must be limited to a single row"
+                );
+            }
             match outer_plan {
                 LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
                 LogicalPlan::Aggregate(Aggregate {
@@ -323,14 +314,16 @@ fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
             JoinType::Left
             | JoinType::LeftSemi
             | JoinType::LeftAnti
-            | JoinType::LeftMark => {
+            | JoinType::LeftMark
+            | JoinType::LeftSingle => {
                 check_inner_plan(left)?;
                 check_no_outer_references(right)
             }
             JoinType::Right
             | JoinType::RightSemi
             | JoinType::RightAnti
-            | JoinType::RightMark => {
+            | JoinType::RightMark
+            | JoinType::RightSingle => {
                 check_no_outer_references(left)?;
                 check_inner_plan(right)
             }
@@ -358,35 +351,70 @@ fn check_no_outer_references(inner_plan: &LogicalPlan) -> Result<()> {
     }
 }
 
-fn check_aggregation_in_scalar_subquery(
-    inner_plan: &LogicalPlan,
-    agg: &Aggregate,
-) -> Result<()> {
-    if agg.aggr_expr.is_empty() {
-        return plan_err!(
-            "Correlated scalar subquery must be aggregated to return at most one row"
-        );
-    }
-    if !agg.group_expr.is_empty() {
-        let correlated_exprs = get_correlated_expressions(inner_plan)?;
-        let inner_subquery_cols =
-            collect_subquery_cols(&correlated_exprs, agg.input.schema())?;
-        let mut group_columns = agg
-            .group_expr
-            .iter()
-            .map(|group| Ok(group.column_refs().into_iter().cloned().collect::<Vec<_>>()))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten();
+/// Returns true if a `LIMIT` sits above an outer reference in the subquery.
+/// Decorrelation cannot pull the correlated predicate above such a `LIMIT`.
+fn correlation_is_below_limit(inner_plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    inner_plan
+        .apply(|plan| {
+            Ok(
+                if matches!(plan, LogicalPlan::Limit(_))
+                    && !plan.all_out_ref_exprs().is_empty()
+                {
+                    found = true;
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                },
+            )
+        })
+        // the closure always returns Ok
+        .expect("infallible");
+    found
+}
 
-        if !group_columns.all(|group| inner_subquery_cols.contains(&group)) {
-            // Group BY columns must be a subset of columns in the correlated expressions
-            return plan_err!(
-                "A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns"
-            );
-        }
+/// Returns true if a correlated scalar subquery already returns at most one row
+/// per set of outer values.
+///
+/// This holds if the subquery aggregates and groups only by columns the
+/// correlated predicate fixes, or if it cannot return more than one row at all.
+/// Such a subquery can be decorrelated with a plain `LEFT JOIN`. The rest need
+/// a single join, which checks the condition at run time.
+pub fn correlated_scalar_subquery_yields_single_row(
+    inner_plan: &LogicalPlan,
+) -> Result<bool> {
+    let agg = match strip_inner_query(inner_plan) {
+        LogicalPlan::Aggregate(agg) => agg,
+        LogicalPlan::Filter(Filter { input, .. }) => match input.as_ref() {
+            LogicalPlan::Aggregate(agg) => agg,
+            _ => return Ok(inner_plan.max_rows().is_some_and(|rows| rows <= 1)),
+        },
+        _ => return Ok(inner_plan.max_rows().is_some_and(|rows| rows <= 1)),
+    };
+
+    // A GROUP BY with no aggregate is a DISTINCT, which can still return one
+    // row per distinct group.
+    if agg.aggr_expr.is_empty() {
+        return Ok(false);
     }
-    Ok(())
+    if agg.group_expr.is_empty() {
+        return Ok(true);
+    }
+
+    // Grouping by a column the correlated predicate does not fix can produce
+    // more than one group, and so more than one row, per set of outer values.
+    let correlated_exprs = get_correlated_expressions(inner_plan)?;
+    let inner_subquery_cols =
+        collect_subquery_cols(&correlated_exprs, agg.input.schema())?;
+    let mut group_columns = agg
+        .group_expr
+        .iter()
+        .map(|group| Ok(group.column_refs().into_iter().cloned().collect::<Vec<_>>()))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten();
+
+    Ok(group_columns.all(|group| inner_subquery_cols.contains(&group)))
 }
 
 fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {

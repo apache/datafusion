@@ -1056,6 +1056,7 @@ impl HashJoinExec {
                     | JoinType::RightAnti
                     | JoinType::RightSemi
                     | JoinType::RightMark
+                    | JoinType::RightSingle
             ),
         ]
     }
@@ -1125,12 +1126,14 @@ impl HashJoinExec {
                 | JoinType::RightSemi
                 | JoinType::Right
                 | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
+                | JoinType::RightMark
+                | JoinType::RightSingle => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
+                | JoinType::LeftSingle
                 | JoinType::Full => EmissionType::Both,
             }
         } else {
@@ -2414,8 +2417,8 @@ mod proto_tests {
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
-        JoinType::Left => (true, false),
-        JoinType::Right => (false, true),
+        JoinType::Left | JoinType::LeftSingle => (true, false),
+        JoinType::Right | JoinType::RightSingle => (false, true),
         JoinType::Full => (false, false),
         // Callers restrict the non-output side of semi joins to join-key columns.
         JoinType::LeftSemi | JoinType::RightSemi => (true, true),
@@ -4156,6 +4159,124 @@ mod tests {
         Ok(())
     }
 
+    /// A single join emits one row per row of its preserved side, padded with
+    /// nulls where nothing matched -- the same output a left/right join gives
+    /// when the other side is unique on the join keys.
+    #[rstest]
+    #[tokio::test]
+    async fn join_single_at_most_one_match(
+        #[values(JoinType::LeftSingle, JoinType::RightSingle)] join_type: JoinType,
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        partition_mode: PartitionMode,
+        #[values(1, 8192)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        // 7 has no match on the right, 6 has no match on the left.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b2", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, _) = join_collect_with_partition_mode(
+            left,
+            right,
+            on,
+            &join_type,
+            partition_mode,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+
+        // LeftSingle keeps every left row, RightSingle every right row.
+        if join_type == JoinType::LeftSingle {
+            allow_duplicates! {
+                assert_snapshot!(batches_to_sort_string(&batches), @r"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b2 | c2 |
+                +----+----+----+----+----+----+
+                | 1  | 4  | 7  | 10 | 4  | 70 |
+                | 2  | 5  | 8  | 20 | 5  | 80 |
+                | 3  | 7  | 9  |    |    |    |
+                +----+----+----+----+----+----+
+                ");
+            }
+        } else {
+            allow_duplicates! {
+                assert_snapshot!(batches_to_sort_string(&batches), @r"
+                +----+----+----+----+----+----+
+                | a1 | b1 | c1 | a2 | b2 | c2 |
+                +----+----+----+----+----+----+
+                |    |    |    | 30 | 6  | 90 |
+                | 1  | 4  | 7  | 10 | 4  | 70 |
+                | 2  | 5  | 8  | 20 | 5  | 80 |
+                +----+----+----+----+----+----+
+                ");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// A second match for a row of the preserved side makes the join fail,
+    /// however the matches are spread over batches and partitions.
+    #[rstest]
+    #[tokio::test]
+    async fn join_single_rejects_second_match(
+        #[values(JoinType::LeftSingle, JoinType::RightSingle)] join_type: JoinType,
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        partition_mode: PartitionMode,
+        #[values(1, 8192)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        // Key 4 matches twice, whichever side is preserved.
+        let left = build_table(
+            ("a1", &vec![1, 2]),
+            ("b1", &vec![4, 4]),
+            ("c1", &vec![7, 8]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b2", &vec![4, 4]),
+            ("c2", &vec![70, 80]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        let err = join_collect_with_partition_mode(
+            left,
+            right,
+            on,
+            &join_type,
+            partition_mode,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "Scalar subquery returned more than one row"
+        );
+
+        Ok(())
+    }
+
     /// Under NullEqualsNothing, NULL join keys are not inserted into the hash
     /// map, so a build side whose keys are all NULL produces an empty map even
     /// though it contains rows. Join types that emit unmatched build rows must
@@ -4190,6 +4311,8 @@ mod tests {
             JoinType::RightAnti,
             JoinType::LeftMark,
             JoinType::RightMark,
+            JoinType::LeftSingle,
+            JoinType::RightSingle,
         ] {
             let (_, batches, metrics) = join_collect_with_partition_mode(
                 Arc::clone(&left),
@@ -4224,6 +4347,33 @@ mod tests {
                 JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
                     let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
                     assert_eq!(num_rows, 0, "unexpected rows for {join_type}");
+                }
+                // Nothing matches, so the single joins degenerate to their
+                // outer counterparts.
+                JoinType::LeftSingle => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        | 1  |    |    |    |
+                        | 2  |    |    |    |
+                        +----+----+----+----+
+                        ");
+                    }
+                }
+                JoinType::RightSingle => {
+                    allow_duplicates! {
+                        assert_snapshot!(batches_to_sort_string(&batches), @r"
+                        +----+----+----+----+
+                        | a1 | b1 | a2 | b1 |
+                        +----+----+----+----+
+                        |    |    | 10 | 4  |
+                        |    |    | 20 |    |
+                        |    |    | 30 | 6  |
+                        +----+----+----+----+
+                        ");
+                    }
                 }
                 JoinType::Left => {
                     allow_duplicates! {

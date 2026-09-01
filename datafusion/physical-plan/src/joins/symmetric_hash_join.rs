@@ -713,6 +713,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             JoinType::RightAnti => protobuf::JoinType::Rightanti,
             JoinType::LeftMark => protobuf::JoinType::Leftmark,
             JoinType::RightMark => protobuf::JoinType::Rightmark,
+            JoinType::LeftSingle => protobuf::JoinType::Leftsingle,
+            JoinType::RightSingle => protobuf::JoinType::Rightsingle,
         };
         let null_equality = match null_equality {
             NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
@@ -860,6 +862,8 @@ impl SymmetricHashJoinExec {
             protobuf::JoinType::Rightanti => JoinType::RightAnti,
             protobuf::JoinType::Leftmark => JoinType::LeftMark,
             protobuf::JoinType::Rightmark => JoinType::RightMark,
+            protobuf::JoinType::Leftsingle => JoinType::LeftSingle,
+            protobuf::JoinType::Rightsingle => JoinType::RightSingle,
         };
         let null_equality = match protobuf::NullEquality::try_from(*null_equality)
             .map_err(|_| {

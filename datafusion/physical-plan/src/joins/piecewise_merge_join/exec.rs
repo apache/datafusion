@@ -293,6 +293,11 @@ impl PiecewiseMergeJoinExec {
         // Left Semi/Anti are handled by `ExistencePWMJStream` (the marked side is
         // already the buffered side, so no input swap is needed). Right existence joins
         // and Mark joins are not yet supported.
+        if join_type.is_single() {
+            return not_impl_err!(
+                "Join type {join_type} is currently not supported for PiecewiseMergeJoin"
+            );
+        }
         if is_existence_join(join_type) && !is_supported_existence_join(join_type) {
             return not_impl_err!(
                 "Existence join {join_type} is currently not supported for PiecewiseMergeJoin"
@@ -405,11 +410,13 @@ impl PiecewiseMergeJoinExec {
             | JoinType::Full
             | JoinType::RightSemi
             | JoinType::RightAnti
-            | JoinType::RightMark => JoinSide::Right,
+            | JoinType::RightMark
+            | JoinType::RightSingle => JoinSide::Right,
             JoinType::Left
             | JoinType::LeftAnti
             | JoinType::LeftSemi
-            | JoinType::LeftMark => JoinSide::Left,
+            | JoinType::LeftMark
+            | JoinType::LeftSingle => JoinSide::Left,
         }
     }
 
