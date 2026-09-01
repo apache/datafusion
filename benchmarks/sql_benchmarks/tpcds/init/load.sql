@@ -1,3 +1,4 @@
+-- Full schema's are required to define primary keys (to match the rust native version)
 CREATE EXTERNAL TABLE call_center
 (
     cc_call_center_sk INT,
