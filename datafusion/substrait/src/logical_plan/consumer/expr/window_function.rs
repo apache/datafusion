@@ -27,6 +27,7 @@ use datafusion::logical_expr::expr::WindowFunctionParams;
 use datafusion::logical_expr::{
     Expr, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, expr,
 };
+use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::expression::WindowFunction;
 use substrait::proto::expression::window_function::{Bound, BoundsType};
 use substrait::proto::expression::{
@@ -98,6 +99,16 @@ pub async fn from_window_function(
     } else {
         from_substrait_func_args(consumer, &window.arguments, input_schema).await?
     };
+    let distinct =
+        match AggregationInvocation::try_from(window.invocation).map_err(|e| {
+            plan_datafusion_err!(
+                "Invalid window aggregation invocation {}: {e}",
+                window.invocation
+            )
+        })? {
+            AggregationInvocation::Unspecified | AggregationInvocation::All => false,
+            AggregationInvocation::Distinct => true,
+        };
 
     Ok(Expr::from(expr::WindowFunction {
         fun,
@@ -113,7 +124,7 @@ pub async fn from_window_function(
             window_frame,
             filter: None,
             null_treatment: None,
-            distinct: false,
+            distinct,
         },
     }))
 }
