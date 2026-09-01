@@ -30,7 +30,7 @@ use datafusion_expr::{
         self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
         WildcardOptions, WindowFunction,
     },
-    planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
+    planner::{PlannerResult, RawAggregateExpr, RawScalarExpr, RawWindowExpr},
     type_coercion::functions::value_fields_with_higher_order_udf,
 };
 use sqlparser::ast::{
@@ -341,7 +341,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             // After resolution, all arguments are positional
-            let inner = ScalarFunction::new_udf(fm, resolved_args);
+            let mut scalar_expr = RawScalarExpr {
+                func: fm,
+                args: resolved_args,
+            };
+
+            for planner in self.context_provider.get_expr_planners().iter() {
+                match planner.plan_scalar(scalar_expr)? {
+                    PlannerResult::Planned(expr) => return Ok(expr),
+                    PlannerResult::Original(expr) => scalar_expr = expr,
+                }
+            }
+
+            let RawScalarExpr { func, args } = scalar_expr;
+            let inner = ScalarFunction::new_udf(func, args);
 
             if name.eq_ignore_ascii_case(inner.name()) {
                 return Ok(Expr::ScalarFunction(inner));
