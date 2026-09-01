@@ -3672,11 +3672,20 @@ impl TryFrom<&Arc<FileDecryptionProperties>> for ConfigFileDecryptionProperties 
     type Error = DataFusionError;
 
     fn try_from(f: &Arc<FileDecryptionProperties>) -> Result<Self> {
+        if f.uses_key_retriever() {
+            // Getting the keys is not possible without the key metadata from
+            // a Parquet file if a key retriever is used.
+            return Err(
+                DataFusionError::Configuration(
+                    "Cannot convert FileDecryptionProperties that use a key retriever to ConfigFileDecryptionProperties".into()
+                )
+            );
+        }
+
         let footer_key = f.footer_key(None).map_err(|e| {
+            // This shouldn't happen for FileDecryptionProperties that don't use a key retriever.
             DataFusionError::Configuration(format!(
-                "Could not retrieve footer key from FileDecryptionProperties. \
-                Note that conversion to ConfigFileDecryptionProperties is not supported \
-                when using a key retriever: {e}"
+                "Could not retrieve footer key from FileDecryptionProperties: {e}"
             ))
         })?;
 
@@ -4474,8 +4483,10 @@ mod tests {
             (&decryption_properties).try_into();
         assert!(config_file_decryption_properties.is_err());
         let err = config_file_decryption_properties.unwrap_err().to_string();
-        assert!(err.contains("key retriever"));
-        assert!(err.contains("Key metadata not provided"));
+        assert_contains!(
+            err,
+            "Cannot convert FileDecryptionProperties that use a key retriever to ConfigFileDecryptionProperties"
+        );
     }
 
     #[cfg(feature = "parquet")]
