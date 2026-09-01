@@ -189,7 +189,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .enumerate()
             .map(|(idx, acc)| {
                 self.aggregate_argument_metrics
-                    .time(idx, || acc.evaluate_acc_args(batch))
+                    .time(idx, || acc.evaluate_compacted_args(batch))
             })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
@@ -415,13 +415,13 @@ pub(super) type AggregateAccumulator = HashAggregateAccumulator;
 ///
 /// Arguments:
 /// * accumulator to update.
-/// * accumulator's evaluated arguments and optional filter.
+/// * accumulator's compacted arguments and optional row-aligned selection.
 /// * one group index per input row, mapping each row to its interned group.
 /// * total number of groups currently interned in that buffer, including newly
 ///   interned groups.
 pub(super) type AggregateBatchFn = fn(
     &mut AggregateAccumulator,
-    &EvaluatedAccumulatorArgs,
+    &CompactedAccumulatorArgs,
     &[usize],
     usize,
 ) -> Result<()>;
@@ -435,20 +435,21 @@ pub(super) type AggregateBatchFn = fn(
 pub(super) type MaterializeAccumulatorFn =
     fn(&mut AggregateAccumulator, EmitTo) -> Result<Vec<ArrayRef>>;
 
-/// Evaluated aggregate arguments and filter for one input batch.
-///
-/// For example, `AVG(x + 1) FILTER (WHERE x > 0)` evaluates both `x + 1`
-/// and `x > 0`.
-///
-/// Normal raw-input aggregation stores compact arguments but retains the original
-/// row-aligned filter so the matching group IDs can be compacted. Skip-partial
-/// conversion stores row-aligned arguments and passes the filter through.
-pub(super) struct EvaluatedAccumulatorArgs {
-    /// Evaluated argument arrays. Some aggregate functions take multiple arguments.
+/// Aggregate arguments compacted according to one aggregate's `FILTER`.
+pub(super) struct CompactedAccumulatorArgs {
+    /// Argument arrays containing only selected rows. Some aggregate functions take
+    /// multiple arguments.
     pub(super) arguments: Vec<ArrayRef>,
-    /// Original row-aligned filter array, `Some` if the aggregate has a `FILTER`
-    /// expression.
-    pub(super) filter: Option<ArrayRef>,
+    /// Original row-aligned selection used only to compact the matching group IDs.
+    pub(super) selection: Option<BooleanArray>,
+}
+
+/// Evaluated aggregate arguments that preserve one output row per input row.
+pub(super) struct RowAlignedAccumulatorArgs {
+    /// Row-aligned argument arrays. Rejected rows are represented as nulls.
+    pub(super) arguments: Vec<ArrayRef>,
+    /// Original row-aligned filter passed through to state conversion.
+    pub(super) filter: Option<BooleanArray>,
 }
 
 /// Evaluated all group by keys and accumulator args.
@@ -460,8 +461,8 @@ pub(super) struct EvaluatedAggregateBatch {
     /// arrays for the current input batch.
     pub(super) grouping_set_args: Vec<Vec<ArrayRef>>,
 
-    /// Evaluated arguments and filters, one entry per aggregate expression.
-    pub(super) accumulator_args: Vec<EvaluatedAccumulatorArgs>,
+    /// Compacted arguments and selections, one entry per aggregate expression.
+    pub(super) accumulator_args: Vec<CompactedAccumulatorArgs>,
 }
 
 /// Buffer for the aggregate hash table's group keys and accumulator states.
@@ -609,27 +610,21 @@ impl HashAggregateAccumulator {
     /// first, then evaluates `2 / x` against a compact batch containing only
     /// selected rows. Filtered rows won't trigger errors such as divide by zero.
     ///
-    /// Before updating [`GroupsAccumulator`], the retained filter is used to compact
-    /// the matching group IDs and is not passed through.
-    pub(super) fn evaluate_acc_args(
+    /// Before updating [`GroupsAccumulator`], the retained selection is used to
+    /// compact the matching group IDs and is not passed through.
+    pub(super) fn evaluate_compacted_args(
         &self,
         batch: &RecordBatch,
-    ) -> Result<EvaluatedAccumulatorArgs> {
-        let filter = self
-            .filter
-            .as_ref()
-            .map(|filter| {
-                filter
-                    .evaluate(batch)
-                    .and_then(|value| value.into_array(batch.num_rows()))
-            })
-            .transpose()?;
-        let selection = filter.as_ref().map(|filter| filter.as_boolean());
-        let selected_rows = selection.map(|selection| selection.true_count());
-        let filtered_batch = match selected_rows {
-            Some(0) | None => None,
-            Some(selected_rows) if selected_rows == batch.num_rows() => None,
-            Some(_) => Some(filter_record_batch(batch, selection.unwrap())?),
+    ) -> Result<CompactedAccumulatorArgs> {
+        let selection = self.evaluate_filter(batch)?;
+        let selected_rows = selection.as_ref().map(|selection| selection.true_count());
+        let filtered_batch = match (selection.as_ref(), selected_rows) {
+            (Some(selection), Some(selected_rows))
+                if selected_rows > 0 && selected_rows < batch.num_rows() =>
+            {
+                Some(filter_record_batch(batch, selection)?)
+            }
+            _ => None,
         };
         let argument_batch = match selected_rows {
             None => Some(batch),
@@ -651,7 +646,49 @@ impl HashAggregateAccumulator {
             })
             .collect::<Result<_>>()?;
 
-        Ok(EvaluatedAccumulatorArgs { arguments, filter })
+        Ok(CompactedAccumulatorArgs {
+            arguments,
+            selection,
+        })
+    }
+
+    /// Evaluates selected arguments while preserving the input batch row count.
+    ///
+    /// Skip-partial conversion produces one state row per input row, so rejected
+    /// rows remain as null argument values and the filter is passed to
+    /// [`GroupsAccumulator::convert_to_state`].
+    pub(super) fn evaluate_row_aligned_args(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<RowAlignedAccumulatorArgs> {
+        let filter = self.evaluate_filter(batch)?;
+        let selection = filter.as_ref();
+        let arguments = self
+            .arguments
+            .iter()
+            .map(|expr| {
+                selection
+                    .map_or_else(
+                        || expr.evaluate(batch),
+                        |selection| expr.evaluate_selection(batch, selection),
+                    )
+                    .and_then(|value| value.into_array(batch.num_rows()))
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(RowAlignedAccumulatorArgs { arguments, filter })
+    }
+
+    fn evaluate_filter(&self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
+        self.filter
+            .as_ref()
+            .map(|filter| {
+                filter
+                    .evaluate(batch)
+                    .and_then(|value| value.into_array(batch.num_rows()))
+                    .map(|filter| filter.as_boolean().clone())
+            })
+            .transpose()
     }
 
     pub(super) fn size(&self) -> usize {
@@ -660,14 +697,14 @@ impl HashAggregateAccumulator {
 
     pub(super) fn update_batch(
         &mut self,
-        values: &EvaluatedAccumulatorArgs,
+        values: &CompactedAccumulatorArgs,
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
         let filtered_group_indices = values
-            .filter
+            .selection
             .as_ref()
-            .and_then(|filter| compact_group_indices(group_indices, filter.as_boolean()));
+            .and_then(|selection| compact_group_indices(group_indices, selection));
         let group_indices = filtered_group_indices.as_deref().unwrap_or(group_indices);
         self.accumulator.update_batch(
             &values.arguments,
@@ -679,11 +716,11 @@ impl HashAggregateAccumulator {
 
     pub(super) fn merge_batch(
         &mut self,
-        values: &EvaluatedAccumulatorArgs,
+        values: &CompactedAccumulatorArgs,
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
-        debug_assert!(values.filter.is_none());
+        debug_assert!(values.selection.is_none());
         self.accumulator
             .merge_batch(&values.arguments, group_indices, total_num_groups)
     }
@@ -709,54 +746,13 @@ impl HashAggregateAccumulator {
         self.accumulator.state(emit_to)
     }
 
-    /// Converts raw input directly to partial state while preserving one output row
-    /// per input row. This is the special evaluation path used when partial
-    /// aggregation is skipped. Argument evaluation and accumulator conversion are
-    /// timed separately to preserve the normal aggregate metric breakdown.
+    /// Converts evaluated row-aligned arguments directly to partial state.
     pub(super) fn convert_to_state(
         &self,
-        batch: &RecordBatch,
-        index: usize,
-        group_by_metrics: &GroupByMetrics,
-        argument_metrics: &AggregateArgumentMetrics,
-        accumulator_metrics: &AggregateAccumulatorMetrics,
+        values: &RowAlignedAccumulatorArgs,
     ) -> Result<Vec<ArrayRef>> {
-        let values = {
-            let _timer = group_by_metrics.aggregate_arguments_time.timer();
-            argument_metrics.time(index, || {
-                let filter = self
-                    .filter
-                    .as_ref()
-                    .map(|filter| {
-                        filter
-                            .evaluate(batch)
-                            .and_then(|value| value.into_array(batch.num_rows()))
-                    })
-                    .transpose()?;
-                let selection = filter.as_ref().map(|filter| filter.as_boolean());
-                let arguments = self
-                    .arguments
-                    .iter()
-                    .map(|expr| {
-                        selection
-                            .map_or_else(
-                                || expr.evaluate(batch),
-                                |selection| expr.evaluate_selection(batch, selection),
-                            )
-                            .and_then(|value| value.into_array(batch.num_rows()))
-                    })
-                    .collect::<Result<_>>()?;
-
-                Ok::<_, datafusion_common::DataFusionError>(EvaluatedAccumulatorArgs {
-                    arguments,
-                    filter,
-                })
-            })?
-        };
-        let filter = values.filter.as_ref().map(|filter| filter.as_boolean());
-        accumulator_metrics.time(index, AccumulatorPhase::ConvertToState, || {
-            self.accumulator.convert_to_state(&values.arguments, filter)
-        })
+        self.accumulator
+            .convert_to_state(&values.arguments, values.filter.as_ref())
     }
 
     pub(super) fn null_arguments(
@@ -870,13 +866,14 @@ mod tests {
             &[AccumulatorPhase::ConvertToState],
         );
 
-        let state = accumulator.convert_to_state(
-            &batch,
-            0,
-            &group_by_metrics,
-            &argument_metrics,
-            &accumulator_metrics,
-        )?;
+        let values = {
+            let _timer = group_by_metrics.aggregate_arguments_time.timer();
+            argument_metrics.time(0, || accumulator.evaluate_row_aligned_args(&batch))?
+        };
+        let state =
+            accumulator_metrics.time(0, AccumulatorPhase::ConvertToState, || {
+                accumulator.convert_to_state(&values)
+            })?;
 
         assert_eq!(
             int64_options(&state[0]),

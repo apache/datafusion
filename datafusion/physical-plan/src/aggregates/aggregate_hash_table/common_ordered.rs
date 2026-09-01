@@ -256,7 +256,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .enumerate()
             .map(|(idx, acc)| {
                 self.aggregate_argument_metrics
-                    .time(idx, || acc.evaluate_acc_args(batch))
+                    .time(idx, || acc.evaluate_compacted_args(batch))
             })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);

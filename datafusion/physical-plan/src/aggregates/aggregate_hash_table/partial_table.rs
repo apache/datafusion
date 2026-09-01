@@ -32,7 +32,7 @@ use crate::aggregates::{
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    EvaluatedAccumulatorArgs, HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
+    CompactedAccumulatorArgs, HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
 };
 
 /// Implementation specific to partial aggregation, where the table stores
@@ -184,9 +184,9 @@ impl AggregateHashTable<PartialMarker> {
             let total_groups = state.group_values.len();
             for (idx, acc) in state.accumulators.iter_mut().enumerate() {
                 let null_args = acc.null_arguments(&self.input_schema, 0)?;
-                let values = EvaluatedAccumulatorArgs {
+                let values = CompactedAccumulatorArgs {
                     arguments: null_args,
-                    filter: None,
+                    selection: None,
                 };
                 accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
                     acc.update_batch(&values, &[], total_groups)
@@ -215,14 +215,30 @@ impl AggregateHashTable<PartialSkipMarker> {
         );
         let mut output = grouping_set_args.into_iter().next().unwrap_or_default();
 
+        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
+        let accumulator_args = state
+            .accumulators
+            .iter()
+            .enumerate()
+            .map(|(idx, acc)| {
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_row_aligned_args(batch))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drop(timer);
+
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building();
-        for (idx, acc) in state.accumulators.iter().enumerate() {
-            output.extend(acc.convert_to_state(
-                batch,
+        for (idx, (acc, values)) in state
+            .accumulators
+            .iter()
+            .zip(accumulator_args.iter())
+            .enumerate()
+        {
+            output.extend(accumulator_metrics.time(
                 idx,
-                &self.group_by_metrics,
-                &self.aggregate_argument_metrics,
-                &self.aggregate_accumulator_metrics,
+                AccumulatorPhase::ConvertToState,
+                || acc.convert_to_state(values),
             )?);
         }
 
