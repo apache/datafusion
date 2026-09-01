@@ -350,12 +350,12 @@ impl RowGroupAccessPlanFilter {
             Ok(values) => {
                 let mut fully_contained_candidates_original_idx: Vec<usize> = Vec::new();
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {
-                    if !value {
-                        self.access_plan.skip(*idx);
-                        metrics.row_groups_pruned_statistics.add_pruned(1);
-                    } else {
+                    if value {
                         metrics.row_groups_pruned_statistics.add_matched(1);
                         fully_contained_candidates_original_idx.push(*idx);
+                    } else {
+                        self.access_plan.skip(*idx);
+                        metrics.row_groups_pruned_statistics.add_pruned(1);
                     }
                 }
 

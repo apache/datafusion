@@ -145,7 +145,9 @@ pub async fn from_read_rel(
                 }));
             }
 
-            let values = if !vt.expressions.is_empty() {
+            let values = if vt.expressions.is_empty() {
+                convert_literal_rows(consumer, vt, named_struct)?
+            } else {
                 let mut exprs = vec![];
                 for row in &vt.expressions {
                     if row.fields.len() != substrait_schema.fields().len() {
@@ -195,8 +197,6 @@ pub async fn from_read_rel(
                     exprs.push(row_exprs);
                 }
                 exprs
-            } else {
-                convert_literal_rows(consumer, vt, named_struct)?
             };
 
             Ok(LogicalPlan::Values(Values {

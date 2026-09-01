@@ -518,10 +518,10 @@ impl DisplayAs for NestedLoopJoinExec {
                 )
             }
             DisplayFormatType::TreeRender => {
-                if *self.join_type() != JoinType::Inner {
-                    writeln!(f, "join_type={:?}", self.join_type)
-                } else {
+                if *self.join_type() == JoinType::Inner {
                     Ok(())
+                } else {
+                    writeln!(f, "join_type={:?}", self.join_type)
                 }
             }
         }
@@ -2721,10 +2721,7 @@ impl NestedLoopJoinStream {
             return Ok(None);
         }
 
-        if !cur_right_bitmap.has_true() {
-            // If none of the pairs has passed the join predicate/filter
-            Ok(None)
-        } else {
+        if cur_right_bitmap.has_true() {
             // Use the optimized approach similar to build_intermediate_batch_for_single_left_row
             let join_batch = build_row_join_batch(
                 &self.output_schema,
@@ -2736,6 +2733,9 @@ impl NestedLoopJoinStream {
                 JoinSide::Left,
             )?;
             Ok(join_batch)
+        } else {
+            // If none of the pairs has passed the join predicate/filter
+            Ok(None)
         }
     }
 

@@ -440,13 +440,13 @@ fn build_join(
             .map(|(_, c)| Expr::Column(c))
             .collect();
 
-        let right_projected = if !right_proj_exprs.is_empty() {
+        let right_projected = if right_proj_exprs.is_empty() {
+            // Degenerate case: no right columns referenced by the predicate(s)
+            sub_query_alias.clone()
+        } else {
             LogicalPlanBuilder::from(sub_query_alias.clone())
                 .project(right_proj_exprs)?
                 .build()?
-        } else {
-            // Degenerate case: no right columns referenced by the predicate(s)
-            sub_query_alias.clone()
         };
 
         // Mark joins don't use null-aware semantics (they use three-valued logic with mark column)

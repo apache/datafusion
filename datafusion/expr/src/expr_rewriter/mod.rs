@@ -256,7 +256,9 @@ fn coerce_exprs_for_schema(
         .enumerate()
         .map(|(idx, expr)| {
             let new_type = dst_schema.field(idx).data_type();
-            if new_type != &expr.get_type(src_schema)? {
+            if new_type == &expr.get_type(src_schema)? {
+                Ok(expr)
+            } else {
                 match expr {
                     Expr::Alias(Alias { expr, name, .. }) => {
                         Ok(expr.cast_to(new_type, src_schema)?.alias(name))
@@ -276,8 +278,6 @@ fn coerce_exprs_for_schema(
                         }
                     }
                 }
-            } else {
-                Ok(expr)
             }
         })
         .collect::<Result<_>>()

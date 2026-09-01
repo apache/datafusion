@@ -1015,35 +1015,35 @@ impl Display for Statistics {
             .enumerate()
             .map(|(i, cs)| {
                 let s = format!("(Col[{i}]:");
-                let s = if cs.min_value != Precision::Absent {
+                let s = if cs.min_value == Precision::Absent {
+                    s
+                } else {
                     format!("{} Min={}", s, cs.min_value)
-                } else {
-                    s
                 };
-                let s = if cs.max_value != Precision::Absent {
+                let s = if cs.max_value == Precision::Absent {
+                    s
+                } else {
                     format!("{} Max={}", s, cs.max_value)
-                } else {
-                    s
                 };
-                let s = if cs.sum_value != Precision::Absent {
+                let s = if cs.sum_value == Precision::Absent {
+                    s
+                } else {
                     format!("{} Sum={}", s, cs.sum_value)
-                } else {
-                    s
                 };
-                let s = if cs.null_count != Precision::Absent {
+                let s = if cs.null_count == Precision::Absent {
+                    s
+                } else {
                     format!("{} Null={}", s, cs.null_count)
-                } else {
-                    s
                 };
-                let s = if cs.distinct_count != Precision::Absent {
+                let s = if cs.distinct_count == Precision::Absent {
+                    s
+                } else {
                     format!("{} Distinct={}", s, cs.distinct_count)
-                } else {
-                    s
                 };
-                let s = if cs.byte_size != Precision::Absent {
-                    format!("{} ScanBytes={}", s, cs.byte_size)
-                } else {
+                let s = if cs.byte_size == Precision::Absent {
                     s
+                } else {
+                    format!("{} ScanBytes={}", s, cs.byte_size)
                 };
 
                 s + ")"

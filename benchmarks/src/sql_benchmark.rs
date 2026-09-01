@@ -374,15 +374,15 @@ impl SqlBenchmark {
 
         // Get the first result query (assuming only one for now)
         let query = &self.result_queries[0];
-        let formatted_actual_results = if !query.query.trim().is_empty() {
-            let results = ctx.sql(&query.query).await?.collect().await?;
-            format_record_batches(&results)
-        } else {
+        let formatted_actual_results = if query.query.trim().is_empty() {
             let actual_results = self
                 .last_results
                 .as_ref()
                 .expect("last_results should be present after successful run");
             format_record_batches(actual_results)
+        } else {
+            let results = ctx.sql(&query.query).await?.collect().await?;
+            format_record_batches(&results)
         }?;
 
         Self::compare_results(query, &formatted_actual_results, &query.expected_result)

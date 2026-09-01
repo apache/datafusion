@@ -64,10 +64,10 @@ pub async fn from_project_rel(
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
 
-        let input = if !window_exprs.is_empty() {
-            LogicalPlanBuilder::window_plan(input, window_exprs)?
-        } else {
+        let input = if window_exprs.is_empty() {
             input
+        } else {
+            LogicalPlanBuilder::window_plan(input, window_exprs)?
         };
 
         let mut final_exprs: Vec<Expr> = vec![];

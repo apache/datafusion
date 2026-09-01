@@ -257,13 +257,13 @@ fn generate_file_path(
     file_extension: &str,
     single_file_output: bool,
 ) -> Path {
-    if !single_file_output {
+    if single_file_output {
+        base_output_path.prefix().to_owned()
+    } else {
         base_output_path
             .prefix()
             .clone()
             .join(format!("{write_id}_{part_idx}.{file_extension}"))
-    } else {
-        base_output_path.prefix().to_owned()
     }
 }
 
@@ -566,10 +566,10 @@ fn remove_partition_by_columns(
         .iter()
         .zip(parted_batch.schema().fields())
         .filter_map(|(a, f)| {
-            if !partition_names.contains(&f.name()) {
-                Some((Arc::clone(a), (**f).clone()))
-            } else {
+            if partition_names.contains(&f.name()) {
                 None
+            } else {
+                Some((Arc::clone(a), (**f).clone()))
             }
         })
         .unzip();

@@ -158,7 +158,9 @@ impl StreamingTable {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let physical_sort = if !self.sort_order.is_empty() {
+        let physical_sort = if self.sort_order.is_empty() {
+            vec![]
+        } else {
             let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
             let eqp = state.execution_props();
 
@@ -182,8 +184,6 @@ impl StreamingTable {
             } else {
                 original_sort_exprs
             }
-        } else {
-            vec![]
         };
 
         let exec = StreamingTableExec::try_new(

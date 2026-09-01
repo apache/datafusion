@@ -112,10 +112,10 @@ impl Display for Metric {
 
             let mut is_first = true;
             for i in iter {
-                if !is_first {
-                    write!(f, ", ")?;
-                } else {
+                if is_first {
                     is_first = false;
+                } else {
+                    write!(f, ", ")?;
                 }
 
                 write!(f, "{i}")?;
@@ -440,10 +440,10 @@ impl Display for MetricsSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut is_first = true;
         for i in self.metrics.iter() {
-            if !is_first {
-                write!(f, ", ")?;
-            } else {
+            if is_first {
                 is_first = false;
+            } else {
+                write!(f, ", ")?;
             }
 
             write!(f, "{i}")?;

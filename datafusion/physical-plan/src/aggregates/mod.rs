@@ -1722,10 +1722,10 @@ impl AggregateExec {
         child_statistics: &Statistics,
         partition: Option<usize>,
     ) -> Precision<usize> {
-        let ndv = if !self.group_by.expr.is_empty() {
-            self.compute_group_ndv(child_statistics)
-        } else {
+        let ndv = if self.group_by.expr.is_empty() {
             None
+        } else {
+            self.compute_group_ndv(child_statistics)
         };
         let limit = self.limit_options.as_ref().map(|lo| lo.limit);
 
@@ -1921,10 +1921,10 @@ impl DisplayAs for AggregateExec {
                 let format_expr_with_alias =
                     |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
                         let e = e.to_string();
-                        if &e != alias {
-                            format!("{e} as {alias}")
-                        } else {
+                        if &e == alias {
                             e
+                        } else {
+                            format!("{e} as {alias}")
                         }
                     };
 
@@ -1979,10 +1979,10 @@ impl DisplayAs for AggregateExec {
                 let format_expr_with_alias =
                     |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
                         let expr_sql = fmt_sql(e.as_ref()).to_string();
-                        if &expr_sql != alias {
-                            format!("{expr_sql} as {alias}")
-                        } else {
+                        if &expr_sql == alias {
                             expr_sql
+                        } else {
+                            format!("{expr_sql} as {alias}")
                         }
                     };
 

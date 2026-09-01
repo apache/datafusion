@@ -147,8 +147,8 @@ fn window_expr_from_aggregate_expr(
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.is_ever_expanding();
 
-    if !unbounded_window {
-        Arc::new(SlidingAggregateWindowExpr::new(
+    if unbounded_window {
+        Arc::new(PlainAggregateWindowExpr::new(
             aggregate,
             partition_by,
             order_by,
@@ -156,7 +156,7 @@ fn window_expr_from_aggregate_expr(
             filter,
         ))
     } else {
-        Arc::new(PlainAggregateWindowExpr::new(
+        Arc::new(SlidingAggregateWindowExpr::new(
             aggregate,
             partition_by,
             order_by,

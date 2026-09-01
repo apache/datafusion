@@ -230,16 +230,15 @@ pub fn adjust_input_keys_ordering(
         )
         .map(Transformed::yes);
     } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
-        if !requirements.data.is_empty() {
-            if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
-                return reorder_aggregate_keys(requirements, aggregate_exec)
-                    .map(Transformed::yes);
-            }
-            requirements.data.clear();
-        } else {
+        if requirements.data.is_empty() {
             // Keep everything unchanged
             return Ok(Transformed::no(requirements));
         }
+        if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
+            return reorder_aggregate_keys(requirements, aggregate_exec)
+                .map(Transformed::yes);
+        }
+        requirements.data.clear();
     } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
         let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
@@ -1164,10 +1163,10 @@ fn enforce_distribution_relationships(
                     let (i, p, _) = native_children[0];
                     Some((*i, p.clone()))
                 } else {
-                    let pool = if !native_children.is_empty() {
-                        native_children
-                    } else {
+                    let pool = if native_children.is_empty() {
                         satisfied_children.iter().collect()
+                    } else {
+                        native_children
                     };
                     let candidates: Vec<_> = pool
                         .into_iter()

@@ -1178,10 +1178,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // `try_new` and the reset points in `emit` / `clear_shrink` keep
         // `self.group_values` populated with one builder per schema field,
         // so no lazy initialization is needed here.
-        if !STREAMING {
-            self.vectorized_intern(cols, groups)
-        } else {
+        if STREAMING {
             self.scalarized_intern(cols, groups)
+        } else {
+            self.vectorized_intern(cols, groups)
         }
     }
 

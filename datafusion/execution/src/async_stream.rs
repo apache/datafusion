@@ -222,13 +222,13 @@ impl Future for Emit {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
-        if !self.done {
+        if self.done {
+            Poll::Ready(())
+        } else {
             self.done = true;
             // Poll::Pending causes the generator to yield, returning control back to the
             // calling Stream
             Poll::Pending
-        } else {
-            Poll::Ready(())
         }
     }
 }

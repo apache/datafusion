@@ -3140,12 +3140,12 @@ mod tests {
             }
 
             fn string_literal_to_sql(&self, s: &str) -> Option<ast::Expr> {
-                if !s.is_ascii() {
+                if s.is_ascii() {
+                    None
+                } else {
                     Some(ast::Expr::value(ast::Value::NationalStringLiteral(
                         s.to_string(),
                     )))
-                } else {
-                    None
                 }
             }
         }

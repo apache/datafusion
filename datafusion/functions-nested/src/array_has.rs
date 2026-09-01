@@ -355,9 +355,7 @@ fn array_has_dispatch_for_array(
 
     // Fast path for primitive/string elements whose (coerced) type matches the
     // needle; a type mismatch or a nested type falls through to the per-row kernel.
-    let fast_path = if visible_values.data_type() != needle.data_type() {
-        None
-    } else {
+    let fast_path = if visible_values.data_type() == needle.data_type() {
         downcast_primitive_array! {
             visible_values => {
                 // The element-null path makes several passes over the values, so
@@ -397,6 +395,8 @@ fn array_has_dispatch_for_array(
             )),
             _ => None,
         }
+    } else {
+        None
     };
 
     if let Some(values) = fast_path {

@@ -98,16 +98,7 @@ impl AggregateUDFImpl for VarianceSample {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
-        if !args.is_distinct {
-            Ok(vec![
-                Field::new(format_state_name(name, "count"), DataType::UInt64, true),
-                Field::new(format_state_name(name, "mean"), DataType::Float64, true),
-                Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-            ]
-            .into_iter()
-            .map(Arc::new)
-            .collect())
-        } else {
+        if args.is_distinct {
             let field = Field::new_list_field(DataType::Float64, true);
             let state_name = "distinct_var";
             Ok(vec![
@@ -118,6 +109,15 @@ impl AggregateUDFImpl for VarianceSample {
                 )
                 .into(),
             ])
+        } else {
+            Ok(vec![
+                Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+                Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+                Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect())
         }
     }
 
@@ -192,17 +192,7 @@ impl AggregateUDFImpl for VariancePopulation {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        if !args.is_distinct {
-            let name = args.name;
-            Ok(vec![
-                Field::new(format_state_name(name, "count"), DataType::UInt64, true),
-                Field::new(format_state_name(name, "mean"), DataType::Float64, true),
-                Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-            ]
-            .into_iter()
-            .map(Arc::new)
-            .collect())
-        } else {
+        if args.is_distinct {
             let field = Field::new_list_field(DataType::Float64, true);
             let state_name = "distinct_var";
             Ok(vec![
@@ -213,6 +203,16 @@ impl AggregateUDFImpl for VariancePopulation {
                 )
                 .into(),
             ])
+        } else {
+            let name = args.name;
+            Ok(vec![
+                Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+                Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+                Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect())
         }
     }
 
@@ -649,10 +649,10 @@ impl Accumulator for DistinctVarianceAccumulator {
 
         let count = match self.stat_type {
             StatsType::Sample => {
-                if !values.is_empty() {
-                    values.len() - 1
-                } else {
+                if values.is_empty() {
                     0
+                } else {
+                    values.len() - 1
                 }
             }
             StatsType::Population => values.len(),

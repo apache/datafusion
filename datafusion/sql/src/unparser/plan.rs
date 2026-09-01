@@ -555,12 +555,12 @@ impl Unparser<'_> {
         // Generate the alias up front so that peel_to_unnest_with_modifiers
         // can rewrite ORDER BY placeholder columns to alias.VALUE.
         if self.dialect.unnest_as_lateral_flatten() && unnest_input_type.is_some() {
-            let flatten_alias_name = if !select.already_projected() {
-                select.next_flatten_alias()
-            } else {
+            let flatten_alias_name = if select.already_projected() {
                 select
                     .current_flatten_alias()
                     .unwrap_or_else(|| select.next_flatten_alias())
+            } else {
+                select.next_flatten_alias()
             };
 
             if let Some((unnest, unnest_plan)) = self.peel_to_unnest_with_modifiers(
@@ -1325,11 +1325,10 @@ impl Unparser<'_> {
                     relation,
                 )?;
 
-                let left_projection: Option<Vec<ast::SelectItem>> = if !already_projected
-                {
-                    Some(select.pop_projections())
-                } else {
+                let left_projection: Option<Vec<ast::SelectItem>> = if already_projected {
                     None
+                } else {
+                    Some(select.pop_projections())
                 };
 
                 let right_plan = Self::extract_join_input_table_scan_filters(
@@ -1371,11 +1370,11 @@ impl Unparser<'_> {
                     join_filters.as_ref(),
                 )?;
 
-                let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
+                let right_projection: Option<Vec<ast::SelectItem>> = if already_projected
                 {
-                    Some(select.pop_projections())
-                } else {
                     None
+                } else {
+                    Some(select.pop_projections())
                 };
 
                 match join.join_type {

@@ -59,19 +59,19 @@ impl UserDefinedVar {
 impl VarProvider for UserDefinedVar {
     /// Get user defined variable value
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue> {
-        if var_names[0] != "@integer" {
+        if var_names[0] == "@integer" {
+            Ok(ScalarValue::Int32(Some(41)))
+        } else {
             let s = format!("{}-{}", "user-defined-var", var_names.concat());
             Ok(ScalarValue::from(s))
-        } else {
-            Ok(ScalarValue::Int32(Some(41)))
         }
     }
 
     fn get_type(&self, var_names: &[String]) -> Option<DataType> {
-        if var_names[0] != "@integer" {
-            Some(DataType::Utf8)
-        } else {
+        if var_names[0] == "@integer" {
             Some(DataType::Int32)
+        } else {
+            Some(DataType::Utf8)
         }
     }
 }

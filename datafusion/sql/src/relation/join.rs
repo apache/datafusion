@@ -133,11 +133,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .into_iter()
                     .map(|object_name| {
                         let ObjectName(mut object_names) = object_name;
-                        if object_names.len() != 1 {
-                            not_impl_err!(
-                                "Invalid identifier in USING clause. Expected single identifier, got {}", ObjectName(object_names)
-                            )
-                        } else {
+                        if object_names.len() == 1 {
                             let id = object_names.swap_remove(0);
                             id.as_ident()
                                 .ok_or_else(|| {
@@ -146,6 +142,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     )
                                 })
                                 .map(|ident| Column::from_name(self.ident_normalizer.normalize(ident.clone())))
+                        } else {
+                            not_impl_err!(
+                                "Invalid identifier in USING clause. Expected single identifier, got {}", ObjectName(object_names)
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;

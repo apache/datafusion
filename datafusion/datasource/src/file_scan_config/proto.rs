@@ -189,10 +189,10 @@ impl FileScanConfig {
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;
 
-        let object_store_url = if !conf.object_store_url.is_empty() {
-            ObjectStoreUrl::parse(&conf.object_store_url)?
-        } else {
+        let object_store_url = if conf.object_store_url.is_empty() {
             ObjectStoreUrl::local_filesystem()
+        } else {
+            ObjectStoreUrl::parse(&conf.object_store_url)?
         };
 
         let mut output_ordering = vec![];

@@ -340,8 +340,11 @@ fn append_translated_ascii<B: BulkNullStringArrayBuilder>(
     input: &str,
     table: &AsciiTranslateTable,
 ) {
-    // Fast path: equal-length byte-to-byte map when no deletions.
-    if !table.has_delete {
+    if table.has_delete {
+        builder.append_with(|w| write_translated_ascii(w, input, table));
+    } else {
+        // Fast path: equal-length byte-to-byte map when there are no deletions.
+        //
         // SAFETY: ASCII source bytes map to ASCII replacements; non-ASCII
         // bytes 128..256 map to themselves, so multi-byte UTF-8 sequences
         // pass through unchanged. Output length equals input length and
@@ -349,8 +352,6 @@ fn append_translated_ascii<B: BulkNullStringArrayBuilder>(
         unsafe {
             builder.append_byte_map(input.as_bytes(), |b| table.map[b as usize]);
         }
-    } else {
-        builder.append_with(|w| write_translated_ascii(w, input, table));
     }
 }
 

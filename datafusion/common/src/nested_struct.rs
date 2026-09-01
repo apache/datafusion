@@ -647,14 +647,14 @@ fn cast_dictionary_column(
     let result = result?;
 
     // If key types differ, delegate key casting to Arrow.
-    if source_key_type != target_key_type {
+    if source_key_type == target_key_type {
+        Ok(result)
+    } else {
         let target_dict_type = DataType::Dictionary(
             Box::new(target_key_type.clone()),
             Box::new(target_value_type.clone()),
         );
         Ok(cast_with_options(&result, &target_dict_type, cast_options)?)
-    } else {
-        Ok(result)
     }
 }
 
@@ -3335,7 +3335,9 @@ pub fn adapt_batch_to_schema(
     let cast_options = CastOptions::default();
 
     for (target_field, col) in target_schema.fields().iter().zip(batch.columns()) {
-        if target_field.data_type() != col.data_type() {
+        if target_field.data_type() == col.data_type() {
+            columns.push(Arc::clone(col));
+        } else {
             // If data types differ, verify that target_field's data type contains
             // the column's data type (e.g. stricter nested struct / list field nullability).
             if !target_field.data_type().contains(col.data_type()) {
@@ -3349,8 +3351,6 @@ pub fn adapt_batch_to_schema(
             needs_column_adaptation = true;
             let adapted_col = cast_column(col, target_field.data_type(), &cast_options)?;
             columns.push(adapted_col);
-        } else {
-            columns.push(Arc::clone(col));
         }
     }
 

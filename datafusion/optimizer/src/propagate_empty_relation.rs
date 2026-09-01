@@ -255,13 +255,13 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
     match plan.inputs()[..] {
         [child] => match child {
             LogicalPlan::EmptyRelation(empty) => {
-                if !empty.produce_one_row {
+                if empty.produce_one_row {
+                    Ok(None)
+                } else {
                     Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: Arc::clone(plan.schema()),
                     })))
-                } else {
-                    Ok(None)
                 }
             }
             _ => Ok(None),

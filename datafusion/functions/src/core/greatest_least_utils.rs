@@ -77,7 +77,11 @@ pub(super) fn execute_conditional<Op: GreatestLeastOperator>(
     let mut result: ArrayRef;
 
     // Optimization: merge all scalars into one to avoid recomputing (constant folding)
-    if !scalars.is_empty() {
+    if scalars.is_empty() {
+        // If we only have arrays, start with the first array
+        // (We must have at least one array)
+        result = Arc::clone(first_array.unwrap());
+    } else {
         let mut scalars_iter = scalars.iter().map(|x| match x {
             ColumnarValue::Scalar(s) => s,
             _ => unreachable!(),
@@ -103,10 +107,6 @@ pub(super) fn execute_conditional<Op: GreatestLeastOperator>(
             first_array,
             &result_scalar.to_array_of_size(first_array.len())?,
         )?;
-    } else {
-        // If we only have arrays, start with the first array
-        // (We must have at least one array)
-        result = Arc::clone(first_array.unwrap());
     }
 
     for array in arrays_iter {

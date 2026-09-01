@@ -998,7 +998,14 @@ impl BinaryExpr {
             ))
         })?;
 
-        if !node.operands.is_empty() {
+        if node.operands.is_empty() {
+            // Legacy format with l/r fields.
+            let left =
+                ctx.decode_required_expression(node.l.as_deref(), "BinaryExpr", "left")?;
+            let right =
+                ctx.decode_required_expression(node.r.as_deref(), "BinaryExpr", "right")?;
+            Ok(Arc::new(BinaryExpr::new(left, op, right)))
+        } else {
             // New linearized format: reduce the flat operands list back into
             // a nested binary expression tree.
             let operands = ctx.decode_children_expressions(&node.operands)?;
@@ -1015,13 +1022,6 @@ impl BinaryExpr {
                     Arc::new(BinaryExpr::new(left, op, right)) as Arc<dyn PhysicalExpr>
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
-        } else {
-            // Legacy format with l/r fields.
-            let left =
-                ctx.decode_required_expression(node.l.as_deref(), "BinaryExpr", "left")?;
-            let right =
-                ctx.decode_required_expression(node.r.as_deref(), "BinaryExpr", "right")?;
-            Ok(Arc::new(BinaryExpr::new(left, op, right)))
         }
     }
 }

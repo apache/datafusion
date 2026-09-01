@@ -376,7 +376,9 @@ impl<'a> TypeCoercionRewriter<'a> {
         // handle special cases for
         // * Date +/- int => Date
         // * Date + time => Timestamp
-        let left_expr = if !left_cast_ok {
+        let left_expr = if left_cast_ok {
+            left.cast_to(&left_type, left_schema)?
+        } else {
             Self::coerce_date_time_math_op(
                 left,
                 &op,
@@ -384,11 +386,11 @@ impl<'a> TypeCoercionRewriter<'a> {
                 &left_type,
                 &right_type,
             )?
-        } else {
-            left.cast_to(&left_type, left_schema)?
         };
 
-        let right_expr = if !right_cast_ok {
+        let right_expr = if right_cast_ok {
+            right.cast_to(&right_type, right_schema)?
+        } else {
             Self::coerce_date_time_math_op(
                 right,
                 &op,
@@ -396,8 +398,6 @@ impl<'a> TypeCoercionRewriter<'a> {
                 &right_type,
                 &left_type,
             )?
-        } else {
-            right.cast_to(&right_type, right_schema)?
         };
 
         Ok((left_expr, right_expr))
@@ -2744,10 +2744,10 @@ mod test {
         data_type: &DataType,
         schema: &DFSchemaRef,
     ) -> Box<Expr> {
-        if &expr.get_type(schema).unwrap() != data_type {
-            Box::new(cast(*expr, data_type.clone()))
-        } else {
+        if &expr.get_type(schema).unwrap() == data_type {
             expr
+        } else {
+            Box::new(cast(*expr, data_type.clone()))
         }
     }
 

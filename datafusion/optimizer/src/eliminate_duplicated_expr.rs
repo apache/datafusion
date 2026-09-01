@@ -94,10 +94,10 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     unique_exprs
                 };
 
-                let transformed = if len != unique_exprs.len() {
-                    Transformed::yes
-                } else {
+                let transformed = if len == unique_exprs.len() {
                     Transformed::no
+                } else {
+                    Transformed::yes
                 };
 
                 if unique_exprs.is_empty() {
@@ -122,10 +122,10 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     .into_iter()
                     .collect();
 
-                let transformed = if len != unique_exprs.len() {
-                    Transformed::yes
-                } else {
+                let transformed = if len == unique_exprs.len() {
                     Transformed::no
+                } else {
+                    Transformed::yes
                 };
 
                 Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)

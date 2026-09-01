@@ -746,7 +746,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let order_by: Vec<SortExpr> = if supports_within_group {
-                    if !within_group.is_empty() {
+                    if within_group.is_empty() {
+                        vec![]
+                    } else {
                         // WITHIN GROUP syntax
                         let sorts = self.order_by_to_sort_expr(
                             within_group,
@@ -777,8 +779,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         args = std::iter::once(value_expr).chain(args).collect();
 
                         sorts
-                    } else {
-                        vec![]
                     }
                 } else {
                     // Normal aggregate behavior

@@ -1106,10 +1106,10 @@ impl DefaultPhysicalPlanner {
                         }
                     }
                 }
-                let input_exec = if !async_exprs.is_empty() {
-                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
-                } else {
+                let input_exec = if async_exprs.is_empty() {
                     input_exec
+                } else {
+                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
                 };
 
                 let initial_aggr = Arc::new(AggregateExec::try_new(

@@ -341,14 +341,14 @@ impl ExprSchemable for Expr {
                             Ok(b) => b,
                         };
 
-                    if !can_be_true {
+                    if can_be_true {
+                        // The branch might be taken
+                        Some(Ok(()))
+                    } else {
                         // If the derived 'when' expression can never evaluate to true, the
                         // 'then' expression is not reachable when it would evaluate to NULL.
                         // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
                         None
-                    } else {
-                        // The branch might be taken
-                        Some(Ok(()))
                     }
                 });
 

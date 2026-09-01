@@ -228,9 +228,11 @@ fn print_docs(
         }
     }
 
-    // If there are any functions that do not have documentation, print them out
-    // eventually make this an error: https://github.com/apache/datafusion/issues/12872
-    if !providers_with_no_docs.is_empty() {
+    if providers_with_no_docs.is_empty() {
+        Ok(docs)
+    } else {
+        // Some functions do not have documentation, print them out.
+        // Eventually make this an error: https://github.com/apache/datafusion/issues/12872
         eprintln!("INFO: The following functions do not have documentation:");
         for f in &providers_with_no_docs {
             eprintln!("  - {f}");
@@ -238,8 +240,6 @@ fn print_docs(
         not_impl_err!(
             "Some functions do not have documentation. Please implement `documentation` for: {providers_with_no_docs:?}"
         )
-    } else {
-        Ok(docs)
     }
 }
 

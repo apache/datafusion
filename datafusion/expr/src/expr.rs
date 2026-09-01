@@ -3570,10 +3570,10 @@ impl Display for Expr {
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v, metadata) => {
-                if !metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
-                    write!(f, "{v:?} {:?}", metadata.as_ref().unwrap())
-                } else {
+                if metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
                     write!(f, "{v:?}")
+                } else {
+                    write!(f, "{v:?} {:?}", metadata.as_ref().unwrap())
                 }
             }
             Expr::Case(case) => {

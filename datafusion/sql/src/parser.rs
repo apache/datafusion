@@ -601,10 +601,10 @@ impl<'a> DFParser<'a> {
         token: &Token,
     ) -> Result<(), DataFusionError> {
         let next_token = self.parser.peek_token_ref();
-        if next_token.token != *token {
-            self.expected(expected, next_token)
-        } else {
+        if next_token.token == *token {
             Ok(())
+        } else {
+            self.expected(expected, next_token)
         }
     }
 

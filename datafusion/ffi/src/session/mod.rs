@@ -679,10 +679,10 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         .iter()
         .filter_map(|(k, v)| {
             let (prefix, _) = k.split_once('.')?;
-            if !["json", "parquet", "csv"].contains(&prefix) {
-                Some((k.to_owned(), v.to_owned()))
-            } else {
+            if ["json", "parquet", "csv"].contains(&prefix) {
                 None
+            } else {
+                Some((k.to_owned(), v.to_owned()))
             }
         })
         .collect();

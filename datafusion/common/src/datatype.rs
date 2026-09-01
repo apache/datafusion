@@ -181,10 +181,10 @@ impl FieldExt for Field {
     fn renamed(self, new_name: &str) -> Self {
         // check if this is a new name before allocating a new Field / copying
         // the existing one
-        if self.name() != new_name {
-            self.with_name(new_name)
-        } else {
+        if self.name() == new_name {
             self
+        } else {
+            self.with_name(new_name)
         }
     }
 
@@ -214,10 +214,10 @@ impl FieldExt for Field {
     }
 
     fn into_list_item(self) -> Self {
-        if self.name() != Field::LIST_FIELD_DEFAULT_NAME {
-            self.with_name(Field::LIST_FIELD_DEFAULT_NAME)
-        } else {
+        if self.name() == Field::LIST_FIELD_DEFAULT_NAME {
             self
+        } else {
+            self.with_name(Field::LIST_FIELD_DEFAULT_NAME)
         }
     }
 }

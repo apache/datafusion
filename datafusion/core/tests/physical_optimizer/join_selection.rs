@@ -1246,12 +1246,7 @@ fn check_join_partition_mode(
         .optimize(join, &ConfigOptions::new())
         .unwrap();
 
-    if !is_swapped {
-        let swapped_join = optimized_join
-            .downcast_ref::<HashJoinExec>()
-            .expect("The type of the plan should not be changed");
-        assert_eq!(*swapped_join.partition_mode(), expected_mode);
-    } else {
+    if is_swapped {
         let swapping_projection = optimized_join
             .downcast_ref::<ProjectionExec>()
             .expect("A proj is required to swap columns back to their original order");
@@ -1260,6 +1255,11 @@ fn check_join_partition_mode(
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
+        assert_eq!(*swapped_join.partition_mode(), expected_mode);
+    } else {
+        let swapped_join = optimized_join
+            .downcast_ref::<HashJoinExec>()
+            .expect("The type of the plan should not be changed");
         assert_eq!(*swapped_join.partition_mode(), expected_mode);
     }
 }

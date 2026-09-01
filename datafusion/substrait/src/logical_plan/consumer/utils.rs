@@ -270,13 +270,13 @@ pub(super) fn rename_expressions(
         .zip(new_schema_fields)
         .map(|(old_expr, new_field)| {
             // Check if type (i.e. nested struct field names) match, use Cast to rename if needed
-            let new_expr = if &old_expr.get_type(input_schema)? != new_field.data_type() {
+            let new_expr = if &old_expr.get_type(input_schema)? == new_field.data_type() {
+                old_expr
+            } else {
                 Expr::Cast(Cast::new(
                     Box::new(old_expr),
                     new_field.data_type().to_owned(),
                 ))
-            } else {
-                old_expr
             };
             // Alias column if needed to fix the top-level name
             match &new_expr {

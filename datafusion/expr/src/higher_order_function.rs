@@ -1219,7 +1219,9 @@ fn resolve_higher_order_function(
     // a map of lambda variable name => a never empty stack of fields [ [..shadowed], in_scope ]
     vars: &mut HashMap<String, Vec<FieldRef>>,
 ) -> Result<Transformed<Expr>> {
-    let args = if !vars.is_empty() {
+    let args = if vars.is_empty() {
+        Transformed::no(args)
+    } else {
         /*  if this is a nested lambda, we must resolve non-lambda args before invoking
             lambda_parameters because it will invoke ExprSchemable::to_field for every
             non-lambda parameter, and if one them contains a lambda variable, it will fail
@@ -1234,8 +1236,6 @@ fn resolve_higher_order_function(
             Expr::Lambda(_) => Ok(Transformed::no(arg)),
             _ => resolve_lambda_variables(arg, schema, vars),
         })?
-    } else {
-        Transformed::no(args)
     };
 
     let transformed = args.transformed;

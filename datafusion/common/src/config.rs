@@ -4448,12 +4448,12 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     impl parquet::encryption::decrypt::KeyRetriever for ParquetEncryptionKeyRetriever {
         fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
-            if !key_metadata.is_empty() {
-                Ok(b"1234567890123450".to_vec())
-            } else {
+            if key_metadata.is_empty() {
                 Err(parquet::errors::ParquetError::General(
                     "Key metadata not provided".to_string(),
                 ))
+            } else {
+                Ok(b"1234567890123450".to_vec())
             }
         }
     }
