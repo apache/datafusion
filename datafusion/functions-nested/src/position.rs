@@ -201,9 +201,13 @@ fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn resolve_zero_based_start_from(start_from: i64) -> Result<i64> {
-    start_from
-        .checked_sub(1)
-        .ok_or_else(|| exec_datafusion_err!("start_from out of bounds: {start_from}"))
+    start_from.checked_sub(1).ok_or_else(|| {
+        exec_datafusion_err!(
+            "start_from out of bounds: {start_from}, expected {} to {}",
+            i64::MIN + 1,
+            i64::MAX
+        )
+    })
 }
 
 /// Resolves the optional `start_from` argument into a `Vec<i64>` of
