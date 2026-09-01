@@ -2775,6 +2775,7 @@ mod tests {
             )?;
 
         for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
             let mut file_names = result
                 .iter()
                 .flat_map(FileGroup::iter)
@@ -2803,6 +2804,7 @@ mod tests {
             )?;
 
         for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
             assert_eq!(result.len(), 1);
             let file_names = result[0]
                 .iter()
