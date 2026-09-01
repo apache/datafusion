@@ -513,9 +513,9 @@ impl HashTableLookupExpr {
             physical_expr_node::ExprType, physical_hash_table_lookup_expr_node::Map,
         };
 
-        let hash_table_lookup_expr = match &node.expr_type {
-            Some(ExprType::HashTableLookupExpr(h)) => h,
-            _ => return internal_err!("PhysicalExprNode is not a HashTableLookupExpr"),
+        let Some(ExprType::HashTableLookupExpr(hash_table_lookup_expr)) = &node.expr_type
+        else {
+            return internal_err!("PhysicalExprNode is not a HashTableLookupExpr");
         };
         let on_columns =
             ctx.decode_children_expressions(&hash_table_lookup_expr.on_columns)?;
