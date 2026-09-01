@@ -7032,8 +7032,8 @@ async fn test_dataframe_from_columns() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_dataframe_from_columns_empty() {
+#[test]
+fn test_dataframe_from_columns_empty() {
     let result = DataFrame::from_columns(vec![]);
     assert!(result.is_err());
 
