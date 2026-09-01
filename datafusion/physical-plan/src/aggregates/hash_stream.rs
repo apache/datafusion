@@ -415,7 +415,7 @@ impl PartialHashAggregateStream {
             reduction_factor,
             skip_aggregation_probe,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
-            hash_table: Some(hash_table)
+            hash_table: Some(hash_table),
         })
     }
 
@@ -495,11 +495,13 @@ impl PartialHashAggregateStream {
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
             let mut hash_table = self
-              .hash_table
-              .take()
-              .expect("hash_table should not be None");
+                .hash_table
+                .take()
+                .expect("hash_table should not be None");
 
-            let should_skip = self.handle_reading_input_async(&mut hash_table, &mut emitter).await?;
+            let should_skip = self
+                .handle_reading_input_async(&mut hash_table, &mut emitter)
+                .await?;
 
             let skip_hash_table = {
                 let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
@@ -514,7 +516,8 @@ impl PartialHashAggregateStream {
                 skip_hash_table
             };
 
-            self.async_produce_output(hash_table, skip_hash_table, emitter).await?;
+            self.async_produce_output(hash_table, skip_hash_table, emitter)
+                .await?;
 
             Ok(())
         })
@@ -567,7 +570,7 @@ impl PartialHashAggregateStream {
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<bool> {
         debug_assert!(hash_table.is_building());
-            let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
         while let Some(batch) = self.input.next().await.transpose()? {
             // ----------------------------------
@@ -581,7 +584,7 @@ impl PartialHashAggregateStream {
             // --------------------------------
             // Step 2: Soft limit optimization
             // --------------------------------
-            if self.hit_soft_group_limit(&hash_table) {
+            if self.hit_soft_group_limit(hash_table) {
                 return Ok(false);
             }
 
@@ -605,7 +608,7 @@ impl PartialHashAggregateStream {
                 // // the accumulated batches have been output.
                 // return Ok(Some(skip_hash_table));
 
-                return Ok(true)
+                return Ok(true);
             }
 
             // -------------------------------------------------
@@ -995,7 +998,7 @@ impl FinalHashAggregateStream {
             let spilled = spill_context
                 .as_ref()
                 .is_some_and(|context| context.has_spills());
-            if self.hit_soft_group_limit(&hash_table) && !spilled {
+            if self.hit_soft_group_limit(hash_table) && !spilled {
                 break;
             }
 
@@ -1003,7 +1006,7 @@ impl FinalHashAggregateStream {
             let resize_result =
                 self.reservation
                     .try_resize(Self::reservation_size_for_table(
-                        &hash_table,
+                        hash_table,
                         spill_context.as_deref(),
                     ));
 
@@ -1220,7 +1223,8 @@ mod tests {
 
         // Execute and collect results
         let mut stream =
-            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?.into_stream();
+            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?
+                .into_stream();
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
@@ -1364,7 +1368,8 @@ mod tests {
 
         // Execute and collect results
         let mut stream =
-            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?.into_stream();
+            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?
+                .into_stream();
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
