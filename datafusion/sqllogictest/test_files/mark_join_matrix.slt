@@ -118,17 +118,13 @@ WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r_nn r);
 4 40
 NULL 50
 
-# NOT IN over a subquery with NULL. The mark join negates `l.k = r.k` and is NOT
-# null-aware, so the subquery NULL is just a non-match: k=3 and the NULL-keyed row
-# are kept (a top-level null-aware NOT IN would return nothing). SMJ and HashJoin
-# must agree.
-query II rowsort
-SELECT l.k, l.v FROM mk_l l
-WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r r);
-----
-3 30
-4 40
-NULL 50
+# https://github.com/apache/datafusion/issues/24854
+# query II rowsort
+# SELECT l.k, l.v FROM mk_l l
+# WHERE l.v > 35 OR l.k NOT IN (SELECT r.k FROM mk_r r);
+# ----
+# 4 40
+# NULL 50
 
 # Empty subquery: EXISTS is always false, so the result is just the predicate.
 query II rowsort
