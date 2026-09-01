@@ -138,10 +138,10 @@ fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             &DataType::new_list(DataType::Null, true),
             len,
         )),
-        (DataType::Null, dt @ DataType::List(_))
-        | (DataType::Null, dt @ DataType::LargeList(_))
-        | (dt @ DataType::List(_), DataType::Null)
-        | (dt @ DataType::LargeList(_), DataType::Null) => Ok(new_null_array(dt, len)),
+        (DataType::Null, dt @ (DataType::List(_) | DataType::LargeList(_)))
+        | (dt @ (DataType::List(_) | DataType::LargeList(_)), DataType::Null) => {
+            Ok(new_null_array(dt, len))
+        }
         (DataType::List(field), DataType::List(_)) => {
             check_datatypes("array_except", &[array1, array2])?;
             let list1 = array1.as_list::<i32>();

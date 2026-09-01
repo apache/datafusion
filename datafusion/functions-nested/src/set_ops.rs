@@ -519,10 +519,9 @@ fn general_set_op(
     let len = array1.len();
     match (array1.data_type(), array2.data_type()) {
         (Null, Null) => Ok(new_null_array(&DataType::new_list(Null, true), len)),
-        (Null, dt @ List(_))
-        | (Null, dt @ LargeList(_))
-        | (dt @ List(_), Null)
-        | (dt @ LargeList(_), Null) => Ok(new_null_array(dt, len)),
+        (Null, dt @ (List(_) | LargeList(_))) | (dt @ (List(_) | LargeList(_)), Null) => {
+            Ok(new_null_array(dt, len))
+        }
         (List(field), List(_)) => {
             let array1 = as_list_array(&array1)?;
             let array2 = as_list_array(&array2)?;

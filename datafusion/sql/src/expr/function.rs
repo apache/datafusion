@@ -289,9 +289,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     && args.iter().all(|arg| {
                         matches!(
                             arg.get_type(schema),
-                            Ok(DataType::List(_))
-                                | Ok(DataType::LargeList(_))
-                                | Ok(DataType::FixedSizeList(_, _))
+                            Ok(DataType::List(_)
+                                | DataType::LargeList(_)
+                                | DataType::FixedSizeList(_, _))
                         )
                     });
 

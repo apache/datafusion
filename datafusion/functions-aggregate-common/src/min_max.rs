@@ -399,12 +399,18 @@ fn min_max_scalar_same_variant(
                 ordering,
             ))
         }
-        (ScalarValue::IntervalYearMonth(_), ScalarValue::IntervalMonthDayNano(_))
-        | (ScalarValue::IntervalYearMonth(_), ScalarValue::IntervalDayTime(_))
-        | (ScalarValue::IntervalMonthDayNano(_), ScalarValue::IntervalDayTime(_))
-        | (ScalarValue::IntervalMonthDayNano(_), ScalarValue::IntervalYearMonth(_))
-        | (ScalarValue::IntervalDayTime(_), ScalarValue::IntervalYearMonth(_))
-        | (ScalarValue::IntervalDayTime(_), ScalarValue::IntervalMonthDayNano(_)) => {
+        (
+            ScalarValue::IntervalYearMonth(_) | ScalarValue::IntervalDayTime(_),
+            ScalarValue::IntervalMonthDayNano(_),
+        )
+        | (
+            ScalarValue::IntervalYearMonth(_) | ScalarValue::IntervalMonthDayNano(_),
+            ScalarValue::IntervalDayTime(_),
+        )
+        | (
+            ScalarValue::IntervalMonthDayNano(_) | ScalarValue::IntervalDayTime(_),
+            ScalarValue::IntervalYearMonth(_),
+        ) => {
             return min_max_interval_scalar(lhs, rhs, ordering);
         }
         (ScalarValue::DurationSecond(lhs), ScalarValue::DurationSecond(rhs)) => {

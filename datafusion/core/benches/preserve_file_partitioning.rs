@@ -88,9 +88,9 @@ impl BenchConfig {
 
     fn from_env() -> Self {
         match std::env::var("BENCH_SIZE").as_deref() {
-            Ok("small") | Ok("SMALL") => Self::small(),
-            Ok("medium") | Ok("MEDIUM") => Self::medium(),
-            Ok("large") | Ok("LARGE") => Self::large(),
+            Ok("small" | "SMALL") => Self::small(),
+            Ok("medium" | "MEDIUM") => Self::medium(),
+            Ok("large" | "LARGE") => Self::large(),
             _ => {
                 println!("Using SMALL dataset (set BENCH_SIZE=small|medium|large)");
                 Self::small()

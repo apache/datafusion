@@ -1012,7 +1012,7 @@ impl SessionContext {
 
         match (if_not_exists, schema) {
             (true, Some(_)) => self.return_empty_dataframe(),
-            (true, None) | (false, None) => {
+            (_, None) => {
                 let schema = Arc::new(MemorySchemaProvider::new());
                 catalog.register_schema(schema_name, schema)?;
                 self.return_empty_dataframe()
@@ -1031,7 +1031,7 @@ impl SessionContext {
 
         match (if_not_exists, catalog) {
             (true, Some(_)) => self.return_empty_dataframe(),
-            (true, None) | (false, None) => {
+            (_, None) => {
                 let new_catalog = Arc::new(MemoryCatalogProvider::new());
                 self.state
                     .write()
