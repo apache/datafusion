@@ -79,19 +79,19 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
     if result_expr == *needle {
         return needle.clone();
     } else if xor_counter % 2 == 0 {
-        if is_left {
-            return Expr::BinaryExpr(BinaryExpr::new(
+        return if is_left {
+            Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(needle.clone()),
                 Operator::BitwiseXor,
                 Box::new(result_expr),
-            ));
+            ))
         } else {
-            return Expr::BinaryExpr(BinaryExpr::new(
+            Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(result_expr),
                 Operator::BitwiseXor,
                 Box::new(needle.clone()),
-            ));
-        }
+            ))
+        };
     }
     result_expr
 }

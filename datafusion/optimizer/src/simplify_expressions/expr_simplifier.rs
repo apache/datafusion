@@ -1488,12 +1488,10 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     // CASE WHEN false THEN A ELSE B END --> B
                     if let Some(else_expr) = else_expr {
                         return Ok(Transformed::yes(*else_expr));
-                    // CASE WHEN false THEN A END --> NULL
-                    } else {
-                        let null =
-                            Expr::Literal(ScalarValue::try_new_null(&out_type)?, None);
-                        return Ok(Transformed::yes(null));
                     }
+                    // CASE WHEN false THEN A END --> NULL
+                    let null = Expr::Literal(ScalarValue::try_new_null(&out_type)?, None);
+                    return Ok(Transformed::yes(null));
                 }
 
                 Transformed::yes(Expr::Case(Case {

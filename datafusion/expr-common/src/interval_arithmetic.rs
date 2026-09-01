@@ -1410,18 +1410,18 @@ pub fn satisfy_greater(
     );
 
     if !left.upper.is_null() && left.upper <= right.lower {
-        if !strict && left.upper == right.lower {
+        return if !strict && left.upper == right.lower {
             // Singleton intervals:
-            return Ok(Some((
+            Ok(Some((
                 Interval::new(left.upper.clone(), left.upper.clone()),
                 Interval::new(left.upper.clone(), left.upper.clone()),
-            )));
+            )))
         } else {
             // Left-hand side:  <--======----0------------>
             // Right-hand side: <------------0--======---->
             // No intersection, infeasible to propagate:
-            return Ok(None);
-        }
+            Ok(None)
+        };
     }
 
     // Only the lower bound of left-hand side and the upper bound of the right-hand

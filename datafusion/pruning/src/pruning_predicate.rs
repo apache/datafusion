@@ -1634,12 +1634,12 @@ fn build_predicate_expression(
     }
     if let Some(not) = expr.downcast_ref::<phys_expr::NotExpr>() {
         // match !col (don't do so recursively)
-        if let Some(col) = not.arg().downcast_ref::<phys_expr::Column>() {
-            return build_single_column_expr(col, schema, required_columns, true)
-                .unwrap_or_else(|| unhandled_hook.handle(expr));
+        return if let Some(col) = not.arg().downcast_ref::<phys_expr::Column>() {
+            build_single_column_expr(col, schema, required_columns, true)
+                .unwrap_or_else(|| unhandled_hook.handle(expr))
         } else {
-            return unhandled_hook.handle(expr);
-        }
+            unhandled_hook.handle(expr)
+        };
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
         // Keep the existing expression shape for lists of at most 20 values.
@@ -1682,9 +1682,8 @@ fn build_predicate_expression(
                 unhandled_hook,
                 max_in_list_size,
             );
-        } else {
-            return unhandled_hook.handle(expr);
         }
+        return unhandled_hook.handle(expr);
     }
 
     let (left, op, right) = {

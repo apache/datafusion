@@ -234,9 +234,8 @@ pub fn adjust_input_keys_ordering(
             if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
                     .map(Transformed::yes);
-            } else {
-                requirements.data.clear();
             }
+            requirements.data.clear();
         } else {
             // Keep everything unchanged
             return Ok(Transformed::no(requirements));

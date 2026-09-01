@@ -694,47 +694,46 @@ fn spawn_parquet_parallel_serialization_task(
                     .await?;
                     current_rg_rows += rb.num_rows();
                     break;
-                } else {
-                    let rows_left = max_row_group_rows - current_rg_rows;
-                    let a = rb.slice(0, rows_left);
-                    send_arrays_to_col_writers(
-                        &col_array_channels,
-                        &a,
-                        Arc::clone(&ctx.schema),
-                    )
-                    .await?;
-
-                    // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
-                    // on a separate task, so that we can immediately start on the next RG before waiting
-                    // for the current one to finish.
-                    drop(col_array_channels);
-                    let finalize_rg_task = spawn_rg_join_and_finalize_task(
-                        column_writer_handles,
-                        max_row_group_rows,
-                        &ctx.pool,
-                        encoding_time.clone(),
-                    );
-
-                    // Do not surface error from closed channel (means something
-                    // else hit an error, and the plan is shutting down).
-                    if serialize_tx.send(finalize_rg_task).await.is_err() {
-                        return Ok(());
-                    }
-
-                    current_rg_rows = 0;
-                    rb = rb.slice(rows_left, rb.num_rows() - rows_left);
-
-                    row_group_index += 1;
-                    let col_writers = row_group_writer_factory
-                        .create_column_writers(row_group_index)?;
-                    (column_writer_handles, col_array_channels) =
-                        spawn_column_parallel_row_group_writer(
-                            col_writers,
-                            max_buffer_rb,
-                            &ctx.pool,
-                            &encoding_time,
-                        )?;
                 }
+                let rows_left = max_row_group_rows - current_rg_rows;
+                let a = rb.slice(0, rows_left);
+                send_arrays_to_col_writers(
+                    &col_array_channels,
+                    &a,
+                    Arc::clone(&ctx.schema),
+                )
+                .await?;
+
+                // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
+                // on a separate task, so that we can immediately start on the next RG before waiting
+                // for the current one to finish.
+                drop(col_array_channels);
+                let finalize_rg_task = spawn_rg_join_and_finalize_task(
+                    column_writer_handles,
+                    max_row_group_rows,
+                    &ctx.pool,
+                    encoding_time.clone(),
+                );
+
+                // Do not surface error from closed channel (means something
+                // else hit an error, and the plan is shutting down).
+                if serialize_tx.send(finalize_rg_task).await.is_err() {
+                    return Ok(());
+                }
+
+                current_rg_rows = 0;
+                rb = rb.slice(rows_left, rb.num_rows() - rows_left);
+
+                row_group_index += 1;
+                let col_writers =
+                    row_group_writer_factory.create_column_writers(row_group_index)?;
+                (column_writer_handles, col_array_channels) =
+                    spawn_column_parallel_row_group_writer(
+                        col_writers,
+                        max_buffer_rb,
+                        &ctx.pool,
+                        &encoding_time,
+                    )?;
             }
         }
 

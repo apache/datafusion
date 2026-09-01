@@ -912,10 +912,9 @@ impl FirstValueAccumulator {
                     }
                 }
                 return Ok(None);
-            } else {
-                // If not ignoring nulls, return the first value if it exists.
-                return Ok((!value.is_empty()).then_some(0));
             }
+            // If not ignoring nulls, return the first value if it exists.
+            return Ok((!value.is_empty()).then_some(0));
         }
 
         let sort_columns = ordering_values
@@ -1301,9 +1300,8 @@ impl LastValueAccumulator {
                     }
                 }
                 return Ok(None);
-            } else {
-                return Ok((!value.is_empty()).then_some(value.len() - 1));
             }
+            return Ok((!value.is_empty()).then_some(value.len() - 1));
         }
 
         let sort_columns = ordering_values

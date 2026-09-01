@@ -220,28 +220,27 @@ fn pushdown_sorts_helper(
                 distribution_requirement: Distribution::UnspecifiedDistribution,
             };
             return Ok(Transformed::yes(sort_push_down));
-        } else {
-            // Sort was unnecessary, just propagate the stricter fetch and
-            // ordering requirements. Reset distribution to Unspecified
-            // because the sort we're removing may have been below a
-            // partition-merging node (like SortPreservingMergeExec) that
-            // already satisfies SinglePartition.
-            sort_push_down.data.fetch = min_fetch(sort_fetch, parent_fetch);
-            sort_push_down.data.distribution_requirement =
-                Distribution::UnspecifiedDistribution;
-            let current_is_stricter = eqp.requirements_compatible(
-                sort_ordering.clone().into(),
-                parent_requirement.first().clone(),
-            );
-            sort_push_down.data.ordering_requirement = if current_is_stricter {
-                Some(OrderingRequirements::from(sort_ordering))
-            } else {
-                Some(parent_requirement)
-            };
-            // Recursive call to helper, so it doesn't transform_down and miss
-            // the new node (previous child of sort):
-            return pushdown_sorts_helper(sort_push_down);
         }
+        // Sort was unnecessary, just propagate the stricter fetch and
+        // ordering requirements. Reset distribution to Unspecified
+        // because the sort we're removing may have been below a
+        // partition-merging node (like SortPreservingMergeExec) that
+        // already satisfies SinglePartition.
+        sort_push_down.data.fetch = min_fetch(sort_fetch, parent_fetch);
+        sort_push_down.data.distribution_requirement =
+            Distribution::UnspecifiedDistribution;
+        let current_is_stricter = eqp.requirements_compatible(
+            sort_ordering.clone().into(),
+            parent_requirement.first().clone(),
+        );
+        sort_push_down.data.ordering_requirement = if current_is_stricter {
+            Some(OrderingRequirements::from(sort_ordering))
+        } else {
+            Some(parent_requirement)
+        };
+        // Recursive call to helper, so it doesn't transform_down and miss
+        // the new node (previous child of sort):
+        return pushdown_sorts_helper(sort_push_down);
     }
 
     sort_push_down.plan = plan;

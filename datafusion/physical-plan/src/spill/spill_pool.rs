@@ -730,11 +730,10 @@ impl Stream for SpillPoolReader {
                             // Clear current file and continue loop to get next file
                             self.current_file = None;
                             continue;
-                        } else {
-                            // Stream exhausted but writer not finished - unexpected
-                            // This shouldn't happen with proper coordination
-                            return Poll::Ready(None);
                         }
+                        // Stream exhausted but writer not finished - unexpected
+                        // This shouldn't happen with proper coordination
+                        return Poll::Ready(None);
                     }
                     Poll::Pending => {
                         // File not ready yet (waiting for writer)

@@ -602,9 +602,8 @@ impl MemorySourceConfig {
                         }
                         // Successful repartition. Break inner loop, and return to outer `cnt_to_repartition` loop.
                         break;
-                    } else {
-                        cannot_split_further.push(new_partitions.remove(0));
                     }
+                    cannot_split_further.push(new_partitions.remove(0));
                 }
             }
             let mut partitions = max_heap

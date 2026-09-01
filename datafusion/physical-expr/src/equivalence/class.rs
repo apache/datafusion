@@ -395,9 +395,8 @@ impl EquivalenceGroup {
                     // If this class becomes trivial, remove it entirely:
                     self.remove_class_at_idx(idx);
                     continue;
-                } else {
-                    cls.constant = None;
                 }
+                cls.constant = None;
             }
             idx += 1;
         }
