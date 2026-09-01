@@ -182,6 +182,9 @@ enum PartialHashAggregateState {
         // After each incremental emitting step, the `remaining_groups` will be updated
         // with batch slicing.
         remaining_groups: RecordBatch,
+
+        // The size of remaining_groups in case we need to hold on it while slicing
+        batch_memory_size: usize,
     },
     ProducingOutput {
         hash_table: AggregateHashTable<PartialMarker>,
@@ -652,10 +655,16 @@ impl PartialHashAggregateStream {
                         let _timer = elapsed_compute.timer();
                         let state_batch_result = hash_table.take_state_batch();
 
+                        // If we are holding on the memory due to slicing account for that
+                        let state_batch_size = match &state_batch_result {
+                            Ok(Some(batch)) if batch.num_rows() > self.batch_size => batch.get_array_memory_size(),
+                            _ => 0
+                        };
+
                         // Emitting clears the aggregate table and releases its
                         // accumulated memory. Update the reservation accordingly.
                         let resize_result =
-                            self.reservation.try_resize(hash_table.memory_size());
+                            self.reservation.try_resize(hash_table.memory_size() + state_batch_size);
 
                         if let Err(e) = resize_result {
                             return Self::break_with_err(e);
@@ -675,6 +684,7 @@ impl PartialHashAggregateStream {
                             PartialHashAggregateState::EmittingOnMemoryPressure {
                                 hash_table,
                                 remaining_groups: materialized_group_states,
+                                batch_memory_size: state_batch_size,
                             },
                         );
                     }
@@ -718,6 +728,7 @@ impl PartialHashAggregateStream {
         let PartialHashAggregateState::EmittingOnMemoryPressure {
             hash_table,
             remaining_groups: batch,
+            batch_memory_size: size,
         } = original_state
         else {
             return Self::break_with_internal_err(
@@ -741,11 +752,16 @@ impl PartialHashAggregateStream {
                 PartialHashAggregateState::EmittingOnMemoryPressure {
                     hash_table,
                     remaining_groups: remaining,
+                    batch_memory_size: size,
                 },
             )
         };
 
         self.reduction_factor.add_part(output_batch.num_rows());
+        if matches!(next_state, PartialHashAggregateState::ReadingInput { .. }) && size > 0 {
+            self.reservation.shrink(size);
+        }
+
         debug_assert!(output_batch.num_rows() > 0);
         ControlFlow::Break((
             Poll::Ready(Some(Ok(output_batch.record_output(&self.baseline_metrics)))),
