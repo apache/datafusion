@@ -39,6 +39,7 @@ use arrow::datatypes::FieldRef;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::GroupSelection;
 use std::sync::Arc;
 
 /// A [`GroupColumn`] for `List<T>` (`O = i32`) and `LargeList<T>` (`O = i64`).
@@ -207,6 +208,55 @@ impl<O: OffsetSizeTrait> GroupColumn for ListGroupValueBuilder<O> {
             child_array,
             outer_nulls,
         ))
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.outer_len)?;
+
+        // Flatten the selected outer rows into the child positions they cover,
+        // rebuilding offsets for the output. Null (and empty) rows contribute a
+        // zero-length range, matching how they are stored.
+        let mut child_indices = Vec::new();
+        let mut offsets = Vec::with_capacity(selection.len() + 1);
+        let mut nulls = NullBufferBuilder::new(selection.len());
+        let mut end = O::usize_as(0);
+        offsets.push(end);
+
+        for row in selection.iter() {
+            nulls.append(!self.outer_nulls.is_null(row));
+            let start = self.offsets[row].as_usize();
+            let row_end = self.offsets[row + 1].as_usize();
+            child_indices.extend(start..row_end);
+            let len = O::from_usize(row_end - start).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "List sublist length {} overflows the offset type",
+                    row_end - start
+                )
+            })?;
+            end = end.checked_add(&len).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "List offset overflow: current={} additional={}",
+                    end.as_usize(),
+                    len.as_usize()
+                )
+            })?;
+            offsets.push(end);
+        }
+
+        let child_selection =
+            GroupSelection::try_from_indices(&child_indices, self.child.len())?;
+        let child_array = self.child.values_preserving(child_selection)?;
+
+        // SAFETY: offsets start at 0 and grow monotonically by each selected
+        // row's length, and `child_array` has exactly `end` elements.
+        let offset_buffer =
+            unsafe { OffsetBuffer::<O>::new_unchecked(ScalarBuffer::<O>::from(offsets)) };
+        Ok(Arc::new(GenericListArray::<O>::new(
+            Arc::clone(&self.field),
+            offset_buffer,
+            child_array,
+            nulls.build(),
+        )))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -733,6 +783,64 @@ mod tests {
         bb.set_bit(0, false);
         vec_b.vectorized_equal_to(&lhs, &input, &rhs, &mut bb);
         assert!(!bb.get_bit(0), "pre-set false stays false");
+    }
+
+    #[test]
+    fn values_preserving_selects_reorders_and_repeats() {
+        let input = list_array(&[
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+        ]);
+        let mut builder = ListGroupValueBuilder::<i32>::new(child_field(), make_child());
+        for i in 0..input.len() {
+            builder.append_val(&input, i).unwrap();
+        }
+
+        let selection = GroupSelection::try_from_indices(&[3, 1, 0, 3, 2], 4).unwrap();
+        let out = builder.values_preserving(selection).unwrap();
+        let out = out.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(out.len(), 5);
+        assert!(out.is_null(1), "selected null row stays null");
+        let v = |i: usize| -> Vec<i32> {
+            let v = out.value(i);
+            v.as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        };
+        assert_eq!(v(0), vec![3, 4, 5]);
+        assert_eq!(v(2), vec![1, 2]);
+        assert_eq!(v(3), vec![3, 4, 5], "repeated index materialized twice");
+        assert_eq!(out.value_length(4), 0, "empty list preserved");
+
+        // The builder is unchanged by a preserving read.
+        assert_eq!(builder.len(), 4);
+        let all = builder.values_preserving(GroupSelection::all(4)).unwrap();
+        assert_eq!(all.len(), 4);
+        let built = Box::new(builder).build();
+        assert_eq!(built.as_ref(), all.as_ref());
+    }
+
+    #[test]
+    fn values_preserving_empty_selection() {
+        let mut builder = ListGroupValueBuilder::<i64>::new(child_field(), make_child());
+        let input = large_list_array(&[Some(vec![Some(1)])]);
+        builder.append_val(&input, 0).unwrap();
+        let out = builder
+            .values_preserving(GroupSelection::try_from_indices(&[], 1).unwrap())
+            .unwrap();
+        assert_eq!(out.len(), 0);
+    }
+
+    #[test]
+    fn values_preserving_rejects_mismatched_group_count() {
+        let input = list_array(&[Some(vec![Some(1)])]);
+        let mut builder = ListGroupValueBuilder::<i32>::new(child_field(), make_child());
+        builder.append_val(&input, 0).unwrap();
+        assert!(builder.values_preserving(GroupSelection::all(2)).is_err());
     }
 
     #[test]
