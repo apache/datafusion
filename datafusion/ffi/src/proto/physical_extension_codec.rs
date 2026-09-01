@@ -127,9 +127,9 @@ impl FFI_PhysicalExtensionCodec {
         unsafe { &(*private_data).codec }
     }
 
-    fn runtime(&self) -> &Option<Handle> {
+    fn runtime(&self) -> Option<&Handle> {
         let private_data = self.private_data as *const PhysicalExtensionCodecPrivateData;
-        unsafe { &(*private_data).runtime }
+        unsafe { (*private_data).runtime.as_ref() }
     }
 }
 
@@ -138,7 +138,7 @@ unsafe extern "C" fn try_decode_fn_wrapper(
     buf: SSlice<u8>,
     inputs: SVec<FFI_ExecutionPlan>,
 ) -> FFI_Result<FFI_ExecutionPlan> {
-    let runtime = codec.runtime().clone();
+    let runtime = codec.runtime().cloned();
     let task_ctx: Arc<TaskContext> =
         sresult_return!((&codec.task_ctx_provider).try_into());
     let codec = codec.inner();
@@ -267,7 +267,7 @@ unsafe extern "C" fn clone_fn_wrapper(
     codec: &FFI_PhysicalExtensionCodec,
 ) -> FFI_PhysicalExtensionCodec {
     let old_codec = Arc::clone(codec.inner());
-    let runtime = codec.runtime().clone();
+    let runtime = codec.runtime().cloned();
 
     FFI_PhysicalExtensionCodec::new(old_codec, runtime, codec.task_ctx_provider.clone())
 }
@@ -534,7 +534,7 @@ pub(crate) mod tests {
             let udf = node.inner();
             if !udf.is::<AbsFunc>() {
                 return exec_err!("TestExtensionCodec only expects Abs UDF");
-            };
+            }
 
             buf.push(Self::ABS_FUNC_SERIALIZED);
 

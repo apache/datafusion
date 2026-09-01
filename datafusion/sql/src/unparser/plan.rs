@@ -329,7 +329,7 @@ impl Unparser<'_> {
                     .map(|e| unproject_unnest_expr(e, unnest))
                     .collect::<Result<Vec<_>>>()?;
             }
-        };
+        }
 
         // Rewrite column references that point to FLATTEN table aliases:
         // in Snowflake, FLATTEN output is accessed via .VALUE, not the
@@ -1170,7 +1170,7 @@ impl Unparser<'_> {
                         fetch.to_string(),
                         false,
                     ))));
-                };
+                }
 
                 let agg = find_agg_node_within_select(plan, select.already_projected());
                 // unproject sort expressions
@@ -1357,7 +1357,7 @@ impl Unparser<'_> {
 
                 let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
                     join.join_type,
-                    &join.filter,
+                    join.filter.as_ref(),
                     table_scan_filters,
                 );
                 for filter in where_filters {
@@ -1473,7 +1473,7 @@ impl Unparser<'_> {
                             select.projection(projection);
                         }
                     }
-                };
+                }
 
                 Ok(())
             }
@@ -1995,7 +1995,7 @@ impl Unparser<'_> {
             // which is normally safe to unnest as a table factor.
             // However, in the future, more comprehensive checks can be added here.
             return Ok(None);
-        };
+        }
 
         let exprs = projection
             .expr
@@ -2212,7 +2212,7 @@ impl Unparser<'_> {
                     } else {
                         let project_columns = project_vec
                             .iter()
-                            .cloned()
+                            .copied()
                             .map(|i| {
                                 let schema = table_scan.source.schema();
                                 let field = schema.field(i);
@@ -2227,7 +2227,7 @@ impl Unparser<'_> {
                             })
                             .collect::<Vec<_>>();
                         builder = builder.project(project_columns)?;
-                    };
+                    }
                 }
 
                 let filter_expr: Result<Option<Expr>> = table_scan
@@ -2571,17 +2571,17 @@ impl Unparser<'_> {
     /// Returns `(on_filter, where_filters)`.
     fn split_join_on_and_where_filters(
         join_type: JoinType,
-        join_filter: &Option<Expr>,
+        join_filter: Option<&Expr>,
         table_scan_filters: Vec<Expr>,
     ) -> (Option<Expr>, Vec<Expr>) {
         if table_scan_filters.is_empty() {
-            return (join_filter.clone(), vec![]);
+            return (join_filter.cloned(), vec![]);
         }
 
         if join_type == JoinType::Inner {
             // ON and WHERE are equivalent for inner joins; prefer WHERE
             // because some dialects reject subqueries inside JOIN ON.
-            return (join_filter.clone(), table_scan_filters);
+            return (join_filter.cloned(), table_scan_filters);
         }
 
         // Outer joins: fold table-scan filters into ON to preserve semantics.

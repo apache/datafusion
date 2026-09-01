@@ -463,7 +463,7 @@ impl MinMaxBytesState {
                         vacant_entry.insert(new_val);
                     }
                 }
-            };
+            }
         }
 
         // Update self.min_max with any new min/max values we found in the input

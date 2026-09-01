@@ -180,10 +180,10 @@ impl FFI_SessionRef {
         unsafe { (*private_data).session }
     }
 
-    unsafe fn runtime(&self) -> &Option<Handle> {
+    unsafe fn runtime(&self) -> Option<&Handle> {
         unsafe {
             let private_data = self.private_data as *const SessionPrivateData;
-            &(*private_data).runtime
+            (*private_data).runtime.as_ref()
         }
     }
 }
@@ -203,7 +203,7 @@ unsafe extern "C" fn catalog_list_fn_wrapper(
 ) -> FFI_CatalogProviderList {
     FFI_CatalogProviderList::new_with_ffi_codec(
         session.inner().catalog_list(),
-        unsafe { session.runtime() }.clone(),
+        unsafe { session.runtime() }.cloned(),
         session.logical_codec.clone(),
     )
 }
@@ -243,7 +243,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
     logical_plan_serialized: SVec<u8>,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     unsafe {
-        let runtime = session.runtime().clone();
+        let runtime = session.runtime().cloned();
         let session = session.clone();
         async move {
             let logical_codec: Arc<dyn LogicalExtensionCodec> =
@@ -375,7 +375,7 @@ unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskCo
 unsafe extern "C" fn physical_optimizers_fn_wrapper(
     session: &FFI_SessionRef,
 ) -> SVec<FFI_PhysicalOptimizerRule> {
-    let runtime = unsafe { session.runtime().clone() };
+    let runtime = unsafe { session.runtime().cloned() };
     session
         .inner()
         .physical_optimizers()

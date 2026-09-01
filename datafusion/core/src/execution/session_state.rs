@@ -990,7 +990,7 @@ impl SessionState {
                     "File type already registered for extension {ext}. Set overwrite to true to replace this extension."
                 );
             }
-        };
+        }
         Ok(())
     }
 
@@ -1712,7 +1712,7 @@ impl SessionStateBuilder {
             for file_format in file_formats {
                 if let Err(e) = state.register_file_format(file_format, false) {
                     info!("Unable to register file format: {e}")
-                };
+                }
             }
         }
 

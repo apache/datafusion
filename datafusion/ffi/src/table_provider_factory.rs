@@ -136,9 +136,9 @@ impl FFI_TableProviderFactory {
         unsafe { &(*private_data).factory }
     }
 
-    fn runtime(&self) -> &Option<Handle> {
+    fn runtime(&self) -> Option<&Handle> {
         let private_data = self.private_data as *const FactoryPrivateData;
-        unsafe { &(*private_data).runtime }
+        unsafe { (*private_data).runtime.as_ref() }
     }
 
     fn deserialize_cmd(
@@ -203,7 +203,7 @@ async fn create_fn_wrapper_impl(
     session: FFI_SessionRef,
     cmd_serialized: SVec<u8>,
 ) -> Result<FFI_TableProvider, DataFusionError> {
-    let runtime = factory.runtime().clone();
+    let runtime = factory.runtime().cloned();
     let ffi_logical_codec = factory.logical_codec.clone();
     let internal_factory = Arc::clone(factory.inner());
     let cmd = factory.deserialize_cmd(&cmd_serialized)?;
@@ -229,7 +229,7 @@ async fn create_fn_wrapper_impl(
 unsafe extern "C" fn clone_fn_wrapper(
     factory: &FFI_TableProviderFactory,
 ) -> FFI_TableProviderFactory {
-    let runtime = factory.runtime().clone();
+    let runtime = factory.runtime().cloned();
     let old_factory = Arc::clone(factory.inner());
 
     let private_data = Box::into_raw(Box::new(FactoryPrivateData {

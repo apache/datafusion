@@ -125,7 +125,7 @@ fn check_join_set_is_valid(
         return plan_err!(
             "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}"
         );
-    };
+    }
 
     Ok(())
 }
@@ -798,7 +798,7 @@ fn estimate_inner_join_cardinality(
     // Immediately return if inputs considered as non-overlapping
     if let Some(estimation) = estimate_disjoint_inputs(&left_stats, &right_stats) {
         return Some(estimation);
-    };
+    }
 
     let Statistics {
         num_rows: left_num_rows,
@@ -1258,7 +1258,7 @@ pub(crate) fn apply_join_filter_to_indices(
 ) -> Result<(UInt64Array, UInt32Array)> {
     if build_indices.is_empty() && probe_indices.is_empty() {
         return Ok((build_indices, probe_indices));
-    };
+    }
 
     let filter_result = if let Some(max_size) = max_intermediate_size {
         let mut filter_results =
@@ -1966,7 +1966,7 @@ pub(crate) trait BatchTransformer: Debug + Clone {
 }
 
 fn count_retained_batch_memory(
-    batch: &Option<RecordBatch>,
+    batch: Option<&RecordBatch>,
     counter: &mut RecordBatchMemoryCounter,
 ) {
     if let Some(batch) = batch {
@@ -1997,7 +1997,7 @@ impl BatchTransformer for NoopBatchTransformer {
     }
 
     fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
-        count_retained_batch_memory(&self.batch, counter);
+        count_retained_batch_memory(self.batch.as_ref(), counter);
     }
 }
 
@@ -2049,7 +2049,7 @@ impl BatchTransformer for BatchSplitter {
     }
 
     fn count_memory(&self, counter: &mut RecordBatchMemoryCounter) {
-        count_retained_batch_memory(&self.batch, counter);
+        count_retained_batch_memory(self.batch.as_ref(), counter);
     }
 }
 

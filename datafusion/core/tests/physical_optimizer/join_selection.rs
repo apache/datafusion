@@ -1896,6 +1896,6 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
                 t.expecting_swap
             )
         );
-    };
+    }
     Ok(())
 }

@@ -714,7 +714,7 @@ impl Stream for GroupedHashAggregateStream {
                                 if let Some(batch) = self.emit(to_emit, false)? {
                                     self.exec_state =
                                         ExecutionState::ProducingOutput(batch);
-                                };
+                                }
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
@@ -1403,7 +1403,7 @@ impl GroupedHashAggregateStream {
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
             probe.update_state(input_rows, self.group_values.len());
-        };
+        }
     }
 
     /// In case the probe indicates that aggregation may be
@@ -1418,7 +1418,7 @@ impl GroupedHashAggregateStream {
             && let Some(batch) = self.emit(EmitTo::All, false)?
         {
             return Ok(Some(ExecutionState::ProducingOutput(batch)));
-        };
+        }
 
         Ok(None)
     }

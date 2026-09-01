@@ -2929,7 +2929,7 @@ impl HashNode for Expr {
                 name.hash(state);
                 field.hash(state);
             }
-        };
+        }
     }
 }
 
@@ -2952,7 +2952,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 *field = Some(other_field.as_ref().clone().with_nullable(true).into());
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -3042,7 +3042,7 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3262,7 +3262,7 @@ impl Display for SchemaDisplay<'_> {
                                 " ORDER BY [{}]",
                                 schema_name_from_sorts(order_by)?
                             )?;
-                        };
+                        }
 
                         write!(f, " {window_frame}")
                     }
@@ -3324,7 +3324,7 @@ impl Display for SqlDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3338,7 +3338,7 @@ impl Display for SqlDisplay<'_> {
                 }
 
                 for (when, then) in when_then_expr {
-                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then))?;
                 }
 
                 if let Some(e) = else_expr {

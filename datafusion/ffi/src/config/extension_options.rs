@@ -176,7 +176,7 @@ impl ExtensionOptions for FFI_ExtensionOptions {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         if key.split_once('.').is_none() {
             return exec_err!("Unable to set FFI config value without namespace set");
-        };
+        }
 
         df_result!(unsafe { (self.set)(self, key.into(), value.into()) })
     }

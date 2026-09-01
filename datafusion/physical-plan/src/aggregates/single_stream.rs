@@ -806,7 +806,6 @@ impl Stream for SingleHashAggregateStream {
             match next_state {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
-                    continue;
                 }
                 ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
                     debug_assert!(matches!(next_state, SingleHashAggregateState::Error));

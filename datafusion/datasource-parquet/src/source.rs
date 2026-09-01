@@ -805,7 +805,7 @@ impl FileSource for ParquetSource {
                             guarantees.join(", ")
                         )?;
                     }
-                };
+                }
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
