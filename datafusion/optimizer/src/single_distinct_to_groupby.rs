@@ -28,9 +28,11 @@ use datafusion_common::{
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    Expr, col,
+    AggregateUDF, Expr, col,
     expr::AggregateFunction,
+    lit,
     logical_plan::{Aggregate, LogicalPlan},
+    when,
 };
 
 /// single distinct to group by optimizer rule
@@ -49,6 +51,33 @@ use datafusion_expr::{
 ///    )
 ///    GROUP BY a
 ///  ```
+///
+/// A non-distinct `count` is also allowed alongside the distinct aggregate. It
+/// is the one supported function whose outer phase is a *different* function:
+/// the inner group-by counts rows per `(group, distinct value)` pair and the
+/// outer phase adds those partial counts up with `sum`.
+///
+///  ```text
+///    Before:
+///    SELECT a, count(*), count(DISTINCT b)
+///    FROM t
+///    GROUP BY a
+///
+///    After:
+///    SELECT a,
+///           CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE 0 END,
+///           count(alias1)
+///    FROM (
+///      SELECT a, b as alias1, count(*) as alias2
+///      FROM t
+///      GROUP BY a, b
+///    )
+///    GROUP BY a
+///  ```
+///
+/// The `CASE` covers the one input on which the two phases disagree: over an
+/// empty input the inner group by produces no rows at all, and a `sum` of no
+/// rows is NULL where `count` is 0.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -61,8 +90,38 @@ impl SingleDistinctToGroupBy {
     }
 }
 
+/// The pair of functions used to compute a non-distinct `count` in two phases:
+/// `count` identifies the aggregates that need the treatment, `sum` combines
+/// the partial counts the inner group-by produces.
+///
+/// Both are resolved from the session's function registry, so a plan built
+/// without one keeps the previous behaviour of bailing out on `count`.
+struct CountRollup {
+    count: Arc<AggregateUDF>,
+    sum: Arc<AggregateUDF>,
+}
+
+impl CountRollup {
+    fn try_new(config: &dyn OptimizerConfig) -> Option<Self> {
+        let registry = config.function_registry()?;
+        Some(Self {
+            count: registry.udaf("count").ok()?,
+            sum: registry.udaf("sum").ok()?,
+        })
+    }
+
+    /// Whether `func` is the registry's `count`, and so decomposes into
+    /// `sum` over per-partition counts.
+    fn is_count(&self, func: &AggregateUDF) -> bool {
+        self.count.as_ref() == func
+    }
+}
+
 /// Check whether all aggregate exprs are distinct on a single field.
-fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
+fn is_single_distinct_agg(
+    aggr_expr: &[Expr],
+    count_rollup: Option<&CountRollup>,
+) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
     for expr in aggr_expr {
@@ -89,6 +148,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
             } else if func.name() != "sum"
                 && func.name().to_lowercase() != "min"
                 && func.name().to_lowercase() != "max"
+                && !count_rollup.is_some_and(|rollup| rollup.is_count(func))
             {
                 return Ok(false);
             }
@@ -120,8 +180,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        if !matches!(plan, LogicalPlan::Aggregate(_)) {
+            return Ok(Transformed::no(plan));
+        }
+        let count_rollup = CountRollup::try_new(config);
         match plan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
@@ -129,7 +193,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 schema,
                 group_expr,
                 ..
-            }) if is_single_distinct_agg(&aggr_expr)?
+            }) if is_single_distinct_agg(&aggr_expr, count_rollup.as_ref())?
                 && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -177,7 +241,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 let mut index = 1;
                 let mut group_fields_set = HashSet::new();
                 let mut inner_aggr_exprs = vec![];
-                let outer_aggr_exprs = aggr_expr
+                // Each aggregate yields the expression the outer `Aggregate`
+                // computes and the expression the projection above it selects.
+                // They differ only for `count`, whose projection restores the
+                // zero that `sum` reports as NULL over an empty input.
+                let (outer_aggr_exprs, outer_proj_exprs): (Vec<Expr>, Vec<Expr>) = aggr_expr
                     .into_iter()
                     .map(|aggr_expr| match aggr_expr {
                         Expr::AggregateFunction(AggregateFunction {
@@ -204,18 +272,32 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }
-                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    func,
-                                    vec![col(SINGLE_DISTINCT_ALIAS)],
-                                    false, // intentional to remove distinct here
-                                    filter,
-                                    order_by,
-                                    null_treatment,
-                                )))
+                                let outer =
+                                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                                        func,
+                                        vec![col(SINGLE_DISTINCT_ALIAS)],
+                                        false, // intentional to remove distinct here
+                                        filter,
+                                        order_by,
+                                        null_treatment,
+                                    ));
+                                Ok((outer.clone(), outer))
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
                             } else {
                                 index += 1;
                                 let alias_str = format!("alias{index}");
+                                // `count` is the one function whose two phases
+                                // use different aggregates: the inner group-by
+                                // counts the rows of each `(group, distinct
+                                // value)` partition and the outer phase adds
+                                // those partial counts up.
+                                let rollup = count_rollup
+                                    .as_ref()
+                                    .filter(|rollup| rollup.is_count(&func));
+                                let outer_func = match rollup {
+                                    Some(rollup) => Arc::clone(&rollup.sum),
+                                    None => Arc::clone(&func),
+                                };
                                 inner_aggr_exprs.push(
                                     Expr::AggregateFunction(AggregateFunction::new_udf(
                                         Arc::clone(&func),
@@ -227,19 +309,34 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     ))
                                     .alias(&alias_str),
                                 );
-                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    func,
-                                    vec![col(&alias_str)],
-                                    false,
-                                    None,
-                                    vec![],
-                                    None,
-                                )))
+                                let outer =
+                                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                                        outer_func,
+                                        vec![col(&alias_str)],
+                                        false,
+                                        None,
+                                        vec![],
+                                        None,
+                                    ));
+                                if rollup.is_none() {
+                                    return Ok((outer.clone(), outer));
+                                }
+                                // The inner group-by produces no rows at all
+                                // for an empty input, and `sum` reports that as
+                                // NULL where `count` reports 0. Restore the 0,
+                                // which also keeps the column non-nullable as
+                                // `count` had it.
+                                let proj =
+                                    when(outer.clone().is_not_null(), outer.clone())
+                                        .otherwise(lit(0_i64))?;
+                                Ok((outer, proj))
                             }
                         }
-                        _ => Ok(aggr_expr),
+                        _ => Ok((aggr_expr.clone(), aggr_expr)),
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .unzip();
 
                 // construct the inner AggrPlan
                 let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
@@ -265,13 +362,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         }
                         None => group_expr,
                     })
-                    .chain(outer_aggr_exprs.iter().cloned().enumerate().map(
-                        |(idx, expr)| {
-                            let idx = idx + group_size;
-                            let (qualifier, field) = schema.qualified_field(idx);
-                            expr.alias_qualified(qualifier.cloned(), field.name())
-                        },
-                    ))
+                    .chain(outer_proj_exprs.into_iter().enumerate().map(|(idx, expr)| {
+                        let idx = idx + group_size;
+                        let (qualifier, field) = schema.qualified_field(idx);
+                        expr.alias_qualified(qualifier.cloned(), field.name())
+                    }))
                     .collect();
 
                 let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
@@ -291,8 +386,13 @@ mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
+    use crate::{Optimizer, OptimizerContext};
+    use chrono::{DateTime, Utc};
+    use datafusion_common::alias::AliasGenerator;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::registry::{FunctionRegistry, MemoryFunctionRegistry};
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
@@ -310,17 +410,70 @@ mod tests {
         ))
     }
 
+    fn count_star() -> Expr {
+        Expr::AggregateFunction(AggregateFunction::new_udf(
+            count_udaf(),
+            vec![lit(1_i64)],
+            false,
+            None,
+            vec![],
+            None,
+        ))
+    }
+
+    /// An [`OptimizerConfig`] that resolves functions the way a session does.
+    /// The rule needs `count` and `sum` from the registry to rewrite a
+    /// non-distinct `count`.
+    #[derive(Debug)]
+    struct RegistryOptimizerContext {
+        inner: OptimizerContext,
+        registry: MemoryFunctionRegistry,
+    }
+
+    impl RegistryOptimizerContext {
+        fn new() -> Self {
+            let mut registry = MemoryFunctionRegistry::new();
+            registry.register_udaf(count_udaf()).unwrap();
+            registry.register_udaf(sum_udaf()).unwrap();
+            Self {
+                inner: OptimizerContext::new(),
+                registry,
+            }
+        }
+    }
+
+    impl OptimizerConfig for RegistryOptimizerContext {
+        fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
+            self.inner.query_execution_start_time()
+        }
+
+        fn alias_generator(&self) -> &Arc<AliasGenerator> {
+            self.inner.alias_generator()
+        }
+
+        fn options(&self) -> Arc<ConfigOptions> {
+            self.inner.options()
+        }
+
+        fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
+            Some(&self.registry)
+        }
+    }
+
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(SingleDistinctToGroupBy::new());
-            assert_optimized_plan_eq_display_indent_snapshot!(
-                rule,
-                $plan,
-                @ $expected,
-            )
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> =
+                Arc::new(SingleDistinctToGroupBy::new());
+            let optimizer = Optimizer::with_rules(vec![rule]);
+            let optimized_plan = optimizer
+                .optimize($plan, &RegistryOptimizerContext::new(), |_, _| {})
+                .expect("failed to optimize plan");
+            insta::assert_snapshot!(optimized_plan.display_indent_schema(), @ $expected);
+
+            Ok::<(), DataFusionError>(())
         }};
     }
 
@@ -523,12 +676,15 @@ mod tests {
             )?
             .build()?;
 
-        // Do nothing
+        // Should work: the non-distinct count becomes a sum of the counts the
+        // inner group-by produces per (test.a, test.b) pair
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, count(test.c):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b), CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(test.c) [a:UInt32, count(DISTINCT test.b):Int64, count(test.c):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), sum(alias2)]] [a:UInt32, count(alias1):Int64, sum(alias2):Int64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:Int64]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -750,6 +906,130 @@ mod tests {
         Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a), count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]]] [c:UInt32, sum(test.a):UInt64;N, count(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a ASC NULLS LAST]:Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
+        )
+    }
+
+    #[test]
+    fn count_star_and_distinct_without_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![count_star(), count_distinct(col("b"))],
+            )?
+            .build()?;
+
+        // Should work. Without a group by the outer aggregate sees no rows at
+        // all for an empty input, so the projection has to turn the NULL that
+        // `sum` reports there back into the 0 `count` reports.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), count(alias1) AS count(DISTINCT test.b) [count(Int64(1)):Int64, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Int64;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [alias1:UInt32, alias2:Int64]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn count_star_min_max_sum_and_distinct_with_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_star(),
+                    count_distinct(col("b")),
+                    min(col("c")),
+                    max(col("c")),
+                    sum(col("c")),
+                ],
+            )?
+            .build()?;
+
+        // Should work: this is the shape a `count(*)` alongside a
+        // `count(DISTINCT ..)`, a min, a max and a sum produces
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), count(alias1) AS count(DISTINCT test.b), min(alias3) AS min(test.c), max(alias4) AS max(test.c), sum(alias5) AS sum(test.c) [a:UInt32, count(Int64(1)):Int64, count(DISTINCT test.b):Int64, min(test.c):UInt32;N, max(test.c):UInt32;N, sum(test.c):UInt64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), count(alias1), min(alias3), max(alias4), sum(alias5)]] [a:UInt32, sum(alias2):Int64;N, count(alias1):Int64, min(alias3):UInt32;N, max(alias4):UInt32;N, sum(alias5):UInt64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2, min(test.c) AS alias3, max(test.c) AS alias4, sum(test.c) AS alias5]] [a:UInt32, alias1:UInt32, alias2:Int64, alias3:UInt32;N, alias4:UInt32;N, alias5:UInt64;N]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn count_with_filter_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // count(a) FILTER (WHERE a > 5)
+        let expr = count_udaf()
+            .call(vec![col("a")])
+            .filter(col("a").gt(lit(5)))
+            .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
+            .build()?;
+
+        // Do nothing: the filter would have to be applied per input row, but
+        // the inner aggregate has already collapsed them
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.c]], aggr=[[count(test.a) FILTER (WHERE test.a > Int32(5)), count(DISTINCT test.b)]] [c:UInt32, count(test.a) FILTER (WHERE test.a > Int32(5)):Int64, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn count_with_order_by_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // count(a ORDER BY a)
+        let expr = count_udaf()
+            .call(vec![col("a")])
+            .order_by(vec![col("a").sort(true, false)])
+            .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
+            .build()?;
+
+        // Do nothing
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.c]], aggr=[[count(test.a) ORDER BY [test.a ASC NULLS LAST], count(DISTINCT test.b)]] [c:UInt32, count(test.a) ORDER BY [test.a ASC NULLS LAST]:Int64, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn count_without_function_registry_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_star(), count_distinct(col("b"))])?
+            .build()?;
+
+        // Do nothing: without a registry the rule cannot resolve the `sum` the
+        // outer phase needs
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(SingleDistinctToGroupBy::new());
+        assert_optimized_plan_eq_display_indent_snapshot!(
+            rule,
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(Int64(1)), count(DISTINCT test.b)]] [a:UInt32, count(Int64(1)):Int64, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        ",
         )
     }
 }
