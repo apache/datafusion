@@ -33,6 +33,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::aggregates::AGGREGATION_HASH_SEED;
+use crate::spill::gc_array;
 
 /// [`GroupColumn`] for dictionary-encoded columns with key type `K`.
 ///
@@ -58,6 +59,8 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     val_to_inner: Vec<usize>,
     /// Reusable hash buffer for the dictionary values array.
     val_hashes: Vec<u64>,
+    /// Value hash for each inner slot, so `take_n` can update `value_dedup` without rehashing.
+    slot_hash: Vec<u64>,
     /// The last `dict.values()` Arc hashed in `append_val`. When the incoming
     /// values array is `ptr_eq` to this, `val_hashes` can be reused directly.
     cached_values: Option<ArrayRef>,
@@ -77,6 +80,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             random_state: AGGREGATION_HASH_SEED,
             val_to_inner: Vec::default(),
             val_hashes: Vec::default(),
+            slot_hash: Vec::default(),
             cached_values: None,
             _phantom: PhantomData,
         }
@@ -199,6 +203,10 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
                     |&(entry_hash, _)| entry_hash,
                     &mut self.value_dedup_size,
                 );
+                if self.slot_hash.len() <= slot {
+                    self.slot_hash.resize(slot + 1, 0);
+                }
+                self.slot_hash[slot] = hash;
                 Ok(slot)
             }
         }
@@ -469,6 +477,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             + self.group_to_inner.capacity() * size_of::<usize>()
             + self.val_to_inner.capacity() * size_of::<usize>()
             + self.val_hashes.capacity() * size_of::<u64>()
+            + self.slot_hash.capacity() * size_of::<u64>()
             + self.null_array.get_array_memory_size()
             + size_of::<Self>()
     }
@@ -529,6 +538,11 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             Int64Array::from_iter(emit_new_to_old.iter().map(|&i| i as i64));
         let compact_emit_values =
             take(&*all_inner_values, &emit_indices, None).expect("take emit values");
+        // take() keeps original view buffers while spill's gc_array copies only when worth it
+        let gced_compact_emit_values = gc_array(&compact_emit_values)
+            .map(|(arr, _)| arr)
+            .unwrap_or(compact_emit_values);
+
         let emitted_keys: PrimitiveArray<K> = self.group_to_inner[..n]
             .iter()
             .map(|&old| {
@@ -539,8 +553,10 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 }
             })
             .collect();
-        let emitted: ArrayRef =
-            Arc::new(DictionaryArray::<K>::new(emitted_keys, compact_emit_values));
+        let emitted: ArrayRef = Arc::new(DictionaryArray::<K>::new(
+            emitted_keys,
+            gced_compact_emit_values,
+        ));
 
         // Null deferred to last so null_inner_slot is always the highest index
         // and check_key_overflow can subtract it without a false overflow.
@@ -565,28 +581,33 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             new_to_old.push(old);
         }
 
-        self.value_dedup = HashTable::new();
-        self.value_dedup_size = 0;
+        let leftover_non_null_len = new_to_old.len() - null_old_slot.is_some() as usize;
+        let old_hashes = std::mem::take(&mut self.slot_hash);
+        // Remapping entries from current slot
+        self.value_dedup.retain(|(_, slot)| {
+            let new = old_to_new[*slot];
+            if new == usize::MAX {
+                false
+            } else {
+                *slot = new;
+                true
+            }
+        });
+
         self.null_inner_slot = None;
-
-        self.hash_values(&all_inner_values);
-
+        self.slot_hash.resize(leftover_non_null_len, 0);
         for (new_slot, &old_slot) in new_to_old.iter().enumerate() {
             if all_inner_values.is_null(old_slot) {
                 self.inner
                     .append_val(&self.null_array, 0)
                     .expect("append null failed in take_n");
                 self.null_inner_slot = Some(new_slot);
-            } else {
-                self.inner
-                    .append_val(&all_inner_values, old_slot)
-                    .expect("append value failed in take_n");
-                self.value_dedup.insert_accounted(
-                    (self.val_hashes[old_slot], new_slot),
-                    |&(entry_hash, _)| entry_hash,
-                    &mut self.value_dedup_size,
-                );
+                continue;
             }
+            self.slot_hash[new_slot] = old_hashes[old_slot];
+            self.inner
+                .append_val(&all_inner_values, old_slot)
+                .expect("append value failed in take_n");
         }
 
         self.group_to_inner = remaining.iter().map(|&old| old_to_new[old]).collect();
@@ -600,12 +621,13 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
 mod tests {
     use super::*;
     use crate::aggregates::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
+    use crate::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
     use arrow::array::{
         Array, ArrayRef, BooleanBufferBuilder, DictionaryArray, Int32Array, StringArray,
-        UInt8Array,
+        StringViewArray, UInt8Array,
     };
     use arrow::compute::cast;
-    use arrow::datatypes::{DataType, Int8Type, Int32Type, UInt8Type};
+    use arrow::datatypes::{DataType, Int8Type, Int32Type, StringViewType, UInt8Type};
     use datafusion_physical_expr::binary_map::OutputType;
     use std::sync::Arc;
 
@@ -633,10 +655,25 @@ mod tests {
         )
     }
 
+    fn utf8_view_col() -> DictionaryGroupValuesColumn<Int32Type> {
+        let f = Field::new("", DataType::Utf8View, true);
+        DictionaryGroupValuesColumn::new(
+            Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()),
+            &f,
+        )
+    }
+
     fn i32_dict(keys: &[Option<i32>], values: &[Option<&str>]) -> ArrayRef {
         Arc::new(DictionaryArray::<Int32Type>::new(
             Int32Array::from(keys.to_vec()),
             Arc::new(StringArray::from(values.to_vec())),
+        ))
+    }
+
+    fn i32_dict_view(keys: &[Option<i32>], values: &[Option<&str>]) -> ArrayRef {
+        Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(keys.to_vec()),
+            Arc::new(StringViewArray::from(values.to_vec())),
         ))
     }
 
@@ -791,6 +828,61 @@ mod tests {
             str_values(&out),
             vec![None, Some("c".into()), None, Some("z".into())]
         );
+    }
+
+    #[test]
+    fn take_n_reuses_leftover_values_and_treats_emitted_values_as_new() {
+        let mut col = utf8_col();
+        col.vectorized_append(
+            &i32_dict(
+                &[Some(0), Some(1), Some(2)],
+                &[Some("a"), Some("b"), Some("c")],
+            ),
+            &[0, 1, 2],
+        )
+        .unwrap();
+        let _ = col.take_n(2);
+
+        let again = i32_dict(&[Some(0), Some(1)], &[Some("c"), Some("a")]);
+        col.vectorized_append(&again, &[0, 1]).unwrap();
+
+        let mut buf = all_true(2);
+        col.vectorized_equal_to(&[0, 1], &again, &[0, 1], &mut buf);
+        assert_eq!(bool_vec(&buf), vec![true, false]);
+
+        let out = Box::new(col).build();
+        assert_eq!(
+            str_values(&out),
+            vec![Some("c".into()), Some("c".into()), Some("a".into())]
+        );
+    }
+
+    #[test]
+    fn take_n_utf8_view_emits_and_interns_leftover_values() {
+        let mut col = utf8_view_col();
+        let b1 = i32_dict_view(
+            &[Some(0), Some(1), Some(2)],
+            &[
+                Some("a_non_inline_view_aaa"),
+                Some("b_non_inline_view_bbb"),
+                Some("c_non_inline_view_ccc"),
+            ],
+        );
+        col.vectorized_append(&b1, &[0, 1, 2]).unwrap();
+
+        let emitted = col.take_n(2);
+        assert_eq!(
+            str_values(&emitted),
+            vec![
+                Some("a_non_inline_view_aaa".into()),
+                Some("b_non_inline_view_bbb".into()),
+            ]
+        );
+
+        let leftover = i32_dict_view(&[Some(0)], &[Some("c_non_inline_view_ccc")]);
+        let mut buf = all_true(1);
+        col.vectorized_equal_to(&[0], &leftover, &[0], &mut buf);
+        assert_eq!(bool_vec(&buf), vec![true]);
     }
 
     #[test]
