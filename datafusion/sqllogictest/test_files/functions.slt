@@ -918,6 +918,48 @@ ORDER BY id
 2 2 Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
 NULL NULL Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
 
+# octet_length over binary types: byte semantics, no string coercion
+query I
+SELECT octet_length(arrow_cast('foo', 'Binary'))
+----
+3
+
+query IT
+SELECT octet_length(arrow_cast('josé', 'Binary')),
+       arrow_typeof(octet_length(arrow_cast('josé', 'Binary')))
+----
+5 Int32
+
+query IT
+SELECT octet_length(arrow_cast('foo', 'BinaryView')),
+       arrow_typeof(octet_length(arrow_cast('foo', 'BinaryView')))
+----
+3 Int32
+
+# LargeBinary widens the return type to Int64, mirroring LargeUtf8
+query IT
+SELECT octet_length(arrow_cast('foo', 'LargeBinary')),
+       arrow_typeof(octet_length(arrow_cast('foo', 'LargeBinary')))
+----
+3 Int64
+
+query I
+SELECT octet_length(arrow_cast(NULL, 'Binary'))
+----
+NULL
+
+# Dictionary encoding is preserved over binary values too
+query ?T
+SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'Dictionary(Int32, Binary)')),
+       arrow_typeof(octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'Dictionary(Int32, Binary)')))
+----
+3 Dictionary(Int32, Int32)
+
+# FixedSizeBinary is a distinct logical type and is deliberately not accepted,
+# matching md5 and the other Native(logical_binary()) signatures.
+query error Function 'octet_length' failed to match any signature
+SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)'))
+
 query ??TT
 SELECT character_length(dict_col), character_length(nested_dict_col),
        arrow_typeof(character_length(dict_col)),

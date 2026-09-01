@@ -19,12 +19,12 @@ use arrow::compute::kernels::length::length;
 use arrow::datatypes::DataType;
 
 use crate::utils::{transform_leaf_type_preserving_encoding, utf8_to_int_type};
-use datafusion_common::types::logical_string;
+use datafusion_common::types::{logical_binary, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -58,10 +58,20 @@ impl Default for OctetLengthFunc {
 impl OctetLengthFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
+            signature: Signature::one_of(
                 vec![
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
-                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                            .with_encoding_preservation(
+                                EncodingPreservation::dictionary(),
+                            ),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_binary()))
+                            .with_encoding_preservation(
+                                EncodingPreservation::dictionary(),
+                            ),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
@@ -107,6 +117,13 @@ fn octet_length_scalar(value: &ScalarValue) -> ScalarValue {
         ScalarValue::Utf8View(v) => {
             ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32))
         }
+        ScalarValue::Binary(v) => ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32)),
+        ScalarValue::LargeBinary(v) => {
+            ScalarValue::Int64(v.as_ref().map(|x| x.len() as i64))
+        }
+        ScalarValue::BinaryView(v) => {
+            ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32))
+        }
         ScalarValue::Dictionary(key_type, value) => ScalarValue::Dictionary(
             key_type.clone(),
             Box::new(octet_length_scalar(value)),
@@ -119,8 +136,11 @@ fn octet_length_scalar(value: &ScalarValue) -> ScalarValue {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Array, Int32Array, StringArray};
-    use arrow::datatypes::DataType::Int32;
+    use arrow::array::{
+        Array, BinaryArray, BinaryViewArray, Int32Array, Int64Array, LargeBinaryArray,
+        StringArray,
+    };
+    use arrow::datatypes::DataType::{Int32, Int64};
 
     use datafusion_common::ScalarValue;
     use datafusion_common::{Result, exec_err};
@@ -135,7 +155,7 @@ mod tests {
             OctetLengthFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(12)))],
             exec_err!(
-                "The OCTET_LENGTH function can only accept strings, but got Int32."
+                "The OCTET_LENGTH function can only accept strings or binary, but got Int32."
             ),
             i32,
             Int32,
@@ -230,6 +250,98 @@ mod tests {
             i32,
             Int32,
             Int32Array
+        );
+
+        // Binary inputs: byte length, no string coercion.
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Array(Arc::new(BinaryArray::from(vec![
+                &b"chars"[..],
+                &b"chars2"[..],
+            ])))],
+            Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                b"chars".to_vec()
+            )))],
+            Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        // Arbitrary non-UTF-8 bytes: the case CAST(col AS VARCHAR) cannot serve.
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Binary(Some(vec![
+                0xff, 0xfe, 0x00, 0x80
+            ])))],
+            Ok(Some(4)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Binary(Some(vec![])))],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Binary(None))],
+            Ok(None),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Array(Arc::new(BinaryViewArray::from(vec![
+                &b"chars"[..],
+                &b"chars2"[..],
+            ])))],
+            Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
+                b"chars".to_vec()
+            )))],
+            Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        // LargeBinary widens the return type to Int64, mirroring LargeUtf8.
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Array(Arc::new(LargeBinaryArray::from(
+                vec![&b"chars"[..], &b"chars2"[..]]
+            )))],
+            Ok(Some(5)),
+            i64,
+            Int64,
+            Int64Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
+                b"chars".to_vec()
+            )))],
+            Ok(Some(5)),
+            i64,
+            Int64,
+            Int64Array
         );
 
         Ok(())

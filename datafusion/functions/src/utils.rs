@@ -50,7 +50,7 @@ macro_rules! get_optimal_return_type {
                     DataType::Null => DataType::Null,
                     _ => {
                         return datafusion_common::exec_err!(
-                            "The {} function can only accept strings, but got {:?}.",
+                            "The {} function can only accept strings or binary, but got {:?}.",
                             name.to_uppercase(),
                             **value_type
                         );
@@ -58,7 +58,7 @@ macro_rules! get_optimal_return_type {
                 },
                 data_type => {
                     return datafusion_common::exec_err!(
-                        "The {} function can only accept strings, but got {:?}.",
+                        "The {} function can only accept strings or binary, but got {:?}.",
                         name.to_uppercase(),
                         data_type
                     );
