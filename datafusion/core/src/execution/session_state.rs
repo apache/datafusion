@@ -2006,7 +2006,7 @@ impl Debug for SessionStateBuilder {
             .field("higher_order_functions", &self.higher_order_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

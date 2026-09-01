@@ -51,7 +51,7 @@ impl Debug for DiskManagerBuilder {
         f.debug_struct("DiskManagerBuilder")
             .field("mode", &self.mode)
             .field("max_temp_directory_size", &self.max_temp_directory_size)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 impl Default for DiskManagerBuilder {
@@ -218,7 +218,7 @@ impl Debug for DiskManager {
             .field("used_disk_space", &self.used_disk_space)
             .field("active_files_count", &self.active_files_count)
             .field("factory", &self.factory.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 /// Information about the current disk usage for spilling

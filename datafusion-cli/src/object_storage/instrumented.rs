@@ -499,7 +499,7 @@ impl fmt::Debug for RequestDetails {
             .field("size", &self.size)
             .field("range", &self.range)
             .field("extra_display", &self.extra_display)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

@@ -310,7 +310,7 @@ impl fmt::Debug for ParquetMorselizer {
             .field("preserve_order", &self.preserve_order)
             .field("enable_page_index", &self.enable_page_index)
             .field("enable_bloom_filter", &self.enable_bloom_filter)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

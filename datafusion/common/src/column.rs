@@ -37,6 +37,10 @@ pub struct Column {
     pub spans: Spans,
 }
 
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "this Debug output appears in user-facing error messages; `spans` is diagnostic bookkeeping and a `..` would only add noise"
+)]
 impl fmt::Debug for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Column")

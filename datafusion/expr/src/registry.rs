@@ -422,7 +422,7 @@ impl Debug for ExtensionTypeRegistration {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultExtensionTypeRegistration")
             .field("type_name", &self.name)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

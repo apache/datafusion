@@ -823,7 +823,7 @@ impl fmt::Debug for HashJoinExec {
             .field("null_equality", &self.null_equality)
             .field("cache", &self.cache)
             // Explicitly exclude dynamic_filter to avoid runtime state differences in tests
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
