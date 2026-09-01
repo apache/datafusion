@@ -28,7 +28,7 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{Result, exec_err};
 use std::any::type_name;
 use std::fmt::Debug;
@@ -217,8 +217,6 @@ where
     output_type: OutputType,
     /// Underlying hash set for each distinct value
     map: hashbrown::hash_table::HashTable<Entry<O, V>>,
-    /// Total size of the map in bytes
-    map_size: usize,
     /// In progress buffer containing all values
     buffer: Vec<u8>,
     /// Offsets into `buffer` for each distinct  value. These offsets as used
@@ -248,7 +246,6 @@ where
         Self {
             output_type,
             map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
             buffer: Vec::with_capacity(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
             random_state: RandomState::default(),
@@ -415,11 +412,7 @@ where
                         offset_or_inline: inline,
                         payload,
                     };
-                    self.map.insert_accounted(
-                        new_header,
-                        |header| header.hash,
-                        &mut self.map_size,
-                    );
+                    self.map.insert_unique(hash, new_header, |header| header.hash);
                     payload
                 }
             }
@@ -457,11 +450,7 @@ where
                         offset_or_inline: offset,
                         payload,
                     };
-                    self.map.insert_accounted(
-                        new_header,
-                        |header| header.hash,
-                        &mut self.map_size,
-                    );
+                    self.map.insert_unique(hash, new_header, |header| header.hash);
                     payload
                 }
             };
@@ -486,7 +475,6 @@ where
         let Self {
             output_type,
             map: _,
-            map_size: _,
             offsets,
             buffer,
             random_state: _,
@@ -591,7 +579,11 @@ where
     /// Return the total size, in bytes, of memory used to store the data in
     /// this set, not including `self`
     pub fn size(&self) -> usize {
-        self.map_size
+        // `HashTable::allocation_size` reports the whole hashbrown allocation,
+        // which is the entry array plus the control bytes plus the trailing
+        // group, so it is larger than `capacity() * size_of::<Entry<O, V>>()`.
+        // It is a constant time layout calculation, not a walk of the table.
+        self.map.allocation_size()
             + self.buffer.capacity() * size_of::<u8>()
             + self.offsets.allocated_size()
             + self.hashes_buffer.allocated_size()
@@ -615,7 +607,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowBytesMap")
             .field("map", &"<map>")
-            .field("map_size", &self.map_size)
+            .field("map_allocation_size", &self.map.allocation_size())
             .field("buffer", &self.buffer)
             .field("random_state", &self.random_state)
             .field("hashes_buffer", &self.hashes_buffer)

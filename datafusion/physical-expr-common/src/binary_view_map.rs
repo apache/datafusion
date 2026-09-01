@@ -28,10 +28,9 @@ use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::{Result, exec_err};
 use std::fmt::Debug;
-use std::mem::size_of;
 use std::sync::Arc;
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -129,8 +128,6 @@ where
     output_type: OutputType,
     /// Underlying hash set for each distinct value
     map: hashbrown::hash_table::HashTable<Entry<V>>,
-    /// Total size of the map in bytes
-    map_size: usize,
 
     /// Views for all stored values (in insertion order)
     views: Vec<u128>,
@@ -159,13 +156,9 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
-        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
-        let map_size = map.capacity() * size_of::<Entry<V>>();
-
         Self {
             output_type,
-            map,
-            map_size,
+            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -374,8 +367,7 @@ where
                     payload,
                 };
 
-                self.map
-                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
+                self.map.insert_unique(hash, new_header, |h| h.hash);
                 payload
             };
             observe_payload_fn(payload);
@@ -540,13 +532,18 @@ where
     pub fn size(&self) -> usize {
         // All fields below own their allocations. Count retained capacity rather
         // than used length because this value drives memory accounting.
+        //
+        // `HashTable::allocation_size` reports the whole hashbrown allocation,
+        // which is the entry array plus the control bytes plus the trailing
+        // group, so it is larger than `capacity() * size_of::<Entry<V>>()`. It
+        // is a constant time layout calculation, not a walk of the table.
         let views_size = self.views.allocated_size();
         let in_progress_size = self.in_progress.allocated_size();
         let completed_size = self.completed.allocated_size()
             + self.completed.iter().map(Buffer::capacity).sum::<usize>();
         let nulls_size = self.nulls.allocated_size();
 
-        self.map_size
+        self.map.allocation_size()
             + views_size
             + in_progress_size
             + completed_size
@@ -562,7 +559,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowBytesMap")
             .field("map", &"<map>")
-            .field("map_size", &self.map_size)
+            .field("map_allocation_size", &self.map.allocation_size())
             .field("views_len", &self.views.len())
             .field("completed_buffers", &self.completed.len())
             .field("random_state", &self.random_state)
@@ -597,6 +594,7 @@ where
 mod tests {
     use arrow::array::{GenericByteViewArray, StringViewArray};
     use datafusion_common::HashMap;
+    use std::mem::size_of;
 
     use super::*;
 
@@ -789,7 +787,15 @@ mod tests {
     fn test_size_counts_initial_hash_table_capacity() {
         let map = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
 
-        assert_eq!(map.size(), map.map.capacity() * size_of::<Entry<()>>());
+        assert_eq!(map.size(), map.map.allocation_size());
+        // The reported size covers the control bytes as well as the entries, so
+        // it is strictly larger than the entry array on its own.
+        assert!(
+            map.size() > map.map.capacity() * size_of::<Entry<()>>(),
+            "expected {} to exceed {}",
+            map.size(),
+            map.map.capacity() * size_of::<Entry<()>>()
+        );
     }
 
     #[test]
@@ -822,7 +828,7 @@ mod tests {
                 .any(|buffer| buffer.capacity() > buffer.len())
         );
 
-        let expected_size = map.map_size
+        let expected_size = map.map.allocation_size()
             + map.views.allocated_size()
             + map.in_progress.allocated_size()
             + map.completed.allocated_size()
@@ -832,7 +838,7 @@ mod tests {
         assert_eq!(map.size(), expected_size);
 
         // Verify the retained-capacity delta independently from the production formula.
-        let legacy_size = map.map_size
+        let legacy_size = map.map.allocation_size()
             + map.views.len() * size_of::<u128>()
             + map.in_progress.capacity()
             + map.completed.iter().map(Buffer::len).sum::<usize>()
