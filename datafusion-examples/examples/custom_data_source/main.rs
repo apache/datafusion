@@ -27,16 +27,16 @@
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
 //!
-//! - `adapter_serialization`  
+//! - `adapter_serialization`
 //!   (file: adapter_serialization.rs, desc: Preserve custom PhysicalExprAdapter information during plan serialization using PhysicalExtensionCodec interception)
 //!
-//! - `csv_json_opener`  
+//! - `csv_json_opener`
 //!   (file: csv_json_opener.rs, desc: Use low-level FileOpener APIs for CSV/JSON)
 //!
 //! - `csv_sql_streaming`
 //!   (file: csv_sql_streaming.rs, desc: Run a streaming SQL query against CSV data)
 //!
-//! - `custom_datasource`  
+//! - `custom_datasource`
 //!   (file: custom_datasource.rs, desc: Query a custom TableProvider)
 //!
 //! - `custom_file_casts`

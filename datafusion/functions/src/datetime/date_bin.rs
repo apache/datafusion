@@ -685,7 +685,7 @@ fn date_bin_impl(
                 stride: i64,
                 stride_fn: BinFunction,
                 array: &ArrayRef,
-                tz_opt: &Option<Arc<str>>,
+                tz_opt: Option<&Arc<str>>,
             ) -> Result<ColumnarValue>
             where
                 T: ArrowTimestampType,
@@ -697,29 +697,45 @@ fn date_bin_impl(
                     date_bin_timestamp_value::<T>(val, origin, stride, stride_fn)
                 });
 
-                let array = result.with_timezone_opt(tz_opt.clone());
+                let array = result.with_timezone_opt(tz_opt.cloned());
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
 
             match array.data_type() {
                 Timestamp(Nanosecond, tz_opt) => {
                     transform_array_with_stride::<TimestampNanosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Microsecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMicrosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Millisecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMillisecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Second, tz_opt) => {
                     transform_array_with_stride::<TimestampSecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Time32(Millisecond) => {

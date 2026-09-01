@@ -2836,7 +2836,7 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 // Returns `None` if they are incomparable, `Some(true)` if there is no current
 // ordering or candidate ordering is finer, and `Some(false)` otherwise.
 fn determine_finer(
-    current: &Option<LexOrdering>,
+    current: Option<&LexOrdering>,
     candidate: &LexOrdering,
 ) -> Option<bool> {
     if let Some(ordering) = current {
@@ -2894,7 +2894,7 @@ pub fn get_finer_aggregate_exprs_requirement(
             // we can skip this expression. If the latter is finer than the former,
             // adopt it if it is satisfied by the equivalence properties. Otherwise,
             // defer the analysis to the reverse expression.
-            let forward_finer = determine_finer(&requirement, &aggr_req);
+            let forward_finer = determine_finer(requirement.as_ref(), &aggr_req);
             if let Some(finer) = forward_finer {
                 if !finer {
                     continue;
@@ -2921,7 +2921,8 @@ pub fn get_finer_aggregate_exprs_requirement(
                 // expression. If the latter is finer than the former, adopt it if
                 // it is satisfied by the equivalence properties. Otherwise, adopt
                 // the forward expression.
-                if let Some(finer) = determine_finer(&requirement, &rev_aggr_req) {
+                if let Some(finer) = determine_finer(requirement.as_ref(), &rev_aggr_req)
+                {
                     if !finer {
                         *aggr_expr = Arc::new(reverse_aggr_expr);
                     } else if eq_properties.ordering_satisfy(rev_aggr_req.clone())? {
@@ -3557,7 +3558,7 @@ mod tests {
             "
             );
             }
-        };
+        }
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
@@ -3678,7 +3679,7 @@ mod tests {
             +---+---------------+-------------+
             ");
             }
-        };
+        }
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
@@ -5274,7 +5275,7 @@ mod tests {
             +---+-------------------------------------------+
             ");
             }
-        };
+        }
         Ok(())
     }
 

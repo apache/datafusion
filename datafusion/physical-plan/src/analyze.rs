@@ -355,10 +355,7 @@ impl ExecutionPlan for AnalyzeExec {
         let Self {
             verbose,
             show_statistics,
-            // TODO: not on the wire. `AnalyzeExecBuilder` always resets this to
-            // `[Summary, Dev]`, so a non-default selection is lost on
-            // round-trip. Fixing it needs a new proto field.
-            metric_types: _,
+            metric_types,
             metric_categories,
             format,
             input,
@@ -382,6 +379,13 @@ impl ExecutionPlan for AnalyzeExec {
             ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
             ExplainFormat::Graphviz => protobuf::ExplainFormat::Graphviz,
         } as i32;
+        let metric_types = metric_types
+            .iter()
+            .map(|metric_type| match metric_type {
+                MetricType::Summary => protobuf::MetricType::Summary,
+                MetricType::Dev => protobuf::MetricType::Dev,
+            } as i32)
+            .collect();
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Analyze(Box::new(
@@ -393,6 +397,8 @@ impl ExecutionPlan for AnalyzeExec {
                         has_metric_categories,
                         metric_categories,
                         format,
+                        has_metric_types: true,
+                        metric_types,
                     },
                 )),
             ),
@@ -424,10 +430,33 @@ impl AnalyzeExec {
             has_metric_categories,
             metric_categories,
             format,
+            has_metric_types,
+            metric_types,
         } = analyze.as_ref();
 
         let input =
             ctx.decode_required_child(input.as_deref(), "AnalyzeExec", "input")?;
+        let metric_types = if *has_metric_types {
+            Some(
+                metric_types
+                    .iter()
+                    .map(|metric_type| {
+                        let metric_type = protobuf::MetricType::try_from(*metric_type)
+                            .map_err(|_| {
+                                datafusion_common::internal_datafusion_err!(
+                                    "Received an AnalyzeExecNode message with unknown MetricType {metric_type}"
+                                )
+                            })?;
+                        Ok(match metric_type {
+                            protobuf::MetricType::Summary => MetricType::Summary,
+                            protobuf::MetricType::Dev => MetricType::Dev,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
         let metric_categories = if *has_metric_categories {
             Some(
                 metric_categories
@@ -454,16 +483,22 @@ impl AnalyzeExec {
                 "AnalyzeExec is missing required field 'schema'"
             )
         })?;
+        let mut builder = AnalyzeExec::builder(
+            *verbose,
+            *show_statistics,
+            input,
+            Arc::new(arrow::datatypes::Schema::try_from(schema)?),
+        );
+        // Retain the builder default for plans written before `metric_types`
+        // and its presence bit were added.
+        if let Some(metric_types) = metric_types {
+            builder = builder.with_metric_types(metric_types);
+        }
         Ok(Arc::new(
-            AnalyzeExec::builder(
-                *verbose,
-                *show_statistics,
-                input,
-                Arc::new(arrow::datatypes::Schema::try_from(schema)?),
-            )
-            .with_metric_categories(metric_categories)
-            .with_format(format)
-            .build(),
+            builder
+                .with_metric_categories(metric_categories)
+                .with_format(format)
+                .build(),
         ))
     }
 }

@@ -337,7 +337,7 @@ where
         } else {
             let end = start + count;
             mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
-        };
+        }
         offsets.push(offsets[row_index] + count);
     }
 

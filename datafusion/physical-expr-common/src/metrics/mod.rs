@@ -314,7 +314,7 @@ impl MetricsSet {
             MetricValue::EndTimestamp(_) => false,
             MetricValue::PruningMetrics { name, .. } => name == metric_name,
             MetricValue::Ratio { name, .. } => name == metric_name,
-            MetricValue::Custom { .. } => false,
+            MetricValue::Custom { name, .. } => name == metric_name,
         })
     }
 
@@ -656,6 +656,8 @@ impl Display for LabelValue {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use chrono::{TimeZone, Utc};
@@ -774,6 +776,60 @@ mod tests {
     }
 
     #[test]
+    fn test_sum_by_name_custom_metric() {
+        #[derive(Debug)]
+        struct CustomCount(AtomicUsize);
+
+        impl Display for CustomCount {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0.load(Ordering::Relaxed))
+            }
+        }
+
+        impl CustomMetricValue for CustomCount {
+            fn new_empty(&self) -> Arc<dyn CustomMetricValue> {
+                Arc::new(Self(AtomicUsize::new(0)))
+            }
+
+            fn aggregate(&self, other: Arc<dyn CustomMetricValue + 'static>) {
+                let other = other.as_any().downcast_ref::<Self>().unwrap();
+                self.0
+                    .fetch_add(other.0.load(Ordering::Relaxed), Ordering::Relaxed);
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn as_usize(&self) -> usize {
+                self.0.load(Ordering::Relaxed)
+            }
+
+            fn is_eq(&self, other: &Arc<dyn CustomMetricValue>) -> bool {
+                other.as_any().downcast_ref::<Self>().is_some_and(|other| {
+                    self.0.load(Ordering::Relaxed) == other.0.load(Ordering::Relaxed)
+                })
+            }
+        }
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        for (name, value) in [("custom_count", 1), ("custom_count", 2), ("other", 4)] {
+            MetricBuilder::new(&metrics).build(MetricValue::Custom {
+                name: name.into(),
+                value: Arc::new(CustomCount(AtomicUsize::new(value))),
+            });
+        }
+
+        assert_eq!(
+            metrics
+                .clone_inner()
+                .sum_by_name("custom_count")
+                .map(|metric| metric.as_usize()),
+            Some(3)
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "Mismatched metric types. Can not aggregate Count")]
     fn test_bad_sum() {
         // can not add different kinds of metrics
@@ -885,7 +941,7 @@ mod tests {
             _ => {
                 panic!("Not a timestamp");
             }
-        };
+        }
 
         let mut ts = aggregated
             .iter()
@@ -903,7 +959,7 @@ mod tests {
             _ => {
                 panic!("Not a timestamp");
             }
-        };
+        }
     }
 
     #[test]

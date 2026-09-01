@@ -367,7 +367,6 @@ impl Stream for PartialReduceHashAggregateStream {
             match next_state {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
-                    continue;
                 }
                 ControlFlow::Break((poll, next_state)) => {
                     self.state = Some(next_state);

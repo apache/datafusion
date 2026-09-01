@@ -313,6 +313,10 @@ where
 }
 
 #[inline]
+#[expect(
+    clippy::needless_bitwise_bool,
+    reason = "the non-short-circuiting `|` is the point of this branchless kernel"
+)]
 fn check_values<C, const N: usize>(
     in_list_values: &[C],
     input_values: &[C],
