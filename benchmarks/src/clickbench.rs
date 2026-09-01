@@ -111,9 +111,7 @@ pub struct RunOpt {
 
 /// Get the SQL file path
 pub fn get_query_path(query_dir: &Path, query: usize) -> PathBuf {
-    let mut query_path = query_dir.to_path_buf();
-    query_path.push(format!("q{query}.sql"));
-    query_path
+    query_dir.join(format!("q{query}.sql"))
 }
 
 /// Get the SQL statement from the specified query file

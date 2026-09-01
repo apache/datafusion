@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
     ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
     CustomTableScanNode, DmlNode, SortExprNodeCollection, dml_node,
@@ -40,6 +39,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::format::{
     ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
 };
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
     NullEquality, Result, TableReference, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
@@ -508,9 +508,11 @@ impl AsLogicalPlan for LogicalPlanNode {
         })?;
         match plan {
             LogicalPlanType::Values(values) => {
-                let n_cols = values.n_cols as usize;
+                let n_cols = usize_from_wire(values.n_cols, "Values", "n_cols")?;
                 let values: Vec<Vec<Expr>> = if values.values_list.is_empty() {
                     Ok(Vec::new())
+                } else if n_cols == 0 {
+                    internal_err!("ValuesNode n_cols must be greater than 0")
                 } else if values.values_list.len() % n_cols != 0 {
                     internal_err!(
                         "Invalid values list length, expect {} to be divisible by {}",
@@ -702,7 +704,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
-            CustomScan(scan) => {
+            LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
                 let schema = Arc::new(schema);
                 let mut projection = None;
@@ -741,7 +743,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<SortExpr> =
                     from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
-                let fetch: Option<usize> = sort.fetch.try_into().ok();
+                let fetch = (sort.fetch >= 0)
+                    .then(|| usize_from_wire(sort.fetch, "Sort", "fetch"))
+                    .transpose()?;
                 LogicalPlanBuilder::from(input)
                     .sort_with_limit(sort_expr, fetch)?
                     .build()
@@ -757,16 +761,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )
                 })?;
 
+                let decode_partition_count =
+                    |count: u64| usize_from_wire(count, "Repartition", "partition_count");
                 let partitioning_scheme = match pb_partition_method {
                     PartitionMethod::Hash(protobuf::HashRepartition {
                         hash_expr: pb_hash_expr,
                         partition_count,
                     }) => Partitioning::Hash(
                         from_proto::parse_exprs(pb_hash_expr, ctx, extension_codec)?,
-                        *partition_count as usize,
+                        decode_partition_count(*partition_count)?,
                     ),
                     PartitionMethod::RoundRobin(partition_count) => {
-                        Partitioning::RoundRobinBatch(*partition_count as usize)
+                        Partitioning::RoundRobinBatch(decode_partition_count(
+                            *partition_count,
+                        )?)
                     }
                     PartitionMethod::Range(protobuf::RangeRepartition {
                         sort_expr: pb_sort_expr,
@@ -983,13 +991,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
-                let skip = limit.skip.max(0) as usize;
+                let skip = usize_from_wire(limit.skip.max(0), "Limit", "skip")?;
 
-                let fetch = if limit.fetch < 0 {
-                    None
-                } else {
-                    Some(limit.fetch as usize)
-                };
+                let fetch = (limit.fetch >= 0)
+                    .then(|| usize_from_wire(limit.fetch, "Limit", "fetch"))
+                    .transpose()?;
 
                 LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
             }
@@ -1532,7 +1538,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec
                         .try_encode_table_provider(table_name, provider, &mut bytes)
                         .map_err(|e| context!("Error serializing custom table", e))?;
-                    let scan = CustomScan(CustomTableScanNode {
+                    let scan = LogicalPlanType::CustomScan(CustomTableScanNode {
                         table_name: Some(protobuf::TableReference::from(
                             table_name.clone(),
                         )),
@@ -1754,8 +1760,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: skip as i64,
-                            fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
+                            skip: usize_to_wire(skip, "Limit", "skip")?,
+                            fetch: match fetch {
+                                Some(f) => usize_to_wire(f, "Limit", "fetch")?,
+                                None => -1, // no limit
+                            },
                         },
                     ))),
                 })
@@ -1772,7 +1781,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::SortNode {
                             input: Some(Box::new(input)),
                             expr: sort_expr,
-                            fetch: fetch.map(|f| f as i64).unwrap_or(-1i64),
+                            fetch: match fetch {
+                                Some(f) => usize_to_wire(*f, "Sort", "fetch")?,
+                                None => -1, // no limit
+                            },
                         },
                     ))),
                 })

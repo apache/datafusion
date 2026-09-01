@@ -17,9 +17,8 @@
 
 use arrow::array::Array;
 use arrow::{
-    array::{ArrayRef, BooleanBufferBuilder, RecordBatch},
+    array::{ArrayRef, RecordBatch},
     compute::concat_batches,
-    util::bit_util,
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
@@ -37,7 +36,6 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::TryStreamExt;
-use parking_lot::Mutex;
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -47,8 +45,9 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::piecewise_merge_join::classic_join::{
     ClassicPWMJStream, PiecewiseMergeJoinStreamState,
 };
+use crate::joins::piecewise_merge_join::existence_join::ExistencePWMJStream;
 use crate::joins::piecewise_merge_join::utils::{
-    build_visited_indices_map, is_existence_join, is_right_existence_join,
+    is_existence_join, is_right_existence_join, is_supported_existence_join,
 };
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
@@ -58,10 +57,7 @@ use crate::{
 };
 use crate::{
     ExecutionPlan, PlanProperties,
-    joins::{
-        SharedBitmapBuilder,
-        utils::{BuildProbeJoinMetrics, OnceAsync, OnceFut, build_join_schema},
-    },
+    joins::utils::{BuildProbeJoinMetrics, OnceAsync, OnceFut, build_join_schema},
     metrics::ExecutionPlanMetricsSet,
     spill::get_record_batch_memory_size,
 };
@@ -164,17 +160,15 @@ use crate::{
 /// ```
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
-/// Existence joins are made magnitudes of times faster with a `PiecewiseMergeJoin` as we only need to find
-/// the min/max value of the streamed side to be able to emit all matches on the buffered side. By putting
-/// the side we need to mark onto the sorted buffer side, we can emit all these matches at once.
+/// Currently only `LeftSemi` and `LeftAnti` are supported. For these the marked side is
+/// already the left (buffered) side, so no input swap is needed. The rest are rejected in
+/// [`Self::try_new`]: `RightSemi`/`RightAnti`/`RightMark` mark the right side and need an
+/// input swap, and `LeftMark` needs an extra boolean column rather than a filtered slice.
 ///
-/// For less than operations (`<`) both inputs are to be sorted in descending order and vice versa for greater
-/// than (`>`) operations. `SortExec` is used to enforce sorting on the buffered side and streamed side does not
-/// need to be sorted due to only needing to find the min/max.
-///
-/// For Left Semi, Anti, and Mark joins we swap the inputs so that the marked side is on the buffered side.
-///
-/// The pseudocode for the algorithm looks like this:
+/// `LeftSemi`/`LeftAnti` are served by a dedicated stream, `ExistencePWMJStream` (see
+/// `existence_join.rs`). Instead of materializing row pairs it records the matched set as a
+/// single index -- the start of the matched suffix of the buffered side -- and slices the
+/// buffered batch at that index once every streamed partition has been consumed.
 ///
 /// ```text
 /// // Using the example of a less than `<` operation
@@ -296,10 +290,12 @@ impl PiecewiseMergeJoinExec {
         join_type: JoinType,
         num_partitions: usize,
     ) -> Result<Self> {
-        // TODO: Implement existence joins for PiecewiseMergeJoin
-        if is_existence_join(join_type) {
+        // Left Semi/Anti are handled by `ExistencePWMJStream` (the marked side is
+        // already the buffered side, so no input swap is needed). Right existence joins
+        // and Mark joins are not yet supported.
+        if is_existence_join(join_type) && !is_supported_existence_join(join_type) {
             return not_impl_err!(
-                "Existence Joins are currently not supported for PiecewiseMergeJoin"
+                "Existence join {join_type} is currently not supported for PiecewiseMergeJoin"
             );
         }
 
@@ -361,7 +357,6 @@ impl PiecewiseMergeJoinExec {
             &streamed,
             Arc::clone(&schema),
             join_type,
-            &on,
         )?;
 
         Ok(Self {
@@ -423,7 +418,6 @@ impl PiecewiseMergeJoinExec {
         streamed: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
-        join_on: &(PhysicalExprRef, PhysicalExprRef),
     ) -> Result<PlanProperties> {
         let eq_properties = join_equivalence_properties(
             buffered.equivalence_properties().clone(),
@@ -432,7 +426,12 @@ impl PiecewiseMergeJoinExec {
             schema,
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
-            std::slice::from_ref(join_on),
+            // `PiecewiseMergeJoin`'s `on` is a range predicate (e.g. `l < r`),
+            // not an equijoin key. Passing it here would register a false
+            // `left == right` output equivalence, letting the optimizer drop a
+            // required sort and return wrongly ordered results. Range joins add
+            // no column equivalences, so pass none.
+            &[],
         )?;
 
         let output_partitioning =
@@ -506,7 +505,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // Existence joins don't need to be sorted on one side.
         if is_right_existence_join(self.join_type) {
-            unimplemented!()
+            // Unreachable: `try_new` rejects right existence joins, and this signature
+            // cannot return `Result`. They swap the inputs, so whoever implements them
+            // must require the order on the streamed side instead.
+            unimplemented!(
+                "required_input_ordering for right existence joins; guarded by try_new"
+            )
         } else {
             // Sort the right side in memory, so we do not need to enforce any sorting
             vec![
@@ -603,6 +607,14 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let on_streamed = Arc::clone(&self.on.1);
 
         let metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        // The final pass over unmatched/existence rows must run exactly once, on the
+        // last streamed partition to finish. That is coordinated by an atomic counter
+        // seeded with the number of streamed partitions that will actually call
+        // `execute`, which is the streamed side's output partition count — not the
+        // planner's `target_partitions` (they can differ, e.g. when the streamed input
+        // has a single partition), otherwise the counter never reaches 1 and the final
+        // pass is skipped.
+        let streamed_partitions = self.streamed.output_partitioning().partition_count();
         let buffered_fut = self.buffered_fut.try_once(|| {
             let reservation = MemoryConsumer::new("PiecewiseMergeJoinInput")
                 .register(context.memory_pool());
@@ -613,8 +625,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 Arc::clone(&on_buffered),
                 metrics.clone(),
                 reservation,
-                build_visited_indices_map(self.join_type),
-                self.num_partitions,
+                streamed_partitions,
             ))
         })?;
 
@@ -622,9 +633,27 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // TODO: Add existence joins + this is guarded at physical planner
-        if is_existence_join(self.join_type()) {
-            unreachable!()
+        let buffered_side =
+            BufferedSide::Initial(BufferedSideInitialState { buffered_fut });
+
+        if is_supported_existence_join(self.join_type) {
+            Ok(Box::pin(ExistencePWMJStream::try_new(
+                Arc::clone(&self.schema),
+                on_streamed,
+                self.join_type,
+                self.operator,
+                streamed,
+                buffered_side,
+                self.sort_options,
+                metrics,
+                batch_size,
+            )))
+        } else if is_existence_join(self.join_type) {
+            // Right existence joins and Mark joins are rejected in `try_new`.
+            internal_err!(
+                "PiecewiseMergeJoin does not support existence join {} (should have been rejected in try_new)",
+                self.join_type
+            )
         } else {
             Ok(Box::pin(ClassicPWMJStream::try_new(
                 Arc::clone(&self.schema),
@@ -632,7 +661,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.join_type,
                 self.operator,
                 streamed,
-                BufferedSide::Initial(BufferedSideInitialState { buffered_fut }),
+                buffered_side,
                 PiecewiseMergeJoinStreamState::WaitBufferedSide,
                 self.sort_options,
                 metrics,
@@ -643,6 +672,150 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            buffered,
+            streamed,
+            on,
+            operator,
+            join_type,
+            num_partitions,
+            // derived from the children's schemas by `try_new` on decode
+            schema: _,
+            // buffered side collected at execution time, not part of the plan
+            buffered_fut: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            left_child_plan_required_order: _,
+            // recomputed from `on` and `sort_options` by `try_new` on decode
+            right_batch_required_orders: _,
+            // recomputed from `operator` and `join_type` by `try_new` on decode
+            sort_options: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
+
+        let (on_buffered, on_streamed) = on;
+        let buffered = ctx.encode_child(buffered)?;
+        let streamed = ctx.encode_child(streamed)?;
+        let on_buffered = ctx.encode_expr(on_buffered)?;
+        let on_streamed = ctx.encode_expr(on_streamed)?;
+        let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::PiecewiseMergeJoin(
+                    Box::new(protobuf::PiecewiseMergeJoinExecNode {
+                        buffered: Some(Box::new(buffered)),
+                        streamed: Some(Box::new(streamed)),
+                        on_buffered: Some(on_buffered),
+                        on_streamed: Some(on_streamed),
+                        // Matches the `Operator` encoding used for `BinaryExpr`:
+                        // the `Debug` name of the variant.
+                        operator: format!("{operator:?}"),
+                        join_type: join_type.into(),
+                        num_partitions: *num_partitions as u64,
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl PiecewiseMergeJoinExec {
+    /// Reconstruct a [`PiecewiseMergeJoinExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Every other field of
+    /// the operator (schema, sort options, required orderings, plan properties) is
+    /// derived by [`PiecewiseMergeJoinExec::try_new`], so it is not on the wire.
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
+        use datafusion_proto_models::protobuf;
+
+        let join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::PiecewiseMergeJoin,
+            "PiecewiseMergeJoinExec",
+        );
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::PiecewiseMergeJoinExecNode {
+            buffered,
+            streamed,
+            on_buffered,
+            on_streamed,
+            operator,
+            join_type,
+            num_partitions,
+        } = &**join;
+
+        let buffered = ctx.decode_required_child(
+            buffered.as_deref(),
+            "PiecewiseMergeJoinExec",
+            "buffered",
+        )?;
+        let streamed = ctx.decode_required_child(
+            streamed.as_deref(),
+            "PiecewiseMergeJoinExec",
+            "streamed",
+        )?;
+        let on_buffered = ctx.decode_required_expr(
+            on_buffered.as_ref(),
+            buffered.schema().as_ref(),
+            "PiecewiseMergeJoinExec",
+            "on_buffered",
+        )?;
+        let on_streamed = ctx.decode_required_expr(
+            on_streamed.as_ref(),
+            streamed.schema().as_ref(),
+            "PiecewiseMergeJoinExec",
+            "on_streamed",
+        )?;
+
+        let operator = Operator::from_proto_name(operator).ok_or_else(|| {
+            internal_datafusion_err!(
+                "PiecewiseMergeJoinExec: unknown Operator '{operator}'"
+            )
+        })?;
+        let join_type = crate::joins::proto::join_type_from_proto(
+            *join_type,
+            "PiecewiseMergeJoinExec",
+        )?;
+
+        // Checked rather than `as usize`: a truncated partition count would not
+        // fail loudly, it would silently change how the buffered side is split.
+        let num_partitions =
+            usize::try_from(*num_partitions).map_err(|_| {
+                plan_datafusion_err!(
+                     "PiecewiseMergeJoinExec: num_partitions {num_partitions} cannot be represented as usize on this target"
+                )
+            })?;
+
+        Ok(Arc::new(Self::try_new(
+            buffered,
+            streamed,
+            (on_buffered, on_streamed),
+            operator,
+            join_type,
+            num_partitions,
+        )?))
     }
 }
 
@@ -680,22 +853,19 @@ async fn build_buffered_data(
     on_buffered: PhysicalExprRef,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
-    build_map: bool,
     remaining_partitions: usize,
 ) -> Result<BufferedSideData> {
     let schema = buffered.schema();
 
     // Combine batches and record number of rows
-    let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, reservation) = buffered
+    let initial = (Vec::new(), metrics, reservation);
+    let (batches, metrics, reservation) = buffered
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = get_record_batch_memory_size(&batch);
-            acc.3.try_grow(batch_size)?;
-            acc.2.build_mem_used.add(batch_size);
-            acc.2.build_input_batches.add(1);
-            acc.2.build_input_rows.add(batch.num_rows());
-            // Update row count
-            acc.1 += batch.num_rows();
+            acc.2.try_grow(batch_size)?;
+            acc.1.build_mem_used.add(batch_size);
+            acc.1.build_input_batches.add(1);
+            acc.1.build_input_rows.add(batch.num_rows());
             // Push batch to output
             acc.0.push(batch);
             Ok(acc)
@@ -716,23 +886,9 @@ async fn build_buffered_data(
     reservation.try_grow(size_estimation)?;
     metrics.build_mem_used.add(size_estimation);
 
-    // Created visited indices bitmap only if the join type requires it
-    let visited_indices_bitmap = if build_map {
-        let bitmap_size = bit_util::ceil(single_batch.num_rows(), 8);
-        reservation.try_grow(bitmap_size)?;
-        metrics.build_mem_used.add(bitmap_size);
-
-        let mut bitmap_buffer = BooleanBufferBuilder::new(single_batch.num_rows());
-        bitmap_buffer.append_n(num_rows, false);
-        bitmap_buffer
-    } else {
-        BooleanBufferBuilder::new(0)
-    };
-
     let buffered_data = BufferedSideData::new(
         single_batch,
         buffered_values,
-        Mutex::new(visited_indices_bitmap),
         remaining_partitions,
         reservation,
     );
@@ -743,8 +899,20 @@ async fn build_buffered_data(
 pub(super) struct BufferedSideData {
     pub(super) batch: RecordBatch,
     values: ArrayRef,
-    pub(super) visited_indices_bitmap: SharedBitmapBuilder,
     pub(super) remaining_partitions: AtomicUsize,
+    /// The start of the matched suffix of the buffered side, or `usize::MAX` before the
+    /// first match. `[min_marked, len)` *is* the matched set and `[0, min_marked)` the
+    /// unmatched one -- no bitmap is allocated.
+    ///
+    /// Both stream kinds only ever mark a suffix, which is what makes one index enough:
+    ///  - `ExistencePWMJStream` marks `[k, len)` for the first buffered row `k` matching
+    ///    a streamed batch's extreme key.
+    ///  - `ClassicPWMJStream` emits `buffered[k..] x streamed_row` on each match, so the
+    ///    rows it marks are exactly that same suffix.
+    ///
+    /// Shared so each partition benefits from what the others have marked; it only ever
+    /// decreases, so a stale read is safe.
+    pub(super) min_marked: AtomicUsize,
     _reservation: MemoryReservation,
 }
 
@@ -752,15 +920,14 @@ impl BufferedSideData {
     pub(super) fn new(
         batch: RecordBatch,
         values: ArrayRef,
-        visited_indices_bitmap: SharedBitmapBuilder,
         remaining_partitions: usize,
         reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             values,
-            visited_indices_bitmap,
             remaining_partitions: AtomicUsize::new(remaining_partitions),
+            min_marked: AtomicUsize::new(usize::MAX),
             _reservation: reservation,
         }
     }

@@ -394,7 +394,7 @@ fn build_join(
                 right,
             })),
         ) => {
-            let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+            let right_col = create_col_from_scalar_expr(&right, alias)?;
             let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
             in_predicate.and(join_filter)
         }
@@ -407,7 +407,7 @@ fn build_join(
                 right,
             })),
         ) => {
-            let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+            let right_col = create_col_from_scalar_expr(&right, alias)?;
 
             Expr::eq(left.deref().clone(), Expr::Column(right_col))
         }

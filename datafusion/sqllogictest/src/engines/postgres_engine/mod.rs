@@ -171,7 +171,7 @@ impl Postgres {
         debug!("Handling COPY command: {sql}");
 
         // Hacky way to  find the 'filename' in the statement
-        let mut tokens = canonical_sql.split_whitespace().peekable();
+        let mut tokens = canonical_sql.split_whitespace();
         let mut filename = None;
 
         // COPY FROM '/opt/data/csv/aggregate_test_100.csv' ...

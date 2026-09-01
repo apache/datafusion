@@ -17,7 +17,11 @@
 
 //! DataFusion Join implementations
 
+use core::fmt;
+use std::fmt::{Display, Formatter};
+
 use arrow::array::BooleanBufferBuilder;
+pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::{
@@ -29,6 +33,7 @@ use parking_lot::Mutex;
 pub use piecewise_merge_join::PiecewiseMergeJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
+mod asof_join;
 pub mod chain;
 mod cross_join;
 mod hash_join;
@@ -102,6 +107,17 @@ pub enum PartitionMode {
     /// mode(Partitioned/CollectLeft) is optimal based on statistics. It will
     /// also consider swapping the left and right inputs for the Join
     Auto,
+}
+
+impl Display for PartitionMode {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let partition_mode = match self {
+            PartitionMode::Partitioned => "Partitioned",
+            PartitionMode::CollectLeft => "CollectLeft",
+            PartitionMode::Auto => "Auto",
+        };
+        write!(f, "{partition_mode}")
+    }
 }
 
 /// Partitioning mode to use for symmetric hash join

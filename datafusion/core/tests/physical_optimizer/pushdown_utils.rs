@@ -434,7 +434,7 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 fn format_lines(s: &str) -> Vec<String> {
-    s.trim().split('\n').map(|s| s.to_string()).collect()
+    s.trim().lines().map(|s| s.to_string()).collect()
 }
 
 pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
@@ -495,7 +495,7 @@ impl ExecutionPlan for TestNode {
         children: Vec<Arc<dyn ExecutionPlan>>,
         _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.len() == 1);
+        assert_eq!(children.len(), 1);
         Ok(Arc::new(TestNode::new(
             self.inject_filter,
             children[0].clone(),

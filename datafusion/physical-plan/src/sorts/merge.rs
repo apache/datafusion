@@ -103,9 +103,10 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Current reset count
     current_reset_epoch: usize,
 
-    /// Stores the previous value of each partitions for tracking the poll counts on the same value
-    /// Used if and only if round robin tie breaker is enabled, otherwise None
-    prev_cursors: Option<Vec<Option<Cursor<C>>>>,
+    /// Stores an owned copy of the last row of each partition's most
+    /// recently exhausted cursor, for tracking the poll counts on the same
+    /// value across a batch boundary.
+    prev_cursors: Option<Vec<Option<C::SingleRowValue>>>,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -364,6 +365,21 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
+    /// Returns the poll count of `partition_idx` for the current tie-breaker
+    /// round.
+    ///
+    /// Poll counts are reset lazily by bumping `current_reset_epoch` (see
+    /// [`Self::reset_poll_counts`]), so a count written in an older epoch is
+    /// stale and reads as 0.
+    #[inline]
+    fn poll_count(&self, partition_idx: usize) -> usize {
+        if self.poll_reset_epochs[partition_idx] == self.current_reset_epoch {
+            self.num_of_polled_with_same_value[partition_idx]
+        } else {
+            0
+        }
+    }
+
     /// For the given partition, updates the poll count. If the current value is the same
     /// of the previous value, it increases the count by 1; otherwise, it is reset as 0.
     fn update_poll_count_on_the_same_value(&mut self, partition_idx: usize) {
@@ -435,7 +451,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // Take the current cursor, leaving `None` in its place
                 let taken = self.cursors[stream_idx].take();
                 if let Some(prev_cursors) = &mut self.prev_cursors {
-                    prev_cursors[stream_idx] = taken;
+                    prev_cursors[stream_idx] = taken.map(|c| c.last_value());
                 }
             }
             return finished;
@@ -456,11 +472,18 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
+    /// Returns `true` if partition `a` has been polled more often than `b` in
+    /// the current tie-breaker round, breaking equal counts by partition index.
+    ///
+    /// Both counts go through [`Self::poll_count`]: only the winner's count is
+    /// refreshed by [`Self::update_poll_count_on_the_same_value`] before this
+    /// is called, so the challenger's raw count may belong to an earlier round.
     #[inline]
     fn is_poll_count_gt(&self, a: usize, b: usize) -> bool {
-        let poll_a = self.num_of_polled_with_same_value[a];
-        let poll_b = self.num_of_polled_with_same_value[b];
-        poll_a.cmp(&poll_b).then_with(|| a.cmp(&b)).is_gt()
+        self.poll_count(a)
+            .cmp(&self.poll_count(b))
+            .then_with(|| a.cmp(&b))
+            .is_gt()
     }
 
     #[inline]
@@ -498,7 +521,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// it takes as input the next item at (S0) and the loser of (S3, S4).
     #[inline]
     fn lt_leaf_node_index(&self, cursor_index: usize) -> usize {
-        (self.cursors.len() + cursor_index) / 2
+        usize::midpoint(self.cursors.len(), cursor_index)
     }
 
     /// Find the parent node index for the given node index
@@ -676,6 +699,8 @@ mod tests {
     struct DummyValues;
 
     impl CursorValues for DummyValues {
+        type SingleRowValue = ();
+
         fn len(&self) -> usize {
             0
         }
@@ -689,6 +714,18 @@ mod tests {
         }
 
         fn compare(_l: &Self, _l_idx: usize, _r: &Self, _r_idx: usize) -> Ordering {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn get_value(&self, _idx: usize) -> Self::SingleRowValue {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn eq_to_single_row_value(
+            _l: &Self,
+            _l_idx: usize,
+            _r: &Self::SingleRowValue,
+        ) -> bool {
             unreachable!("done-path test should not compare cursors")
         }
     }

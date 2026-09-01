@@ -166,7 +166,7 @@ impl PredicateBoundsEvaluator<'_> {
         }
 
         // If `expr` is not nullable, we can be certain `expr` is not null
-        if let Ok(false) = expr.nullable(self.input_schema) {
+        if expr.nullable(self.input_schema).ok() == Some(false) {
             return NullableInterval::FALSE;
         }
 

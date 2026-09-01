@@ -170,7 +170,7 @@ create table weekly_performance(week int, productivity_score int) as values (1,6
 select * from weekly_performance;
 +------+---------------------+
 | week | productivity_score  |
-| ---- | ------------------- |
++------+---------------------+
 | 1    | 60                  |
 | 2    | 65                  |
 | 3    | 70                  |
@@ -179,12 +179,11 @@ select * from weekly_performance;
 +------+---------------------+
 
 SELECT regr_intercept(productivity_score, week) AS intercept FROM weekly_performance;
-+----------+
-|intercept|
-|intercept |
-+----------+
-|  55      |
-+----------+
++-----------+
+| intercept |
++-----------+
+| 55        |
++-----------+
 ```
 "#
                 )
@@ -206,7 +205,7 @@ create table daily_metrics(day int, user_signups int) as values (1,100), (2,120)
 select * from daily_metrics;
 +-----+---------------+
 | day | user_signups  |
-| --- | ------------- |
++-----+---------------+
 | 1   | 100           |
 | 2   | 120           |
 | 3   | NULL          |
@@ -250,11 +249,11 @@ select * from weekly_performance;
 +-----+--------------+
 
 SELECT regr_r2(user_signups, day) AS r_squared FROM weekly_performance;
-+---------+
-|r_squared|
-+---------+
-| 1.0     |
-+---------+
++-----------+
+| r_squared |
++-----------+
+| 1.0       |
++-----------+
 ```
 "#
                 )
@@ -276,7 +275,7 @@ create table daily_sales(day int, total_sales int) as values (1,100), (2,150), (
 select * from daily_sales;
 +-----+-------------+
 | day | total_sales |
-| --- | ----------- |
++-----+-------------+
 | 1   | 100         |
 | 2   | 150         |
 | 3   | 200         |
@@ -311,7 +310,7 @@ create table daily_temperature(day int, temperature int) as values (1,30), (2,32
 select * from daily_temperature;
 +-----+-------------+
 | day | temperature |
-| --- | ----------- |
++-----+-------------+
 | 1   | 30          |
 | 2   | 32          |
 | 3   | NULL        |
@@ -600,10 +599,8 @@ impl Accumulator for RegrAccumulator {
 
         for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let (value_y, value_x) = match (value_y, value_x) {
-                (Some(y), Some(x)) => (y, x),
-                // skip either x or y is NULL
-                _ => continue,
+            let (Some(value_y), Some(value_x)) = (value_y, value_x) else {
+                continue;
             };
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
@@ -632,10 +629,8 @@ impl Accumulator for RegrAccumulator {
 
         for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let (value_y, value_x) = match (value_y, value_x) {
-                (Some(y), Some(x)) => (y, x),
-                // skip either x or y is NULL
-                _ => continue,
+            let (Some(value_y), Some(value_x)) = (value_y, value_x) else {
+                continue;
             };
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]

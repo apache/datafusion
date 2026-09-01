@@ -2177,7 +2177,7 @@ pub fn wrap_projection_for_join_if_necessary(
         // Expr contains Arc with interior mutability but is intentionally used as hash key
         let join_key_items = alias_join_keys
             .iter()
-            .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
+            .filter(|expr| expr.try_as_col().is_none())
             .cloned()
             .collect::<HashSet<Expr>>();
         projection.extend(join_key_items);
@@ -2972,9 +2972,7 @@ mod tests {
     #[test]
     fn test_values_metadata() -> Result<()> {
         let metadata: HashMap<String, String> =
-            [("ARROW:extension:metadata".to_string(), "test".to_string())]
-                .into_iter()
-                .collect();
+            once(("ARROW:extension:metadata".to_string(), "test".to_string())).collect();
         let metadata = FieldMetadata::from(metadata);
         let values = LogicalPlanBuilder::values(vec![
             vec![lit_with_metadata(1, Some(metadata.clone()))],
@@ -2985,9 +2983,7 @@ mod tests {
 
         // Do not allow VALUES with different metadata mixed together
         let metadata2: HashMap<String, String> =
-            [("ARROW:extension:metadata".to_string(), "test2".to_string())]
-                .into_iter()
-                .collect();
+            once(("ARROW:extension:metadata".to_string(), "test2".to_string())).collect();
         let metadata2 = FieldMetadata::from(metadata2);
         assert!(
             LogicalPlanBuilder::values(vec![

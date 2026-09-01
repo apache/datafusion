@@ -291,6 +291,9 @@ impl GenerateSeriesTable {
         &self,
         batch_size: usize,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        if batch_size == 0 {
+            return plan_err!("GenerateSeriesTable: batch_size must be greater than 0");
+        }
         let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
             GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
             GenSeriesArgs::Int64Args {
@@ -552,14 +555,14 @@ impl TableProvider for GenerateSeriesTable {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size.get();
         let generator = self.as_generator(batch_size)?;
         let mut exec = LazyMemoryExec::try_new(self.schema(), vec![generator])?
-            .with_projection(projection.cloned());
+            .with_projection(projection.map(|p| p.to_vec()));
 
         if let Some(ordering) = self.output_ordering(exec.schema().as_ref()) {
             exec.add_ordering([ordering]);
@@ -877,7 +880,26 @@ mod generate_series_tests {
     use datafusion_common::Result;
     use datafusion_physical_plan::memory::LazyBatchGenerator;
 
-    use crate::generate_series::GenericSeriesState;
+    use crate::generate_series::{
+        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState,
+    };
+
+    #[test]
+    fn generate_series_rejects_zero_batch_size() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let table = GenerateSeriesTable::new(
+            schema,
+            GenSeriesArgs::Int64Args {
+                start: 1,
+                end: 2,
+                step: 1,
+                include_end: true,
+                name: "generate_series",
+            },
+        );
+
+        assert!(table.as_generator(0).is_err());
+    }
 
     #[test]
     fn test_generic_series_state_reset() -> Result<()> {
