@@ -365,7 +365,7 @@ pub fn value_fields_with_higher_order_udf_and_lambdas(
                 ValueOrLambda::Lambda(_) => {}
             }
         }
-    };
+    }
 
     Ok(new_fields)
 }
@@ -688,7 +688,7 @@ fn get_valid_types(
 
         if !fixed_size {
             list_sizes.clear()
-        };
+        }
 
         let mut list_sizes = list_sizes.into_iter();
         let valid_types = arguments

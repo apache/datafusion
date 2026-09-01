@@ -486,9 +486,8 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
-    /// Return the maximum size of an `IN (...)` list that the pruning
-    /// predicate will rewrite into per-value statistics checks. Lists
-    /// longer than this skip container-level pruning. Reads from
+    /// Return the maximum size of an `IN (...)` list eligible for statistics
+    /// pruning. Longer lists skip container-level pruning. Reads from
     /// `datafusion.execution.parquet.max_in_list_size`.
     pub fn max_in_list_size(&self) -> usize {
         self.table_parquet_options.global.max_in_list_size
@@ -806,7 +805,7 @@ impl FileSource for ParquetSource {
                             guarantees.join(", ")
                         )?;
                     }
-                };
+                }
                 Ok(())
             }
             DisplayFormatType::TreeRender => {

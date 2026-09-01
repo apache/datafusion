@@ -180,7 +180,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                         }
                     }
                     _ => {}
-                };
+                }
                 state = builder.build();
                 let store = get_object_store(
                     &state,

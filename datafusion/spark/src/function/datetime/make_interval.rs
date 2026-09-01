@@ -215,10 +215,7 @@ fn make_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> 
 
         match make_interval_month_day_nano(y, mo, w, d, h, mi, s) {
             Some(v) => builder.append_value(v),
-            None => {
-                builder.append_null();
-                continue;
-            }
+            None => builder.append_null(),
         }
     }
 

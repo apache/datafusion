@@ -231,7 +231,7 @@ impl BenchmarkRun {
     pub fn maybe_write_json(&self, maybe_path: Option<impl AsRef<Path>>) -> Result<()> {
         if let Some(path) = maybe_path {
             std::fs::write(path, self.to_json())?;
-        };
+        }
         Ok(())
     }
 }

@@ -191,3 +191,12 @@ select ammp from a;
 
 statement ok
 drop table a;
+
+
+# Test valid fields in a nested query when providing an invalid column name
+# (https://github.com/apache/datafusion/issues/24773)
+query error DataFusion error: Schema error: No field named y\.\nValid fields are t\.x\.$
+select * from (select 1 as x) t order by y;
+
+query error DataFusion error: Schema error: No field named t\.y\. Did you mean 't\.x'\?\nValid fields are t\.x\.$
+select * from (select 1 as x) t order by t.y;

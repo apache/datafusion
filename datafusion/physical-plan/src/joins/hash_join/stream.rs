@@ -575,11 +575,13 @@ impl HashJoinStream {
             .bounds
             .clone()
             .unwrap_or_else(|| PartitionBounds::new(vec![]));
-        // Arrow tracks null counts per array, so this costs no data scan.
+        // Use the logical null count: a dictionary key whose entry points at a
+        // NULL dictionary value is a NULL key even though the key bitmap has no
+        // physical nulls (`null_count() == 0` but `logical_null_count() > 0`).
         let keys_have_null = left_data
             .values()
             .iter()
-            .any(|array| array.null_count() > 0);
+            .any(|array| array.logical_null_count() > 0);
 
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
@@ -745,7 +747,7 @@ impl HashJoinStream {
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
-        };
+        }
 
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
@@ -1046,7 +1048,7 @@ impl HashJoinStream {
                     .ok_or_else(|| internal_datafusion_err!("unexpected None offset"))?,
                 last_joined_right_idx,
             )
-        };
+        }
 
         Ok(StatefulStreamResult::Continue)
     }

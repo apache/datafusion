@@ -27,7 +27,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{PhysicalSortExpr, col, lit};
-use datafusion::physical_plan::metrics::MetricCategory;
+use datafusion::physical_plan::metrics::{MetricCategory, MetricType};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -92,6 +92,196 @@ fn roundtrip_analyze() -> Result<()> {
             .is_some()
     );
     Ok(())
+}
+
+#[test]
+fn roundtrip_analyze_metric_types() -> Result<()> {
+    use protobuf::MetricType as ProtoMetricType;
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+
+    for (metric_types, expected) in [
+        (
+            Some(vec![MetricType::Summary]),
+            vec![ProtoMetricType::Summary as i32],
+        ),
+        (
+            Some(vec![MetricType::Dev]),
+            vec![ProtoMetricType::Dev as i32],
+        ),
+        (Some(vec![]), vec![]),
+        (
+            None,
+            vec![ProtoMetricType::Summary as i32, ProtoMetricType::Dev as i32],
+        ),
+    ] {
+        let legacy = metric_types.is_none();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("plan_type", DataType::Utf8, false),
+            Field::new("plan", DataType::Utf8, false),
+        ]));
+        let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+        let builder = AnalyzeExec::builder(false, false, input, schema);
+        let analyze = Arc::new(match metric_types {
+            Some(metric_types) => builder.with_metric_types(metric_types).build(),
+            None => builder.build(),
+        });
+        let mut node = PhysicalPlanNode::try_from_physical_plan(analyze, &codec)?;
+
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+            node.physical_plan_type.as_mut()
+        else {
+            unreachable!("expected AnalyzeExecNode")
+        };
+        if legacy {
+            analyze.has_metric_types = false;
+            analyze.metric_types.clear();
+        }
+
+        let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        #[cfg(feature = "json")]
+        let node: PhysicalPlanNode =
+            serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        let roundtripped = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+        let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+            node.physical_plan_type.as_ref()
+        else {
+            unreachable!("expected AnalyzeExecNode")
+        };
+        assert!(analyze.has_metric_types);
+        assert_eq!(analyze.metric_types, expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn decode_malformed_analyze_exec_node() -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+    let analyze = Arc::new(
+        AnalyzeExec::builder(false, false, input, schema)
+            .with_metric_types(vec![MetricType::Summary])
+            .build(),
+    );
+    let mut node = PhysicalPlanNode::try_from_physical_plan(analyze, &codec)?;
+
+    let mut invalid_schema_node = node.clone();
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+        invalid_schema_node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected AnalyzeExecNode")
+    };
+    analyze
+        .schema
+        .as_mut()
+        .unwrap()
+        .columns
+        .push(protobuf::Field::default());
+    let error = invalid_schema_node
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .unwrap_err();
+    assert!(error.strip_backtrace().contains("arrow_type"));
+
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Analyze(analyze)) =
+        node.physical_plan_type.as_mut()
+    else {
+        unreachable!("expected AnalyzeExecNode")
+    };
+    analyze.metric_types = vec![i32::MAX];
+    let error = node
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .unwrap_err();
+    assert!(error.strip_backtrace().contains("unknown MetricType"));
+
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn analyze_metric_types_json() {
+    use protobuf::{AnalyzeExecNode, MetricType as ProtoMetricType};
+
+    struct FailAfterFirstByte(bool);
+
+    impl std::io::Write for FailAfterFirstByte {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            if self.0 {
+                return Err(std::io::Error::other("expected write failure"));
+            }
+            self.0 = true;
+            Ok(1)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let node = AnalyzeExecNode {
+        has_metric_types: true,
+        metric_types: vec![ProtoMetricType::Summary as i32, ProtoMetricType::Dev as i32],
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&node).unwrap();
+    assert_eq!(
+        json,
+        r#"{"hasMetricTypes":true,"metricTypes":["METRIC_TYPE_SUMMARY","METRIC_TYPE_DEV"]}"#
+    );
+
+    let node: AnalyzeExecNode = serde_json::from_str(
+        r#"{"has_metric_types":true,"metric_types":["METRIC_TYPE_DEV"]}"#,
+    )
+    .unwrap();
+    assert!(node.has_metric_types);
+    assert_eq!(node.metric_types, [ProtoMetricType::Dev as i32]);
+
+    for json in [
+        r#"{"hasMetricTypes":true,"has_metric_types":false}"#,
+        r#"{"metricTypes":[],"metric_types":[]}"#,
+    ] {
+        let error = serde_json::from_str::<AnalyzeExecNode>(json).unwrap_err();
+        assert!(error.to_string().contains("duplicate field"));
+    }
+
+    for json in [
+        r#"{"hasMetricTypes":"true"}"#,
+        r#"{"metricTypes":true}"#,
+        r#"{"metricTypes":["UNKNOWN"]}"#,
+    ] {
+        assert!(serde_json::from_str::<AnalyzeExecNode>(json).is_err());
+    }
+
+    let invalid = AnalyzeExecNode {
+        metric_types: vec![i32::MAX],
+        ..Default::default()
+    };
+    let error = serde_json::to_string(&invalid).unwrap_err();
+    assert!(error.to_string().contains("Invalid variant"));
+
+    for node in [
+        AnalyzeExecNode {
+            has_metric_types: true,
+            ..Default::default()
+        },
+        AnalyzeExecNode {
+            metric_types: vec![ProtoMetricType::Summary as i32],
+            ..Default::default()
+        },
+    ] {
+        let error = serde_json::to_writer(FailAfterFirstByte(false), &node).unwrap_err();
+        assert!(error.to_string().contains("expected write failure"));
+    }
 }
 
 #[test]
@@ -343,12 +533,9 @@ fn parse_hash_partitioning_delegates_to_shared_decoder() -> Result<()> {
     }
 
     #[cfg(not(target_pointer_width = "64"))]
-    assert!(
-        decoded
-            .unwrap_err()
-            .to_string()
-            .contains("Partition count 18446744073709551615 exceeds usize::MAX")
-    );
+    assert!(decoded.unwrap_err().to_string().contains(
+        "Partitioning: partition_count wire value 18446744073709551615 is out of range for usize"
+    ));
 
     Ok(())
 }

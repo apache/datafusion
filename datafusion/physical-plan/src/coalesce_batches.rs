@@ -136,7 +136,7 @@ impl DisplayAs for CoalesceBatchesExec {
                 )?;
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
-                };
+                }
 
                 Ok(())
             }
@@ -144,7 +144,7 @@ impl DisplayAs for CoalesceBatchesExec {
                 writeln!(f, "target_batch_size={}", self.target_batch_size)?;
                 if let Some(fetch) = self.fetch {
                     write!(f, "limit={fetch}")?;
-                };
+                }
                 Ok(())
             }
         }
@@ -322,6 +322,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
         // Destructure exhaustively (no `..`) so that adding a field to
         // `CoalesceBatchesExec` is a compile error here until it is either
@@ -336,13 +337,22 @@ impl ExecutionPlan for CoalesceBatchesExec {
             cache: _,
         } = self;
         let input = ctx.encode_child(input)?;
+        let to_wire =
+            |value, field| usize_to_wire::<u32>(value, "CoalesceBatchesExec", field);
+        if *target_batch_size == 0 {
+            return datafusion_common::plan_err!(
+                "CoalesceBatchesExec: target_batch_size must be greater than 0"
+            );
+        }
+        let target_batch_size = to_wire(*target_batch_size, "target_batch_size")?;
+        let fetch = fetch.map(|fetch| to_wire(fetch, "fetch")).transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches(
                     Box::new(protobuf::CoalesceBatchesExecNode {
                         input: Some(Box::new(input)),
-                        target_batch_size: *target_batch_size as u32,
-                        fetch: fetch.map(|n| n as u32),
+                        target_batch_size,
+                        fetch,
                     }),
                 ),
             ),
@@ -367,6 +377,7 @@ impl CoalesceBatchesExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let coalesce_batches = crate::expect_plan_variant!(
             node,
@@ -383,9 +394,17 @@ impl CoalesceBatchesExec {
         } = &**coalesce_batches;
         let input =
             ctx.decode_required_child(input.as_deref(), "CoalesceBatchesExec", "input")?;
+        let from_wire =
+            |value, field| usize_from_wire(value, "CoalesceBatchesExec", field);
+        let target_batch_size = from_wire(*target_batch_size, "target_batch_size")?;
+        if target_batch_size == 0 {
+            return datafusion_common::plan_err!(
+                "CoalesceBatchesExec: target_batch_size must be greater than 0"
+            );
+        }
+        let fetch = fetch.map(|fetch| from_wire(fetch, "fetch")).transpose()?;
         Ok(Arc::new(
-            CoalesceBatchesExec::new(input, *target_batch_size as usize)
-                .with_fetch(fetch.map(|f| f as usize)),
+            CoalesceBatchesExec::new(input, target_batch_size).with_fetch(fetch),
         ))
     }
 }

@@ -26,7 +26,7 @@ use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use half::f16;
 use hashbrown::hash_table::HashTable;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -237,6 +237,35 @@ where
         };
 
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+    }
+
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.values.len())?;
+        let values: Vec<T::Native> =
+            selection.iter().map(|index| self.values[index]).collect();
+        let nulls = if let Some(null_group) = self.null_group {
+            let mut nulls = NullBufferBuilder::new(values.len());
+            for index in selection.iter() {
+                if index == null_group {
+                    nulls.append_null();
+                } else {
+                    nulls.append_non_null();
+                }
+            }
+            nulls.finish()
+        } else {
+            None
+        };
+        let array = PrimitiveArray::<T>::new(values.into(), nulls)
+            .with_data_type(self.data_type.clone());
+        Ok(vec![Arc::new(array)])
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
