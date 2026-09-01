@@ -1472,7 +1472,7 @@ pub(crate) fn emission_type_from_children<'a>(
         match child.pipeline_behavior() {
             EmissionType::Final => return EmissionType::Final,
             EmissionType::Both => inc_and_final = true,
-            EmissionType::Incremental => continue,
+            EmissionType::Incremental => {}
         }
     }
 

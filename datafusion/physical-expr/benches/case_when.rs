@@ -543,8 +543,8 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
             })
             .collect();
 
-        let divisor: Int32Array = divisor_values.iter().cloned().collect();
-        let divisor_copy: Int32Array = divisor_values.iter().cloned().collect();
+        let divisor: Int32Array = divisor_values.iter().copied().collect();
+        let divisor_copy: Int32Array = divisor_values.iter().copied().collect();
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("numerator", numerator.data_type().clone(), true),

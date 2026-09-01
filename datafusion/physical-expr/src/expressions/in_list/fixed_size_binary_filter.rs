@@ -321,6 +321,8 @@ mod tests {
         Ok(())
     }
 
+    // The cast only checks alignment; the pointer is never dereferenced.
+    #[expect(clippy::cast_ptr_alignment)]
     fn unaligned_i128_array(
         values: &[Vec<u8>],
         nulls: Option<NullBuffer>,
