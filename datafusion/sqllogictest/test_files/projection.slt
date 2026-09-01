@@ -217,7 +217,7 @@ SELECT column1 as a from (values (1), (2)) f where f.column1 = 2;
 ----
 2
 
-# Regression: one optimizer pass must preserve anonymous nested projections.
+# Regression: preserve deep anonymous nested projections with one and default passes.
 statement ok
 CREATE TABLE nested_projection(i INT);
 
