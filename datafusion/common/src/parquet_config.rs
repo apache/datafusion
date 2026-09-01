@@ -173,9 +173,16 @@ impl ConfigField for Option<DFParquetStatistics> {
         Ok(())
     }
 
-    fn reset(&mut self, _key: &str) -> Result<()> {
-        *self = None;
-        Ok(())
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            crate::error::_config_err!(
+                "Config field parquet.statistics_enabled is a scalar Option<DFParquetStatistics> and does not have nested field \"{}\"",
+                key
+            )
+        }
     }
 }
 

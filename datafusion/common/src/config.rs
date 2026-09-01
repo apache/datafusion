@@ -4615,6 +4615,17 @@ mod tests {
                 .is_err()
         );
         assert_eq!(config.execution.parquet.statistics_enabled, None);
+
+        config.execution.parquet.statistics_enabled = Some(DFParquetStatistics::Page);
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.statistics_enabled.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.statistics_enabled,
+            Some(DFParquetStatistics::Page)
+        );
     }
 
     #[cfg(feature = "parquet")]
