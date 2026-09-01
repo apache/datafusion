@@ -698,14 +698,15 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
         match expr {
             //  remove any intermediate aliases if they do not carry metadata
             Expr::Alias(alias) => {
-                match alias
+                if alias
                     .metadata
                     .as_ref()
                     .map(|h| h.is_empty())
                     .unwrap_or(true)
                 {
-                    true => Ok(Transformed::yes(*alias.expr)),
-                    false => Ok(Transformed::no(Expr::Alias(alias))),
+                    Ok(Transformed::yes(*alias.expr))
+                } else {
+                    Ok(Transformed::no(Expr::Alias(alias)))
                 }
             }
             Expr::Column(col) => {

@@ -289,7 +289,6 @@ inline_always = "allow"                      # 45 hits
 items_after_statements = "allow"             # 171 hits
 many_single_char_names = "allow"             # 12 hits; short names are idiomatic in the numeric kernels
 map_unwrap_or = "allow"                      # 198 hits
-match_bool = "allow"                         # 46 hits
 match_same_arms = "allow"                    # 261 hits
 match_wildcard_for_single_variants = "allow" # 132 hits
 missing_errors_doc = "allow"                 # 1807 hits

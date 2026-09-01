@@ -138,9 +138,10 @@ fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {
-            let val: ScalarValue = match lhs.eq(rhs) {
-                true => lhs.data_type().try_into()?,
-                false => lhs.clone(),
+            let val: ScalarValue = if lhs.eq(rhs) {
+                lhs.data_type().try_into()?
+            } else {
+                lhs.clone()
             };
 
             Ok(ColumnarValue::Scalar(val))

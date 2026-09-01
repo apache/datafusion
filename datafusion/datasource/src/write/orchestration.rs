@@ -216,20 +216,18 @@ pub(crate) async fn stateless_serialize_and_write_files(
     }
 
     if any_errors {
-        match any_abort_errors {
-            true => {
+        if any_abort_errors {
+            return internal_err!(
+                "Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."
+            );
+        }
+        match triggering_error {
+            Some(e) => return Err(e),
+            None => {
                 return internal_err!(
-                    "Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."
+                    "Unknown Error encountered during writing to ObjectStore. All writers successfully aborted."
                 );
             }
-            false => match triggering_error {
-                Some(e) => return Err(e),
-                None => {
-                    return internal_err!(
-                        "Unknown Error encountered during writing to ObjectStore. All writers successfully aborted."
-                    );
-                }
-            },
         }
     }
 

@@ -160,10 +160,7 @@ pub fn compare_op_for_nested(
 
     assert_or_internal_err!(l_len == r_len || is_l_scalar || is_r_scalar, "len mismatch");
 
-    let len = match is_l_scalar {
-        true => r_len,
-        false => l_len,
-    };
+    let len = if is_l_scalar { r_len } else { l_len };
 
     // fast path, if compare with one null and operator is not 'distinct', then we can return null array directly
     if !matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom)

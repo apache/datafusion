@@ -1170,9 +1170,10 @@ impl ParquetSource {
         }
 
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
-        let object_store_url = match base_conf.object_store_url.is_empty() {
-            false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
-            true => ObjectStoreUrl::local_filesystem(),
+        let object_store_url = if !base_conf.object_store_url.is_empty() {
+            ObjectStoreUrl::parse(&base_conf.object_store_url)?
+        } else {
+            ObjectStoreUrl::local_filesystem()
         };
         let store = ctx
             .task_ctx()

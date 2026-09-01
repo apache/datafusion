@@ -98,27 +98,26 @@ impl AggregateUDFImpl for VarianceSample {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
-        match args.is_distinct {
-            false => Ok(vec![
+        if !args.is_distinct {
+            Ok(vec![
                 Field::new(format_state_name(name, "count"), DataType::UInt64, true),
                 Field::new(format_state_name(name, "mean"), DataType::Float64, true),
                 Field::new(format_state_name(name, "m2"), DataType::Float64, true),
             ]
             .into_iter()
             .map(Arc::new)
-            .collect()),
-            true => {
-                let field = Field::new_list_field(DataType::Float64, true);
-                let state_name = "distinct_var";
-                Ok(vec![
-                    Field::new(
-                        format_state_name(name, state_name),
-                        DataType::List(Arc::new(field)),
-                        true,
-                    )
-                    .into(),
-                ])
-            }
+            .collect())
+        } else {
+            let field = Field::new_list_field(DataType::Float64, true);
+            let state_name = "distinct_var";
+            Ok(vec![
+                Field::new(
+                    format_state_name(name, state_name),
+                    DataType::List(Arc::new(field)),
+                    true,
+                )
+                .into(),
+            ])
         }
     }
 
@@ -193,30 +192,27 @@ impl AggregateUDFImpl for VariancePopulation {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        match args.is_distinct {
-            false => {
-                let name = args.name;
-                Ok(vec![
-                    Field::new(format_state_name(name, "count"), DataType::UInt64, true),
-                    Field::new(format_state_name(name, "mean"), DataType::Float64, true),
-                    Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-                ]
-                .into_iter()
-                .map(Arc::new)
-                .collect())
-            }
-            true => {
-                let field = Field::new_list_field(DataType::Float64, true);
-                let state_name = "distinct_var";
-                Ok(vec![
-                    Field::new(
-                        format_state_name(args.name, state_name),
-                        DataType::List(Arc::new(field)),
-                        true,
-                    )
-                    .into(),
-                ])
-            }
+        if !args.is_distinct {
+            let name = args.name;
+            Ok(vec![
+                Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+                Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+                Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect())
+        } else {
+            let field = Field::new_list_field(DataType::Float64, true);
+            let state_name = "distinct_var";
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, state_name),
+                    DataType::List(Arc::new(field)),
+                    true,
+                )
+                .into(),
+            ])
         }
     }
 

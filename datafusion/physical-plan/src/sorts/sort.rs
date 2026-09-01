@@ -1354,15 +1354,16 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match has_same_children_properties(self.as_ref(), &children)? {
-            true => self.replace_children(
+        if has_same_children_properties(self.as_ref(), &children)? {
+            self.replace_children(
                 children,
                 ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
-            ),
-            false => self.replace_children(
+            )
+        } else {
+            self.replace_children(
                 children,
                 ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-            ),
+            )
         }
     }
 

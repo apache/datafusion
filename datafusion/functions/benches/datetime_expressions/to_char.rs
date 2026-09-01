@@ -109,9 +109,10 @@ fn pick_date_time_pattern(rng: &mut StdRng) -> String {
 }
 
 fn pick_date_and_date_time_mixed_pattern(rng: &mut StdRng) -> String {
-    match rng.random_bool(0.5) {
-        true => pick_date_pattern(rng),
-        false => pick_date_time_pattern(rng),
+    if rng.random_bool(0.5) {
+        pick_date_pattern(rng)
+    } else {
+        pick_date_time_pattern(rng)
     }
 }
 

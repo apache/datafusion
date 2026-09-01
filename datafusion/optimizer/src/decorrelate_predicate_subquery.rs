@@ -273,9 +273,10 @@ fn build_join_top(
         })
         .map_or(Ok(None), |v| v.map(Some))?;
 
-    let join_type = match query_info.negated {
-        true => JoinType::LeftAnti,
-        false => JoinType::LeftSemi,
+    let join_type = if query_info.negated {
+        JoinType::LeftAnti
+    } else {
+        JoinType::LeftSemi
     };
     let subquery = query_info.query.subquery.as_ref();
     let subquery_alias = alias.next("__correlated_sq");
@@ -524,14 +525,20 @@ impl SubqueryInfo {
 
     pub fn expr(self) -> Expr {
         match self.where_in_expr {
-            Some(expr) => match self.negated {
-                true => not_in_subquery(expr, self.query.subquery),
-                false => in_subquery(expr, self.query.subquery),
-            },
-            None => match self.negated {
-                true => not_exists(self.query.subquery),
-                false => exists(self.query.subquery),
-            },
+            Some(expr) => {
+                if self.negated {
+                    not_in_subquery(expr, self.query.subquery)
+                } else {
+                    in_subquery(expr, self.query.subquery)
+                }
+            }
+            None => {
+                if self.negated {
+                    not_exists(self.query.subquery)
+                } else {
+                    exists(self.query.subquery)
+                }
+            }
         }
     }
 }

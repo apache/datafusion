@@ -231,52 +231,49 @@ impl SqlBenchmark {
             let mut local_result = vec![];
 
             for query in run_queries {
-                match save_results {
-                    true => {
+                if save_results {
+                    debug!(
+                        "Running query (saving results) {}-{}: {query}",
+                        self.group, self.subgroup
+                    );
+
+                    let df = ctx.sql(query).await?;
+                    if !self.expect.is_empty() {
+                        let physical_plan = df.create_physical_plan().await?;
+                        self.validate_expected_plan(&physical_plan)?;
+                    }
+
+                    let result_schema = Arc::new(df.schema().as_arrow().clone());
+                    let mut batches = df.collect().await?;
+                    let trimmed = query.trim_start();
+
+                    // save the output for select/with queries
+                    if starts_with_ignore_ascii_case(trimmed, "select")
+                        || starts_with_ignore_ascii_case(trimmed, "with")
+                    {
+                        if batches.is_empty() {
+                            batches.push(RecordBatch::new_empty(result_schema));
+                        }
+                        let row_count_for_query =
+                            batches.iter().map(RecordBatch::num_rows).sum::<usize>();
                         debug!(
-                            "Running query (saving results) {}-{}: {query}",
-                            self.group, self.subgroup
+                            "Persisting {} batches ({} rows)...",
+                            batches.len(),
+                            row_count_for_query
                         );
 
-                        let df = ctx.sql(query).await?;
-                        if !self.expect.is_empty() {
-                            let physical_plan = df.create_physical_plan().await?;
-                            self.validate_expected_plan(&physical_plan)?;
-                        }
-
-                        let result_schema = Arc::new(df.schema().as_arrow().clone());
-                        let mut batches = df.collect().await?;
-                        let trimmed = query.trim_start();
-
-                        // save the output for select/with queries
-                        if starts_with_ignore_ascii_case(trimmed, "select")
-                            || starts_with_ignore_ascii_case(trimmed, "with")
-                        {
-                            if batches.is_empty() {
-                                batches.push(RecordBatch::new_empty(result_schema));
-                            }
-                            let row_count_for_query =
-                                batches.iter().map(RecordBatch::num_rows).sum::<usize>();
-                            debug!(
-                                "Persisting {} batches ({} rows)...",
-                                batches.len(),
-                                row_count_for_query
-                            );
-
-                            result_count = row_count_for_query;
-                            local_result = batches;
-                        }
+                        result_count = row_count_for_query;
+                        local_result = batches;
                     }
-                    false => {
-                        debug!(
-                            "Running query (ignoring results) {}-{}: {query}",
-                            self.group, self.subgroup
-                        );
+                } else {
+                    debug!(
+                        "Running query (ignoring results) {}-{}: {query}",
+                        self.group, self.subgroup
+                    );
 
-                        result_count = self
-                            .execute_sql_without_result_buffering(query, ctx)
-                            .await?;
-                    }
+                    result_count = self
+                        .execute_sql_without_result_buffering(query, ctx)
+                        .await?;
                 }
             }
 

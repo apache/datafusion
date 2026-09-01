@@ -436,16 +436,18 @@ async fn list_with_cache<'b>(
 #[cfg(not(target_arch = "wasm32"))]
 fn url_from_filesystem_path(s: &str) -> Option<Url> {
     let path = std::path::Path::new(s);
-    let is_dir = match path.exists() {
-        true => path.is_dir(),
+    let is_dir = if path.exists() {
+        path.is_dir()
+    } else {
         // Fallback to inferring from trailing separator
-        false => std::path::is_separator(s.chars().last()?),
+        std::path::is_separator(s.chars().last()?)
     };
 
     let from_absolute_path = |p| {
-        let first = match is_dir {
-            true => Url::from_directory_path(p).ok(),
-            false => Url::from_file_path(p).ok(),
+        let first = if is_dir {
+            Url::from_directory_path(p).ok()
+        } else {
+            Url::from_file_path(p).ok()
         }?;
 
         // By default from_*_path preserve relative path segments

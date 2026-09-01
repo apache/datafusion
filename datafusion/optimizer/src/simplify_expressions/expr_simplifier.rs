@@ -705,9 +705,10 @@ impl ConstEvaluator {
             .ok()
             .and_then(|f| {
                 let m = f.metadata();
-                match m.is_empty() {
-                    true => None,
-                    false => Some(FieldMetadata::from(m)),
+                if m.is_empty() {
+                    None
+                } else {
+                    Some(FieldMetadata::from(m))
                 }
             });
         let col_val = match phys_expr.evaluate(&DUMMY_BATCH) {
@@ -843,13 +844,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 op: Eq,
                 right,
             }) if (left == right) & !left.is_volatile() => {
-                Transformed::yes(match !info.nullable(&left)? {
-                    true => lit(true),
-                    false => Expr::BinaryExpr(BinaryExpr {
+                Transformed::yes(if !info.nullable(&left)? {
+                    lit(true)
+                } else {
+                    Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(Expr::IsNotNull(left)),
                         op: Or,
                         right: Box::new(lit_bool_null()),
-                    }),
+                    })
                 })
             }
 

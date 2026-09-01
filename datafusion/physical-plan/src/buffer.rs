@@ -749,12 +749,13 @@ mod tests {
     async fn finished<T: SizedMessage>(
         buffered: &mut MemoryBufferedStream<T>,
     ) -> Result<(), Box<dyn Error>> {
-        match timeout(Duration::from_millis(1), buffered.next())
+        if timeout(Duration::from_millis(1), buffered.next())
             .await?
             .is_none()
         {
-            true => Ok(()),
-            false => internal_err!("Stream should have finished")?,
+            Ok(())
+        } else {
+            internal_err!("Stream should have finished")?
         }
     }
 

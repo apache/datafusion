@@ -509,9 +509,10 @@ impl<T: CursorValues> ArrayValues<T> {
         reservation: MemoryReservation,
     ) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
-        let null_threshold = match options.nulls_first {
-            true => array.null_count(),
-            false => array.len() - array.null_count(),
+        let null_threshold = if options.nulls_first {
+            array.null_count()
+        } else {
+            array.len() - array.null_count()
         };
 
         Self {
@@ -562,18 +563,27 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
-            (true, false) => match l.options.nulls_first {
-                true => Ordering::Less,
-                false => Ordering::Greater,
-            },
-            (false, true) => match l.options.nulls_first {
-                true => Ordering::Greater,
-                false => Ordering::Less,
-            },
-            (false, false) => match l.options.descending {
-                true => T::compare(&r.values, r_idx, &l.values, l_idx),
-                false => T::compare(&l.values, l_idx, &r.values, r_idx),
-            },
+            (true, false) => {
+                if l.options.nulls_first {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
+            (false, true) => {
+                if l.options.nulls_first {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+            (false, false) => {
+                if l.options.descending {
+                    T::compare(&r.values, r_idx, &l.values, l_idx)
+                } else {
+                    T::compare(&l.values, l_idx, &r.values, r_idx)
+                }
+            }
         }
     }
 
@@ -619,9 +629,10 @@ mod tests {
         values: ScalarBuffer<i32>,
         null_count: usize,
     ) -> Cursor<ArrayValues<PrimitiveValues<i32>>> {
-        let null_threshold = match options.nulls_first {
-            true => null_count,
-            false => values.len() - null_count,
+        let null_threshold = if options.nulls_first {
+            null_count
+        } else {
+            values.len() - null_count
         };
 
         let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(10000));

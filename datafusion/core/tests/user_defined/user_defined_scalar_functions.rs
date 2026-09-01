@@ -1819,9 +1819,10 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
         // If we have the extension type set, we are outputting a boolean value.
         // Otherwise we output a string representation of the numeric value.
         fn print_value(x: i8, as_bool: bool) -> String {
-            match as_bool {
-                true => format!("{}", x != 0),
-                false => format!("{x}"),
+            if as_bool {
+                format!("{}", x != 0)
+            } else {
+                format!("{x}")
             }
         }
 
