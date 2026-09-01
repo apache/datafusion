@@ -314,6 +314,22 @@ where
         new_self
     }
 
+    /// Empties this map and releases every allocation it holds, so
+    /// [`Self::size`] drops to approximately zero.
+    ///
+    /// This is the difference from [`Self::take`]: `take` restores the
+    /// capacities the map was configured with so the emptied map stays warm for
+    /// continued use, which is what emitting wants, whereas here the point is
+    /// to hand the memory back, as before spilling or before a downstream sort.
+    /// The configured capacities are remembered, so the next [`Self::take`]
+    /// warms the map up again.
+    pub fn clear_and_release(&mut self) {
+        let mut released = Self::new_inner(self.output_type, 0, 0);
+        released.initial_map_capacity = self.initial_map_capacity;
+        released.initial_buffer_capacity = self.initial_buffer_capacity;
+        *self = released;
+    }
+
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
     /// each value if *not* already present, deferring the allocation of the
     /// payload until it is needed.
@@ -769,6 +785,45 @@ mod tests {
         lazy.take();
         assert_eq!(lazy.map.capacity(), 0);
         assert_eq!(lazy.buffer.capacity(), 0);
+    }
+
+    #[test]
+    fn clear_and_release_frees_the_preallocation_that_take_keeps() {
+        let mut map = ArrowBytesMap::<i32, ()>::with_capacity(
+            OutputType::Utf8,
+            INITIAL_MAP_CAPACITY,
+        );
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..1_000).map(|i| format!("distinct value number {i}")),
+        ));
+        map.insert_if_new(&values, |_| (), |_| ());
+
+        let populated_size = map.size();
+        assert!(populated_size > INITIAL_BUFFER_CAPACITY);
+
+        // `take` deliberately keeps the map warm, so it does not release the
+        // configured capacities.
+        map.take();
+        let taken_size = map.size();
+        assert!(
+            taken_size > INITIAL_BUFFER_CAPACITY,
+            "expected take to retain the warm up allocations, got {taken_size}"
+        );
+
+        map.clear_and_release();
+        let released_size = map.size();
+        assert_eq!(map.map.allocation_size(), 0);
+        assert_eq!(map.buffer.capacity(), 0);
+        assert!(
+            released_size < 128,
+            "expected the released map to report approximately zero bytes, got {released_size}"
+        );
+
+        // The configured capacities survive, so the map warms back up when it
+        // is emitted from again.
+        map.take();
+        assert!(map.map.capacity() >= INITIAL_MAP_CAPACITY);
+        assert_eq!(map.buffer.capacity(), INITIAL_BUFFER_CAPACITY);
     }
 
     #[test]
