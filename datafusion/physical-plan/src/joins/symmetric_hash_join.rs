@@ -368,10 +368,10 @@ impl DisplayAs for SymmetricHashJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={}", f.expression()),
-                );
+                let display_filter = self
+                    .filter
+                    .as_ref()
+                    .map_or_else(String::new, |f| format!(", filter={}", f.expression()));
                 let on = self
                     .on
                     .iter()

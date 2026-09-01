@@ -319,7 +319,7 @@ pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     }
 
     let mut new_args = Vec::with_capacity(args.len());
-    let mut contiguous_scalar = "".to_string();
+    let mut contiguous_scalar = String::new();
 
     let return_type = {
         let data_types: Vec<_> = args
@@ -369,7 +369,7 @@ pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
                             .push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
                         _ => unreachable!(),
                     }
-                    contiguous_scalar = "".to_string();
+                    contiguous_scalar = String::new();
                 }
                 new_args.push(arg);
             }

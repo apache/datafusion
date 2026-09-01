@@ -1478,9 +1478,9 @@ mod tests {
 
         // Test empty string
         expect_cast(
-            ScalarValue::Utf8(Some("".to_string())),
+            ScalarValue::Utf8(Some(String::new())),
             DataType::Utf8View,
-            ExpectedCast::Value(ScalarValue::Utf8View(Some("".to_string()))),
+            ExpectedCast::Value(ScalarValue::Utf8View(Some(String::new()))),
         );
 
         // Test large string

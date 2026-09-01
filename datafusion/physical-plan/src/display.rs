@@ -680,7 +680,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         let label = { format!("{}", Wrapper(plan, self.t)) };
 
         let metrics = match self.show_metrics {
-            ShowMetrics::None => "".to_string(),
+            ShowMetrics::None => String::new(),
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
                     let mut metrics = metrics
@@ -721,7 +721,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
                 .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
         } else {
-            "".to_string()
+            String::new()
         };
 
         let delimiter = if !metrics.is_empty() && !statistics.is_empty() {

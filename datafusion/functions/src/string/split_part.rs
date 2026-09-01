@@ -747,7 +747,7 @@ mod tests {
             SplitPartFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::new()))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ],
             Ok(Some("a,b")),
@@ -759,7 +759,7 @@ mod tests {
             SplitPartFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::new()))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
             ],
             Ok(Some("")),
@@ -797,7 +797,7 @@ mod tests {
             SplitPartFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::new()))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
             ],
             Ok(Some("a,b")),
@@ -821,7 +821,7 @@ mod tests {
             SplitPartFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::new()))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(-2))),
             ],
             Ok(Some("")),
