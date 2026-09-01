@@ -37,6 +37,7 @@ use datafusion_common::exec_datafusion_err;
 
 use half::f16;
 use std::cmp::Ordering;
+use std::fmt::Write as _;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
@@ -478,10 +479,12 @@ impl<VAL: ValueType> TopKHeap<VAL> {
             } else {
                 ""
             };
-            output.push_str(&format!(
-                "{}{}val={:?} idx={}, bucket={}\n",
+            writeln!(
+                output,
+                "{}{}val={:?} idx={}, bucket={}",
                 prefix, connector, hi.val, idx, hi.map_idx
-            ));
+            )
+            .ok();
             let new_prefix = if is_tail { "" } else { "│   " };
             let child_prefix = format!("{prefix}{new_prefix}");
 

@@ -293,7 +293,7 @@ async fn verify_file_encrypted(
         // Windows backslashes are eventually converted to slashes when writing the Parquet files,
         // through `ListingTableUrl::parse`, making `encryption_factory.encryption_keys` store them
         // it that format. So we also replace backslashes here to ensure they match.
-        file_path.to_str().unwrap().replace("\\", "/")
+        file_path.to_str().unwrap().replace('\\', "/")
     } else {
         file_path.to_str().unwrap().to_owned()
     };

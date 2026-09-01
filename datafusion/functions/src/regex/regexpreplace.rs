@@ -250,7 +250,7 @@ impl OptimizedRegex {
         // also leave the input unchanged.
         if short_re.captures_read(locs, val).is_none() {
             return Cow::Borrowed(val);
-        };
+        }
 
         // `captures_read` succeeded, so the overall shortened match is present.
         let match_end = locs.get(0).unwrap().1;
@@ -259,7 +259,7 @@ impl OptimizedRegex {
             // regex since it won't match across lines. Fall back to the full
             // regex replacement.
             return self.re.replacen(val, limit, replacement);
-        };
+        }
         // The fast path only applies to `${1}` replacements, so the result is
         // either capture group 1 or the empty string if that group did not match.
         if let Some((start, end)) = locs.get(1) {
