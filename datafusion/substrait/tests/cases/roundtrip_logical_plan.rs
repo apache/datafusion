@@ -344,9 +344,10 @@ async fn aggregate_multiple_keys() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_sets() -> Result<()> {
+    let ctx = create_context().await?;
     let proto = roundtrip_with_ctx(
         "SELECT a, c, d, avg(b), sum(e) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
-        create_context().await?,
+        ctx.clone(),
     )
     .await?;
 
@@ -375,6 +376,25 @@ async fn aggregate_grouping_sets() -> Result<()> {
         _ => panic!("expected aggregate output mapping"),
     };
     assert_eq!(output_mapping, &[0, 1, 2, 5, 3, 4]);
+
+    let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    let results = DataFrame::new(ctx.state(), plan).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------+-------+-------------+-------------+",
+            "| a | c          | d     | avg(data.b) | sum(data.e) |",
+            "+---+------------+-------+-------------+-------------+",
+            "|   |            |       | 3.250000    | 6442450943  |",
+            "|   |            | false | 2.000000    | 4294967295  |",
+            "|   |            | true  | 4.500000    | 2147483648  |",
+            "| 1 |            |       | 2.000000    | 4294967295  |",
+            "| 1 | 2020-01-01 |       | 2.000000    | 4294967295  |",
+            "| 3 |            |       | 4.500000    | 2147483648  |",
+            "| 3 | 2020-01-01 |       | 4.500000    | 2147483648  |",
+            "+---+------------+-------+-------------+-------------+",
+        ],
+        &results
+    );
 
     Ok(())
 }
