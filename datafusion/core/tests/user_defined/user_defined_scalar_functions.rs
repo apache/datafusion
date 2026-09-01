@@ -197,7 +197,7 @@ impl std::fmt::Debug for Simple0ArgsScalarUDF {
             .field("name", &self.name)
             .field("signature", &self.signature)
             .field("fun", &"<FUNC>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

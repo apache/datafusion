@@ -62,7 +62,7 @@ impl Debug for InListExpr {
             .field("expr", &self.expr)
             .field("list", &self.list)
             .field("negated", &self.negated)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

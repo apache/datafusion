@@ -115,7 +115,7 @@ impl Debug for HigherOrderFunctionExpr {
             .field("args", &self.args)
             .field("lambda_positions", &lambda_positions)
             .field("return_field", &self.return_field)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

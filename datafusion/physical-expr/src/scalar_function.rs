@@ -64,7 +64,7 @@ impl Debug for ScalarFunctionExpr {
             .field("name", &self.name)
             .field("args", &self.args)
             .field("return_field", &self.return_field)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

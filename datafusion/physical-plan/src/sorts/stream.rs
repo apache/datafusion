@@ -229,7 +229,7 @@ impl<T: CursorArray> std::fmt::Debug for FieldCursorStream<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrimitiveCursorStream")
             .field("num_streams", &self.streams)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

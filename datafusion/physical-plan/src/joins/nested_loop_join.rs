@@ -1749,7 +1749,7 @@ impl std::fmt::Debug for FallbackCoordinator {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FallbackCoordinator")
             .field("right_partition_count", &self.right_partition_count)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

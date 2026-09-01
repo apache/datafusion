@@ -351,7 +351,7 @@ impl Debug for CsvSerializer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CsvSerializer")
             .field("header", &self.header)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

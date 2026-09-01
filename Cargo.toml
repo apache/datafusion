@@ -292,7 +292,6 @@ map_unwrap_or = "allow"                      # 198 hits
 match_same_arms = "allow"                    # 261 hits
 match_wildcard_for_single_variants = "allow" # 132 hits
 missing_errors_doc = "allow"                 # 1807 hits
-missing_fields_in_debug = "allow"            # 29 hits
 missing_panics_doc = "allow"                 # 244 hits
 must_use_candidate = "allow"                 # 2726 hits
 needless_raw_string_hashes = "allow"         # 540 hits

@@ -925,7 +925,7 @@ impl Debug for MemSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MemSink")
             .field("num_partitions", &self.batches.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
