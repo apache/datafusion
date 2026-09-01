@@ -324,6 +324,11 @@ impl AggregateStream {
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
+        // Accumulators that allocate their state at construction are invisible to the
+        // per-batch size deltas in `aggregate_batch`, so charge their initial sizes up
+        // front (mirroring `GroupsAccumulatorAdapter`, which charges `state.size()` when
+        // it creates each accumulator).
+        reservation.try_grow(accumulators.iter().map(|accum| accum.size()).sum())?;
 
         // Enable dynamic filter if:
         // 1. AggregateExec did the check and ensure it supports the dynamic filter

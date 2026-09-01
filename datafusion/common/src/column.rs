@@ -22,6 +22,7 @@ use crate::utils::parse_identifiers_normalized;
 use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
+use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -236,7 +237,7 @@ impl Column {
                 .flat_map(|s| s.qualified_fields_with_unqualified_name(&self.name))
                 .collect::<Vec<_>>();
             match qualified_fields.len() {
-                0 => continue,
+                0 => {}
                 1 => return Ok(Column::from(qualified_fields[0])),
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
@@ -295,6 +296,7 @@ impl Column {
                 .iter()
                 .flat_map(|s| s.iter())
                 .flat_map(|s| s.columns())
+                .unique()
                 .collect(),
         })
     }

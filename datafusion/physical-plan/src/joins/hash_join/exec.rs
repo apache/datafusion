@@ -109,7 +109,7 @@ const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
 #[expect(clippy::too_many_arguments)]
 fn try_create_array_map(
-    bounds: &Option<PartitionBounds>,
+    bounds: Option<&PartitionBounds>,
     schema: &SchemaRef,
     batches: &[RecordBatch],
     on_left: &[PhysicalExprRef],
@@ -2666,7 +2666,7 @@ async fn collect_left_input(
 
     let (join_hash_map, batch, left_values) =
         if let Some((array_map, batch, left_value)) = try_create_array_map(
-            &bounds,
+            bounds.as_ref(),
             &schema,
             &batches,
             &on_left,

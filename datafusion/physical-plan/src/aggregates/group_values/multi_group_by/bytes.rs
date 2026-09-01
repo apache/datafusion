@@ -263,7 +263,7 @@ where
                 self.append_val_inner::<GenericStringType<O>>(column, row)?
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
+        }
 
         Ok(())
     }
@@ -322,7 +322,7 @@ where
                 self.vectorized_append_inner::<GenericStringType<O>>(column, rows)?
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
+        }
 
         Ok(())
     }

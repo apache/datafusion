@@ -384,6 +384,8 @@ mod tests {
     }
 
     #[test]
+    // The pointer casts are aligned because the pointees are the concrete types.
+    #[expect(clippy::cast_ptr_alignment)]
     fn test_ffi_partition_evaluator_local_bypass_inner() -> datafusion_common::Result<()>
     {
         let original_accum = TestPartitionEvaluator {};

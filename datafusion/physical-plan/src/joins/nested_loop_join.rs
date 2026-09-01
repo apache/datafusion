@@ -1384,9 +1384,9 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) left_data: OnceFut<LeftLoad>,
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
-    /// - output_schema: ['a', 'c']
-    /// - left_schema: ['a', 'b']
-    /// - right_schema: ['c']
+    /// - output_schema: `['a', 'c']`
+    /// - left_schema: `['a', 'b']`
+    /// - right_schema: `['c']`
     ///
     /// The column indices would be [(left, 0), (right, 0)] -- taking the left
     /// 0th column and right 0th column can construct the output schema.
@@ -1532,7 +1532,7 @@ impl Stream for NestedLoopJoinStream {
                     let _build_timer = build_metric.timer();
 
                     match self.handle_buffering_left(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => return poll,
                     }
                 }
@@ -1567,7 +1567,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_fetching_right(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => return poll,
                     }
                 }
@@ -1594,7 +1594,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_probe_right() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1615,7 +1615,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_right_unmatched() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1637,7 +1637,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_probe_end() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1667,7 +1667,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_left_unmatched() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1686,7 +1686,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_global_right_unmatched(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1961,9 +1961,23 @@ impl NestedLoopJoinStream {
         }
 
         if active.pending_batches.is_empty() {
-            // No data at all — go directly to Done
             self.left_exhausted = true;
-            self.state = NLJState::Done;
+            // Reached both when the left side was empty from the start and when
+            // the previous chunk consumed the last of it, so this load finds
+            // nothing left. In the latter case earlier chunks have already
+            // merged their per-batch bitmaps into `global_right_bitmaps`, and
+            // those unmatched probe-side rows are still waiting to be emitted.
+            // Going straight to `Done` would discard them, silently dropping
+            // rows. `EmitGlobalRightUnmatched` replays the spilled right side
+            // and emits them; with no bitmaps accumulated it reports nothing
+            // unmatched and finishes immediately, so a genuinely empty left
+            // side behaves as before.
+            self.state = if self.should_track_unmatched_right {
+                self.right_data = None;
+                NLJState::EmitGlobalRightUnmatched
+            } else {
+                NLJState::Done
+            };
             return ControlFlow::Continue(());
         }
 

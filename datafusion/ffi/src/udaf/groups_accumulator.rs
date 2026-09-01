@@ -311,7 +311,7 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
                 .iter()
                 .map(WrappedArray::try_from)
                 .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
-            let group_indices = group_indices.iter().cloned().collect();
+            let group_indices = group_indices.iter().copied().collect();
             let opt_filter = opt_filter
                 .map(|bool_array| to_ffi(&bool_array.to_data()))
                 .transpose()?
@@ -373,7 +373,7 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
                 .iter()
                 .map(WrappedArray::try_from)
                 .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
-            let group_indices = group_indices.iter().cloned().collect();
+            let group_indices = group_indices.iter().copied().collect();
 
             df_result!((self.accumulator.merge_batch)(
                 &mut self.accumulator,
@@ -529,6 +529,8 @@ mod tests {
     }
 
     #[test]
+    // The pointer casts are aligned because the pointees are the concrete types.
+    #[expect(clippy::cast_ptr_alignment)]
     fn test_ffi_groups_accumulator_local_bypass_inner() -> Result<()> {
         let original_accum = StddevGroupsAccumulator::new(StatsType::Population);
         let boxed_accum: Box<dyn GroupsAccumulator> = Box::new(original_accum);

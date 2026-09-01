@@ -579,7 +579,7 @@ impl PartialSortStream {
                         Poll::Ready(None)
                     };
                 }
-            };
+            }
         }
     }
 

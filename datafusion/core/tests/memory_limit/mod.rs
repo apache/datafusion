@@ -22,6 +22,7 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
 mod view_spill_compaction;
@@ -908,7 +909,7 @@ impl TestCase {
 
         if let Some(pool) = memory_pool {
             builder = builder.with_memory_pool(pool);
-        };
+        }
         let runtime = builder.build_arc().unwrap();
 
         // Configure execution
