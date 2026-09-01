@@ -297,6 +297,65 @@ statement ok
 drop table t_probe;
 
 ##########
+## Foreign keys
+##########
+
+statement ok
+CREATE TABLE dim (k INT, name TEXT, PRIMARY KEY (k)) AS VALUES (1, 'one'), (2, 'two');
+
+statement ok
+CREATE TABLE fact (id INT, k INT, FOREIGN KEY (k) REFERENCES dim(k)) AS VALUES
+(10, 1),
+(11, 2),
+(12, NULL);
+
+# Every fact row matches, so the join only removes NULL keys. Without the
+# foreign key this is a semi join instead.
+query TT
+EXPLAIN SELECT f.id FROM fact f JOIN dim d ON f.k = d.k;
+----
+logical_plan
+01)SubqueryAlias: f
+02)--Projection: fact.id
+03)----Filter: fact.k IS NOT NULL
+04)------TableScan: fact projection=[id, k]
+
+query I rowsort
+SELECT f.id FROM fact f JOIN dim d ON f.k = d.k;
+----
+10
+11
+
+# A predicate on the referenced side breaks the guarantee: the key exists in the
+# table, but not necessarily in the filtered subset.
+query TT
+EXPLAIN SELECT f.id FROM fact f JOIN dim d ON f.k = d.k WHERE d.name = 'one';
+----
+logical_plan
+01)Projection: f.id
+02)--LeftSemi Join: f.k = d.k
+03)----SubqueryAlias: f
+04)------TableScan: fact projection=[id, k]
+05)----SubqueryAlias: d
+06)------Projection: dim.k
+07)--------Filter: dim.name = Utf8View("one")
+08)----------TableScan: dim projection=[k, name]
+
+# Using a column of the referenced table keeps the join: it supplies data, not
+# just existence.
+query IT rowsort
+SELECT f.id, d.name FROM fact f JOIN dim d ON f.k = d.k;
+----
+10 one
+11 two
+
+statement ok
+drop table fact;
+
+statement ok
+drop table dim;
+
+##########
 ## Cleanup
 ##########
 

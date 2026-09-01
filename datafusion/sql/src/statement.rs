@@ -181,7 +181,9 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     constraints.push(TableConstraint::ForeignKey(ForeignKeyConstraint {
                         name: name.clone(),
                         index_name: None,
-                        columns: vec![],
+                        // An inline REFERENCES names no columns: the referencing
+                        // column is the one being defined.
+                        columns: vec![column.name.clone()],
                         foreign_table: foreign_table.clone(),
                         referred_columns: referred_columns.clone(),
                         on_delete: *on_delete,
@@ -1962,8 +1964,43 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )?;
                     Ok(Constraint::PrimaryKey(indices))
                 }
-                TableConstraint::ForeignKey { .. } => {
-                    _plan_err!("Foreign key constraints are not currently supported")
+                TableConstraint::ForeignKey(ForeignKeyConstraint {
+                    columns,
+                    foreign_table,
+                    referred_columns,
+                    ..
+                }) => {
+                    let field_names = df_schema.field_names();
+                    let indices = columns
+                        .iter()
+                        .map(|ident| {
+                            let column =
+                                self.ident_normalizer.normalize(ident.clone());
+                            field_names
+                                .iter()
+                                .position(|item| *item == column)
+                                .ok_or_else(|| {
+                                    plan_datafusion_err!(
+                                        "Column for foreign key not found in schema: {column}"
+                                    )
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    if referred_columns.len() != indices.len() {
+                        return _plan_err!(
+                            "Foreign key must reference as many columns as it has"
+                        );
+                    }
+                    Ok(Constraint::ForeignKey {
+                        columns: indices,
+                        referenced_table: self.object_name_to_table_reference(
+                            foreign_table.clone(),
+                        )?,
+                        referenced_columns: referred_columns
+                            .iter()
+                            .map(|column| column.value.clone())
+                            .collect(),
+                    })
                 }
                 TableConstraint::Check { .. } => {
                     _plan_err!("Check constraints are not currently supported")
