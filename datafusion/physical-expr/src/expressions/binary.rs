@@ -589,20 +589,18 @@ impl PhysicalExpr for BinaryExpr {
                         );
                     }
                     ColumnarValue::Scalar(scalar) => {
-                        if let ScalarValue::Boolean(v) = scalar {
+                        return if let ScalarValue::Boolean(v) = scalar {
                             // A scalar RHS applies uniformly to all selected rows.
                             if let Some(v) = v {
-                                return Ok(uniform_pre_selection_result(
-                                    *v, fill_value, lhs,
-                                ));
+                                Ok(uniform_pre_selection_result(*v, fill_value, lhs))
                             } else {
-                                return pre_selection_scatter(&mask, None, fill_value);
+                                pre_selection_scatter(&mask, None, fill_value)
                             }
                         } else {
-                            return internal_err!(
+                            internal_err!(
                                 "Expected boolean scalar value, found: {right_ret:?}"
-                            );
-                        }
+                            )
+                        };
                     }
                 }
             }
@@ -1259,11 +1257,11 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
                 // Return Left for:
                 // - AND with false value
                 // - OR with true value
-                if (is_and && !is_true) || (!is_and && *is_true) {
-                    return ShortCircuitStrategy::ReturnLeft;
+                return if (is_and && !is_true) || (!is_and && *is_true) {
+                    ShortCircuitStrategy::ReturnLeft
                 } else {
-                    return ShortCircuitStrategy::ReturnRight;
-                }
+                    ShortCircuitStrategy::ReturnRight
+                };
             }
         }
     }

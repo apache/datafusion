@@ -2875,9 +2875,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
                             name: c,
                         });
-                    } else {
-                        value_indices[column_index] = Some(i);
                     }
+                    value_indices[column_index] = Some(i);
                     Ok(Arc::clone(table_schema.field(column_index)))
                 })
                 .collect::<Result<Vec<_>>>()?;
