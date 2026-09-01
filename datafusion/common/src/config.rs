@@ -1979,7 +1979,7 @@ config_namespace! {
         /// instead of being converted into a [`std::fmt::Error`]
         pub safe: bool, default = true
         /// Format string for nulls
-        pub null: String, default = "".into()
+        pub null: String, default = String::new()
         /// Date format for date arrays
         pub date_format: Option<String>, default = Some("%Y-%m-%d".to_string())
         /// Format for DateTime arrays
@@ -3378,7 +3378,7 @@ impl Default for ConfigFileEncryptionProperties {
 config_namespace_with_hashmap! {
     pub struct ColumnEncryptionProperties {
         /// Per column encryption key
-        pub column_key_as_hex: String, default = "".to_string()
+        pub column_key_as_hex: String, default = String::new()
         /// Per column encryption key metadata
         pub column_metadata_as_hex: Option<String>, default = None
     }
@@ -3557,7 +3557,7 @@ pub struct ConfigFileDecryptionProperties {
 config_namespace_with_hashmap! {
     pub struct ColumnDecryptionProperties {
         /// Per column encryption key
-        pub column_key_as_hex: String, default = "".to_string()
+        pub column_key_as_hex: String, default = String::new()
     }
 }
 
@@ -4527,7 +4527,7 @@ mod tests {
 
         let parsed_metadata = table_config.parquet.key_value_metadata.clone();
         assert_eq!(parsed_metadata.get("should not exist1"), None);
-        assert_eq!(parsed_metadata.get("key1"), Some(&Some("".into())));
+        assert_eq!(parsed_metadata.get("key1"), Some(&Some(String::new())));
         assert_eq!(parsed_metadata.get("key2"), Some(&Some("value2".into())));
         assert_eq!(
             parsed_metadata.get("key3"),

@@ -93,7 +93,7 @@ fn print_docs(
     providers: Vec<Box<dyn DocProvider>>,
     doc_sections: Vec<DocSection>,
 ) -> Result<String> {
-    let mut docs = "".to_string();
+    let mut docs = String::new();
 
     // Ensure that all providers have documentation
     let mut providers_with_no_docs = HashSet::new();

@@ -2036,7 +2036,7 @@ impl LogicalPlan {
                                     .collect();
                                 format!(" projection=[{}]", names.join(", "))
                             }
-                            _ => "".to_string(),
+                            _ => String::new(),
                         };
 
                         write!(f, "TableScan: {table_name}{projected_fields}")?;
@@ -2176,7 +2176,7 @@ impl LogicalPlan {
                         let filter_expr = filter
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
-                            .unwrap_or_else(|| "".to_string());
+                            .unwrap_or_else(String::new);
                         let null_aware_expr =
                             if *null_aware { " null_aware" } else { "" };
                         let join_type = if filter.is_none()
@@ -2286,7 +2286,7 @@ impl LogicalPlan {
                             if let Some(sort_expr) = sort_expr {
                                 expr_vec_fmt!(sort_expr)
                             } else {
-                                "".to_string()
+                                String::new()
                             },
                         ),
                     },
@@ -5993,7 +5993,7 @@ mod tests {
             .unwrap();
         let prepared_builder = LogicalPlanBuilder::new(plan)
             .prepare(
-                "".to_string(),
+                String::new(),
                 vec![Field::new("", DataType::Int32, true).into()],
             )
             .unwrap();

@@ -435,7 +435,7 @@ mod tests {
         test_function!(
             FindInSetFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::new()))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b,c")))),
             ],
             Ok(Some(0)),
@@ -447,7 +447,7 @@ mod tests {
             FindInSetFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::new()))),
             ],
             Ok(Some(0)),
             i32,

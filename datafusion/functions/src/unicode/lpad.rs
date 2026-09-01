@@ -725,7 +725,7 @@ mod tests {
         test_lpad!(
             Some("hi".into()),
             ScalarValue::Int64(Some(5i64)),
-            Some("".into()),
+            Some(String::new()),
             Ok(Some("hi"))
         );
         test_lpad!(

@@ -665,8 +665,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         {
             for (path, entry) in file_statistics_cache.list_entries() {
                 path_arr.push(path.path.to_string());
-                table_arr
-                    .push(path.table.map_or_else(|| "".to_string(), |t| t.to_string()));
+                table_arr.push(path.table.map_or_else(String::new, |t| t.to_string()));
                 file_modified_arr
                     .push(Some(entry.value.meta.last_modified.timestamp_millis()));
                 file_size_bytes_arr.push(entry.value.meta.size);

@@ -489,10 +489,10 @@ impl DisplayAs for NestedLoopJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={}", f.expression()),
-                );
+                let display_filter = self
+                    .filter
+                    .as_ref()
+                    .map_or_else(String::new, |f| format!(", filter={}", f.expression()));
                 let display_projections = if self.contains_projection() {
                     format!(
                         ", projection=[{}]",
@@ -509,7 +509,7 @@ impl DisplayAs for NestedLoopJoinExec {
                             .join(", ")
                     )
                 } else {
-                    "".to_string()
+                    String::new()
                 };
                 write!(
                     f,

@@ -242,7 +242,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_ascii!(Some(String::from("x")), Ok(Some(120)));
         test_ascii!(Some(String::from("a")), Ok(Some(97)));
-        test_ascii!(Some(String::from("")), Ok(Some(0)));
+        test_ascii!(Some(String::new()), Ok(Some(0)));
         test_ascii!(Some(String::from("🚀")), Ok(Some(128640)));
         test_ascii!(Some(String::from("\n")), Ok(Some(10)));
         test_ascii!(Some(String::from("\t")), Ok(Some(9)));
