@@ -77,6 +77,15 @@ true
 # the assertion must not be the thing that differs between them.
 expect_plan PartitionedTopKExec
 
+# `PartitionedTopKExec` alone only proves the plan has an operator that
+# distributes by the partition key; that operator requires no input ordering,
+# so it appears whether or not the scan below it declares one. Assert the
+# scan's own declared ordering too, so a `WITH ORDER` that silently stops
+# reaching `DataSourceExec` (e.g. a rewrite that drops it, or a future change
+# to `load_window_sorted.sql`) fails loudly here instead of just being absent
+# from a plan that still "passes" the check above.
+expect_plan output_ordering=[pk@0 ASC NULLS LAST, ob@1 DESC]
+
 run
 -- Top-2 per partition by ${FN} over the declared-sorted input.
 SELECT pk, ob FROM (
