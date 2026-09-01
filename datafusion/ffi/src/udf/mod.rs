@@ -272,7 +272,7 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(udf: &mut FFI_ScalarUDF) {
     unsafe {
         debug_assert!(!udf.private_data.is_null());
-        let private_data = Box::from_raw(udf.private_data as *mut ScalarUDFPrivateData);
+        let private_data = Box::from_raw(udf.private_data.cast::<ScalarUDFPrivateData>());
         drop(private_data);
         udf.private_data = std::ptr::null_mut();
     }
@@ -317,7 +317,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             placement: placement_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
             preserves_lex_ordering: preserves_lex_ordering_fn_wrapper,
             with_updated_config: with_updated_config_fn_wrapper,

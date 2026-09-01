@@ -93,7 +93,7 @@ impl FFI_GroupsAccumulator {
     #[inline]
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn GroupsAccumulator> {
         unsafe {
-            let private_data = self.private_data as *mut GroupsAccumulatorPrivateData;
+            let private_data = self.private_data.cast::<GroupsAccumulatorPrivateData>();
             &mut (*private_data).accumulator
         }
     }
@@ -227,7 +227,9 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator)
     unsafe {
         if !accumulator.private_data.is_null() {
             let private_data = Box::from_raw(
-                accumulator.private_data as *mut GroupsAccumulatorPrivateData,
+                accumulator
+                    .private_data
+                    .cast::<GroupsAccumulatorPrivateData>(),
             );
             drop(private_data);
             accumulator.private_data = null_mut();
@@ -255,7 +257,7 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
             convert_to_state: convert_to_state_fn_wrapper,
 
             release: release_fn_wrapper,
-            private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            private_data: Box::into_raw(Box::new(private_data)).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -286,7 +288,9 @@ impl From<FFI_GroupsAccumulator> for Box<dyn GroupsAccumulator> {
         if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
             unsafe {
                 let private_data = Box::from_raw(
-                    accumulator.private_data as *mut GroupsAccumulatorPrivateData,
+                    accumulator
+                        .private_data
+                        .cast::<GroupsAccumulatorPrivateData>(),
                 );
                 // We must set this to null to avoid a double free
                 accumulator.private_data = null_mut();
@@ -542,8 +546,8 @@ mod tests {
         let foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
         unsafe {
             let concrete =
-                &*(std::ptr::from_ref::<dyn GroupsAccumulator>(foreign_accum.as_ref())
-                    as *const StddevGroupsAccumulator);
+                &*std::ptr::from_ref::<dyn GroupsAccumulator>(foreign_accum.as_ref())
+                    .cast::<StddevGroupsAccumulator>();
             assert_eq!(original_size, concrete.size());
         }
 
@@ -555,8 +559,8 @@ mod tests {
         let foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
         unsafe {
             let concrete =
-                &*(std::ptr::from_ref::<dyn GroupsAccumulator>(foreign_accum.as_ref())
-                    as *const ForeignGroupsAccumulator);
+                &*std::ptr::from_ref::<dyn GroupsAccumulator>(foreign_accum.as_ref())
+                    .cast::<ForeignGroupsAccumulator>();
             assert_eq!(original_size, concrete.size());
         }
 

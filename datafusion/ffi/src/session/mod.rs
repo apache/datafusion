@@ -387,7 +387,7 @@ unsafe extern "C" fn physical_optimizers_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     unsafe {
         let private_data =
-            Box::from_raw(provider.private_data as *mut SessionPrivateData);
+            Box::from_raw(provider.private_data.cast::<SessionPrivateData>());
         drop(private_data);
     }
 }
@@ -399,7 +399,8 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
         let private_data = Box::into_raw(Box::new(SessionPrivateData {
             session: (*old_private_data).session,
             runtime: (*old_private_data).runtime.clone(),
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
 
         FFI_SessionRef {
             session_id: session_id_fn_wrapper,
@@ -514,7 +515,7 @@ impl FFI_SessionRef {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
