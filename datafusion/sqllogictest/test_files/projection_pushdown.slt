@@ -2199,6 +2199,17 @@ FROM (
 ----
 true
 
+# Same invariant when the extraction is routed into one side of a join.
+query B
+SELECT bool_and(field = s['a'])
+FROM (
+  SELECT l.s, l.s['a'] AS field
+  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000)) AS l
+  INNER JOIN (SELECT 1 AS k) AS r ON true
+);
+----
+true
+
 # Every surviving row satisfies the predicate it was filtered on.
 query B
 SELECT bool_and(s['a'] > 0.5)
