@@ -483,6 +483,16 @@ impl Unparser<'_> {
             return None;
         }
 
+        if select.already_projected()
+            && find_unnest_node_within_select(plan).is_none()
+            && let Some(alias) = Self::derived_input_alias(plan)
+        {
+            return Some(DerivedInputScope {
+                alias,
+                schema: plan.schema().as_ref(),
+            });
+        }
+
         match plan {
             LogicalPlan::Projection(projection) => {
                 let alias = Self::derived_input_alias(projection.input.as_ref())?;

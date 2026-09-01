@@ -458,6 +458,18 @@ fn roundtrip_rebases_derived_projection_references() -> Result<(), DataFusionErr
         unparser.plan_to_sql(&plan)?,
         @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 1)"
     );
+
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .alias("ta")?
+        .project(vec![col("ta.j1_id")])?
+        .filter(col("ta.j1_id").gt(lit(0)))?
+        .project(vec![lit(1)])?
+        .build()?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT 1 FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 0)"
+    );
     Ok(())
 }
 
