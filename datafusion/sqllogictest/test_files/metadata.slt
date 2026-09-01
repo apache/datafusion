@@ -225,9 +225,9 @@ SELECT
     arrow_metadata(CAST(ts AS DATE), 'metadata_key')
 FROM table_with_metadata;
 ----
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
+2020-09-08 NULL
+2020-09-08 NULL
+2020-09-08 NULL
 
 # Regression test: CAST preserves metadata on integer column
 query IT
@@ -236,15 +236,15 @@ SELECT
     arrow_metadata(CAST(id AS BIGINT), 'metadata_key')
 FROM table_with_metadata;
 ----
-1 the id field
-NULL the id field
-3 the id field
+1 NULL
+NULL NULL
+3 NULL
 
 # Regression test: CAST with single-argument arrow_metadata (returns full map)
 query ?
 select arrow_metadata(CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
-{metadata_key: the id field}
+{}
 
 # Regression test: distinct with cast
 query D
@@ -380,9 +380,9 @@ SELECT
     arrow_metadata(TRY_CAST(ts AS DATE), 'metadata_key')
 FROM table_with_metadata;
 ----
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
-2020-09-08 ts non-nullable field
+2020-09-08 NULL
+2020-09-08 NULL
+2020-09-08 NULL
 
 # Regression test: TRY_CAST preserves metadata on integer column
 query IT
@@ -391,9 +391,9 @@ SELECT
     arrow_metadata(TRY_CAST(id AS BIGINT), 'metadata_key')
 FROM table_with_metadata;
 ----
-1 the id field
-NULL the id field
-3 the id field
+1 NULL
+NULL NULL
+3 NULL
 
 # Regression test: TRY_CAST preserves metadata even when cast fails (returns NULL)
 query IT
@@ -402,15 +402,15 @@ SELECT
     arrow_metadata(TRY_CAST(name AS INT), 'metadata_key')
 FROM table_with_metadata;
 ----
-NULL the name field
-NULL the name field
-NULL the name field
+NULL NULL
+NULL NULL
+NULL NULL
 
 # Regression test: TRY_CAST with single-argument arrow_metadata (returns full map)
 query ?
 select arrow_metadata(TRY_CAST(id AS BIGINT)) from table_with_metadata limit 1;
 ----
-{metadata_key: the id field}
+{}
 
 # with_metadata: attach a single key and read it back
 query T

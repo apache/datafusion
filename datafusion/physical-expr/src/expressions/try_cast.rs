@@ -25,7 +25,6 @@ use arrow::compute;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use compute::can_cast_types;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
@@ -179,19 +178,16 @@ impl PhysicalExpr for TryCastExpr {
             ));
         }
 
-        // Pass-through metadata from source (stripping extension keys)
+        // A type-only target carries no metadata, and the target's metadata is
+        // authoritative, so the output carries none.
         source_result.map(|source_field| {
-            let mut metadata = source_field.metadata().clone();
-            metadata.remove(EXTENSION_TYPE_NAME_KEY);
-            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
-
             Arc::new(
                 source_field
                     .as_ref()
                     .clone()
                     .with_data_type(self.cast_type().clone())
                     .with_nullable(true) // TRY_CAST is always nullable
-                    .with_metadata(metadata),
+                    .with_metadata(Default::default()),
             )
         })
     }
@@ -310,16 +306,13 @@ pub fn try_cast_with_target_field(
         && target_field.is_nullable()
         && target_field.metadata().is_empty();
 
-    // For same-type casts, we can skip creating a TryCastExpr only if:
-    // 1. The target is type-only (no explicit metadata)
-    // 2. The source has no extension metadata that needs to be stripped
-    // Otherwise we need the TryCastExpr to strip extension metadata from the source.
+    // For same-type casts we can skip creating a TryCastExpr only if the cast
+    // would be a genuine no-op: the target is type-only, and the source carries
+    // no metadata for the cast to drop. Because the target's metadata is
+    // authoritative, a same-type cast is still meaningful when it clears metadata.
     if expr_type == *cast_type && is_type_only {
         let source_field = expr.return_field(input_schema)?;
-        let has_extension_metadata = source_field
-            .metadata()
-            .contains_key(EXTENSION_TYPE_NAME_KEY);
-        if !has_extension_metadata {
+        if source_field.metadata().is_empty() {
             return Ok(Arc::clone(&expr));
         }
     }
@@ -355,6 +348,7 @@ mod tests {
         },
         datatypes::*,
     };
+    use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     // runs an end-to-end test of physical type cast
@@ -922,11 +916,9 @@ mod tests {
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY).is_none(),
             "Type-only try_cast should strip extension type metadata"
         );
-        // Non-extension metadata should pass through
-        assert_eq!(
-            field.metadata().get("custom_key"),
-            Some(&"custom_value".to_string()),
-            "Type-only try_cast should preserve non-extension metadata"
+        assert!(
+            field.metadata().get("custom_key").is_none(),
+            "Type-only try_cast should not carry source metadata"
         );
         // Field name preserved, type changed, always nullable
         assert_eq!(field.name(), "a");

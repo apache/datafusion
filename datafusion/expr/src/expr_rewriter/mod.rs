@@ -22,14 +22,17 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, Unnest};
+use arrow::compute::can_cast_types;
+use arrow::datatypes::Field;
+
+use crate::expr::{Alias, Cast, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
 use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{Column, DFSchema, Result, plan_err};
 
 mod guarantees;
 pub use guarantees::GuaranteeRewriter;
@@ -255,11 +258,12 @@ fn coerce_exprs_for_schema(
         .into_iter()
         .enumerate()
         .map(|(idx, expr)| {
-            let new_type = dst_schema.field(idx).data_type();
-            if new_type != &expr.get_type(src_schema)? {
+            let dst_field = dst_schema.field(idx);
+            if dst_field.data_type() != &expr.get_type(src_schema)? {
                 match expr {
                     Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                        Ok(coerce_expr_to_field(*expr, dst_field, src_schema)?
+                            .alias(name))
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
@@ -270,9 +274,10 @@ fn coerce_exprs_for_schema(
                             // (see: https://github.com/apache/datafusion/issues/18818)
                             Expr::Column(ref column) => {
                                 let name = column.name().to_owned();
-                                Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                                Ok(coerce_expr_to_field(expr, dst_field, src_schema)?
+                                    .alias(name))
                             }
-                            _ => Ok(expr.cast_to(new_type, src_schema)?),
+                            _ => coerce_expr_to_field(expr, dst_field, src_schema),
                         }
                     }
                 }
@@ -281,6 +286,36 @@ fn coerce_exprs_for_schema(
             }
         })
         .collect::<Result<_>>()
+}
+
+/// Cast `expr` so that it produces `dst_field`, carrying that field's metadata on
+/// the cast target.
+///
+/// A cast's target metadata is authoritative, so coercing to a bare `DataType`
+/// would produce an expression whose output field has no metadata, contradicting
+/// the destination schema that the coercion is supposed to satisfy.
+fn coerce_expr_to_field(
+    expr: Expr,
+    dst_field: &Field,
+    src_schema: &DFSchema,
+) -> Result<Expr> {
+    if dst_field.metadata().is_empty() {
+        return expr.cast_to(dst_field.data_type(), src_schema);
+    }
+
+    let this_type = expr.get_type(src_schema)?;
+    if !can_cast_types(&this_type, dst_field.data_type()) {
+        return plan_err!(
+            "Cannot automatically convert {this_type} to {}",
+            dst_field.data_type()
+        );
+    }
+
+    let target = Arc::new(
+        Field::new("", dst_field.data_type().clone(), true)
+            .with_metadata(dst_field.metadata().clone()),
+    );
+    Ok(Expr::Cast(Cast::new_from_field(Box::new(expr), target)))
 }
 
 /// Recursively un-alias an expressions
