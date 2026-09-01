@@ -2417,7 +2417,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
                 // recursively check JoinRels
                 match check_post_join_filters(join.left.as_ref().unwrap().as_ref()) {
                     Err(e) => Err(e),
-                    Ok(_) => {
+                    Ok(()) => {
                         check_post_join_filters(join.right.as_ref().unwrap().as_ref())
                     }
                 }

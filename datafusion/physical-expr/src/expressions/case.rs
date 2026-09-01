@@ -1304,7 +1304,7 @@ impl PhysicalExpr for CaseExpr {
             // There is at least one reachable nullable 'then' expression, so the case
             // expression itself is nullable.
             // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-            nullable_then.map(|_| true)
+            nullable_then.map(|()| true)
         } else if let Some(e) = &self.body.else_expr {
             // There are no reachable nullable 'then' expressions, so all we still need to
             // check is the 'else' expression's nullability.

@@ -1075,7 +1075,7 @@ impl MaterializingSortMergeJoinStream {
 
     fn allocate_reservation(&mut self, mut buffered_batch: BufferedBatch) -> Result<()> {
         match self.reservation.try_grow(buffered_batch.size_estimation) {
-            Ok(_) => {
+            Ok(()) => {
                 buffered_batch.reserved_amount = buffered_batch.size_estimation;
                 self.join_metrics
                     .peak_mem_used()

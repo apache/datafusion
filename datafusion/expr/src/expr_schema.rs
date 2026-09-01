@@ -288,7 +288,7 @@ impl ExprSchemable for Expr {
                     .transpose()?;
                 Ok(match has_nullable {
                     // If a nullable subexpression is found, the result may also be nullable.
-                    Some(_) => true,
+                    Some(()) => true,
                     // If the list is too long, we assume it is nullable.
                     None if list.len() + 1 > MAX_INSPECT_LIMIT => true,
                     // All the subexpressions are non-nullable, so the result must be non-nullable.
@@ -356,7 +356,7 @@ impl ExprSchemable for Expr {
                     // There is at least one reachable nullable 'then' expression, so the case
                     // expression itself is nullable.
                     // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-                    nullable_then.map(|_| true)
+                    nullable_then.map(|()| true)
                 } else if let Some(e) = &case.else_expr {
                     // There are no reachable nullable 'then' expressions, so all we still need to
                     // check is the 'else' expression's nullability.

@@ -500,7 +500,7 @@ impl MultiLevelMergeBuilder {
             // this is not and there should be some upper limit to memory
             // reservation so we won't starve the system.
             match try_grow_reservation_to_at_least(reservation, total_needed) {
-                Ok(_) => {
+                Ok(()) => {
                     number_of_spills_to_read_for_current_phase += 1;
                 }
                 // If we can't grow the reservation, we need to stop

@@ -607,7 +607,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let window_frame: WindowFrame = window_frame.clone().try_into()?;
                     window_frame
                         .regularize_order_bys(&mut order_by)
-                        .map(|_| window_frame)
+                        .map(|()| window_frame)
                 })
                 .transpose()?;
 

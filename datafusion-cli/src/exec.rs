@@ -79,7 +79,7 @@ pub async fn exec_from_lines(
                 query.push_str(line);
                 if line.ends_with(';') {
                     match exec_and_print(ctx, print_options, query).await {
-                        Ok(_) => {}
+                        Ok(()) => {}
                         Err(err) => eprintln!("{err}"),
                     }
                     query = String::new();
@@ -175,7 +175,7 @@ pub async fn exec_from_repl(
                     rl.add_history_entry(line.trim_end())?;
                     tokio::select! {
                         res = exec_and_print(ctx, print_options, line) => match res {
-                            Ok(_) => {}
+                            Ok(()) => {}
                             Err(err) => eprintln!("{err}"),
                         },
                         _ = signal::ctrl_c() => {

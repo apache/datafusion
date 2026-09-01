@@ -802,7 +802,7 @@ impl ExternalSorter {
         let size = get_reserved_bytes_for_record_batch(input)?;
 
         match self.reservation.try_grow(size) {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(e) => {
                 if self.in_mem_batches.is_empty() {
                     return Err(Self::err_with_oom_context(e));
