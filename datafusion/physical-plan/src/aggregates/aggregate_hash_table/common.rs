@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, new_empty_array, new_null_array};
-use arrow::compute::filter_record_batch;
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, new_empty_array, new_null_array,
+};
+use arrow::compute::{filter_record_batch, prep_null_mask_filter};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
@@ -537,6 +540,42 @@ impl MaterializedAggregateOutput {
     }
 }
 
+/// Compacts row-aligned group indices using an aggregate filter.
+///
+/// Returns `None` when every row is selected so callers can reuse the input
+/// slice without allocating. At high selectivity, copying contiguous selected
+/// ranges avoids branching once per row.
+fn compact_group_indices(
+    group_indices: &[usize],
+    filter: &BooleanArray,
+) -> Option<Vec<usize>> {
+    debug_assert_eq!(group_indices.len(), filter.len());
+
+    let filter = match filter.null_count() {
+        0 => Cow::Borrowed(filter),
+        _ => Cow::Owned(prep_null_mask_filter(filter)),
+    };
+    let mask = filter.values();
+    let selected_rows = mask.count_set_bits();
+
+    if selected_rows == group_indices.len() {
+        return None;
+    }
+
+    let mut compacted = Vec::with_capacity(selected_rows);
+    // Match scatter's strategy: above 80% selectivity, copy contiguous ranges.
+    if selected_rows * 5 > group_indices.len() * 4 {
+        for (start, end) in mask.set_slices() {
+            compacted.extend_from_slice(&group_indices[start..end]);
+        }
+    } else {
+        compacted.extend(mask.set_indices().map(|index| group_indices[index]));
+    }
+    debug_assert_eq!(compacted.len(), selected_rows);
+
+    Some(compacted)
+}
+
 impl HashAggregateAccumulator {
     pub(super) fn new(
         aggregate_expr: Arc<AggregateFunctionExpr>,
@@ -625,15 +664,10 @@ impl HashAggregateAccumulator {
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
-        let filtered_group_indices = values.filter.as_ref().map(|filter| {
-            group_indices
-                .iter()
-                .zip(filter.as_boolean().iter())
-                .filter_map(|(&group_index, filter_value)| {
-                    (filter_value == Some(true)).then_some(group_index)
-                })
-                .collect::<Vec<_>>()
-        });
+        let filtered_group_indices = values
+            .filter
+            .as_ref()
+            .and_then(|filter| compact_group_indices(group_indices, filter.as_boolean()));
         let group_indices = filtered_group_indices.as_deref().unwrap_or(group_indices);
         self.accumulator.update_batch(
             &values.arguments,
@@ -768,6 +802,27 @@ mod tests {
 
     use super::*;
     use crate::metrics::ExecutionPlanMetricsSet;
+
+    #[test]
+    fn compact_group_indices_uses_filter_bitmap() {
+        let group_indices = (0..10).collect::<Vec<_>>();
+        let all_true = BooleanArray::from(vec![true; 10]);
+        assert_eq!(compact_group_indices(&group_indices, &all_true), None);
+
+        let high_selectivity =
+            BooleanArray::from((0..10).map(|index| index != 4).collect::<Vec<_>>());
+        assert_eq!(
+            compact_group_indices(&group_indices, &high_selectivity),
+            Some(vec![0, 1, 2, 3, 5, 6, 7, 8, 9])
+        );
+
+        let with_nulls =
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true), None]);
+        assert_eq!(
+            compact_group_indices(&group_indices[..5], &with_nulls),
+            Some(vec![0, 3])
+        );
+    }
 
     #[test]
     fn materialized_aggregate_output_slices_batches_until_exhausted() -> Result<()> {
