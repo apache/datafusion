@@ -311,7 +311,7 @@ config_namespace! {
         ///
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
-        pub default_null_ordering: String, default = "nulls_max".to_string()
+        pub default_null_ordering: NullOrdering, default = NullOrdering::NullsMax
 
         /// When set to true, DataFusion may remove `ORDER BY` clauses from
         /// subqueries or CTEs during SQL planning when their ordering cannot
@@ -878,6 +878,106 @@ impl Display for MapKeyDedupPolicy {
             Self::LastWin => "LAST_WIN",
         };
         write!(f, "{str}")
+    }
+}
+
+/// Default null placement used when an `ORDER BY` clause does not specify
+/// `NULLS FIRST` / `NULLS LAST`.
+///
+/// This is the typed value of [`SqlParserOptions::default_null_ordering`].
+/// Invalid strings are rejected when the option is set rather than silently
+/// falling back to [`NullOrdering::NullsMax`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum NullOrdering {
+    /// Nulls appear last in ascending order (Postgres default).
+    #[default]
+    NullsMax,
+    /// Nulls appear first in ascending order.
+    NullsMin,
+    /// Nulls always appear first, regardless of sort direction.
+    NullsFirst,
+    /// Nulls always appear last, regardless of sort direction.
+    NullsLast,
+}
+
+impl NullOrdering {
+    /// All accepted config values, for error messages and docs.
+    pub const fn available() -> &'static str {
+        "nulls_max, nulls_min, nulls_first, nulls_last"
+    }
+
+    /// Canonical config string for this variant.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::NullsMax => "nulls_max",
+            Self::NullsMin => "nulls_min",
+            Self::NullsFirst => "nulls_first",
+            Self::NullsLast => "nulls_last",
+        }
+    }
+
+    /// Evaluates the null ordering based on the given ascending flag.
+    ///
+    /// # Returns
+    /// * `true` if nulls should appear first.
+    /// * `false` if nulls should appear last.
+    pub fn nulls_first(&self, asc: bool) -> bool {
+        match self {
+            Self::NullsMax => !asc,
+            Self::NullsMin => asc,
+            Self::NullsFirst => true,
+            Self::NullsLast => false,
+        }
+    }
+}
+
+impl AsRef<str> for NullOrdering {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl FromStr for NullOrdering {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "nulls_max" => Ok(Self::NullsMax),
+            "nulls_min" => Ok(Self::NullsMin),
+            "nulls_first" => Ok(Self::NullsFirst),
+            "nulls_last" => Ok(Self::NullsLast),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid default_null_ordering: '{other}'. Expected one of: {}",
+                Self::available()
+            ))),
+        }
+    }
+}
+
+impl From<&str> for NullOrdering {
+    /// Parses a null-ordering name, defaulting to [`NullOrdering::NullsMax`]
+    /// when the string is not one of the supported values.
+    ///
+    /// Prefer [`FromStr`] when an invalid value should be reported as an error.
+    fn from(s: &str) -> Self {
+        Self::from_str(s).unwrap_or_default()
+    }
+}
+
+impl ConfigField for NullOrdering {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = Self::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for NullOrdering {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -4709,6 +4809,79 @@ mod tests {
 
         assert!(error.contains("Invalid Dialect: notadialect"));
         assert!(error.contains(Dialect::available()));
+    }
+
+    #[test]
+    fn test_default_null_ordering_roundtrip() {
+        use crate::config::NullOrdering;
+        use std::str::FromStr;
+
+        assert_eq!(NullOrdering::default(), NullOrdering::NullsMax);
+
+        for (value, expected) in [
+            ("nulls_max", NullOrdering::NullsMax),
+            ("nulls_min", NullOrdering::NullsMin),
+            ("nulls_first", NullOrdering::NullsFirst),
+            ("nulls_last", NullOrdering::NullsLast),
+        ] {
+            assert_eq!(NullOrdering::from_str(value).unwrap(), expected);
+            assert_eq!(
+                NullOrdering::from_str(&value.to_ascii_uppercase()).unwrap(),
+                expected
+            );
+            assert_eq!(expected.as_str(), value);
+            assert_eq!(expected.to_string(), value);
+        }
+    }
+
+    #[test]
+    fn test_default_null_ordering_nulls_first() {
+        use crate::config::NullOrdering;
+
+        assert!(!NullOrdering::NullsMax.nulls_first(true));
+        assert!(NullOrdering::NullsMax.nulls_first(false));
+        assert!(NullOrdering::NullsMin.nulls_first(true));
+        assert!(!NullOrdering::NullsMin.nulls_first(false));
+        assert!(NullOrdering::NullsFirst.nulls_first(true));
+        assert!(NullOrdering::NullsFirst.nulls_first(false));
+        assert!(!NullOrdering::NullsLast.nulls_first(true));
+        assert!(!NullOrdering::NullsLast.nulls_first(false));
+    }
+
+    #[test]
+    fn test_invalid_default_null_ordering_error_lists_available_values() {
+        use crate::config::NullOrdering;
+        use std::str::FromStr;
+
+        let error = NullOrdering::from_str("nulls_mx").unwrap_err().to_string();
+
+        assert!(error.contains("Invalid default_null_ordering: 'nulls_mx'"));
+        assert!(error.contains(NullOrdering::available()));
+    }
+
+    #[test]
+    fn test_default_null_ordering_config_set_rejects_invalid_values() {
+        use crate::config::ConfigOptions;
+
+        let mut options = ConfigOptions::new();
+        let err = options
+            .set("datafusion.sql_parser.default_null_ordering", "nulls_mx")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Invalid default_null_ordering: 'nulls_mx'"));
+        assert_eq!(
+            options.sql_parser.default_null_ordering,
+            crate::config::NullOrdering::NullsMax
+        );
+
+        options
+            .set("datafusion.sql_parser.default_null_ordering", "NULLS_FIRST")
+            .unwrap();
+        assert_eq!(
+            options.sql_parser.default_null_ordering,
+            crate::config::NullOrdering::NullsFirst
+        );
     }
 
     #[test]
