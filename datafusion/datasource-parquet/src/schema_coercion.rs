@@ -324,12 +324,13 @@ fn coerce_int96_to_resolution_impl(
                     // the resulting struct with correct child types.
                     let processed_children = processed_children.borrow();
                     assert_eq!(processed_children.len(), unprocessed_children.len());
-                    let processed_struct = Field::new_struct(
-                        current_field.name(),
-                        processed_children.as_slice(),
-                        current_field.is_nullable(),
+                    // Rebuild via `field_with_new_type` so the container field keeps its
+                    // name, nullability and metadata; only the child types change.
+                    let processed_struct = field_with_new_type(
+                        current_field,
+                        DataType::Struct(processed_children.iter().cloned().collect()),
                     );
-                    parent_fields.borrow_mut().push(Arc::new(processed_struct));
+                    parent_fields.borrow_mut().push(processed_struct);
                 }
                 (DataType::List(unprocessed_child), None) => {
                     // This is the first time popping off this list. See struct docs above.
@@ -357,12 +358,11 @@ fn coerce_int96_to_resolution_impl(
                     // This is the second time popping off this list. See struct docs above.
                     let processed_children = processed_children.borrow();
                     assert_eq!(processed_children.len(), 1);
-                    let processed_list = Field::new_list(
-                        current_field.name(),
-                        Arc::clone(&processed_children[0]),
-                        current_field.is_nullable(),
+                    let processed_list = field_with_new_type(
+                        current_field,
+                        DataType::List(Arc::clone(&processed_children[0])),
                     );
-                    parent_fields.borrow_mut().push(Arc::new(processed_list));
+                    parent_fields.borrow_mut().push(processed_list);
                 }
                 (DataType::Map(unprocessed_child, _), None) => {
                     // This is the first time popping off this map. See struct docs above.
@@ -387,12 +387,11 @@ fn coerce_int96_to_resolution_impl(
                     // This is the second time popping off this map. See struct docs above.
                     let processed_children = processed_children.borrow();
                     assert_eq!(processed_children.len(), 1);
-                    let processed_map = Field::new(
-                        current_field.name(),
+                    let processed_map = field_with_new_type(
+                        current_field,
                         DataType::Map(Arc::clone(&processed_children[0]), *sorted),
-                        current_field.is_nullable(),
                     );
-                    parent_fields.borrow_mut().push(Arc::new(processed_map));
+                    parent_fields.borrow_mut().push(processed_map);
                 }
                 (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
                     if int96_fields.contains(parquet_path.concat().as_str()) =>
@@ -727,5 +726,58 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_preserves_container_field_metadata() {
+        // Regression test for #24786: coercing INT96 timestamps rebuilds struct/list/map
+        // container fields, and must not drop the metadata attached to those fields. The
+        // coercion is only meant to change the time unit of INT96 timestamp leaves.
+        let spark_schema = "
+        message spark_schema {
+          optional group c1 {
+            optional int96 c0;
+          }
+          optional group c2 (LIST) {
+            repeated group list {
+              optional int96 element;
+            }
+          }
+          optional group c3 (MAP) {
+            repeated group key_value {
+              required int96 key;
+              optional int96 value;
+            }
+          }
+        }
+        ";
+
+        let schema = parse_message_type(spark_schema).expect("should parse schema");
+        let descr = SchemaDescriptor::new(Arc::new(schema));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+
+        // Attach metadata to every top-level container field so we can assert it survives.
+        let fields_with_meta: Vec<FieldRef> = arrow_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let meta = HashMap::from([("origin".to_string(), f.name().to_string())]);
+                Arc::new(f.as_ref().clone().with_metadata(meta))
+            })
+            .collect();
+        let arrow_schema = Schema::new(fields_with_meta);
+
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+
+        for name in ["c1", "c2", "c3"] {
+            let field = result.field_with_name(name).unwrap();
+            assert_eq!(
+                field.metadata().get("origin"),
+                Some(&name.to_string()),
+                "metadata on container field `{name}` was dropped during INT96 coercion",
+            );
+        }
     }
 }
