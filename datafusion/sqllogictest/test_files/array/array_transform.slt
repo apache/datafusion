@@ -429,6 +429,27 @@ SELECT array_transform([1], v -> v -> v+1);
 query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)
 SELECT array_transform([1], () -> 1);
 
+# Regression for https://github.com/apache/datafusion/issues/24372
+# Collapsing the inner projection must not treat the lambda parameter
+# index as an outer-batch column after the input schema grows.
+query ?
+SELECT array_transform(arr, x -> x)
+FROM (
+  SELECT arr
+  FROM (VALUES ([1, 2], 7)) AS t(arr, padding)
+) AS q;
+----
+[1, 2]
+
+query ?
+SELECT array_transform(arr, x -> x + pad)
+FROM (
+  SELECT arr, padding AS pad
+  FROM (VALUES ([1, 2], 7)) AS t(arr, padding)
+) AS q;
+----
+[8, 9]
+
 statement ok
 drop table t;
 

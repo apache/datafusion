@@ -224,6 +224,30 @@ SELECT array_filter(NULL, x -> x > 2);
 ----
 NULL
 
+# Regression for https://github.com/apache/datafusion/issues/24372
+# NestedLoopJoin filter pushdown remaps the lambda across a schema
+# boundary; the parameter must stay bound to the filter element.
+statement ok
+set datafusion.sql_parser.dialect = spark;
+
+query II
+SELECT l.id, r.k
+FROM (
+  VALUES
+    (1, [1], 10, 20),
+    (2, arrow_cast([NULL], 'List(Int64)'), 30, 40)
+) AS l(id, arr, padding_1, padding_2)
+JOIN (VALUES (0), (1), (2)) AS r(k)
+ON (cardinality(array_filter(l.arr, x -> x IS NOT NULL)) > 0)
+   = (l.id > r.k)
+ORDER BY l.id, r.k;
+----
+1 0
+2 2
+
+statement ok
+set datafusion.sql_parser.dialect = databricks;
+
 statement ok
 drop table t;
 
