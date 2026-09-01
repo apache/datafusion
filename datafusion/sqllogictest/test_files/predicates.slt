@@ -961,6 +961,13 @@ physical_plan
 01)FilterExec: x@0 < 5
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# A NULL branch rejects every row, but must not hide errors from the other branch.
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT * FROM t WHERE x / 0 > 1 AND (10 * NULL < x);
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT * FROM t WHERE (10 * NULL < x) AND x / 0 > 1;
+
 statement ok
 drop table t;
 
