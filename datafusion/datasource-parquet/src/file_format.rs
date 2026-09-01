@@ -730,8 +730,21 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                 parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size as u64)
             }),
             pushdown_filters: global_options.global.pushdown_filters,
+            pushdown_filter_mode: match global_options.global.pushdown_filter_mode {
+                datafusion_common::config::ParquetPushdownFilterMode::Auto => {
+                    parquet_options::PushdownFilterMode::Auto
+                }
+                datafusion_common::config::ParquetPushdownFilterMode::Always => {
+                    parquet_options::PushdownFilterMode::Always
+                }
+                datafusion_common::config::ParquetPushdownFilterMode::Heuristic => {
+                    parquet_options::PushdownFilterMode::Heuristic
+                }
+            }
+            .into(),
             reorder_filters: global_options.global.reorder_filters,
             force_filter_selections: global_options.global.force_filter_selections,
+            progressive_io: global_options.global.progressive_io,
             data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
             write_batch_size: global_options.global.write_batch_size as u64,
             writer_version: global_options.global.writer_version.to_string(),

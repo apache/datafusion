@@ -120,6 +120,15 @@ Plan with Metrics
 # row groups (see `metrics.rs`), which is why a run of three
 # fully-matched RGs still reads `=1`. Time- and size-keyed fields are
 # masked with `<slt:ignore>`.
+#
+# `pushdown_filter_mode = always` opts out of the narrow-projection gate:
+# this scan projects only the filter column, which the gate would
+# otherwise decline, and the test exists to observe the installed
+# RowFilter being suppressed.
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filter_mode = always;
+
 query I
 SELECT v FROM t WHERE v >= 4 ORDER BY v;
 ----
@@ -149,6 +158,9 @@ drop table t;
 # leaking session state into subsequent files.
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filter_mode;
 
 statement ok
 RESET datafusion.explain.analyze_level;

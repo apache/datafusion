@@ -189,6 +189,12 @@ reset datafusion.explain.analyze_level;
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+# Section exercises the pushdown path directly. Force unconditional
+# pushdown (pushdown_filter_mode = always) so the expected plans (FilterExec absorbed
+# into DataSourceExec) are reproduced regardless of projection width.
+statement ok
+set datafusion.execution.parquet.pushdown_filter_mode = always;
+
 statement ok
 CREATE TABLE _cat_data AS VALUES
   ('Anow Vole', 7),
@@ -713,3 +719,6 @@ drop table cat_tracking;
 
 statement ok
 reset datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+reset datafusion.execution.parquet.pushdown_filter_mode;

@@ -583,6 +583,72 @@ impl Display for SpillCompression {
     }
 }
 
+/// Strategy for filter pushdown in Parquet scan when
+/// `datafusion.execution.parquet.pushdown_filters`
+/// (*[`ParquetOptions::pushdown_filters`]) is enabled
+///
+/// Different strategies are better depending on how data is stored in the
+/// Parquet files and what rows predicates select (e.g. their selectivity and
+/// how many contiguous rows they select).
+///
+/// Note: This option has no effect unless `pushdown_filters` is also enabled.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ParquetPushdownFilterMode {
+    /// Let DataFusion pick the best available strategy.
+    ///
+    /// Note: currently  identical to [`Self::Heuristic`], but as we implement
+    /// more sophisticated pushdown strategies (e.g. runtime-adaptive placement
+    /// in <https://github.com/apache/datafusion/issues/22883>), this may change.
+    #[default]
+    Auto,
+    /// Always push filters into the scan.
+    Always,
+    /// Use plan-time heuristics to decide which filters to push.
+    ///
+    /// The current heuristic skips pushdown when the projection contains fewer
+    /// than 3 non-filter columns, which avoid narrow-projection queries such as
+    /// `SELECT col2 FROM t WHERE col1 <> ''`, where `RowFilter` overhead
+    /// tends to dominate the decode it would save.
+    Heuristic,
+}
+
+impl FromStr for ParquetPushdownFilterMode {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" | "" => Ok(Self::Auto),
+            "always" => Ok(Self::Always),
+            "heuristic" => Ok(Self::Heuristic),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid pushdown filter mode: {other}. Expected one of: auto, always, heuristic"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for ParquetPushdownFilterMode {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = ParquetPushdownFilterMode::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for ParquetPushdownFilterMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Heuristic => "heuristic",
+        };
+        write!(f, "{str}")
+    }
+}
+
 /// A `usize` configuration value that rejects zero when set from strings.
 ///
 /// Use this for options where zero is never a meaningful runtime value.
@@ -1314,7 +1380,12 @@ config_namespace! {
 
         /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
-        pub pushdown_filters: bool, default = false
+        pub pushdown_filters: bool, default = true
+
+        /// (reading) When `pushdown_filters` is enabled, determines how DataFusion
+        /// pushes each filter into the Parquet scan. Options are `auto` (the default)
+        ///  `always`, and `heurstic` (plan time heuristic).
+        pub pushdown_filter_mode: ParquetPushdownFilterMode, default = ParquetPushdownFilterMode::Auto
 
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
@@ -1326,6 +1397,19 @@ config_namespace! {
         /// choose between a RowSelection and a Bitmap based on the number and
         /// pattern of selected rows.
         pub force_filter_selections: bool, default = false
+
+        /// (reading) Controls the I/O pattern used when `pushdown_filters` is
+        /// enabled. If false (the default), all data pages needed to read a row
+        /// group (for both filter evaluation and output projection) are fetched
+        /// in a single request, the same I/O pattern used when
+        /// `pushdown_filters` is disabled. If true, data is fetched
+        /// progressively: first the columns needed by each filter, then, after
+        /// the filters are evaluated, the remaining projected columns for the
+        /// rows that passed. Progressive fetching can reduce the total bytes
+        /// read when the file has a Parquet offset index, at the cost of
+        /// additional I/O requests per row group; files without an offset index
+        /// are always read with a single request per row group.
+        pub progressive_io: bool, default = false
 
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.

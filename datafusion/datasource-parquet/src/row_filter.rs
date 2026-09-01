@@ -520,6 +520,23 @@ pub(crate) fn prebuild_row_filter_candidates(
     Ok(Some(prebuilt))
 }
 
+/// Returns the union of the [`ProjectionMask`]s of all prebuilt candidates:
+/// the set of parquet leaf columns that will be read to evaluate the row
+/// filter. Used by the opener to compute the byte ranges needed for a whole
+/// row group when
+/// [`progressive_io`](datafusion_common::config::ParquetOptions::progressive_io)
+/// is disabled.
+pub(crate) fn prebuilt_filter_mask(
+    prebuilt: &[PrebuiltRowFilterCandidate],
+) -> Option<ProjectionMask> {
+    let mut iter = prebuilt.iter().map(|c| &c.projection_mask);
+    let mut mask = iter.next()?.clone();
+    for m in iter {
+        mask.union(m);
+    }
+    Some(mask)
+}
+
 /// Wrap a list of prebuilt candidates into a fresh [`RowFilter`], assigning
 /// per-predicate metric counters and (optionally) reordering by
 /// `required_bytes`. This is the cheap per-row-group rebuild path — no tree
