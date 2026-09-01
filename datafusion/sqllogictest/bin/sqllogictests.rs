@@ -45,6 +45,7 @@ use crate::postgres_container::{
 };
 use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{IsTerminal, Write, stderr, stdout};
 use std::path::{Path, PathBuf};
@@ -360,11 +361,13 @@ async fn run_tests() -> Result<()> {
                             test_file_path.display()
                         )))
                     } else {
-                        let sqls = current_sql
-                            .iter()
-                            .enumerate()
-                            .map(|(i, sql)| format!("\n[{}]: {}", i + 1, sql))
-                            .collect::<String>();
+                        let sqls = current_sql.iter().enumerate().fold(
+                            String::new(),
+                            |mut acc, (i, sql)| {
+                                write!(acc, "\n[{}]: {}", i + 1, sql).ok();
+                                acc
+                            },
+                        );
                         Some(error.context(format!(
                             "failure in {} for multiple currently running sqls: {}",
                             test_file_path.display(),
