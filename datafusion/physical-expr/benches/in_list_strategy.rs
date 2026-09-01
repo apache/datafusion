@@ -45,6 +45,7 @@
 //! | Utf8View length-12 cases | Utf8View | 12-byte strings | 16, 64 |
 //! | Utf8View long-string cases | Utf8View | 24-byte strings | 4, 16, 64, 256 |
 //! | Shared-prefix string cases | Utf8, Utf8View | same prefix, different suffix | 16, 32, 64 |
+//! | Dictionary dispatch cases | Int32, Dictionary<Int32> | per-batch dispatch overhead | 4, 64 |
 //! | Fixed-size binary direct-comparison case | FixedSizeBinary(1) | direct-comparison cutoff | 16 |
 //! | Fixed-size binary direct-comparison case | FixedSizeBinary(16) | direct-comparison cutoff | 4 |
 //! | Fixed-size binary bitmap case | FixedSizeBinary(2) | bitmap lookup | 64 |
@@ -758,7 +759,7 @@ fn bench_dict_int32(
     let mut rng = StdRng::seed_from_u64(seed);
 
     let dict_values: Vec<i32> = (0..dict_size).map(|_| rng.random()).collect();
-    let haystack: Vec<i32> = dict_values.iter().take(list_size).cloned().collect();
+    let haystack: Vec<i32> = dict_values.iter().take(list_size).copied().collect();
 
     let indices: Vec<i32> = (0..ARRAY_SIZE)
         .map(|_| rng.random_range(0..dict_size as i32))
@@ -869,6 +870,60 @@ fn bench_dictionary(c: &mut Criterion) {
 
     // String dictionary: large cardinality (realistic category counts)
     bench_dict_string(c, "utf8_short/dict=500/list=20", 500, 20, 10);
+}
+
+/// Measures the fixed per-batch cost of handling dictionary and plain inputs.
+/// Small batches make dispatch overhead visible, while the standard 8,192-row
+/// batch shows whether it matters in the usual vectorized case.
+fn bench_dictionary_dispatch(c: &mut Criterion) {
+    for list_size in [4_usize, 64] {
+        let strategy = if list_size == 4 {
+            "branchless"
+        } else {
+            "hash_set"
+        };
+        let haystack = (0..list_size as i32).collect::<Vec<_>>();
+
+        for batch_size in [1, 8, 64, ARRAY_SIZE] {
+            let keys = (0..batch_size)
+                .map(|index| (index % 8) as i32)
+                .collect::<Vec<_>>();
+            let values = keys.iter().map(|key| key * 2).collect::<Vec<_>>();
+
+            for dictionary in [false, true] {
+                let array: ArrayRef = if dictionary {
+                    Arc::new(
+                        DictionaryArray::<Int32Type>::try_new(
+                            Int32Array::from(keys.clone()),
+                            Arc::new(Int32Array::from_iter_values((0..8).map(|v| v * 2))),
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    Arc::new(Int32Array::from(values.clone()))
+                };
+
+                let schema =
+                    Schema::new(vec![Field::new("a", array.data_type().clone(), false)]);
+                let exprs = haystack.iter().map(|value| lit(*value)).collect();
+                let expr =
+                    in_list(col("a", &schema).unwrap(), exprs, &false, &schema).unwrap();
+                let batch = RecordBatch::try_new(Arc::new(schema), vec![array]).unwrap();
+                let encoding = if dictionary { "dictionary" } else { "plain" };
+
+                c.bench_with_input(
+                    BenchmarkId::new(
+                        "dictionary_dispatch",
+                        format!(
+                            "i32/{strategy}/{encoding}/list={list_size}/batch={batch_size}"
+                        ),
+                    ),
+                    &batch,
+                    |b, batch| b.iter(|| expr.evaluate(batch).unwrap()),
+                );
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -1114,6 +1169,8 @@ fn generate_fixed_size_binary_data(
     (haystack, values)
 }
 
+// The cast only checks alignment; the pointer is never dereferenced.
+#[expect(clippy::cast_ptr_alignment)]
 fn unaligned_fixed_size_binary_16(values: &[Vec<u8>]) -> FixedSizeBinaryArray {
     const WIDTH: usize = 16;
     let payload_len = values.len() * WIDTH;
@@ -1204,7 +1261,7 @@ fn bench_fixed_size_binary(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_interval_month_day_nano, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
+    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_interval_month_day_nano, bench_utf8, bench_utf8view, bench_dictionary, bench_dictionary_dispatch, bench_nulls, bench_fixed_size_binary
 }
 
 criterion_main!(benches);

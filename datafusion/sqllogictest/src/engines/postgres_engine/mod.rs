@@ -85,7 +85,7 @@ impl Postgres {
         let res = config.connect(tokio_postgres::NoTls).await;
         if res.is_err() {
             eprintln!("Error connecting to postgres using PG_URI={uri}");
-        };
+        }
 
         let (client, connection) = res?;
 
@@ -216,7 +216,7 @@ impl Postgres {
 
     fn update_slow_count(&self) {
         let msg = self.pb.message();
-        let split: Vec<&str> = msg.split(" ").collect();
+        let split: Vec<&str> = msg.split(' ').collect();
         let mut current_count = 0;
 
         if split.len() > 2 {

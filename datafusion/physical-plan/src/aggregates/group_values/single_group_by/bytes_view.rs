@@ -17,7 +17,7 @@
 
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::{Array, ArrayRef};
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewMap;
 use std::mem::size_of;
@@ -120,6 +120,18 @@ impl GroupValues for GroupValuesBytesView {
         };
 
         Ok(vec![group_values])
+    }
+
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> datafusion_common::Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.len())?;
+        Ok(vec![self.map.keys(selection.iter())?])
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
     }
 
     fn clear_shrink(&mut self, _num_rows: usize) {

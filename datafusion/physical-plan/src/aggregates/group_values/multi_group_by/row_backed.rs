@@ -53,6 +53,7 @@ use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::GroupSelection;
 
 /// A [`GroupColumn`] that stores group values for a single column in the arrow
 /// [row format], backed by a single-field [`RowConverter`].
@@ -292,6 +293,12 @@ impl GroupColumn for RowsGroupColumn {
 
     fn build(self: Box<Self>) -> ArrayRef {
         self.rows_to_array(&self.group_values)
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.group_values.num_rows())?;
+        let rows = selection.iter().map(|index| self.group_values.row(index));
+        Ok(self.rows_to_array(rows))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -555,6 +562,33 @@ mod tests {
         assert_eq!(col.len(), 2);
         assert!(col.equal_to(0, &input, 0));
         assert!(!col.equal_to(0, &input, 1));
+    }
+
+    #[test]
+    fn struct_values_preserving() {
+        let dt = DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into());
+        let mut col = RowsGroupColumn::try_new(dt).unwrap();
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(2)]));
+        let input: ArrayRef = Arc::new(StructArray::new(
+            vec![Field::new("a", DataType::Int32, true)].into(),
+            vec![values],
+            None,
+        ));
+        col.vectorized_append(&input, &[0, 1]).unwrap();
+
+        let output = col
+            .values_preserving(GroupSelection::try_from_indices(&[1, 0, 1], 2).unwrap())
+            .unwrap();
+        let output = output.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap(),
+            &Int32Array::from(vec![Some(2), Some(1), Some(2)])
+        );
+        assert_eq!(col.len(), 2);
     }
 
     #[test]

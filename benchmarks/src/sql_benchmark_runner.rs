@@ -26,6 +26,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, exec_datafusion_err};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -357,7 +358,7 @@ pub fn format_benchmark_list(benchmarks: &BTreeMap<String, Vec<SqlBenchmark>>) -
         } else {
             "queries"
         };
-        output.push_str(&format!("  {name:<24} {} {query_word}\n", benchmarks.len()));
+        writeln!(output, "  {name:<24} {} {query_word}", benchmarks.len()).ok();
     }
 
     output.trim_end().to_string()
@@ -439,7 +440,7 @@ fn format_subgroup_list(benchmark_name: &str, benchmarks: &[SqlBenchmark]) -> St
         output.push_str("  <none>");
     } else {
         for entry in entries {
-            output.push_str(&format!("  {entry}\n"));
+            writeln!(output, "  {entry}").ok();
         }
     }
 
@@ -485,7 +486,7 @@ fn format_query_list(
         output.push_str("  <none>");
     } else {
         for entry in entries {
-            output.push_str(&format!("  {entry}\n"));
+            writeln!(output, "  {entry}").ok();
         }
     }
 

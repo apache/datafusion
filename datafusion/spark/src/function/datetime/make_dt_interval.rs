@@ -189,10 +189,7 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
 
         match make_interval_dt_nano(d, h, mi, s) {
             Some(v) => builder.append_value(v),
-            None => {
-                builder.append_null();
-                continue;
-            }
+            None => builder.append_null(),
         }
     }
 

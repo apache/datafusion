@@ -782,7 +782,7 @@ fn remove_corresponding_sort_from_sub_plan(
                 repartition.properties().output_partitioning().clone(),
             )?) as _;
         }
-    };
+    }
     // Deleting a merging sort may invalidate distribution requirements.
     // Ensure that we stay compliant with such requirements:
     if requires_single_partition && node.plan.output_partitioning().partition_count() > 1
