@@ -154,28 +154,39 @@ fn to_substrait_bound(bound: &WindowFrameBound) -> datafusion::common::Result<Bo
         }),
         WindowFrameBound::Preceding(s) => {
             let offset = to_substrait_bound_offset(s)?;
+            if offset == 0 {
+                // A zero distance is equivalent to CurrentRow, and `offset`
+                // cannot represent zero, so the specification asks producers to
+                // emit CurrentRow instead of a zero bound.
+                return Ok(Bound {
+                    kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
+                });
+            }
             #[expect(deprecated)]
             Ok(Bound {
                 kind: Some(BoundKind::Preceding(Box::new(SubstraitBound::Preceding {
-                    // `offset` carries the int64-literal equivalent for consumers
-                    // that do not read `offset_expr` yet. A zero distance is
-                    // equivalent to CurrentRow and `offset` cannot represent it,
-                    // so the specification asks producers not to write a zero
-                    // `offset_expr`.
+                    // `offset` carries the int64-literal equivalent for
+                    // consumers that do not read `offset_expr` yet.
                     offset,
-                    offset_expr: (offset != 0)
-                        .then(|| Box::new(bound_offset_expr(offset))),
+                    offset_expr: Some(Box::new(bound_offset_expr(offset))),
                 }))),
             })
         }
         WindowFrameBound::Following(s) => {
             let offset = to_substrait_bound_offset(s)?;
+            if offset == 0 {
+                // A zero distance is equivalent to CurrentRow, and `offset`
+                // cannot represent zero, so the specification asks producers to
+                // emit CurrentRow instead of a zero bound.
+                return Ok(Bound {
+                    kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
+                });
+            }
             #[expect(deprecated)]
             Ok(Bound {
                 kind: Some(BoundKind::Following(Box::new(SubstraitBound::Following {
                     offset,
-                    offset_expr: (offset != 0)
-                        .then(|| Box::new(bound_offset_expr(offset))),
+                    offset_expr: Some(Box::new(bound_offset_expr(offset))),
                 }))),
             })
         }
@@ -215,6 +226,24 @@ fn to_substrait_bound_offset(value: &ScalarValue) -> datafusion::common::Result<
 mod tests {
     use super::*;
     use datafusion::common::assert_contains;
+
+    #[test]
+    fn zero_distance_bounds_become_current_row() {
+        // `offset` cannot represent zero and the specification asks producers to
+        // emit CurrentRow rather than a zero bound, so neither field is written.
+        let frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(0))),
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(0))),
+        );
+        let (lower, upper) = to_substrait_bounds(&frame).unwrap();
+        for bound in [lower, upper] {
+            assert_eq!(
+                bound.kind,
+                Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {}))
+            );
+        }
+    }
 
     #[test]
     #[expect(deprecated)]

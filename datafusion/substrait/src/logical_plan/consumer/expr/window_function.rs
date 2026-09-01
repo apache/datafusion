@@ -146,6 +146,9 @@ fn from_substrait_bound(
                     #[expect(deprecated)]
                     let offset =
                         bound_offset(bound.offset, bound.offset_expr.as_deref())?;
+                    let Some(offset) = offset else {
+                        return Ok(WindowFrameBound::CurrentRow);
+                    };
                     if offset <= 0 {
                         return plan_err!("Preceding bound must be positive");
                     }
@@ -157,6 +160,9 @@ fn from_substrait_bound(
                     #[expect(deprecated)]
                     let offset =
                         bound_offset(bound.offset, bound.offset_expr.as_deref())?;
+                    let Some(offset) = offset else {
+                        return Ok(WindowFrameBound::CurrentRow);
+                    };
                     if offset <= 0 {
                         return plan_err!("Following bound must be positive");
                     }
@@ -187,12 +193,14 @@ fn from_substrait_bound(
 /// Reads the distance of a window frame bound.
 ///
 /// The specification requires a consumer to use `offset_expr` when it is set and
-/// to ignore `offset`. DataFusion frame bounds hold a literal, so an expression
-/// that is not an int64 literal cannot be represented.
+/// to ignore `offset`, and defines a zero `offset_expr` as equivalent to
+/// CurrentRow, which `None` reports here. DataFusion frame bounds hold a
+/// literal, so an expression that is not an int64 literal cannot be
+/// represented.
 fn bound_offset(
     offset: i64,
     offset_expr: Option<&Expression>,
-) -> datafusion::common::Result<i64> {
+) -> datafusion::common::Result<Option<i64>> {
     match offset_expr {
         Some(Expression {
             rex_type:
@@ -200,10 +208,57 @@ fn bound_offset(
                     literal_type: Some(LiteralType::I64(value)),
                     ..
                 })),
-        }) => Ok(*value),
+        }) => Ok((*value != 0).then_some(*value)),
         Some(_) => not_impl_err!(
             "Window frame bound offsets other than int64 literals are not supported"
         ),
-        None => Ok(offset),
+        None => Ok(Some(offset)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn i64_literal(value: i64) -> Expression {
+        Expression {
+            rex_type: Some(RexType::Literal(Literal {
+                literal_type: Some(LiteralType::I64(value)),
+                ..Default::default()
+            })),
+        }
+    }
+
+    /// A zero `offset_expr` is defined as equivalent to CurrentRow, so it is
+    /// read as such rather than rejected as a non-positive distance.
+    #[test]
+    fn zero_offset_expression_reads_as_current_row() {
+        #[expect(deprecated)]
+        let bound = Bound {
+            kind: Some(BoundKind::Preceding(Box::new(SubstraitBound::Preceding {
+                offset: 0,
+                offset_expr: Some(Box::new(i64_literal(0))),
+            }))),
+        };
+        assert_eq!(
+            from_substrait_bound(Some(&bound), true).unwrap(),
+            WindowFrameBound::CurrentRow
+        );
+    }
+
+    /// When `offset_expr` is set the consumer must use it and ignore `offset`.
+    #[test]
+    fn offset_expression_wins_over_the_deprecated_offset() {
+        #[expect(deprecated)]
+        let bound = Bound {
+            kind: Some(BoundKind::Preceding(Box::new(SubstraitBound::Preceding {
+                offset: 7,
+                offset_expr: Some(Box::new(i64_literal(3))),
+            }))),
+        };
+        assert_eq!(
+            from_substrait_bound(Some(&bound), true).unwrap(),
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(3)))
+        );
     }
 }
