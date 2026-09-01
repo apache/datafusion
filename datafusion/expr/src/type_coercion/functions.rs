@@ -246,15 +246,15 @@ pub fn value_fields_with_higher_order_udf<L: Clone>(
                 current_fields.iter().zip(expected.iter()).enumerate()
             {
                 match (actual, expected) {
-                    (ValueOrLambda::Value(_), ValueOrLambda::Value(_)) => {}
-                    (ValueOrLambda::Lambda(_), ValueOrLambda::Lambda(_)) => {}
-                    (ValueOrLambda::Value(_), ValueOrLambda::Lambda(_)) => {
+                    (ValueOrLambda::Value(_), ValueOrLambda::Value(())) => {}
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Lambda(())) => {}
+                    (ValueOrLambda::Value(_), ValueOrLambda::Lambda(())) => {
                         let name = func.name();
                         return plan_err!(
                             "The function '{name}' expected a lambda at position {i} but received a value"
                         );
                     }
-                    (ValueOrLambda::Lambda(_), ValueOrLambda::Value(_)) => {
+                    (ValueOrLambda::Lambda(_), ValueOrLambda::Value(())) => {
                         let name = func.name();
                         return plan_err!(
                             "The function '{name}' expected a value at position {i} but received a lambda"
