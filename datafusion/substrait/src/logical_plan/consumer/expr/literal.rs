@@ -393,9 +393,8 @@ pub(crate) fn from_substrait_literal(
                         return substrait_err!(
                             "Cannot set subseconds field of IntervalDayToSecond without setting precision"
                         );
-                    } else {
-                        0_i32
                     }
+                    0_i32
                 }
                 Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
                 Some(PrecisionMode::Precision(3)) => *subseconds as i32,
