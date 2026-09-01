@@ -291,15 +291,17 @@ fn union_orderby_query(n: usize) -> String {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        query.push_str(&format!("(SELECT {select_list} FROM t ORDER BY c{i})"));
+        write!(query, "(SELECT {select_list} FROM t ORDER BY c{i})").ok();
     }
-    query.push_str(&format!(
+    write!(
+        query,
         "\nORDER BY {}",
         (0..n)
             .map(|i| format!("c{i}"))
             .collect::<Vec<_>>()
             .join(", ")
-    ));
+    )
+    .ok();
     query
 }
 

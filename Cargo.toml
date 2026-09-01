@@ -282,7 +282,6 @@ enum_glob_use = "allow"                       # 98 hits
 explicit_into_iter_loop = "allow"             # 55 hits
 explicit_iter_loop = "allow"                  # 189 hits
 float_cmp = "allow"                           # 8 hits; exact float comparisons are often intentional here
-format_push_string = "allow"                  # 34 hits
 from_iter_instead_of_collect = "allow"        # 51 hits
 if_not_else = "allow"                         # 133 hits
 ignored_unit_patterns = "allow"               # 52 hits

@@ -741,14 +741,16 @@ where
         let mut msg = format!("{} errors in file {}\n\n", errs.len(), path.display());
         for (i, err) in errs.iter().enumerate() {
             if i >= ERRS_PER_FILE_LIMIT {
-                msg.push_str(&format!(
+                write!(
+                    msg,
                     "... other {} errors in {} not shown ...\n\n",
                     errs.len() - ERRS_PER_FILE_LIMIT,
                     path.display()
-                ));
+                )
+                .ok();
                 break;
             }
-            msg.push_str(&format!("{}. {err}\n\n", i + 1));
+            write!(msg, "{}. {err}\n\n", i + 1).ok();
         }
         return Err(DataFusionError::External(msg.into()));
     }

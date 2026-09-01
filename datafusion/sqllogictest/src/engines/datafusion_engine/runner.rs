@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, time::Duration};
 
@@ -117,8 +118,7 @@ impl DataFusion {
                 let default = default_entry.as_deref().unwrap_or("NULL");
                 let current = entry.value.as_deref().unwrap_or("NULL");
 
-                message
-                    .push_str(&format!("\n  {}: {} -> {}", entry.key, default, current));
+                write!(message, "\n  {}: {} -> {}", entry.key, default, current).ok();
             }
         }
 
@@ -126,7 +126,7 @@ impl DataFusion {
             changed = true;
 
             let default = value.as_deref().unwrap_or("NULL");
-            message.push_str(&format!("\n  {key}: {default} -> NULL"));
+            write!(message, "\n  {key}: {default} -> NULL").ok();
         }
 
         if changed {
