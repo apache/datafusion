@@ -45,6 +45,9 @@ use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocked_vec::{
+    BlockedVec, StorageMut, block_offset, take_blocked,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
@@ -990,10 +993,10 @@ where
     return_data_type: DataType,
 
     /// Count per group (use u64 to make UInt64Array)
-    counts: Vec<u64>,
+    counts: BlockedVec<u64>,
 
     /// Sums per group, stored as the native type
-    sums: Vec<S::Native>,
+    sums: BlockedVec<S::Native>,
 
     /// Track nulls in the input / filters
     null_state: NullState,
@@ -1021,8 +1024,8 @@ where
         Self {
             return_data_type: return_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
-            counts: vec![],
-            sums: vec![],
+            counts: BlockedVec::new(),
+            sums: BlockedVec::new(),
             null_state: NullState::new(),
             avg_fn,
             _phantom: PhantomData,
@@ -1052,26 +1055,58 @@ where
         self.counts.resize(total_num_groups, 0);
         self.sums.resize(total_num_groups, S::default_value());
 
-        self.null_state.accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value| {
-                // SAFETY: group_index is guaranteed to be in bounds
-                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
-                *sum = add_avg_sum::<I, S>(*sum, new_value);
+        let Self {
+            counts,
+            sums,
+            null_state,
+            ..
+        } = self;
 
-                self.counts[group_index] += 1;
-            },
-        );
+        // Both states switch to blocks at the same group count, so they are always in
+        // the same representation; resolve it once rather than per value.
+        match (sums.storage_mut(), counts.storage_mut()) {
+            (StorageMut::Flat(sums), StorageMut::Flat(counts)) => null_state.accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, new_value| {
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let sum = unsafe { sums.get_unchecked_mut(group_index) };
+                    *sum = add_avg_sum::<I, S>(*sum, new_value);
+                    // SAFETY: group_index is in bounds after the resize above
+                    unsafe { *counts.get_unchecked_mut(group_index) += 1 };
+                },
+            ),
+            (StorageMut::Blocked(sums), StorageMut::Blocked(counts)) => null_state
+                .accumulate(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, new_value| {
+                        let (block, offset) = block_offset(group_index);
+                        // SAFETY: group_index is guaranteed to be in bounds
+                        let sum = unsafe {
+                            sums.get_unchecked_mut(block).get_unchecked_mut(offset)
+                        };
+                        *sum = add_avg_sum::<I, S>(*sum, new_value);
+                        // SAFETY: group_index is in bounds after the resize above
+                        unsafe {
+                            *counts.get_unchecked_mut(block).get_unchecked_mut(offset) +=
+                                1
+                        };
+                    },
+                ),
+            _ => unreachable!("counts and sums switch to blocks together"),
+        }
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let sums = emit_to.take_needed(&mut self.sums);
+        let counts = take_blocked(&mut self.counts, emit_to);
+        let sums = take_blocked(&mut self.sums, emit_to);
         let nulls = self.null_state.build(emit_to);
 
         if let Some(nulls) = &nulls {
@@ -1113,10 +1148,10 @@ where
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build(emit_to);
 
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = take_blocked(&mut self.counts, emit_to);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let sums = emit_to.take_needed(&mut self.sums);
+        let sums = take_blocked(&mut self.sums, emit_to);
         let sums = PrimitiveArray::<S>::new(sums.into(), nulls) // zero copy
             .with_data_type(self.sum_data_type.clone());
 
@@ -1138,31 +1173,69 @@ where
         let partial_sums = values[1].as_primitive::<S>();
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
-        self.null_state.accumulate(
-            group_indices,
-            partial_counts,
-            None,
-            total_num_groups,
-            |group_index, partial_count| {
-                // SAFETY: group_index is guaranteed to be in bounds
-                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
-                *count += partial_count;
-            },
-        );
+        let Self {
+            counts, null_state, ..
+        } = self;
+        match counts.storage_mut() {
+            StorageMut::Flat(counts) => null_state.accumulate(
+                group_indices,
+                partial_counts,
+                None,
+                total_num_groups,
+                |group_index, partial_count| {
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let count = unsafe { counts.get_unchecked_mut(group_index) };
+                    *count += partial_count;
+                },
+            ),
+            StorageMut::Blocked(blocks) => null_state.accumulate(
+                group_indices,
+                partial_counts,
+                None,
+                total_num_groups,
+                |group_index, partial_count| {
+                    let (block, offset) = block_offset(group_index);
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let count = unsafe {
+                        blocks.get_unchecked_mut(block).get_unchecked_mut(offset)
+                    };
+                    *count += partial_count;
+                },
+            ),
+        }
 
         // update sums
         self.sums.resize(total_num_groups, S::default_value());
-        self.null_state.accumulate(
-            group_indices,
-            partial_sums,
-            None,
-            total_num_groups,
-            |group_index, new_value: <S as ArrowPrimitiveType>::Native| {
-                // SAFETY: group_index is guaranteed to be in bounds
-                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
-                *sum = add_avg_sum::<S, S>(*sum, new_value);
-            },
-        );
+        let Self {
+            sums, null_state, ..
+        } = self;
+        match sums.storage_mut() {
+            StorageMut::Flat(sums) => null_state.accumulate(
+                group_indices,
+                partial_sums,
+                None,
+                total_num_groups,
+                |group_index, new_value: <S as ArrowPrimitiveType>::Native| {
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let sum = unsafe { sums.get_unchecked_mut(group_index) };
+                    *sum = add_avg_sum::<S, S>(*sum, new_value);
+                },
+            ),
+            StorageMut::Blocked(blocks) => null_state.accumulate(
+                group_indices,
+                partial_sums,
+                None,
+                total_num_groups,
+                |group_index, new_value: <S as ArrowPrimitiveType>::Native| {
+                    let (block, offset) = block_offset(group_index);
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let sum = unsafe {
+                        blocks.get_unchecked_mut(block).get_unchecked_mut(offset)
+                    };
+                    *sum = add_avg_sum::<S, S>(*sum, new_value);
+                },
+            ),
+        }
 
         Ok(())
     }
@@ -1205,8 +1278,8 @@ where
     }
     fn size(&self) -> usize {
         // Heap buffers
-        self.counts.capacity() * size_of::<u64>()
-        + self.sums.capacity() * size_of::<S::Native>()
+        self.counts.capacity_bytes()
+        + self.sums.capacity_bytes()
         // Vec struct overhead (ptr, len, cap) for each field
         + size_of::<Vec<u64>>()
         + size_of::<Vec<S::Native>>()

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -25,6 +24,8 @@ use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+
+use super::blocked_vec::{BlockedVec, StorageMut, block_offset, take_blocked};
 
 use super::accumulate::NullState;
 
@@ -44,7 +45,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// values per group, stored as the native type
-    values: Vec<T::Native>,
+    values: BlockedVec<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -66,7 +67,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: vec![],
+            values: BlockedVec::new(),
             data_type: data_type.clone(),
             null_state: NullState::new(),
             starting_value: T::default_value(),
@@ -96,27 +97,54 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // update values
-        self.values.resize(total_num_groups, self.starting_value);
+        let Self {
+            values: state,
+            null_state,
+            prim_fn,
+            starting_value,
+            ..
+        } = self;
 
+        // update values
+        state.resize(total_num_groups, *starting_value);
+
+        // Resolve how the state is stored once, so the loop below is not charged for
+        // re-checking it on every value.
+        //
         // NullState dispatches / handles tracking nulls and groups that saw no values
-        self.null_state.accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value| {
-                // SAFETY: group_index is guaranteed to be in bounds
-                let value = unsafe { self.values.get_unchecked_mut(group_index) };
-                (self.prim_fn)(value, new_value);
-            },
-        );
+        match state.storage_mut() {
+            StorageMut::Flat(state) => null_state.accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, new_value| {
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let value = unsafe { state.get_unchecked_mut(group_index) };
+                    prim_fn(value, new_value);
+                },
+            ),
+            StorageMut::Blocked(blocks) => null_state.accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, new_value| {
+                    let (block, offset) = block_offset(group_index);
+                    // SAFETY: group_index is guaranteed to be in bounds
+                    let value = unsafe {
+                        blocks.get_unchecked_mut(block).get_unchecked_mut(offset)
+                    };
+                    prim_fn(value, new_value);
+                },
+            ),
+        }
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed(&mut self.values);
+        let values = take_blocked(&mut self.values, emit_to);
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
             .with_data_type(self.data_type.clone());
@@ -190,6 +218,6 @@ where
         Ok(vec![Arc::new(state_values)])
     }
     fn size(&self) -> usize {
-        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+        self.values.capacity_bytes() + self.null_state.size()
     }
 }
