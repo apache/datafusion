@@ -27,7 +27,7 @@ use crate::{
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, exec_err,
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -391,19 +391,7 @@ pub fn create_physical_expr(
             None,
         ),
         Expr::TryCast(TryCast { expr, field }) => {
-            if !field.metadata().is_empty() {
-                let (_, src_field) = expr.to_field(input_dfschema)?;
-                return plan_err!(
-                    "TryCast from {} to {} is not supported",
-                    format_type_and_metadata(
-                        src_field.data_type(),
-                        Some(src_field.metadata()),
-                    ),
-                    format_type_and_metadata(field.data_type(), Some(field.metadata()))
-                );
-            }
-
-            expressions::try_cast(
+            expressions::try_cast_with_target_field(
                 create_physical_expr(
                     expr,
                     input_dfschema,
@@ -411,7 +399,7 @@ pub fn create_physical_expr(
                     planning_ctx,
                 )?,
                 input_schema,
-                field.data_type().clone(),
+                Arc::clone(field),
             )
         }
         Expr::Not(expr) => expressions::not(create_physical_expr(

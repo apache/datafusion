@@ -45,8 +45,48 @@ FROM (
 ----
 00010203040506070809000102030506 arrow.uuid
 
-statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*TryCast from FixedSizeBinary\(16\) to FixedSizeBinary\(16\)<\{"ARROW:extension:name": "arrow\.uuid"\}> is not supported
-SELECT TRY_CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID);
+# TRY_CAST to an extension type preserves the target's extension metadata, the
+# same as CAST. This used to be a planning error, because the physical
+# `TryCastExpr` had nowhere to put the target field.
+query ?T
+SELECT
+    TRY_CAST(
+        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+        AS UUID
+    ),
+    arrow_metadata(
+        TRY_CAST(
+            arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+            AS UUID
+        ),
+        'ARROW:extension:name'
+    );
+----
+00010203040506070809000102030506 arrow.uuid
+
+# ... including when the value comes from a column rather than a literal
+query ?T
+SELECT
+    TRY_CAST(raw AS UUID),
+    arrow_metadata(TRY_CAST(raw AS UUID), 'ARROW:extension:name')
+FROM (
+    VALUES (
+        arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)')
+    )
+) AS uuids(raw);
+----
+00010203040506070809000102030506 arrow.uuid
+
+# A TRY_CAST that only names a data type still drops the source's metadata
+query ?T
+SELECT
+    TRY_CAST(uuid_val AS BYTEA),
+    arrow_metadata(TRY_CAST(uuid_val AS BYTEA), 'ARROW:extension:name')
+FROM (
+    SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+);
+----
+00010203040506070809000102030506 NULL
 
 # Casting an extension-typed value to a different storage type drops the
 # extension metadata: `arrow.uuid` describes a `FixedSizeBinary(16)`, and a

@@ -22,7 +22,7 @@ use std::sync::Arc;
 use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{CastOptions, can_cast_types};
-use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
+use arrow::datatypes::{DataType, DataType::*, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
@@ -310,12 +310,23 @@ impl PhysicalExpr for CastExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        // `arrow_type` stays populated for readers that predate
+        // `target_field`; `target_field` is only written when it carries more
+        // than the data type, so plans that do not use one encode byte for byte
+        // as they did before.
+        let target_field = if is_type_only_cast_target(&self.target_field) {
+            None
+        } else {
+            Some(self.target_field.as_ref().try_into()?)
+        };
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
                 protobuf::PhysicalCastNode {
                     expr: Some(Box::new(ctx.encode_child(self.expr())?)),
                     arrow_type: Some(self.cast_type().try_into()?),
+                    target_field,
                 },
             ))),
         }))
@@ -355,7 +366,18 @@ impl CastExpr {
             internal_datafusion_err!("CastExpr is missing required field 'arrow_type'")
         })?;
 
-        Ok(Arc::new(CastExpr::new(expr, arrow_type.try_into()?, None)))
+        let target_field = match cast_expr.target_field.as_ref() {
+            Some(field) => Arc::new(Field::try_from(field)?),
+            // Encoded before `target_field` existed, or by a cast that only
+            // named a data type.
+            None => DataType::try_from(arrow_type)?.into_nullable_field_ref(),
+        };
+
+        Ok(Arc::new(CastExpr::new_with_target_field(
+            expr,
+            target_field,
+            None,
+        )))
     }
 }
 
@@ -1332,6 +1354,7 @@ mod proto_tests {
     use datafusion_proto_models::protobuf::{
         PhysicalCastNode, PhysicalExprNode, physical_expr_node,
     };
+    use std::collections::HashMap;
 
     /// A `CastExpr` over an `Int32` column, casting to `Int64`.
     fn proto_cast_fixture() -> CastExpr {
@@ -1351,9 +1374,81 @@ mod proto_tests {
         PhysicalExprNode {
             expr_id: None,
             expr_type: Some(physical_expr_node::ExprType::Cast(Box::new(
-                PhysicalCastNode { expr, arrow_type },
+                PhysicalCastNode {
+                    expr,
+                    arrow_type,
+                    target_field: None,
+                },
             ))),
         }
+    }
+
+    #[test]
+    fn target_field_survives_a_proto_round_trip() {
+        // `PhysicalCastNode` only carried a data type, so a cast to an
+        // extension type came back from serialization as a plain cast to the
+        // storage type - silently losing `ARROW:extension:name`.
+        let schema = Schema::new(vec![Field::new("a", Binary, true)]);
+        let target = Arc::new(
+            Field::new("uuid", FixedSizeBinary(16), true).with_metadata(HashMap::from([
+                ("ARROW:extension:name".to_string(), "arrow.uuid".to_string()),
+            ])),
+        );
+        let cast = CastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Arc::clone(&target),
+            None,
+        );
+
+        let encoder = StubEncoder::ok();
+        let node = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("CastExpr should encode to Some(node)");
+        let encoded = match node.expr_type {
+            Some(physical_expr_node::ExprType::Cast(boxed)) => *boxed,
+            other => panic!("expected a CastExpr node, got {other:?}"),
+        };
+        assert!(
+            encoded.target_field.is_some(),
+            "an explicit target field must be encoded"
+        );
+
+        let node = PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::Cast(Box::new(
+                PhysicalCastNode {
+                    expr: Some(Box::new(column_node("a"))),
+                    ..encoded
+                },
+            ))),
+        };
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = CastExpr::try_from_proto(&node, &ctx).unwrap();
+        let decoded = decoded
+            .downcast_ref::<CastExpr>()
+            .expect("decoded expr should be a CastExpr");
+
+        assert_eq!(decoded.target_field(), &target);
+    }
+
+    #[test]
+    fn a_type_only_target_field_is_not_encoded() {
+        let cast = proto_cast_fixture();
+        let encoder = StubEncoder::ok();
+        let node = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .unwrap();
+        let encoded = match node.expr_type {
+            Some(physical_expr_node::ExprType::Cast(boxed)) => *boxed,
+            other => panic!("expected a CastExpr node, got {other:?}"),
+        };
+        assert!(
+            encoded.target_field.is_none(),
+            "a type-only cast should encode exactly as it did before"
+        );
     }
 
     #[test]

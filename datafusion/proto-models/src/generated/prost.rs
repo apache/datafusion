@@ -1846,6 +1846,13 @@ pub struct PhysicalTryCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    /// The full cast target. A cast target may describe more than a data type -
+    /// an extension type carries `ARROW:extension:name` in its field metadata -
+    /// and that metadata is what the cast's output reports. Optional so that
+    /// plans encoded before this field existed still decode, falling back to
+    /// `arrow_type`.
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalCastNode {
@@ -1853,6 +1860,9 @@ pub struct PhysicalCastNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(message, optional, tag = "2")]
     pub arrow_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    /// See PhysicalTryCastNode.target_field.
+    #[prost(message, optional, tag = "3")]
+    pub target_field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalNegativeNode {

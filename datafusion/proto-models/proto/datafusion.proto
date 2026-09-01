@@ -1187,11 +1187,19 @@ message PhysicalCaseNode {
 message PhysicalTryCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  // The full cast target. A cast target may describe more than a data type -
+  // an extension type carries `ARROW:extension:name` in its field metadata -
+  // and that metadata is what the cast's output reports. Optional so that
+  // plans encoded before this field existed still decode, falling back to
+  // `arrow_type`.
+  optional datafusion_common.Field target_field = 3;
 }
 
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  // See PhysicalTryCastNode.target_field.
+  optional datafusion_common.Field target_field = 3;
 }
 
 message PhysicalNegativeNode {
