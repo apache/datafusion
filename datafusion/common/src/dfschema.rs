@@ -395,7 +395,7 @@ impl DFSchema {
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => f.name() == name,
+                (None, Some(_) | None) => f.name() == name,
             })
             .map(|(idx, _)| idx);
         matches.next()

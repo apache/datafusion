@@ -723,11 +723,11 @@ impl PartialOrd for ScalarValue {
             (LargeListView(arr1), LargeListView(arr2)) => {
                 partial_cmp_list(arr1.as_ref(), arr2.as_ref())
             }
-            (List(_), _)
-            | (LargeList(_), _)
-            | (FixedSizeList(_), _)
-            | (ListView(_), _)
-            | (LargeListView(_), _) => None,
+            (
+                List(_) | LargeList(_) | FixedSizeList(_) | ListView(_)
+                | LargeListView(_),
+                _,
+            ) => None,
             (Struct(struct_arr1), Struct(struct_arr2)) => {
                 partial_cmp_struct(struct_arr1.as_ref(), struct_arr2.as_ref())
             }
@@ -3191,10 +3191,8 @@ impl ScalarValue {
             // not supported if the TimeUnit is not valid (Time32 can
             // only be used with Second and Millisecond, Time64 only
             // with Microsecond and Nanosecond)
-            DataType::Time32(TimeUnit::Microsecond)
-            | DataType::Time32(TimeUnit::Nanosecond)
-            | DataType::Time64(TimeUnit::Second)
-            | DataType::Time64(TimeUnit::Millisecond) => {
+            DataType::Time32(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+            | DataType::Time64(TimeUnit::Second | TimeUnit::Millisecond) => {
                 return _not_impl_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,

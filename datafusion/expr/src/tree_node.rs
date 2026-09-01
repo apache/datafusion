@@ -64,8 +64,7 @@ impl TreeNode for Expr {
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::InSubquery(InSubquery { expr, .. })
             | Expr::SetComparison(SetComparison { expr, .. }) => expr.apply_elements(f),
-            Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.apply_elements(f),
+            Expr::GroupingSet(GroupingSet::Rollup(exprs) | GroupingSet::Cube(exprs)) => exprs.apply_elements(f),
             Expr::ScalarFunction(ScalarFunction { args, .. }) => {
                 args.apply_elements(f)
             }

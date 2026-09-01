@@ -888,17 +888,20 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Date32
             | DataType::Date64
-            | DataType::Time32(TimeUnit::Second)
-            | DataType::Time32(TimeUnit::Millisecond)
-            | DataType::Time64(TimeUnit::Microsecond)
-            | DataType::Time64(TimeUnit::Nanosecond)
-            | DataType::Timestamp(TimeUnit::Second, _)
-            | DataType::Timestamp(TimeUnit::Millisecond, _)
-            | DataType::Timestamp(TimeUnit::Microsecond, _)
-            | DataType::Timestamp(TimeUnit::Nanosecond, _)
-            | DataType::Interval(IntervalUnit::YearMonth)
-            | DataType::Interval(IntervalUnit::DayTime)
-            | DataType::Interval(IntervalUnit::MonthDayNano)
+            | DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+            | DataType::Timestamp(
+                TimeUnit::Second
+                    | TimeUnit::Millisecond
+                    | TimeUnit::Microsecond
+                    | TimeUnit::Nanosecond,
+                _
+            )
+            | DataType::Interval(
+                IntervalUnit::YearMonth
+                    | IntervalUnit::DayTime
+                    | IntervalUnit::MonthDayNano
+            )
             | DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)

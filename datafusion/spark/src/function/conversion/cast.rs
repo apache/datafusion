@@ -177,9 +177,11 @@ fn get_target_type_from_scalar_args(
     let type_arg = scalar_args.get(1).and_then(|opt| *opt);
 
     match type_arg {
-        Some(ScalarValue::Utf8(Some(s)))
-        | Some(ScalarValue::LargeUtf8(Some(s)))
-        | Some(ScalarValue::Utf8View(Some(s))) => parse_target_type(s, timezone),
+        Some(
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)),
+        ) => parse_target_type(s, timezone),
         _ => exec_err!(
             "spark_cast requires second argument to be a string of target data type ex: timestamp"
         ),

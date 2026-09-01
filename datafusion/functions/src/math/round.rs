@@ -1127,7 +1127,7 @@ mod test {
         assert!(result.is_err());
         assert!(matches!(
             result,
-            Err(DataFusionError::ArrowError(_, _)) | Err(DataFusionError::Execution(_))
+            Err(DataFusionError::ArrowError(_, _) | DataFusionError::Execution(_))
         ));
     }
 }

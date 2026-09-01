@@ -3179,7 +3179,7 @@ FROM (
             None => Ok(()),
             // BEGIN TRANSACTION
             Some(BeginTransactionKind::Transaction) => Ok(()),
-            Some(BeginTransactionKind::Work) | Some(BeginTransactionKind::Tran) => {
+            Some(BeginTransactionKind::Work | BeginTransactionKind::Tran) => {
                 not_impl_err!("Transaction kind not supported: {kind:?}")
             }
         }

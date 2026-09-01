@@ -970,10 +970,8 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             // other unit combinations, so accepting them here would cause a
             // schema to be routed into GroupValuesColumn and then fail at
             // intern. Keep these two arms in lockstep with the dispatcher.
-            | DataType::Time32(TimeUnit::Second)
-            | DataType::Time32(TimeUnit::Millisecond)
-            | DataType::Time64(TimeUnit::Microsecond)
-            | DataType::Time64(TimeUnit::Nanosecond)
+            | DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
             | DataType::Timestamp(_, _)
             | DataType::Duration(_)
             | DataType::Interval(_)

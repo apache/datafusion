@@ -79,7 +79,7 @@ impl FusedStreams {
                 // Skip empty batches
                 Poll::Ready(Some(Ok(b))) if b.num_rows() == 0 => {}
                 Poll::Ready(Some(Ok(_))) => return poll_result,
-                Poll::Ready(None) | Poll::Ready(Some(Err(_))) => {
+                Poll::Ready(None | Some(Err(_))) => {
                     let stream_schema = self.0[stream_idx].get_ref().schema();
 
                     // Replace the stream with an empty stream, so we can drop memory usage

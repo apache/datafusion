@@ -699,7 +699,7 @@ impl StatisticsAccumulators<'_> {
                     (Some(max_value), Some(true)) => {
                         max_value.evaluate().ok().map(Precision::Exact)
                     }
-                    (Some(max_value), Some(false)) | (Some(max_value), None) => {
+                    (Some(max_value), Some(false) | None) => {
                         max_value.evaluate().ok().map(Precision::Inexact)
                     }
                     (None, _) => None,
@@ -711,7 +711,7 @@ impl StatisticsAccumulators<'_> {
                     (Some(min_value), Some(true)) => {
                         min_value.evaluate().ok().map(Precision::Exact)
                     }
-                    (Some(min_value), Some(false)) | (Some(min_value), None) => {
+                    (Some(min_value), Some(false) | None) => {
                         min_value.evaluate().ok().map(Precision::Inexact)
                     }
                     (None, _) => None,

@@ -183,10 +183,9 @@ pub fn is_restrict_null_predicate<'a>(
                     false
                 }
             }
-            ColumnarValue::Scalar(scalar) => matches!(
-                scalar,
-                ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
-            ),
+            ColumnarValue::Scalar(scalar) => {
+                matches!(scalar, ScalarValue::Boolean(None | Some(false)))
+            }
         },
     )
 }

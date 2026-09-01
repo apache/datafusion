@@ -228,12 +228,7 @@ pub fn is_eq_and_ne_with_different_literal(eq_expr: &Expr, ne_expr: &Expr) -> bo
         match expr {
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Eq,
-                right,
-            })
-            | Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::NotEq,
+                op: Operator::Eq | Operator::NotEq,
                 right,
             }) => match (left.as_ref(), right.as_ref()) {
                 (Expr::Literal(_, _), var) => Some((var, left)),

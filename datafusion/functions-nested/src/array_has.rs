@@ -142,9 +142,9 @@ impl ScalarUDFImpl for ArrayHas {
                     None,
                 )));
             }
+            // FixedSizeList gets coerced to List
             Expr::Literal(
-                // FixedSizeList gets coerced to List
-                scalar @ ScalarValue::List(_) | scalar @ ScalarValue::LargeList(_),
+                scalar @ (ScalarValue::List(_) | ScalarValue::LargeList(_)),
                 _,
             ) => {
                 if let Ok(scalar_values) =

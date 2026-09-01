@@ -125,14 +125,14 @@ fn stronger_distribution(a: &Distribution, b: &Distribution) -> Distribution {
         (Distribution::SinglePartition, _) | (_, Distribution::SinglePartition) => {
             Distribution::SinglePartition
         }
-        (Distribution::HashPartitioned(exprs), _)
-        | (Distribution::KeyPartitioned(exprs), _) => {
-            Distribution::KeyPartitioned(exprs.clone())
-        }
-        (_, Distribution::HashPartitioned(exprs))
-        | (_, Distribution::KeyPartitioned(exprs)) => {
-            Distribution::KeyPartitioned(exprs.clone())
-        }
+        (
+            Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs),
+            _,
+        ) => Distribution::KeyPartitioned(exprs.clone()),
+        (
+            _,
+            Distribution::HashPartitioned(exprs) | Distribution::KeyPartitioned(exprs),
+        ) => Distribution::KeyPartitioned(exprs.clone()),
         _ => Distribution::UnspecifiedDistribution,
     }
 }
