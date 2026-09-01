@@ -210,7 +210,7 @@ use crate::aggregates_blocked::BlockedAggregateExec;
 mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;
-mod grouped_hash_stream;
+pub(crate) mod grouped_hash_stream;
 mod grouped_topk_stream;
 mod hash_stream;
 pub mod order;
@@ -1201,6 +1201,12 @@ impl AggregateExec {
 
     pub(crate) fn unset_dynamic_filter(mut self) -> Self {
         self.dynamic_filter = None;
+
+        self
+    }
+
+    pub(crate) fn set_metrics(mut self, metrics: ExecutionPlanMetricsSet) -> Self {
+        self.metrics = metrics;
 
         self
     }

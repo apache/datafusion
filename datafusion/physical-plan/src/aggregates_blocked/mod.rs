@@ -149,7 +149,6 @@ use std::sync::Arc;
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates_blocked::{
     aggregate_stream::AggregateStream,
-    grouped_hash_stream::GroupedHashAggregateStream,
     grouped_topk_stream::GroupedTopKAggregateStream,
     hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
     ordered_final_stream::OrderedFinalAggregateStream,
@@ -206,8 +205,8 @@ use topk::heap::is_supported_heap_type;
 mod aggregate_hash_table;
 mod aggregate_stream;
 pub mod group_values;
-mod grouped_hash_stream;
 mod grouped_topk_stream;
+pub(crate) use crate::aggregates::grouped_hash_stream;
 mod hash_stream;
 pub mod order;
 mod ordered_final_stream;
@@ -271,7 +270,7 @@ enum StreamType {
     /// [`StreamType::OrderedSingleAggregate`]
     ///
     /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
-    GroupedHash(GroupedHashAggregateStream),
+    GroupedHash(SendableRecordBatchStream),
     /// Grouped TopK aggregate stream.
     /// Input output scheme: initial input -> final result
     ///
@@ -291,7 +290,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::OrderedSingleAggregate(stream) => Box::pin(stream),
-            StreamType::GroupedHash(stream) => Box::pin(stream),
+            StreamType::GroupedHash(stream) => stream,
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
     }
@@ -533,7 +532,7 @@ impl BlockedAggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
-        fallback_agg_exec: crate::aggregates::AggregateExec,
+        mut fallback_agg_exec: crate::aggregates::AggregateExec,
     ) -> Result<Self> {
         let group_by = group_by.into();
         let filter_expr = filter_expr.into();
@@ -618,6 +617,9 @@ impl BlockedAggregateExec {
             )?
         };
 
+        let metrics = ExecutionPlanMetricsSet::new();
+        fallback_agg_exec = fallback_agg_exec.set_metrics(metrics.clone());
+
         let mut exec = BlockedAggregateExec {
             mode,
             group_by,
@@ -626,7 +628,7 @@ impl BlockedAggregateExec {
             input,
             schema,
             input_schema,
-            metrics: ExecutionPlanMetricsSet::new(),
+            metrics,
             required_input_ordering,
             limit_options: None,
             input_order_mode,
@@ -837,9 +839,7 @@ impl BlockedAggregateExec {
         }
 
         // Execution paths that have not been migrated use the fallback implementation
-        Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
-            self, context, partition,
-        )?))
+        Ok(StreamType::GroupedHash(self.fallback_agg_exec.execute(partition, Arc::clone(context))?))
     }
 
     fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
@@ -4835,183 +4835,6 @@ mod tests {
         | {a: , b: c}  | 1          |
         +--------------+------------+
         ");
-        }
-
-        Ok(())
-    }
-
-    // Migrated to PartialHashAggregateStream coverage below;
-    // kept here for the legacy GroupedHashAggregateStream implementation.
-    #[tokio::test]
-    async fn test_skip_aggregation_after_first_batch() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("val", DataType::Int32, true),
-        ]));
-
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
-
-        let aggr_expr = vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias(String::from("COUNT(val)"))
-                .build()
-                .map(Arc::new)?,
-        ];
-
-        let input_data = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-        ];
-
-        let input =
-            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(BlockedAggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            schema,
-        )?);
-
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(2)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
-
-        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
-        let stream: SendableRecordBatchStream = Box::pin(
-            GroupedHashAggregateStream::new(aggregate_exec.as_ref(), &ctx, 0)?,
-        );
-        let output = collect(stream).await?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&output), @r"
-            +-----+-------------------+
-            | key | COUNT(val)[count] |
-            +-----+-------------------+
-            | 1   | 1                 |
-            | 2   | 1                 |
-            | 3   | 1                 |
-            | 2   | 1                 |
-            | 3   | 1                 |
-            | 4   | 1                 |
-            +-----+-------------------+
-            ");
-        }
-
-        Ok(())
-    }
-
-    // Migrated to PartialHashAggregateStream coverage below;
-    // kept here for the legacy GroupedHashAggregateStream implementation.
-    #[tokio::test]
-    async fn test_skip_aggregation_after_threshold() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("val", DataType::Int32, true),
-        ]));
-
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
-
-        let aggr_expr = vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias(String::from("COUNT(val)"))
-                .build()
-                .map(Arc::new)?,
-        ];
-
-        let input_data = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-        ];
-
-        let input =
-            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(BlockedAggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            schema,
-        )?);
-
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(5)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
-
-        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
-        let stream: SendableRecordBatchStream = Box::pin(
-            GroupedHashAggregateStream::new(aggregate_exec.as_ref(), &ctx, 0)?,
-        );
-        let output = collect(stream).await?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&output), @r"
-            +-----+-------------------+
-            | key | COUNT(val)[count] |
-            +-----+-------------------+
-            | 1   | 1                 |
-            | 2   | 2                 |
-            | 3   | 2                 |
-            | 4   | 1                 |
-            | 2   | 1                 |
-            | 3   | 1                 |
-            | 4   | 1                 |
-            +-----+-------------------+
-            ");
         }
 
         Ok(())
