@@ -39,8 +39,19 @@ use std::sync::Arc;
 pub struct ArrowBytesViewSet(ArrowBytesViewMap<()>);
 
 impl ArrowBytesViewSet {
+    /// Creates a set that does not pre-allocate its hash table.
+    ///
+    /// See [`ArrowBytesViewMap::new`] for when to prefer this over
+    /// [`Self::with_capacity`].
     pub fn new(output_type: OutputType) -> Self {
         Self(ArrowBytesViewMap::new(output_type))
+    }
+
+    /// Creates a set with room for `map_capacity` entries.
+    ///
+    /// See [`ArrowBytesViewMap::with_capacity`].
+    pub fn with_capacity(output_type: OutputType, map_capacity: usize) -> Self {
+        Self(ArrowBytesViewMap::with_capacity(output_type, map_capacity))
     }
 
     /// Inserts each value from `values` into the set
@@ -54,9 +65,7 @@ impl ArrowBytesViewSet {
     /// Return the contents of this map and replace it with a new empty map with
     /// the same output type
     pub fn take(&mut self) -> Self {
-        let mut new_self = Self::new(self.0.output_type);
-        std::mem::swap(self, &mut new_self);
-        new_self
+        Self(self.0.take())
     }
 
     /// Converts this set into a `StringViewArray` or `BinaryViewArray`
@@ -128,6 +137,10 @@ where
     output_type: OutputType,
     /// Underlying hash set for each distinct value
     map: hashbrown::hash_table::HashTable<Entry<V>>,
+    /// Hash table capacity to re-create the map with in [`Self::take`], so a
+    /// map built with [`Self::with_capacity`] keeps its pre-allocation when it
+    /// is emptied and reused
+    initial_map_capacity: usize,
 
     /// Views for all stored values (in insertion order)
     views: Vec<u128>,
@@ -148,17 +161,36 @@ where
     null: Option<(V, usize)>,
 }
 
-/// The size, in number of entries, of the initial hash table
-const INITIAL_MAP_CAPACITY: usize = 512;
+/// The size, in number of entries, of the hash table pre-allocated by
+/// [`ArrowBytesViewMap::with_capacity`]. It is a warm up size for maps that go
+/// on to hold many values, not a bound on what the map can hold.
+pub const INITIAL_MAP_CAPACITY: usize = 512;
 
 impl<V> ArrowBytesViewMap<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
+    /// Creates a map that does not pre-allocate its hash table.
+    ///
+    /// Use this when maps are created in large numbers and most of them stay
+    /// small, such as the per group `COUNT(DISTINCT)` accumulators that
+    /// `GroupsAccumulatorAdapter` creates one of per group. There the
+    /// pre-allocation dwarfs the values the map actually holds.
     pub fn new(output_type: OutputType) -> Self {
+        Self::with_capacity(output_type, 0)
+    }
+
+    /// Creates a map whose hash table is pre-allocated for `map_capacity`
+    /// entries.
+    ///
+    /// Use this for the few long lived maps that are each expected to hold many
+    /// values, such as the single map backing a `GROUP BY` on one string
+    /// column. The capacity is preserved across [`Self::take`].
+    pub fn with_capacity(output_type: OutputType, map_capacity: usize) -> Self {
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
+            map: hashbrown::hash_table::HashTable::with_capacity(map_capacity),
+            initial_map_capacity: map_capacity,
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -172,7 +204,8 @@ where
     /// Return the contents of this map and replace it with a new empty map with
     /// the same output type
     pub fn take(&mut self) -> Self {
-        let mut new_self = Self::new(self.output_type);
+        let mut new_self =
+            Self::with_capacity(self.output_type, self.initial_map_capacity);
         std::mem::swap(self, &mut new_self);
         new_self
     }
@@ -783,19 +816,69 @@ mod tests {
         assert_eq!(set.len(), 10);
     }
 
+    /// The bytes a hashbrown table of `buckets` buckets must allocate for
+    /// entries of type `T`, ignoring the alignment padding and the trailing
+    /// group. Derived independently of the production accounting so it can
+    /// bracket it.
+    fn min_table_bytes<T>(buckets: usize) -> usize {
+        // One entry slot plus one control byte per bucket.
+        buckets * (size_of::<T>() + 1)
+    }
+
     #[test]
-    fn test_size_counts_initial_hash_table_capacity() {
+    fn map_new_does_not_allocate() {
         let map = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
 
+        assert_eq!(map.map.capacity(), 0);
+        assert_eq!(map.map.allocation_size(), 0);
+        assert_eq!(map.size(), 0);
+    }
+
+    #[test]
+    fn test_size_counts_initial_hash_table_capacity() {
+        let map = ArrowBytesViewMap::<()>::with_capacity(
+            OutputType::Utf8View,
+            INITIAL_MAP_CAPACITY,
+        );
+
+        assert!(map.map.capacity() >= INITIAL_MAP_CAPACITY);
         assert_eq!(map.size(), map.map.allocation_size());
-        // The reported size covers the control bytes as well as the entries, so
-        // it is strictly larger than the entry array on its own.
+
+        // Before this accounting was corrected the map reported exactly
+        // `capacity() * size_of::<Entry<V>>()`, which leaves out the control
+        // bytes and undercounts the real allocation by roughly half.
+        let lower_bound = min_table_bytes::<Entry<()>>(map.map.capacity());
+        assert!(
+            map.size() >= lower_bound,
+            "expected {} to be at least {lower_bound}",
+            map.size()
+        );
+        assert!(
+            map.size() <= 2 * lower_bound + 64,
+            "expected {} to be within a small factor of {lower_bound}",
+            map.size()
+        );
         assert!(
             map.size() > map.map.capacity() * size_of::<Entry<()>>(),
             "expected {} to exceed {}",
             map.size(),
             map.map.capacity() * size_of::<Entry<()>>()
         );
+    }
+
+    #[test]
+    fn take_preserves_the_capacity_the_map_was_built_with() {
+        let mut preallocated = ArrowBytesViewMap::<()>::with_capacity(
+            OutputType::Utf8View,
+            INITIAL_MAP_CAPACITY,
+        );
+        let capacity = preallocated.map.capacity();
+        preallocated.take();
+        assert_eq!(preallocated.map.capacity(), capacity);
+
+        let mut lazy = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
+        lazy.take();
+        assert_eq!(lazy.map.capacity(), 0);
     }
 
     #[test]

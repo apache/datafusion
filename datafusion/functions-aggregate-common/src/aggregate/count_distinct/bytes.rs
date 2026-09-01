@@ -39,6 +39,10 @@ use std::mem::size_of_val;
 pub struct BytesDistinctCountAccumulator<O: OffsetSizeTrait>(ArrowBytesSet<O>);
 
 impl<O: OffsetSizeTrait> BytesDistinctCountAccumulator<O> {
+    /// The set deliberately does not pre-allocate. `GroupsAccumulatorAdapter`
+    /// creates one accumulator per group, so a grouped `COUNT(DISTINCT)` over a
+    /// high cardinality key holds hundreds of thousands of these at once and
+    /// most of them see only a handful of values.
     pub fn new(output_type: OutputType) -> Self {
         Self(ArrowBytesSet::new(output_type))
     }
@@ -100,6 +104,8 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
 pub struct BytesViewDistinctCountAccumulator(ArrowBytesViewSet);
 
 impl BytesViewDistinctCountAccumulator {
+    /// See [`BytesDistinctCountAccumulator::new`] for why the set does not
+    /// pre-allocate.
     pub fn new(output_type: OutputType) -> Self {
         Self(ArrowBytesViewSet::new(output_type))
     }

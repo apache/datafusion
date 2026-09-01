@@ -22,7 +22,9 @@ use crate::aggregates::group_values::GroupValues;
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;
 use datafusion_expr::{EmitTo, GroupSelection};
-use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
+use datafusion_physical_expr_common::binary_map::{
+    ArrowBytesMap, INITIAL_MAP_CAPACITY, OutputType,
+};
 
 /// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
 ///
@@ -38,7 +40,9 @@ pub struct GroupValuesBytes<O: OffsetSizeTrait> {
 impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
     pub fn new(output_type: OutputType) -> Self {
         Self {
-            map: ArrowBytesMap::new(output_type),
+            // One map holds every group value for the whole query, so it is
+            // worth pre-allocating the hash table and the value buffer.
+            map: ArrowBytesMap::with_capacity(output_type, INITIAL_MAP_CAPACITY),
             num_groups: 0,
         }
     }

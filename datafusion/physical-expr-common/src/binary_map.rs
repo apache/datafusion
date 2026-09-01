@@ -55,8 +55,19 @@ pub enum OutputType {
 pub struct ArrowBytesSet<O: OffsetSizeTrait>(ArrowBytesMap<O, ()>);
 
 impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
+    /// Creates a set that does not pre-allocate its hash table or value buffer.
+    ///
+    /// See [`ArrowBytesMap::new`] for when to prefer this over
+    /// [`Self::with_capacity`].
     pub fn new(output_type: OutputType) -> Self {
         Self(ArrowBytesMap::new(output_type))
+    }
+
+    /// Creates a set with room for `map_capacity` entries.
+    ///
+    /// See [`ArrowBytesMap::with_capacity`].
+    pub fn with_capacity(output_type: OutputType, map_capacity: usize) -> Self {
+        Self(ArrowBytesMap::with_capacity(output_type, map_capacity))
     }
 
     /// Return the contents of this set and replace it with a new empty
@@ -217,6 +228,13 @@ where
     output_type: OutputType,
     /// Underlying hash set for each distinct value
     map: hashbrown::hash_table::HashTable<Entry<O, V>>,
+    /// Hash table capacity to re-create the map with in [`Self::take`], so a
+    /// map built with [`Self::with_capacity`] keeps its pre-allocation when it
+    /// is emptied and reused
+    initial_map_capacity: usize,
+    /// Value buffer capacity to re-create the buffer with in [`Self::take`],
+    /// for the same reason as `initial_map_capacity`
+    initial_buffer_capacity: usize,
     /// In progress buffer containing all values
     buffer: Vec<u8>,
     /// Offsets into `buffer` for each distinct  value. These offsets as used
@@ -234,19 +252,49 @@ where
     null: Option<(V, usize)>,
 }
 
-/// The size, in number of entries, of the initial hash table
-const INITIAL_MAP_CAPACITY: usize = 128;
-/// The initial size, in bytes, of the string data
+/// The size, in number of entries, of the hash table pre-allocated by
+/// [`ArrowBytesMap::with_capacity`]. It is a warm up size for maps that go on
+/// to hold many values, not a bound on what the map can hold.
+pub const INITIAL_MAP_CAPACITY: usize = 128;
+/// The size, in bytes, of the string data buffer pre-allocated by
+/// [`ArrowBytesMap::with_capacity`]
 pub const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
 impl<O: OffsetSizeTrait, V> ArrowBytesMap<O, V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
+    /// Creates a map that does not pre-allocate its hash table or value buffer.
+    ///
+    /// Use this when maps are created in large numbers and most of them stay
+    /// small, such as the per group `COUNT(DISTINCT)` accumulators that
+    /// `GroupsAccumulatorAdapter` creates one of per group. There the
+    /// pre-allocation dwarfs the values the map actually holds.
     pub fn new(output_type: OutputType) -> Self {
+        Self::new_inner(output_type, 0, 0)
+    }
+
+    /// Creates a map whose hash table is pre-allocated for `map_capacity`
+    /// entries and whose value buffer is pre-allocated with
+    /// [`INITIAL_BUFFER_CAPACITY`] bytes.
+    ///
+    /// Use this for the few long lived maps that are each expected to hold many
+    /// values, such as the single map backing a `GROUP BY` on one string
+    /// column. The capacities are preserved across [`Self::take`].
+    pub fn with_capacity(output_type: OutputType, map_capacity: usize) -> Self {
+        Self::new_inner(output_type, map_capacity, INITIAL_BUFFER_CAPACITY)
+    }
+
+    fn new_inner(
+        output_type: OutputType,
+        map_capacity: usize,
+        buffer_capacity: usize,
+    ) -> Self {
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            buffer: Vec::with_capacity(INITIAL_BUFFER_CAPACITY),
+            map: hashbrown::hash_table::HashTable::with_capacity(map_capacity),
+            initial_map_capacity: map_capacity,
+            initial_buffer_capacity: buffer_capacity,
+            buffer: Vec::with_capacity(buffer_capacity),
             offsets: vec![O::default()], // first offset is always 0
             random_state: RandomState::default(),
             hashes_buffer: vec![],
@@ -257,7 +305,11 @@ where
     /// Return the contents of this map and replace it with a new empty map with
     /// the same output type
     pub fn take(&mut self) -> Self {
-        let mut new_self = Self::new(self.output_type);
+        let mut new_self = Self::new_inner(
+            self.output_type,
+            self.initial_map_capacity,
+            self.initial_buffer_capacity,
+        );
         swap(self, &mut new_self);
         new_self
     }
@@ -412,7 +464,8 @@ where
                         offset_or_inline: inline,
                         payload,
                     };
-                    self.map.insert_unique(hash, new_header, |header| header.hash);
+                    self.map
+                        .insert_unique(hash, new_header, |header| header.hash);
                     payload
                 }
             }
@@ -450,7 +503,8 @@ where
                         offset_or_inline: offset,
                         payload,
                     };
-                    self.map.insert_unique(hash, new_header, |header| header.hash);
+                    self.map
+                        .insert_unique(hash, new_header, |header| header.hash);
                     payload
                 }
             };
@@ -475,6 +529,8 @@ where
         let Self {
             output_type,
             map: _,
+            initial_map_capacity: _,
+            initial_buffer_capacity: _,
             offsets,
             buffer,
             random_state: _,
@@ -654,6 +710,68 @@ mod tests {
     use super::*;
     use arrow::array::{BinaryArray, LargeBinaryArray, StringArray};
     use std::collections::HashMap;
+
+    /// The bytes a hashbrown table of `buckets` buckets must allocate for
+    /// entries of type `T`, ignoring the alignment padding and the trailing
+    /// group. Derived independently of the production accounting so it can
+    /// bracket it.
+    fn min_table_bytes<T>(buckets: usize) -> usize {
+        // One entry slot plus one control byte per bucket.
+        buckets * (size_of::<T>() + 1)
+    }
+
+    #[test]
+    fn map_new_does_not_allocate() {
+        let map = ArrowBytesMap::<i32, ()>::new(OutputType::Utf8);
+
+        assert_eq!(map.map.capacity(), 0);
+        assert_eq!(map.map.allocation_size(), 0);
+        assert_eq!(map.buffer.capacity(), 0);
+        // Only the single leading zero offset is allocated.
+        assert!(map.size() < 128, "expected {} to be tiny", map.size());
+    }
+
+    #[test]
+    fn map_with_capacity_reports_the_real_hash_table_allocation() {
+        let map = ArrowBytesMap::<i32, ()>::with_capacity(
+            OutputType::Utf8,
+            INITIAL_MAP_CAPACITY,
+        );
+
+        assert!(map.map.capacity() >= INITIAL_MAP_CAPACITY);
+        assert_eq!(map.buffer.capacity(), INITIAL_BUFFER_CAPACITY);
+
+        // Before this accounting was corrected the map reported its hash table
+        // as costing zero bytes until the table grew past its pre-allocation.
+        let table_bytes = map.map.allocation_size();
+        let lower_bound = min_table_bytes::<Entry<i32, ()>>(map.map.capacity());
+        assert!(
+            table_bytes >= lower_bound,
+            "expected {table_bytes} to be at least {lower_bound}"
+        );
+        assert!(
+            table_bytes <= 2 * lower_bound + 64,
+            "expected {table_bytes} to be within a small factor of {lower_bound}"
+        );
+        assert!(map.size() >= table_bytes + INITIAL_BUFFER_CAPACITY);
+    }
+
+    #[test]
+    fn take_preserves_the_capacity_the_map_was_built_with() {
+        let mut preallocated = ArrowBytesMap::<i32, ()>::with_capacity(
+            OutputType::Utf8,
+            INITIAL_MAP_CAPACITY,
+        );
+        let capacity = preallocated.map.capacity();
+        preallocated.take();
+        assert_eq!(preallocated.map.capacity(), capacity);
+        assert_eq!(preallocated.buffer.capacity(), INITIAL_BUFFER_CAPACITY);
+
+        let mut lazy = ArrowBytesMap::<i32, ()>::new(OutputType::Utf8);
+        lazy.take();
+        assert_eq!(lazy.map.capacity(), 0);
+        assert_eq!(lazy.buffer.capacity(), 0);
+    }
 
     #[test]
     fn string_set_empty() {

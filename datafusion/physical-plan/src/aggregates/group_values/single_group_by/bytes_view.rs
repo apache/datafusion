@@ -19,7 +19,9 @@ use crate::aggregates::group_values::GroupValues;
 use arrow::array::{Array, ArrayRef};
 use datafusion_expr::{EmitTo, GroupSelection};
 use datafusion_physical_expr::binary_map::OutputType;
-use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewMap;
+use datafusion_physical_expr_common::binary_view_map::{
+    ArrowBytesViewMap, INITIAL_MAP_CAPACITY,
+};
 use std::mem::size_of;
 
 /// A [`GroupValues`] storing single column of Utf8View/BinaryView values
@@ -36,7 +38,9 @@ pub struct GroupValuesBytesView {
 impl GroupValuesBytesView {
     pub fn new(output_type: OutputType) -> Self {
         Self {
-            map: ArrowBytesViewMap::new(output_type),
+            // One map holds every group value for the whole query, so it is
+            // worth pre-allocating the hash table.
+            map: ArrowBytesViewMap::with_capacity(output_type, INITIAL_MAP_CAPACITY),
             num_groups: 0,
         }
     }
