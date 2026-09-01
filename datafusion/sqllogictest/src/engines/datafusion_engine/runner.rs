@@ -85,7 +85,7 @@ impl DataFusion {
 
     fn update_slow_count(&self) {
         let msg = self.pb.message();
-        let split: Vec<&str> = msg.split(" ").collect();
+        let split: Vec<&str> = msg.split(' ').collect();
         let mut current_count = 0;
 
         if split.len() > 2 {

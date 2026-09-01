@@ -442,7 +442,7 @@ impl TestFull {
 
         let new_file_name = if cfg!(target_os = "windows") {
             // Windows path separator is different from Unix
-            file_name.replace("\\", "/")
+            file_name.replace('\\', "/")
         } else {
             file_name.clone()
         };

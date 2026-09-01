@@ -308,7 +308,6 @@ redundant_else = "allow"                      # 48 hits
 return_self_not_must_use = "allow"            # 644 hits
 semicolon_if_nothing_returned = "allow"       # 1353 hits
 similar_names = "allow"                       # 228 hits; too many false positives, e.g. `expr`/`exprs`
-single_char_pattern = "allow"                 # 23 hits
 single_match_else = "allow"                   # 155 hits
 struct_excessive_bools = "allow"              # 24 hits
 struct_field_names = "allow"                  # 14 hits

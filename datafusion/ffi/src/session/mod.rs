@@ -659,7 +659,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         let format_options: HashMap<String, String> = options
             .iter()
             .filter_map(|(k, v)| {
-                let (prefix, key) = k.split_once(".")?;
+                let (prefix, key) = k.split_once('.')?;
                 if prefix == format_name {
                     Some((format!("format.{key}"), v.to_owned()))
                 } else {
@@ -677,7 +677,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
     let extension_options: HashMap<String, String> = options
         .iter()
         .filter_map(|(k, v)| {
-            let (prefix, _) = k.split_once(".")?;
+            let (prefix, _) = k.split_once('.')?;
             if !["json", "parquet", "csv"].contains(&prefix) {
                 Some((k.to_owned(), v.to_owned()))
             } else {
