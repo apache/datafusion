@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{arrow_datafusion_err, Result};
+use datafusion_common::{arrow_datafusion_err, Result, DataFusionError};
 use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
@@ -36,10 +36,7 @@ use crate::aggregates_blocked::group_values::{
 };
 use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates_blocked::order::GroupOrdering;
-use crate::aggregates_blocked::{
-  BlockedAggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-  evaluate_group_by,
-};
+use crate::aggregates_blocked::{BlockedAggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions, evaluate_group_by, create_blocked_group_accumulator};
 
 use super::AggregateTableMetrics;
 use super::common::{
@@ -208,7 +205,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .zip(aggregate_arguments)
             .zip(filters)
             .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
+                let accumulator = create_blocked_group_accumulator(agg_expr, batch_size)?;
                 Ok(AggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
@@ -340,9 +337,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         // groups once, then slice the materialized batch on later polls.
         let timer = self.group_by_metrics.emitting_time.timer();
         let emit_to = if self.buffer.group_values.len() <= self.batch_size {
-            EmitTo::All
+            BlockedEmitTo::All
         } else {
-            EmitTo::First(self.batch_size)
+            BlockedEmitTo::NextBlock
         };
         let mut output = self.buffer.group_values.emit_block()?.expect("must have groups since checked before that len is not empty");
 
@@ -350,7 +347,13 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             output.extend(accumulator_metrics.time(
                 idx,
                 AccumulatorPhase::State,
-                || acc.state(emit_to),
+                || {
+                    let state = acc.state(emit_to)?;
+
+                    assert_eq!(state.len(), 1);
+
+                    Ok::<_, DataFusionError>(state.into_iter().next().unwrap())
+                },
             )?);
         }
 
@@ -361,7 +364,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         })?;
         debug_assert!(batch.num_rows() > 0);
 
-        if emit_to == EmitTo::All {
+        if emit_to == BlockedEmitTo::All {
             // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
             // key/index buffers too so the memory reservation can be released
             // before the batch is passed downstream or sorted for spilling.
@@ -435,7 +438,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                     aggregate_fn(
                         acc,
                         values,
-                        &group_indices_flattened,
+                        &self.buffer.group_indices,
                         total_num_groups,
                     )
                 })?;
@@ -485,15 +488,13 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             }
         }
 
-        let mapped_emit_to = match emit_to {
-            BlockedEmitTo::First(n) => EmitTo::First(n),
-            BlockedEmitTo::NextBlock => EmitTo::First(self.batch_size),
-            BlockedEmitTo::All => EmitTo::All,
-        };
-
         for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
             output.extend(accumulator_metrics.time(idx, accumulator_phase, || {
-                materialize_accumulator_fn(acc, mapped_emit_to)
+                let output = materialize_accumulator_fn(acc, emit_to)?;
+
+                assert_eq!(output.len(), 1, "must always get single block {emit_to:?}");
+
+                Ok::<_, DataFusionError>(output.into_iter().next().unwrap())
             })?);
         }
         drop(timer);

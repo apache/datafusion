@@ -52,13 +52,11 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
+use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Expr, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
+use datafusion_expr_common::groups_accumulator::{BlockedGroupsAccumulator, GroupsAccumulator};
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
-use datafusion_functions_aggregate_common::accumulator::{
-    AccumulatorArgs, StateFieldsArgs,
-};
+use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, BlockedAccumulatorArgs, StateFieldsArgs};
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -139,6 +137,7 @@ pub struct AggregateExprBuilder {
     is_distinct: bool,
     /// Whether the expression is reversed
     is_reversed: bool,
+    batch_size: Option<usize>,
 }
 
 impl AggregateExprBuilder {
@@ -155,6 +154,7 @@ impl AggregateExprBuilder {
             ignore_nulls: false,
             is_distinct: false,
             is_reversed: false,
+            batch_size: None,
         }
     }
 
@@ -261,6 +261,7 @@ impl AggregateExprBuilder {
             ignore_nulls,
             is_distinct,
             is_reversed,
+            batch_size,
         } = self;
         assert_or_internal_err!(!args.is_empty(), "args should not be empty");
 
@@ -316,6 +317,7 @@ impl AggregateExprBuilder {
             input_fields: input_exprs_fields,
             is_reversed,
             is_nullable,
+            batch_size
         })
     }
 
@@ -362,6 +364,11 @@ impl AggregateExprBuilder {
 
     pub fn with_reversed(mut self, is_reversed: bool) -> Self {
         self.is_reversed = is_reversed;
+        self
+    }
+
+    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
+        self.batch_size = batch_size;
         self
     }
 
@@ -553,7 +560,8 @@ impl<'a> LoweredAggregateBuilder<'a> {
             .alias(name)
             .output_metadata(output_metadata)
             .with_ignore_nulls(ignore_nulls)
-            .with_distinct(*distinct);
+            .with_distinct(*distinct)
+            .with_batch_size(execution_props.config_options.as_ref().map(|x| x.execution.batch_size.get()));
 
         if let Some(human_display) = human_display {
             builder = builder.human_display(human_display.expression);
@@ -661,6 +669,7 @@ pub struct AggregateFunctionExpr {
     is_reversed: bool,
     input_fields: Vec<FieldRef>,
     is_nullable: bool,
+    batch_size: Option<usize>,
 }
 
 impl AggregateFunctionExpr {
@@ -717,6 +726,10 @@ impl AggregateFunctionExpr {
     /// Return if the aggregation is nullable
     pub fn is_nullable(&self) -> bool {
         self.is_nullable
+    }
+
+    pub fn batch_size(&self) -> Option<usize> {
+        self.batch_size
     }
 
     /// the field of the final result of this aggregation.
@@ -812,7 +825,8 @@ impl AggregateFunctionExpr {
                 .output_metadata(self.return_field_metadata())
                 .with_ignore_nulls(self.ignore_nulls)
                 .with_distinct(self.is_distinct)
-                .with_reversed(self.is_reversed);
+                .with_reversed(self.is_reversed)
+                .with_batch_size(self.batch_size);
         if let Some(human_display) = self.human_display() {
             builder = builder.human_display(human_display);
         }
@@ -928,6 +942,52 @@ impl AggregateFunctionExpr {
         self.fun.create_groups_accumulator(args)
     }
 
+    /// If the aggregate expression has a specialized
+    /// [`GroupsAccumulator`] implementation. If this returns true,
+    /// `[Self::create_groups_accumulator`] will be called.
+    pub fn blocked_groups_accumulator_supported(&self) -> bool {
+        let Some(batch_size) = self.batch_size else {
+            return false
+        };
+        let args = AccumulatorArgs {
+            return_field: Arc::clone(&self.return_field),
+            schema: &self.schema,
+            expr_fields: &self.arg_fields,
+            ignore_nulls: self.ignore_nulls,
+            order_bys: self.order_bys.as_ref(),
+            is_distinct: self.is_distinct,
+            name: &self.name,
+            is_reversed: self.is_reversed,
+            exprs: &self.args,
+        };
+        let blocked = BlockedAccumulatorArgs::from_accumulator_args(args, batch_size);
+        self.fun.blocked_groups_accumulator_supported(blocked)
+    }
+
+    /// Return a specialized [`GroupsAccumulator`] that manages state
+    /// for all groups.
+    ///
+    /// For maximum performance, a [`GroupsAccumulator`] should be
+    /// implemented in addition to [`Accumulator`].
+    pub fn create_blocked_groups_accumulator(&self) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        let Some(batch_size) = self.batch_size else {
+            return internal_err!("batch size must be set if blocked group accumulator is supported");
+        };
+        let args = AccumulatorArgs {
+            return_field: Arc::clone(&self.return_field),
+            schema: &self.schema,
+            expr_fields: &self.arg_fields,
+            ignore_nulls: self.ignore_nulls,
+            order_bys: self.order_bys.as_ref(),
+            is_distinct: self.is_distinct,
+            name: &self.name,
+            is_reversed: self.is_reversed,
+            exprs: &self.args,
+        };
+        let blocked = BlockedAccumulatorArgs::from_accumulator_args(args, batch_size);
+        self.fun.create_blocked_groups_accumulator(blocked)
+    }
+
     /// Construct an expression that calculates the aggregate in reverse.
     /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
     /// For aggregates that do not support calculation in reverse,
@@ -977,7 +1037,8 @@ impl AggregateFunctionExpr {
                         .output_metadata(self.return_field_metadata())
                         .with_ignore_nulls(self.ignore_nulls)
                         .with_distinct(self.is_distinct)
-                        .with_reversed(!self.is_reversed);
+                        .with_reversed(!self.is_reversed)
+                        .with_batch_size(self.batch_size);
                 if let Some(human_display) = human_display {
                     builder = builder.human_display(human_display.expression);
                     if let Some(alias) = human_display.alias {
@@ -1047,6 +1108,7 @@ impl AggregateFunctionExpr {
             is_reversed: false,
             input_fields: self.input_fields.clone(),
             is_nullable: self.is_nullable,
+            batch_size: self.batch_size,
         })
     }
 

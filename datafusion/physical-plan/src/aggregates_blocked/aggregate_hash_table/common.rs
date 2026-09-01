@@ -25,7 +25,7 @@ use itertools::Itertools;
 use datafusion_common::{internal_datafusion_err, internal_err, Result, arrow_datafusion_err, DataFusionError};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
-use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use crate::PhysicalExpr;
 use crate::aggregates_blocked::group_values::{
@@ -34,9 +34,7 @@ use crate::aggregates_blocked::group_values::{
 };
 use crate::aggregates_blocked::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates_blocked::order::GroupOrdering;
-use crate::aggregates_blocked::{
-    BlockedAggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-};
+use crate::aggregates_blocked::{aggregate_expressions, create_blocked_group_accumulator, evaluate_group_by, BlockedAggregateExec, PhysicalGroupBy};
 
 use super::AggregateTableMetrics;
 
@@ -133,7 +131,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .zip(aggregate_arguments)
             .zip(filters)
             .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
+                let accumulator = create_blocked_group_accumulator(agg_expr, batch_size)?;
                 Ok(HashAggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
@@ -218,9 +216,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             state
               .group_values
               .intern(group_values, &mut state.batch_group_indices)?;
-            let group_indices_flattened = state.batch_group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
 
-            let group_indices = &group_indices_flattened;
+            let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 
             for (idx, (acc, values)) in state
@@ -264,28 +261,25 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
                     // Accumulator output consumes internal state. Materialize all
                     // groups once, then slice the materialized batch on later polls.
-                    let timer = self.group_by_metrics.emitting_time.timer();
+                    let _timer = self.group_by_metrics.emitting_time.timer();
                     let mut columns_blocked = state.group_values.emit_all()?;
+
+                    for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                        let blocks = accumulator_metrics.time(
+                            idx,
+                            accumulator_phase,
+                            || materialize_accumulator_fn(acc, BlockedEmitTo::All)
+                        )?;
+
+                        columns_blocked.iter_mut().zip_eq(blocks.into_iter()).for_each(|(column_blocked, materialized)| {
+                            column_blocked.extend(materialized)
+                        });
+                    }
 
                     let mut size = 0;
 
-                    let number_of_blocks = columns_blocked.len();
-                    let mut reversed_blocked_batches = columns_blocked.into_iter().enumerate().map(|(index, mut block)| {
-                        let emit_to = if number_of_blocks == index + 1 {
-                            EmitTo::All
-                        } else {
-                            EmitTo::First(self.batch_size)
-                        };
-
-                        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                            block.extend(accumulator_metrics.time(
-                                idx,
-                                accumulator_phase,
-                                || materialize_accumulator_fn(acc, emit_to)
-                            )?);
-                        }
-
-                        let batch = RecordBatch::try_new(Arc::clone(&output_schema), block).map_err(|e| {
+                    let mut batches = columns_blocked.into_iter().map(|columns| {
+                        let batch = RecordBatch::try_new(Arc::clone(&output_schema), columns).map_err(|e| {
                             arrow_datafusion_err!(e)
                         })?;
                         debug_assert!(batch.num_rows() > 0);
@@ -295,11 +289,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                         Ok(batch)
                     }).collect::<Result<Vec<_>>>()?;
 
-                    reversed_blocked_batches.reverse();
 
-                    drop(timer);
+                    // Reverse so we can take from the start without shifting
+                    batches.reverse();
 
-                    (reversed_blocked_batches, size)
+
+                    (batches, size)
                 }
                 AggregateHashTableState::OutputtingMaterialized(output_reversed, size) => (output_reversed, size),
                 AggregateHashTableState::Done => return Ok(None),
@@ -372,9 +367,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         // groups once, then slice the materialized batch on later polls.
         let timer = self.group_by_metrics.emitting_time.timer();
         let emit_to = if state.group_values.len() <= self.batch_size {
-            EmitTo::All
+            BlockedEmitTo::All
         } else {
-            EmitTo::First(self.batch_size)
+            BlockedEmitTo::NextBlock
         };
         let mut output = state.group_values.emit_block()?.expect("must have groups since checked before that len is not empty");
 
@@ -382,7 +377,13 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             output.extend(accumulator_metrics.time(
                 idx,
                 AccumulatorPhase::State,
-                || acc.state(emit_to),
+                || {
+                    let state = acc.state(emit_to)?;
+
+                    assert_eq!(state.len(), 1, "must have 1 block");
+
+                    Ok::<_, DataFusionError>(state.into_iter().next().unwrap())
+                },
             )?);
         }
 
@@ -393,7 +394,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         })?;
         debug_assert!(batch.num_rows() > 0);
 
-        if emit_to == EmitTo::All {
+        if emit_to == BlockedEmitTo::All {
             // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
             // key/index buffers too so the memory reservation can be released
             // before the batch is sorted for spilling.
@@ -445,7 +446,7 @@ pub(super) struct HashAggregateAccumulator {
     filter: Option<Arc<dyn PhysicalExpr>>,
 
     /// Accumulator state for all groups for one aggregate expression.
-    accumulator: Box<dyn GroupsAccumulator>,
+    accumulator: Box<dyn BlockedGroupsAccumulator>,
 }
 
 pub(super) type AggregateAccumulator = HashAggregateAccumulator;
@@ -462,7 +463,7 @@ pub(super) type AggregateAccumulator = HashAggregateAccumulator;
 pub(super) type AggregateBatchFn = fn(
     &mut AggregateAccumulator,
     &EvaluatedAccumulatorArgs,
-    &[usize],
+    &[BlocksIndex],
     usize,
 ) -> Result<()>;
 
@@ -473,7 +474,7 @@ pub(super) type AggregateBatchFn = fn(
 /// * accumulator to materialize.
 /// * group range to emit from the accumulator.
 pub(super) type MaterializeAccumulatorFn =
-    fn(&mut AggregateAccumulator, EmitTo) -> Result<Vec<ArrayRef>>;
+    fn(&mut AggregateAccumulator, BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>>;
 
 /// Evaluated aggregate arguments and filter for one input batch.
 ///
@@ -584,8 +585,11 @@ impl HashAggregateAccumulator {
         aggregate_expr: Arc<AggregateFunctionExpr>,
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
-        accumulator: Box<dyn GroupsAccumulator>,
+        accumulator: Box<dyn BlockedGroupsAccumulator>,
     ) -> Self {
+        if let Some(batch_size) = aggregate_expr.batch_size() {
+            assert_eq!(batch_size, accumulator.batch_size());
+        }
         Self {
             aggregate_expr,
             arguments,
@@ -597,7 +601,9 @@ impl HashAggregateAccumulator {
     /// Construct a new accumulator with the same definition, but with empty internal
     /// state buffers (empty [`GroupsAccumulator`]).
     pub(super) fn empty_like(&self) -> Result<Self> {
-        let accumulator = create_group_accumulator(&self.aggregate_expr)?;
+        let batch_size = self.accumulator.batch_size();
+
+        let accumulator = create_blocked_group_accumulator(&self.aggregate_expr, batch_size)?;
         Ok(Self::new(
             Arc::clone(&self.aggregate_expr),
             self.arguments.clone(),
@@ -651,7 +657,7 @@ impl HashAggregateAccumulator {
     pub(super) fn update_batch(
         &mut self,
         values: &EvaluatedAccumulatorArgs,
-        group_indices: &[usize],
+        group_indices: &[BlocksIndex],
         total_num_groups: usize,
     ) -> Result<()> {
         let filter = values.filter.as_ref().map(|filter| filter.as_boolean());
@@ -666,7 +672,7 @@ impl HashAggregateAccumulator {
     pub(super) fn merge_batch(
         &mut self,
         values: &EvaluatedAccumulatorArgs,
-        group_indices: &[usize],
+        group_indices: &[BlocksIndex],
         total_num_groups: usize,
     ) -> Result<()> {
         debug_assert!(values.filter.is_none());
@@ -677,21 +683,23 @@ impl HashAggregateAccumulator {
     /// Evaluating final aggregate results according to `EmitTo`, and reset inner
     /// states. (e.g. after `evaluate(EmitTo::All)`, it returns all accumulated groups
     /// , and clear the inner buffers)
-    pub(super) fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+    pub(super) fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
         self.accumulator.evaluate(emit_to)
     }
 
     pub(super) fn evaluate_to_columns(
         &mut self,
-        emit_to: EmitTo,
-    ) -> Result<Vec<ArrayRef>> {
-        Ok(vec![self.evaluate(emit_to)?])
+        emit_to: BlockedEmitTo,
+    ) -> Result<Vec<Vec<ArrayRef>>> {
+        let blocks = self.evaluate(emit_to)?;
+        let blocks_in_columns = blocks.into_iter().map(|block| vec![block]).collect::<Vec<_>>();
+        Ok(blocks_in_columns)
     }
 
     /// Evaluating partial aggregate results according to `EmitTo`, and reset inner
     /// states. (e.g. after `state(EmitTo::All)`, it returns all accumulated groups
     /// , and clear the inner buffers)
-    pub(super) fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+    pub(super) fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
         self.accumulator.state(emit_to)
     }
 

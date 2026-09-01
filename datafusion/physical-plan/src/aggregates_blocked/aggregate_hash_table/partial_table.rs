@@ -190,7 +190,7 @@ impl AggregateHashTable<PartialMarker> {
                     filter: Some(Arc::new(false_filter.clone())),
                 };
                 accumulator_metrics.time(idx, AccumulatorPhase::Update, || {
-                    acc.update_batch(&values, &[0], total_groups)
+                    acc.update_batch(&values, &[BlocksIndex::new(0, 0)], total_groups)
                 })?;
             }
         }

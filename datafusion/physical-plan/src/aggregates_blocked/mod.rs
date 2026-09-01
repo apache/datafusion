@@ -199,6 +199,10 @@ use datafusion_physical_expr_common::sort_expr::{
 
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use itertools::Itertools;
+use log::debug;
+use datafusion_expr_common::groups_accumulator::{BlockedGroupsAccumulator, GroupsAccumulator};
+use datafusion_functions_aggregate_common::aggregate::blocked_groups_accumulator::BlockedGroupsAccumulatorAdapter;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::GroupsAccumulatorAdapter;
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
@@ -2590,6 +2594,29 @@ pub fn create_accumulators(
         .collect()
 }
 
+
+/// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
+/// that is supported by the aggregate, or a
+/// [`GroupsAccumulatorAdapter`] if not.
+pub(crate) fn create_blocked_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    batch_size: usize,
+) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+    if agg_expr.blocked_groups_accumulator_supported() {
+        agg_expr.create_blocked_groups_accumulator()
+    } else {
+        // Note in the log when the slow path is used
+        debug!(
+            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
+            agg_expr.name()
+        );
+        if let Some(agg_batch_size) = agg_expr.batch_size() {
+            assert_eq_or_internal_err!(batch_size, agg_batch_size, "agg expr batch_size must equal provider batch size");
+        }
+        Ok(Box::new(BlockedGroupsAccumulatorAdapter::new(create_group_accumulator(agg_expr)?, batch_size)))
+    }
+}
+
 pub use crate::aggregates::PhysicalGroupBy;
 pub(crate) use crate::aggregates::AGGREGATION_HASH_SEED;
 pub use crate::aggregates::AggregateInputMode;
@@ -2603,6 +2630,7 @@ pub use crate::aggregates::evaluate_many;
 pub(crate) use crate::aggregates::max_duplicate_ordinal;
 pub(crate) use crate::aggregates::group_id_array;
 use crate::aggregates::evaluate_optional;
+use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 
 #[cfg(test)]
 mod tests {
