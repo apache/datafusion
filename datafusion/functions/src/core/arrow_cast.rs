@@ -27,8 +27,8 @@ use datafusion_common::{
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ExprSchemable, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -161,8 +161,25 @@ impl ScalarUDFImpl for ArrowCastFunc {
         let [source_arg, type_arg] = take_function_args(self.name(), args)?;
         let target_type = data_type_from_type_arg(self.name(), &type_arg)?;
         let source_type = info.get_data_type(&source_arg)?;
-        let new_expr = if source_type == target_type {
-            // the argument's data type is already the correct type
+        // `arrow_cast` names a `DataType` and nothing else: its declared return
+        // field (see `return_field_from_args`) never carries metadata. Dropping
+        // the cast is therefore only sound when the argument has nothing for the
+        // cast to drop - the cast target's metadata is authoritative, so a cast
+        // whose argument carries metadata is a metadata-changing cast even when
+        // the two data types are identical.
+        //
+        // Eliding it there would leave, for example,
+        // `arrow_cast(uuid_val, 'FixedSizeBinary(16)')` still labelled
+        // `ARROW:extension:name = arrow.uuid`, i.e. an extension value that
+        // escaped a cast back to its storage type.
+        // See https://github.com/apache/datafusion/issues/22079
+        let is_noop = source_type == target_type && {
+            let (_, source_field) = source_arg.to_field(info.schema().as_ref())?;
+            source_field.metadata().is_empty()
+        };
+        let new_expr = if is_noop {
+            // the argument's data type is already the correct type and it
+            // carries no metadata that the cast would strip
             source_arg
         } else {
             // Use an actual cast to get the correct type

@@ -61,3 +61,42 @@ FROM (
 );
 ----
 00010203040506070809000102030506 NULL
+
+# `arrow_cast` names a storage type and nothing else, so casting an
+# extension-typed value back to its own storage type is not a no-op: it strips
+# the extension metadata. The same-type short circuit in `ArrowCastFunc::simplify`
+# must not swallow it.
+# See https://github.com/apache/datafusion/issues/22079
+query ?T
+SELECT
+    arrow_cast(uuid_val, 'FixedSizeBinary(16)'),
+    arrow_metadata(arrow_cast(uuid_val, 'FixedSizeBinary(16)'), 'ARROW:extension:name')
+FROM (
+    SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+);
+----
+00010203040506070809000102030506 NULL
+
+# ... and casting it to a different storage type, through `arrow_cast` rather
+# than a SQL CAST, strips it too
+query ?T
+SELECT
+    arrow_cast(uuid_val, 'Binary'),
+    arrow_metadata(arrow_cast(uuid_val, 'Binary'), 'ARROW:extension:name')
+FROM (
+    SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
+);
+----
+00010203040506070809000102030506 NULL
+
+# An `arrow_cast` whose argument carries no metadata has nothing to strip and is
+# still simplified away entirely
+query TT
+EXPLAIN SELECT arrow_cast(a, 'Int64') FROM (SELECT arrow_cast(1, 'Int64') AS a);
+----
+logical_plan
+01)Projection: Int64(1) AS arrow_cast(a,Utf8("Int64"))
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[1 as arrow_cast(a,Utf8("Int64"))]
+02)--PlaceholderRowExec
