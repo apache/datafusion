@@ -373,7 +373,7 @@ impl PartialEq for ForeignScalarUDF {
         } = self;
         name == &other.name
             && aliases == &other.aliases
-            && std::ptr::eq(udf, &other.udf)
+            && std::ptr::eq(udf, &raw const other.udf)
             && signature == &other.signature
     }
 }

@@ -270,7 +270,6 @@ wildcard_dependencies = "warn"
 
 # Pedantic lints we opt out of, with the number of hits at the time we enabled `pedantic`.
 # Some of these we should consider enabling.
-borrow_as_ptr = "allow"                       # 6 hits
 cast_lossless = "allow"                       # 361 hits
 cast_possible_truncation = "allow"            # 911 hits
 cast_possible_wrap = "allow"                  # 493 hits
