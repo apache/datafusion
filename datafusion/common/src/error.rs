@@ -296,7 +296,9 @@ impl Display for SchemaError {
                     )?;
                 }
 
-                if !valid_fields.is_empty() {
+                if valid_fields.is_empty() {
+                    Ok(())
+                } else {
                     write!(
                         f,
                         "\nValid fields are {}.",
@@ -306,8 +308,6 @@ impl Display for SchemaError {
                             .collect::<Vec<String>>()
                             .join(", ")
                     )
-                } else {
-                    Ok(())
                 }
             }
             Self::DuplicateQualifiedField { qualifier, name } => {
@@ -559,7 +559,7 @@ impl DataFusionError {
         }
 
         #[cfg(not(feature = "backtrace"))]
-        "".to_owned()
+        String::new()
     }
 
     /// Return a [`DataFusionErrorBuilder`] to build a [`DataFusionError`]
