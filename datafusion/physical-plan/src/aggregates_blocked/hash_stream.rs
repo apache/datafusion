@@ -25,6 +25,7 @@
 //!
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
+use std::collections::VecDeque;
 use std::mem::size_of;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -181,7 +182,7 @@ enum PartialHashAggregateState {
         hash_table: AggregateHashTable<PartialMarker>,
         // After each incremental emitting step, the `remaining_groups` will be updated
         // with batch slicing.
-        remaining_groups: RecordBatch,
+        remaining_groups: VecDeque<RecordBatch>,
     },
     ProducingOutput {
         hash_table: AggregateHashTable<PartialMarker>,
@@ -352,27 +353,25 @@ impl FinalSpillContext {
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
     ) -> Result<()> {
-        let Some(batch) = hash_table.take_state_batch()? else {
-            return Ok(());
-        };
+        while let Some(batch) = hash_table.take_next_state_batch()? {
+            let sorted_iter =
+              IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
+            let spill_file = self
+              .spill_manager
+              .spill_record_batch_iter_and_return_max_batch_memory(
+                  sorted_iter,
+                  "FinalHashAggregateSpill",
+              )?;
 
-        let sorted_iter =
-            IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                "FinalHashAggregateSpill",
-            )?;
+            let Some((file, max_record_batch_memory)) = spill_file else {
+                return internal_err!("Final hash aggregation produced an empty spill");
+            };
 
-        let Some((file, max_record_batch_memory)) = spill_file else {
-            return internal_err!("Final hash aggregation produced an empty spill");
-        };
-
-        self.spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
+            self.spills.push(SortedSpillFile {
+                file,
+                max_record_batch_memory,
+            });
+        }
 
         Ok(())
     }
@@ -650,31 +649,49 @@ impl PartialHashAggregateStream {
                             self.baseline_metrics.elapsed_compute().clone();
                         // Stops on drop
                         let _timer = elapsed_compute.timer();
-                        let state_batch_result = hash_table.take_state_batch();
+                        let mut state_batches = VecDeque::new();
+
+                        let mut accumulated = 0;
+
+                        loop {
+                            let next = hash_table.take_next_state_batch();
+
+                            let next_size = match &next {
+                                // Only account from the 2nd item
+                                // since the first item will be emitted right away
+                                Ok(Some(batch)) if !state_batches.is_empty() => batch.get_array_memory_size(),
+                                _ => 0
+                            };
+
+                            accumulated += next_size;
+                            match next {
+                                Ok(Some(batch)) => state_batches.push_back(batch),
+                                Ok(None) => {
+                                    break;
+                                }
+                                Err(e) => return Self::break_with_err(e),
+                            }
+                        }
 
                         // Emitting clears the aggregate table and releases its
                         // accumulated memory. Update the reservation accordingly.
                         let resize_result =
-                            self.reservation.try_resize(hash_table.memory_size());
+                            self.reservation.try_resize(hash_table.memory_size() + accumulated);
 
                         if let Err(e) = resize_result {
                             return Self::break_with_err(e);
                         }
 
-                        let materialized_group_states = match state_batch_result {
-                            Ok(Some(batch)) => batch,
-                            Ok(None) => {
-                                return Self::break_with_err(internal_datafusion_err!(
-                                    "Partial hash aggregate ran out of memory with no aggregated groups"
-                                ));
-                            }
-                            Err(e) => return Self::break_with_err(e),
-                        };
+                        if state_batches.is_empty() {
+                            return Self::break_with_err(internal_datafusion_err!(
+                                "Partial hash aggregate ran out of memory with no aggregated groups"
+                            ));
+                        }
 
                         return ControlFlow::Continue(
                             PartialHashAggregateState::EmittingOnMemoryPressure {
                                 hash_table,
-                                remaining_groups: materialized_group_states,
+                                remaining_groups: state_batches,
                             },
                         );
                     }
@@ -717,7 +734,7 @@ impl PartialHashAggregateStream {
     ) -> PartialHashAggregateStateTransition {
         let PartialHashAggregateState::EmittingOnMemoryPressure {
             hash_table,
-            remaining_groups: batch,
+            mut remaining_groups,
         } = original_state
         else {
             return Self::break_with_internal_err(
@@ -725,24 +742,16 @@ impl PartialHashAggregateStream {
             );
         };
 
-        let (output_batch, next_state) = if batch.num_rows() <= self.batch_size {
+        let output_batch = remaining_groups.pop_front().expect("must have batch in groups");
+
+        let next_state = if remaining_groups.is_empty() {
             // Last batch to output, go back to `ReadingInput`
-            (
-                batch,
-                PartialHashAggregateState::ReadingInput { hash_table },
-            )
+            PartialHashAggregateState::ReadingInput { hash_table }
         } else {
-            // More batch to output, continue in the current state.
-            let remaining =
-                batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
-            let output = batch.slice(0, self.batch_size);
-            (
-                output,
-                PartialHashAggregateState::EmittingOnMemoryPressure {
-                    hash_table,
-                    remaining_groups: remaining,
-                },
-            )
+            PartialHashAggregateState::EmittingOnMemoryPressure {
+                hash_table,
+                remaining_groups,
+            }
         };
 
         self.reduction_factor.add_part(output_batch.num_rows());

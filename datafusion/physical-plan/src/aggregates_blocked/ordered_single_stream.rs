@@ -248,27 +248,25 @@ impl OrderedSingleSpillContext {
         &mut self,
         table: &mut OrderedAggregateTable<SingleMarker>,
     ) -> Result<()> {
-        let Some(batch) = table.take_state_batch()? else {
-            return Ok(());
-        };
+        while let Some(batch) = table.take_next_state_batch()? {
+            let sorted_iter =
+                IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
+            let spill_file = self
+                .spill_manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    sorted_iter,
+                    "OrderedSingleAggregateSpill",
+                )?;
 
-        let sorted_iter =
-            IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                "OrderedSingleAggregateSpill",
-            )?;
+            let Some((file, max_record_batch_memory)) = spill_file else {
+                return internal_err!("Ordered single aggregation produced an empty spill");
+            };
 
-        let Some((file, max_record_batch_memory)) = spill_file else {
-            return internal_err!("Ordered single aggregation produced an empty spill");
-        };
-
-        self.spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
+            self.spills.push(SortedSpillFile {
+                file,
+                max_record_batch_memory,
+            });
+        }
 
         Ok(())
     }

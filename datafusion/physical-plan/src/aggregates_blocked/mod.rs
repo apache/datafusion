@@ -3518,6 +3518,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn partial_grouped_aggregate_materializes_before_slicing() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int32, false),

@@ -21,12 +21,12 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
+use itertools::Itertools;
+use datafusion_common::{internal_datafusion_err, internal_err, Result, arrow_datafusion_err, DataFusionError};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
-use datafusion_expr_common::groups_accumulator::BlocksIndex;
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
-
 use crate::PhysicalExpr;
 use crate::aggregates_blocked::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
@@ -263,10 +263,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         accumulator_phase: AccumulatorPhase,
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
-        let batch_size = self.batch_size;
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
 
-        let mut output =
+        let (mut output_reversed, size) =
             match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
                 AggregateHashTableState::Outputting(mut state) => {
                     if state.group_values.is_empty() {
@@ -275,23 +274,44 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
                     // Accumulator output consumes internal state. Materialize all
                     // groups once, then slice the materialized batch on later polls.
-                    let emit_to = EmitTo::All;
                     let timer = self.group_by_metrics.emitting_time.timer();
-                    let mut columns = state.group_values.emit(emit_to)?;
-                    for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                        columns.extend(accumulator_metrics.time(
-                            idx,
-                            accumulator_phase,
-                            || materialize_accumulator_fn(acc, emit_to),
-                        )?);
-                    }
+                    let mut columns_blocked = state.group_values.emit_all()?;
+
+                    let mut size = 0;
+
+                    let number_of_blocks = columns_blocked.len();
+                    let mut reversed_blocked_batches = columns_blocked.into_iter().enumerate().map(|(index, mut block)| {
+                        let emit_to = if number_of_blocks == index + 1 {
+                            EmitTo::All
+                        } else {
+                            EmitTo::First(self.batch_size)
+                        };
+
+                        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                            block.extend(accumulator_metrics.time(
+                                idx,
+                                accumulator_phase,
+                                || materialize_accumulator_fn(acc, emit_to)
+                            )?);
+                        }
+
+                        let batch = RecordBatch::try_new(Arc::clone(&output_schema), block).map_err(|e| {
+                            arrow_datafusion_err!(e)
+                        })?;
+                        debug_assert!(batch.num_rows() > 0);
+
+                        size += batch.get_array_memory_size();
+
+                        Ok(batch)
+                    }).collect::<Result<Vec<_>>>()?;
+
+                    reversed_blocked_batches.reverse();
+
                     drop(timer);
 
-                    let batch = RecordBatch::try_new(output_schema, columns)?;
-                    debug_assert!(batch.num_rows() > 0);
-                    MaterializedAggregateOutput::new(batch)
+                    (reversed_blocked_batches, size)
                 }
-                AggregateHashTableState::OutputtingMaterialized(output) => output,
+                AggregateHashTableState::OutputtingMaterialized(output_reversed, size) => (output_reversed, size),
                 AggregateHashTableState::Done => return Ok(None),
                 AggregateHashTableState::Building(_) => {
                     return internal_err!(
@@ -300,11 +320,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size);
-        if output.is_exhausted() {
+        let batch = output_reversed.pop();
+        if output_reversed.is_empty() {
             self.state = AggregateHashTableState::Done;
         } else {
-            self.state = AggregateHashTableState::OutputtingMaterialized(output);
+            self.state = AggregateHashTableState::OutputtingMaterialized(output_reversed, size - batch.as_ref().map_or(0, |batch| batch.get_array_memory_size()));
         }
         Ok(batch)
     }
@@ -322,8 +342,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
             }
-            AggregateHashTableState::OutputtingMaterialized(output) => {
-                output.memory_size()
+            AggregateHashTableState::OutputtingMaterialized(_, memory_size) => {
+                *memory_size
             }
             AggregateHashTableState::Done => 0,
         }
@@ -340,34 +360,57 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Unlike normal single aggregation output, this materializes intermediate
     /// states rather than final values. The states can therefore be merged after
     /// spilling without finalizing the same group more than once.
-    pub(in crate::aggregates_blocked) fn take_state_batch(
+    pub(in crate::aggregates_blocked) fn take_next_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let state = self.state.building_mut();
         if state.group_values.is_empty() {
+
+            // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
+            // key/index buffers too so the memory reservation can be released
+            // before the batch is sorted for spilling.
+            state.group_values.clear_shrink(0);
+            state.batch_group_indices.clear();
+            state.batch_group_indices.shrink_to_fit();
+
             return Ok(None);
         }
 
-        let mut output = state.group_values.emit(EmitTo::All)?;
+        // Accumulator output consumes internal state. Materialize all
+        // groups once, then slice the materialized batch on later polls.
+        let timer = self.group_by_metrics.emitting_time.timer();
+        let emit_to = if state.group_values.len() <= self.batch_size {
+            EmitTo::All
+        } else {
+            EmitTo::First(self.batch_size)
+        };
+        let mut output = state.group_values.emit_block()?.expect("must have groups since checked before that len is not empty");
+
         for (idx, acc) in state.accumulators.iter_mut().enumerate() {
             output.extend(accumulator_metrics.time(
                 idx,
                 AccumulatorPhase::State,
-                || acc.state(EmitTo::All),
+                || acc.state(emit_to),
             )?);
         }
 
-        let batch = RecordBatch::try_new(state_schema, output)?;
+        drop(timer);
+
+        let batch = RecordBatch::try_new(state_schema, output).map_err(|e| {
+            arrow_datafusion_err!(e)
+        })?;
         debug_assert!(batch.num_rows() > 0);
 
-        // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is sorted for spilling.
-        state.group_values.clear_shrink(0);
-        state.batch_group_indices.clear();
-        state.batch_group_indices.shrink_to_fit();
+        if emit_to == EmitTo::All {
+            // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
+            // key/index buffers too so the memory reservation can be released
+            // before the batch is sorted for spilling.
+            state.group_values.clear_shrink(0);
+            state.batch_group_indices.clear();
+            state.batch_group_indices.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }
@@ -504,7 +547,9 @@ pub(super) enum AggregateHashTableState {
     ///
     /// Note this is a temporary solution until the `GroupValues` issue is solved:
     /// Issue: <https://github.com/apache/datafusion/issues/23178>
-    OutputtingMaterialized(MaterializedAggregateOutput),
+    ///
+    /// Saving the output reversed so we can do pop without needing to shift
+    OutputtingMaterialized(Vec<RecordBatch>, usize),
     Done,
 }
 

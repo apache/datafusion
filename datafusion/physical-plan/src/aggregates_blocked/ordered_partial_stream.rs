@@ -247,15 +247,21 @@ impl OrderedPartialAggregateStream {
             let input_rows = batch.num_rows();
             self.reduction_factor.add_total(input_rows);
 
-            let timer = elapsed_compute.timer();
+            let mut timer = elapsed_compute.timer();
 
             table.aggregate_batch(&batch)?;
 
             // Check memory reservation. See function comments for details.
-            if let Some(batch) = self.resize_or_take_state_batch(table)? {
+            let mut took_state_batch = false;
+            while let Some(batch) = self.resize_or_take_state_batch(table, !took_state_batch)? {
+                took_state_batch = true;
                 self.reduction_factor.add_part(batch.num_rows());
                 drop(timer);
                 emitter.emit(batch).await;
+                timer = elapsed_compute.timer();
+            }
+
+            if took_state_batch {
                 continue;
             }
 
@@ -292,6 +298,7 @@ impl OrderedPartialAggregateStream {
     fn resize_or_take_state_batch(
         &mut self,
         table: &mut OrderedAggregateTable<PartialMarker>,
+        should_fail_on_no_state_batch: bool,
     ) -> Result<Option<RecordBatch>> {
         let oom = match self.reservation.try_resize(table.memory_size()) {
             Ok(()) => return Ok(None),
@@ -303,8 +310,12 @@ impl OrderedPartialAggregateStream {
             return Err(oom);
         }
 
-        let Some(batch) = table.take_state_batch()? else {
-            return Err(oom);
+        let Some(batch) = table.take_next_state_batch()? else {
+            if should_fail_on_no_state_batch {
+                return Err(oom);
+            } else {
+                return Ok(None);
+            }
         };
         self.reservation.try_resize(table.memory_size())?;
         Ok(Some(batch))

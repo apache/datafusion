@@ -24,7 +24,7 @@ use arrow::array::types::{
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::Result;
+use datafusion_common::{assert_ne_or_internal_err, Result, assert_or_internal_err, unwrap_or_internal_err, assert_eq_or_internal_err};
 
 use datafusion_expr::EmitTo;
 use datafusion_expr_common::groups_accumulator::BlockedEmitTo;
@@ -117,7 +117,59 @@ pub trait BlockedGroupValues: Send {
     fn len(&self) -> usize;
 
     /// Emits the group values
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+    fn emit(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
+        match emit_to {
+            BlockedEmitTo::All => {
+                self.emit_all()
+            }
+            BlockedEmitTo::NextBlock => {
+                let len = self.len();
+                let block_size = self.block_size();
+
+                if len == 0 {
+                    return Ok(vec![]);
+                }
+
+                if len <= block_size {
+                    return self.emit_all();
+                }
+
+                let block = self.emit_block()?;
+                let block = unwrap_or_internal_err!(block);
+
+                // Assert that all arrays length equal block size since length is greater than block size
+                for arr in &block {
+                    assert_eq_or_internal_err!(arr.len(), block_size);
+                }
+
+                Ok(vec![block])
+            }
+            BlockedEmitTo::First(n) => {
+                assert_ne_or_internal_err!(n, 0);
+                assert_or_internal_err!(n <= self.len(), "n ({n}) must be less than or equal current length ({})", self.len());
+                assert_or_internal_err!(n < self.block_size(), "n ({n}) must be less than current block size ({})", self.block_size());
+
+                if n == self.len() {
+                    self.emit_all()
+                } else {
+                    self.emit_first_n(n).map(|first_n| vec![first_n])
+                }
+            }
+        }
+    }
+
+    /// Emit all group values
+    fn emit_all(&mut self) -> Result<Vec<Vec<ArrayRef>>>;
+
+    /// Emit the next block
+    /// returns Ok(None) when there are no blocks
+    fn emit_block(&mut self) -> Result<Option<Vec<ArrayRef>>>;
+
+    /// Emit first `n` values and shift all values to fit into blocks
+    ///
+    /// `n` must be smaller than [`Self::block_size`] and larger than `0`
+    /// `n` must be smaller or equal to [`Self::len`]
+    fn emit_first_n(&mut self, n: usize) -> Result<Vec<ArrayRef>>;
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, num_rows: usize);
@@ -156,8 +208,46 @@ impl BlockedGroupValues for BlockedGroupValuesAdapter {
         self.inner.len()
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        self.inner.emit(emit_to)
+    fn emit_all(&mut self) -> Result<Vec<Vec<ArrayRef>>> {
+        let mut blocks = vec![];
+
+        while self.len() > self.block_size {
+            blocks.push(self.inner.emit(EmitTo::First(self.block_size))?);
+        }
+
+        if self.len() > 0 {
+            blocks.push(self.inner.emit(EmitTo::All)?);
+        }
+
+        Ok(blocks)
+    }
+
+    fn emit_block(&mut self) -> Result<Option<Vec<ArrayRef>>> {
+        if self.len() == 0 {
+            return Ok(None);
+        }
+
+        let output = if self.len() <= self.block_size {
+            self.inner.emit(EmitTo::All)
+        } else {
+            self.inner.emit(EmitTo::First(self.block_size))
+        };
+
+        Ok(Some(output?))
+    }
+
+    fn emit_first_n(&mut self, n: usize) -> Result<Vec<ArrayRef>> {
+        assert_ne_or_internal_err!(n, 0);
+        assert_or_internal_err!(n <= self.len(), "n ({n}) must be less than or equal current length ({})", self.len());
+        assert_or_internal_err!(n < self.block_size(), "n ({n}) must be less than current block size ({})", self.block_size());
+
+        let output = if self.len() == n {
+            self.inner.emit(EmitTo::All)
+        } else {
+            self.inner.emit(EmitTo::First(n))
+        };
+
+        Ok(output?)
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
