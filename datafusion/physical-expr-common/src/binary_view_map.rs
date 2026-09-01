@@ -570,13 +570,14 @@ where
         // which is the entry array plus the control bytes plus the trailing
         // group, so it is larger than `capacity() * size_of::<Entry<V>>()`. It
         // is a constant time layout calculation, not a walk of the table.
+        let map_size = self.map.allocation_size();
         let views_size = self.views.allocated_size();
         let in_progress_size = self.in_progress.allocated_size();
         let completed_size = self.completed.allocated_size()
             + self.completed.iter().map(Buffer::capacity).sum::<usize>();
         let nulls_size = self.nulls.allocated_size();
 
-        self.map.allocation_size()
+        map_size
             + views_size
             + in_progress_size
             + completed_size
@@ -816,13 +817,11 @@ mod tests {
         assert_eq!(set.len(), 10);
     }
 
-    /// The bytes a hashbrown table of `buckets` buckets must allocate for
-    /// entries of type `T`, ignoring the alignment padding and the trailing
-    /// group. Derived independently of the production accounting so it can
-    /// bracket it.
-    fn min_table_bytes<T>(buckets: usize) -> usize {
-        // One entry slot plus one control byte per bucket.
-        buckets * (size_of::<T>() + 1)
+    /// A lower bound on the bytes a hashbrown table holding `entries` entries
+    /// of type `T` must allocate: one entry slot and one control byte each.
+    /// Derived independently of the production accounting so it can bracket it.
+    fn min_table_bytes<T>(entries: usize) -> usize {
+        entries * (size_of::<T>() + 1)
     }
 
     #[test]

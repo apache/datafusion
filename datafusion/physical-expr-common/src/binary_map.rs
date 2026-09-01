@@ -711,13 +711,11 @@ mod tests {
     use arrow::array::{BinaryArray, LargeBinaryArray, StringArray};
     use std::collections::HashMap;
 
-    /// The bytes a hashbrown table of `buckets` buckets must allocate for
-    /// entries of type `T`, ignoring the alignment padding and the trailing
-    /// group. Derived independently of the production accounting so it can
-    /// bracket it.
-    fn min_table_bytes<T>(buckets: usize) -> usize {
-        // One entry slot plus one control byte per bucket.
-        buckets * (size_of::<T>() + 1)
+    /// A lower bound on the bytes a hashbrown table holding `entries` entries
+    /// of type `T` must allocate: one entry slot and one control byte each.
+    /// Derived independently of the production accounting so it can bracket it.
+    fn min_table_bytes<T>(entries: usize) -> usize {
+        entries * (size_of::<T>() + 1)
     }
 
     #[test]
