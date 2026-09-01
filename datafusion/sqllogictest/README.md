@@ -397,9 +397,9 @@ generated DataFusion logical plan (SQL statement → DF logical → Substrait �
 Not all statements will be round-tripped, some statements like CREATE, INSERT, SET or EXPLAIN statements will be
 issued as is, but any other statement will be round-tripped to/from Substrait.
 
-_WARNING_: this mode lives behind the `substrait` feature, and it still reports failures, so it is not enforced
-in the CI and needs to be run manually. Some of the failures are collected in
-https://github.com/apache/datafusion/issues/16248.
+_WARNING_: this mode lives behind the `substrait` feature, and the full suite still reports failures. CI therefore
+runs it over a single file, through `cargo xtask ci step test substrait`, which filters to `limit.slt`. Some of the
+failures are collected in https://github.com/apache/datafusion/issues/16248. To run it over every file:
 
 ```shell
 cargo test --test sqllogictests --features substrait -- --substrait-round-trip
