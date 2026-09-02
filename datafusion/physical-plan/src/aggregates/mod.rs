@@ -858,7 +858,20 @@ pub struct AggregateExec {
     /// FILTER (WHERE clause) expression for each aggregate expression
     /// The same reason to [`Arc`] it as for [`Self::group_by`].
     filter_expr: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
-    /// Configuration for limit-based optimizations
+    /// Soft limit for best-effort, limit-based optimizations.
+    ///
+    /// `AggregateExec` has multiple stream implementations and not all of them
+    /// support the optimization, so this is only a hint. The downstream limit
+    /// operator enforces the exact row count either way.
+    ///
+    /// Supported by:
+    /// - [`StreamType::GroupedPriorityQueue`]: retains only the best `limit`
+    ///   groups per partition (this stream is selected only when a limit is set)
+    /// - [`StreamType::PartialHash`], [`StreamType::FinalHash`] and the legacy
+    ///   [`StreamType::GroupedHash`]: stop reading input once `limit` groups
+    ///   have been accumulated
+    ///
+    /// The remaining streams consume all input.
     limit_options: Option<LimitOptions>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
@@ -1292,7 +1305,6 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_ordered_partial_aggregate_stream(
@@ -1302,22 +1314,19 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode == InputOrderMode::Linear
+        ) && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
 
     fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::PartialReduce
-            && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
@@ -1327,8 +1336,7 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode == InputOrderMode::Linear
+        ) && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
     }
 
@@ -1336,8 +1344,7 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode != InputOrderMode::Linear
+        ) && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
     }
 
@@ -1345,15 +1352,9 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode != InputOrderMode::Linear
+        ) && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
-    }
-
-    /// See comments in `PartialHashAggregateStream` limit optimization section
-    fn limit_options_supported_by_hash_stream(&self) -> bool {
-        self.limit_options.is_none() || self.is_unordered_unfiltered_group_by_distinct()
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
