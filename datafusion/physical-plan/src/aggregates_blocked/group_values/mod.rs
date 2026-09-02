@@ -49,11 +49,13 @@ use crate::aggregates_blocked::{
 
 mod metrics;
 mod null_builder;
+mod single_group_by;
 
 pub(crate) use metrics::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics,
 };
+use single_group_by::boolean::GroupValuesBoolean;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -281,6 +283,15 @@ pub fn new_group_values(
     group_ordering: &GroupOrdering,
     block_size: usize,
 ) -> Result<Box<dyn BlockedGroupValues>> {
+    if schema.fields().len() == 1 {
+        match schema.fields()[0].data_type() {
+            DataType::Boolean => {
+                return Ok(Box::new(GroupValuesBoolean::new(block_size)));
+            }
+            _ => {}
+        }
+    }
+
     let mapped_group_ordering: crate::aggregates::order::GroupOrdering = group_ordering.clone().into();
     let mapped = crate::aggregates::group_values::new_group_values(schema, &mapped_group_ordering)?;
     Ok(Box::new(BlockedGroupValuesAdapter::new(block_size, mapped)))
