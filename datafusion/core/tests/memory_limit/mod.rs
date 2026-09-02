@@ -26,9 +26,13 @@ mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
 mod view_spill_compaction;
-use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
+use arrow::array::{
+    ArrayRef, DictionaryArray, Int32Array, Int64Array, Int64Builder, ListBuilder,
+    RecordBatch, StringViewArray, StructArray,
+};
+use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Int32Type, SchemaRef};
+use arrow::datatypes::{Fields, Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
 use datafusion::config::SpillCompression;
@@ -43,6 +47,7 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::Session;
 use datafusion_catalog::streaming::StreamingTable;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::{Result, assert_contains};
 use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
@@ -133,7 +138,6 @@ async fn group_by_hash() {
 #[cfg(not(feature = "force_hash_collisions"))]
 mod count_distinct_spill {
     use super::*;
-    use arrow::array::Int64Array;
     use datafusion::assert_batches_sorted_eq;
 
     /// `count(distinct)` over integers under a memory limit.
@@ -218,6 +222,117 @@ mod count_distinct_spill {
         expected.push("+------+------+");
         assert_batches_sorted_eq!(expected, &batches);
     }
+}
+
+/// `GROUP BY` on a single nested key in the legacy `GroupedHashAggregateStream`
+/// under a memory limit.
+///
+/// After spilling, the legacy stream re-aggregates the merged spill files with
+/// `GroupOrderingFull`, which requires group ids in first-seen order. A single
+/// nested key has no specialized single-column group values implementation and
+/// is handled by the multi-column one, whose vectorized interning does not
+/// guarantee that order. If the stream keeps that implementation for the merge
+/// phase, groups are emitted while still in progress and come out duplicated.
+const NESTED_KEY_ROWS: usize = 200_000;
+const NESTED_KEY_GROUPS: i64 = 16;
+const NESTED_KEY_BATCH_ROWS: usize = 8_192;
+
+/// Small enough that the final stages must spill their `count(distinct)`
+/// state, large enough for the merge of the spilled runs. A `FairSpillPool`
+/// caps every stage at its share, so the partial stages emit early and the
+/// final stages spill repeatedly, which produces the many small merged batches
+/// this bug needs.
+const NESTED_KEY_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
+
+fn nested_key_struct_fields() -> Fields {
+    Fields::from(vec![
+        Field::new("list", DataType::new_list(DataType::Int64, true), true),
+        Field::new("num", DataType::Int64, true),
+    ])
+}
+
+/// `st` is mostly `{list: [g, g + 1], num: g}` for group `g`, with a sprinkle
+/// of null lists, empty lists, null nums and null structs so that keys of
+/// different shapes meet in the same batches. `v` is unique.
+fn nested_key_table() -> MemTable {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new_struct("st", nested_key_struct_fields(), true),
+        Field::new("v", DataType::Int64, false),
+    ]));
+    let batches = (0..NESTED_KEY_ROWS)
+        .step_by(NESTED_KEY_BATCH_ROWS)
+        .map(|start| {
+            let rows = start..(start + NESTED_KEY_BATCH_ROWS).min(NESTED_KEY_ROWS);
+            let mut list = ListBuilder::new(Int64Builder::new());
+            let mut num = Vec::with_capacity(rows.len());
+            let mut valid = Vec::with_capacity(rows.len());
+            for row in rows.clone() {
+                let group = row as i64 % NESTED_KEY_GROUPS;
+                match row % 37 {
+                    0 => list.append_null(),
+                    1 => list.append(true),
+                    _ => {
+                        list.values().append_value(group);
+                        list.values().append_value(group + 1);
+                        list.append(true);
+                    }
+                }
+                num.push((row % 41 != 0).then_some(group));
+                valid.push(row % 43 != 0);
+            }
+            let st = StructArray::new(
+                nested_key_struct_fields(),
+                vec![Arc::new(list.finish()), Arc::new(Int64Array::from(num))],
+                Some(NullBuffer::from(valid)),
+            );
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(st),
+                    Arc::new(Int64Array::from_iter_values(rows.map(|row| row as i64))),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    MemTable::try_new(schema, vec![batches]).unwrap()
+}
+
+const NESTED_KEY_QUERY: &str = "select st, count(v), count(distinct v), sum(v), avg(v), min(v), max(v) \
+                     from t group by st";
+
+/// Runs the query on the legacy stream, with or without a memory limit.
+async fn run_nested_key_query(memory_limit: Option<usize>) -> String {
+    let mut runtime =
+        RuntimeEnvBuilder::new().with_disk_manager_builder(DiskManagerBuilder::default());
+    if let Some(limit) = memory_limit {
+        runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
+    }
+    let config = SessionConfig::new()
+        .with_target_partitions(4)
+        // small batches: the merged spill stream arrives in many batches and
+        // groups span batch boundaries
+        .with_batch_size(64)
+        .set_bool("datafusion.execution.enable_migration_aggregate", false);
+    let ctx = SessionContext::new_with_config_rt(config, runtime.build_arc().unwrap());
+    ctx.register_table("t", Arc::new(nested_key_table()))
+        .unwrap();
+    let batches = ctx
+        .sql(NESTED_KEY_QUERY)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    batches_to_sort_string(&batches)
+}
+
+#[tokio::test]
+async fn legacy_stream_nested_key_spill_keeps_groups_unique() {
+    let expected = run_nested_key_query(None).await;
+    let actual = run_nested_key_query(Some(NESTED_KEY_MEMORY_LIMIT)).await;
+    // A duplicated group shows up as extra rows with the counts split
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test]
