@@ -61,6 +61,113 @@ subsequent join processing time.
 | avg_fanout              | Average number of build-side join-key matches per matched probe-side row before applying any join filter. |
 | array_map_created_count | Number of times `HashJoinExec` created an `ArrayMap` for perfect hash join lookup execution.              |
 
+### AggregateExec
+
+`AggregateExec` exposes the common `BaselineMetrics`, the operator-level
+metrics below, and a timer per aggregate expression and execution phase.
+
+| Metric                     | Description                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| time_calculating_group_ids | Time spent preparing group keys; see the note below for path-specific coverage.                                                       |
+| aggregate_arguments_time   | Total time spent evaluating the inputs to the aggregate functions. `agg_expr_{index}_arguments_time` breaks this down per expression. |
+| aggregation_time           | Time spent invoking accumulator `update` and `merge` operations.                                                                      |
+| emitting_time              | Time spent materializing group values and accumulator `state` or `evaluate` results.                                                  |
+| topk_maintenance_time      | Time spent maintaining Grouped TopK's priority map, including batch setup, insertion, comparison, and NULL handling.                  |
+| skipped_aggregation_rows   | Number of input rows passed through without aggregating them, when partial aggregation is skipped.                                    |
+| reduction_factor           | Rows emitted per row consumed by a partial aggregation, displayed as `66.67% (2/3)`.                                                  |
+| spill_count                | Number of spill files written when the aggregation exceeds its memory budget.                                                         |
+| spilled_bytes              | Total number of bytes written to spill files.                                                                                         |
+| spilled_rows               | Total number of rows written to spill files.                                                                                          |
+| peak_mem_used              | Peak tracked memory held by the grouped aggregation, in bytes; recorded by the fallback grouped hash path only.                       |
+
+These operator-level metrics are recorded by the grouped aggregation paths
+only: an `AggregateExec` without a `GROUP BY` reports just `BaselineMetrics`
+and the per-aggregate timers. `reduction_factor` and `skipped_aggregation_rows`
+are recorded in partial mode only. `skipped_aggregation_rows` is recorded only
+when partial-aggregation skipping is enabled for a single, non-grouping-sets
+`GROUP BY`; a `datafusion.execution.skip_partial_aggregation_probe_ratio_threshold`
+of `>= 1.0` disables the feature.
+
+`time_calculating_group_ids` covers both grouping-expression evaluation and
+resolving the resulting rows to group IDs, including interning and ordering
+setup. `aggregation_time` covers only accumulator `update` and `merge` calls.
+On accumulator-backed grouped aggregation paths, `state` and `evaluate` are
+included in `emitting_time`, including when partial aggregation materializes
+state under memory pressure. For an `AggregateExec` without a `GROUP BY`, the
+per-aggregate `state` and `evaluate` timers are recorded during
+`elapsed_compute`; it does not report grouped operator metrics such as
+`emitting_time`. Partial aggregation that skips aggregation reports
+`convert_to_state` instead of `aggregation_time` for those rows.
+
+When the specialized Grouped TopK path is selected for a limited grouped
+aggregate, it has no accumulators. Its group-key expression evaluation is
+included in `time_calculating_group_ids`, and its priority-map work is reported
+by `topk_maintenance_time`; it does not report accumulator phases. Planner
+selection is query-shape dependent: a limited `DISTINCT` query without
+ordering requirements uses the regular aggregate path instead.
+
+The per-aggregate timers are named `agg_expr_{index}_{phase}_time`, where
+`index` is the zero-based position of an aggregate expression in the operator
+and `phase` is one of the following:
+
+| Phase              | Description                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| `arguments`        | Evaluating the aggregate's argument expressions into input arrays.                            |
+| `update`           | Updating an accumulator from raw input values.                                                |
+| `merge`            | Merging partial accumulator states.                                                           |
+| `state`            | Obtaining an accumulator's intermediate state for partial output or aggregate spilling.       |
+| `convert_to_state` | Converting raw aggregate inputs directly to partial state without normal accumulator updates. |
+| `evaluate`         | Evaluating an accumulator to its final result.                                                |
+
+For example, when a partial stage is planned, the partial `AggregateExec` for
+`SELECT SUM(a), SUM(b) FROM t` reports `agg_expr_0_arguments_time` and
+`agg_expr_0_update_time` for `SUM(a)`,
+and `agg_expr_1_arguments_time` and `agg_expr_1_update_time` for `SUM(b)`. The
+index is positional and refers to the same position in the `aggr=[...]` list
+printed on the operator's plan line, which is how an indexed timer is mapped
+back to an aggregate expression. Because the index is part of the metric name,
+otherwise identical functions over different columns stay distinct when
+per-partition metrics are combined.
+
+Each per-aggregate timer additionally carries an `aggregate` label holding the
+rendered aggregate expression (for example, `sum(t.a)`). Combining metrics
+across partitions drops labels, so this label is only shown in the "Plan with
+Full Metrics" section of `EXPLAIN ANALYZE VERBOSE`, which reports metrics per
+partition.
+
+`arguments` is recorded in every mode. The accumulator phases that are present
+depend on the aggregate mode and implementation. For non-grouped aggregation,
+partial mode records `update` and `state`, partial reduce mode records `merge`
+and `state`, final mode records `merge` and `evaluate`, and single mode records
+`update` and `evaluate`. Hash aggregation uses `update`, `state`, and
+`convert_to_state` in partial mode; `merge` and `state` in partial-reduce mode;
+`merge`, `state`, and `evaluate` in final mode; and `update`, `state`, `merge`,
+and `evaluate` in single mode. Its `state` timers measure intermediate-state
+emission, including during spilling. The grouped TopK aggregate path records
+only the per-aggregate `arguments` timer, because it maintains values directly
+rather than using accumulators.
+
+Where an aggregate has a `FILTER` clause, its evaluation is included in
+`aggregate_arguments_time`. Per-aggregate `arguments` timers include the filter
+when it is evaluated per aggregate. The legacy grouped hash path evaluates
+filters collectively, so its per-aggregate `arguments` timers cover argument
+expressions only; their sum need not equal `aggregate_arguments_time`.
+
+Except for the `Summary` metric `reduction_factor`, these operator-level and
+per-aggregate metrics are `Dev` metrics. They appear in `EXPLAIN ANALYZE` when
+`datafusion.explain.analyze_level` includes `Dev` (the default), but are omitted
+at the `Summary` level. The normal display combines partitions; use `EXPLAIN ANALYZE VERBOSE` to additionally show the per-partition values together with
+each per-aggregate timer's `aggregate` label. For a query
+such as the following, the per-expression metrics stay readable, and the
+operator's `aggr=[...]` list names the aggregate behind each timer index:
+
+```sql
+EXPLAIN ANALYZE
+SELECT k, SUM(a), SUM(b), COUNT(c)
+FROM t
+GROUP BY k;
+```
+
 ## TODO
 
 Add metrics for the remaining operators
