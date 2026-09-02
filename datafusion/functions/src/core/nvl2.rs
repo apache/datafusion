@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::unanimous_metadata;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -96,13 +96,12 @@ impl ScalarUDFImpl for NVL2Func {
             args.arg_fields[1].is_nullable() || args.arg_fields[2].is_nullable();
         let return_type = args.arg_fields[1].data_type().clone();
         // The result value comes from the second or third argument; propagate
-        // field metadata (e.g. Arrow extension types) only when they agree on
-        // it. The first argument is only tested for NULL and does not
-        // contribute a value.
+        // field metadata (e.g. Arrow extension types) from them. The first
+        // argument is only tested for NULL and does not contribute a value.
         let metadata =
-            unanimous_metadata(args.arg_fields[1..3].iter().map(|f| f.as_ref()));
-        Ok(Field::new(self.name(), return_type, nullable)
-            .with_metadata(metadata)
+            coerced_fields_metadata(args.arg_fields[1..3].iter().map(|f| f.as_ref()));
+        Ok(metadata
+            .add_to_field(Field::new(self.name(), return_type, nullable))
             .into())
     }
 
@@ -197,13 +196,16 @@ mod tests {
     }
 
     #[test]
-    fn drops_metadata_when_value_arguments_disagree() {
+    fn first_value_argument_metadata_wins_when_they_disagree() {
         let ret = return_field(&[
             Arc::new(Field::new("test", DataType::Boolean, true)),
             ext_field("if_non_null", DataType::Binary, "geoarrow.wkb"),
-            Arc::new(Field::new("if_null", DataType::Binary, true)),
+            ext_field("if_null", DataType::Binary, "unrelated.type"),
         ]);
         assert_eq!(ret.data_type(), &DataType::Binary);
-        assert!(ret.metadata().is_empty());
+        assert_eq!(
+            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
+            Some("geoarrow.wkb")
+        );
     }
 }

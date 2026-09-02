@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::unanimous_metadata;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::conditional_expressions::CaseBuilder;
@@ -87,11 +87,13 @@ impl ScalarUDFImpl for CoalesceFunc {
             .find_or_first(|d| !d.is_null())
             .unwrap()
             .clone();
-        // Propagate field metadata (e.g. Arrow extension types) only when the
-        // arguments that can supply a value agree on it.
-        let metadata = unanimous_metadata(args.arg_fields.iter().map(|f| f.as_ref()));
-        Ok(Field::new(self.name(), return_type, nullable)
-            .with_metadata(metadata)
+        // Propagate field metadata (e.g. Arrow extension types) from the
+        // arguments that can supply a value; see `coerced_fields_metadata`
+        // for why the arguments are not required to agree on it.
+        let metadata =
+            coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()));
+        Ok(metadata
+            .add_to_field(Field::new(self.name(), return_type, nullable))
             .into())
     }
 
@@ -199,7 +201,7 @@ mod tests {
     #[test]
     fn null_literal_argument_does_not_block_metadata() {
         // An untyped NULL argument carries no metadata but cannot contribute
-        // a typed value either, so it does not participate in the agreement.
+        // a typed value either, so it is skipped when picking the metadata.
         let ret = return_field(&[
             field("null", DataType::Null, true),
             ext_field("b", DataType::Binary, "geoarrow.wkb"),
@@ -212,13 +214,29 @@ mod tests {
     }
 
     #[test]
-    fn drops_metadata_when_arguments_disagree() {
+    fn first_metadata_wins_when_arguments_disagree() {
         let ret = return_field(&[
             ext_field("a", DataType::Binary, "geoarrow.wkb"),
-            field("plain", DataType::Binary, true),
+            ext_field("b", DataType::Binary, "unrelated.type"),
         ]);
         assert_eq!(ret.data_type(), &DataType::Binary);
-        assert!(ret.metadata().is_empty());
+        assert_eq!(
+            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
+            Some("geoarrow.wkb")
+        );
+    }
+
+    #[test]
+    fn plain_argument_does_not_block_later_metadata() {
+        let ret = return_field(&[
+            field("plain", DataType::Binary, true),
+            ext_field("b", DataType::Binary, "geoarrow.wkb"),
+        ]);
+        assert_eq!(ret.data_type(), &DataType::Binary);
+        assert_eq!(
+            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
+            Some("geoarrow.wkb")
+        );
     }
 
     #[test]
