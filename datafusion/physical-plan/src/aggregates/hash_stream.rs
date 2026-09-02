@@ -32,7 +32,10 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
+use datafusion_common::{
+    DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
+    internal_err,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -1040,7 +1043,7 @@ impl FinalHashAggregateStream {
     ///
     /// See comments in [`FinalHashAggregateStream`] for high-level ideas.
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
-        async_try_stream(|mut emitter| async move {
+        async_try_stream(|emitter| async move {
             let mut hash_table = self
                 .hash_table
                 .take()
@@ -1054,35 +1057,12 @@ impl FinalHashAggregateStream {
 
             match spill_context.filter(|s| s.has_spills()) {
                 // - If spilled before, perform merging spill runs
-                Some(mut spill_context) => {
-                    // perform merging spill runs
-
-                    // Input was exhausted after spilling. Spill the last in-memory run
-                    {
-                        let elapsed_compute =
-                            self.baseline_metrics.elapsed_compute().clone();
-                        let _timer = elapsed_compute.timer();
-                        spill_context.spill_table(&mut hash_table)?;
-                    }
-
-                    // Construct the ordered input used to merge all spill files.
-                    let mut output_stream =
-                        self.switch_to_ordered_final_stream(hash_table, spill_context)?;
-
-                    // Forwards output from the fully ordered stream that consumes the merged
-                    // spill runs.
-                    //
-                    // Not wrapping in a timer and not record output batches since this is now `merge_stream` responsibility
-                    // we just pass through
-                    while let Some(batch) = output_stream.next().await.transpose()? {
-                        emitter.emit(batch).await;
-                    }
+                Some(spill_context) => {
+                    self.produce_output_from_spills(hash_table, spill_context, emitter)
+                        .await?
                 }
                 // Either all the input fit in memory or hit soft group limit with no spilling
-                None => {
-                    hash_table.start_output()?;
-                    self.produce_output(hash_table, emitter).await?;
-                }
+                None => self.produce_output(hash_table, emitter).await?,
             }
 
             Ok(())
@@ -1130,6 +1110,7 @@ impl FinalHashAggregateStream {
         spill_context: &mut Option<Box<FinalSpillContext>>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
             hash_table.aggregate_batch(&batch)?;
@@ -1159,18 +1140,16 @@ impl FinalHashAggregateStream {
                 // Move all current states into one fully group-key-sorted spill run.
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                     // OOM and don't support spilling from configuration
-                    let Some(spill_context) = spill_context.as_mut() else {
-                        return Err(e.context(
-                                    "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
-                                ));
-                    };
+                    let spill_context = spill_context.as_mut().ok_or_else(|| e.context(
+                        "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
+                    ))?;
 
                     // Sanity check: impossible to OOM when there is no group aggregated.
-                    if hash_table.building_group_count() == 0 {
-                        return internal_err!(
-                            "Final hash aggregate ran out of memory with no aggregated groups"
-                        );
-                    }
+                    assert_ne_or_internal_err!(
+                        hash_table.building_group_count(),
+                        0,
+                        "Final hash aggregate ran out of memory with no aggregated groups"
+                    );
 
                     // Sorts and spills one complete in-memory state run
 
@@ -1180,12 +1159,13 @@ impl FinalHashAggregateStream {
 
                     // Spilling shrinks the aggregate table and releases its accumulated
                     // memory. Update the reservation accordingly.
-                    if let Err(e) = self.reservation.try_resize(hash_table.memory_size())
-                    {
-                        return Err(e.context(
-                            "Decreasing allocation after spilling should succeed",
-                        ));
-                    }
+                    self.reservation
+                        .try_resize(hash_table.memory_size())
+                        .map_err(|e| {
+                            e.context(
+                                "Decreasing allocation after spilling should succeed",
+                            )
+                        })?;
 
                     result?;
 
@@ -1193,6 +1173,40 @@ impl FinalHashAggregateStream {
                 }
                 Err(e) => return Err(e),
             }
+        }
+
+        Ok(())
+    }
+
+    /// Produce output from spills
+    /// 1. Spill in progress in-memory hash table
+    /// 2. Switch to ordered final stream
+    /// 3. passthrough stream output
+    async fn produce_output_from_spills(
+        &mut self,
+        mut hash_table: AggregateHashTable<FinalMarker>,
+        mut spill_context: Box<FinalSpillContext>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let timer = elapsed_compute.timer();
+
+        // Input was exhausted after spilling. Spill the last in-memory run
+        spill_context.spill_table(&mut hash_table)?;
+
+        // Construct the ordered input used to merge all spill files.
+        let mut output_stream =
+            self.switch_to_ordered_final_stream(hash_table, spill_context)?;
+
+        timer.done();
+
+        // Forwards output from the fully ordered stream that consumes the merged
+        // spill runs.
+        //
+        // Not wrapping in a timer and not record output batches since this is now `merge_stream` responsibility
+        // we just pass through
+        while let Some(batch) = output_stream.next().await.transpose()? {
+            emitter.emit(batch).await;
         }
 
         Ok(())
@@ -1209,9 +1223,6 @@ impl FinalHashAggregateStream {
         hash_table: AggregateHashTable<FinalMarker>,
         spill_context: Box<FinalSpillContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let _timer = elapsed_compute.timer();
-
         let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
         drop(hash_table);
         self.reservation.try_resize(0)?;
@@ -1230,8 +1241,9 @@ impl FinalHashAggregateStream {
         mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-
         let mut timer = elapsed_compute.timer();
+
+        hash_table.start_output()?;
 
         while let Some(batch) = hash_table.next_output_batch()? {
             if hash_table.is_done() {
