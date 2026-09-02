@@ -5087,6 +5087,7 @@ mod tests {
     /// Creates a setup for chunk pruning, modeling a utf8 column "s1"
     /// with 5 different containers (e.g. RowGroups). They have [min,
     /// max]:
+    /// ```text
     /// s1 ["A", "Z"]
     /// s1 ["A", "L"]
     /// s1 ["N", "Z"]
@@ -5096,6 +5097,7 @@ mod tests {
     /// s1 ["", ""]
     /// s1 ["AB", "A\u{10ffff}"]
     /// s1 ["A\u{10ffff}\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]
+    /// ```
     fn utf8_setup() -> (SchemaRef, TestStatistics) {
         let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
 

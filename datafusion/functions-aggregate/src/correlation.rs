@@ -31,7 +31,7 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
 };
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_multiple;
 use log::debug;
 
@@ -305,9 +305,64 @@ pub struct CorrelationGroupsAccumulator {
     sum_yy: Vec<f64>,
 }
 
+fn copy_selected<T: Copy>(selection: GroupSelection<'_>, values: &[T]) -> Vec<T> {
+    debug_assert_eq!(selection.total_num_groups(), values.len());
+    selection.iter().map(|index| values[index]).collect()
+}
+
 impl CorrelationGroupsAccumulator {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    fn evaluate_values(
+        counts: &[u64],
+        sum_xs: &[f64],
+        sum_ys: &[f64],
+        sum_xys: &[f64],
+        sum_xxs: &[f64],
+        sum_yys: &[f64],
+    ) -> ArrayRef {
+        let n = counts.len();
+        let mut values = Vec::with_capacity(n);
+        let mut nulls = NullBufferBuilder::new(n);
+
+        for i in 0..n {
+            let count = counts[i];
+            let sum_x = sum_xs[i];
+            let sum_y = sum_ys[i];
+            let sum_xy = sum_xys[i];
+            let sum_xx = sum_xxs[i];
+            let sum_yy = sum_yys[i];
+
+            // If both inputs are NaN, return NaN. If only one input is NaN,
+            // or there are too few values, return NULL.
+            if sum_x.is_nan() && sum_y.is_nan() {
+                values.push(f64::NAN);
+                nulls.append_non_null();
+                continue;
+            } else if count < 2 || sum_x.is_nan() || sum_y.is_nan() {
+                values.push(0.0);
+                nulls.append_null();
+                continue;
+            }
+
+            let mean_x = sum_x / count as f64;
+            let mean_y = sum_y / count as f64;
+            let numerator = sum_xy - sum_x * mean_y;
+            let denominator =
+                ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
+
+            if denominator == 0.0 {
+                values.push(0.0);
+                nulls.append_null();
+            } else {
+                values.push(numerator / denominator);
+                nulls.append_non_null();
+            }
+        }
+
+        Arc::new(Float64Array::new(values.into(), nulls.finish()))
     }
 }
 
@@ -409,65 +464,30 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        // Drain the state vectors for the groups being emitted
-        let counts = emit_to.take_needed(&mut self.count);
-        let sum_xs = emit_to.take_needed(&mut self.sum_x);
-        let sum_ys = emit_to.take_needed(&mut self.sum_y);
-        let sum_xys = emit_to.take_needed(&mut self.sum_xy);
-        let sum_xxs = emit_to.take_needed(&mut self.sum_xx);
-        let sum_yys = emit_to.take_needed(&mut self.sum_yy);
+        Ok(Self::evaluate_values(
+            &emit_to.take_needed(&mut self.count),
+            &emit_to.take_needed(&mut self.sum_x),
+            &emit_to.take_needed(&mut self.sum_y),
+            &emit_to.take_needed(&mut self.sum_xy),
+            &emit_to.take_needed(&mut self.sum_xx),
+            &emit_to.take_needed(&mut self.sum_yy),
+        ))
+    }
 
-        let n = counts.len();
-        let mut values = Vec::with_capacity(n);
-        let mut nulls = NullBufferBuilder::new(n);
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.count.len())?;
+        Ok(Self::evaluate_values(
+            &copy_selected(selection, &self.count),
+            &copy_selected(selection, &self.sum_x),
+            &copy_selected(selection, &self.sum_y),
+            &copy_selected(selection, &self.sum_xy),
+            &copy_selected(selection, &self.sum_xx),
+            &copy_selected(selection, &self.sum_yy),
+        ))
+    }
 
-        // Notes for `Null` handling:
-        // - If the `count` state of a group is 0, no valid records are accumulated
-        //   for this group, so the aggregation result is `Null`.
-        // - Correlation can't be calculated when a group only has 1 record, or when
-        //   the `denominator` state is 0. In these cases, the final aggregation
-        //   result should be `Null` (according to PostgreSQL's behavior).
-        // - However, if any of the accumulated values contain NaN, the result should
-        //   be NaN regardless of the count (even for single-row groups).
-        for i in 0..n {
-            let count = counts[i];
-            let sum_x = sum_xs[i];
-            let sum_y = sum_ys[i];
-            let sum_xy = sum_xys[i];
-            let sum_xx = sum_xxs[i];
-            let sum_yy = sum_yys[i];
-
-            // If BOTH sum_x AND sum_y are NaN, then both input values are NaN → return NaN
-            // If only ONE of them is NaN, then only one input value is NaN → return NULL
-            if sum_x.is_nan() && sum_y.is_nan() {
-                // Both inputs are NaN → return NaN
-                values.push(f64::NAN);
-                nulls.append_non_null();
-                continue;
-            } else if count < 2 || sum_x.is_nan() || sum_y.is_nan() {
-                // Only one input is NaN → return NULL
-                values.push(0.0);
-                nulls.append_null();
-                continue;
-            }
-
-            let mean_x = sum_x / count as f64;
-            let mean_y = sum_y / count as f64;
-
-            let numerator = sum_xy - sum_x * mean_y;
-            let denominator =
-                ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
-
-            if denominator == 0.0 {
-                values.push(0.0);
-                nulls.append_null();
-            } else {
-                values.push(numerator / denominator);
-                nulls.append_non_null();
-            }
-        }
-
-        Ok(Arc::new(Float64Array::new(values.into(), nulls.finish())))
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -539,6 +559,25 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             Arc::new(Float64Array::from(sum_yy)),
         ])
     }
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.count.len())?;
+        Ok(vec![
+            Arc::new(UInt64Array::from(copy_selected(selection, &self.count))),
+            Arc::new(Float64Array::from(copy_selected(selection, &self.sum_x))),
+            Arc::new(Float64Array::from(copy_selected(selection, &self.sum_y))),
+            Arc::new(Float64Array::from(copy_selected(selection, &self.sum_xy))),
+            Arc::new(Float64Array::from(copy_selected(selection, &self.sum_xx))),
+            Arc::new(Float64Array::from(copy_selected(selection, &self.sum_yy))),
+        ])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
+    }
+
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
@@ -642,6 +681,71 @@ mod tests {
             )
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn correlation_groups_preserving_reads() -> Result<()> {
+        let mut accumulator = CorrelationGroupsAccumulator::new();
+        let x = Arc::new(Float64Array::from(vec![1.0, 2.0, 1.0, 1.0, 2.0]));
+        let y = Arc::new(Float64Array::from(vec![2.0, 4.0, 2.0, 3.0, 1.0]));
+        accumulator.update_batch(&[x, y], &[0, 0, 1, 2, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected = Float64Array::from(vec![Some(-1.0), Some(1.0), None, Some(-1.0)]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_primitive::<Float64Type>(),
+                &expected
+            );
+            let state = accumulator.state_preserving(selection)?;
+            assert_eq!(state.len(), 6);
+            assert_eq!(
+                state[0].as_primitive::<UInt64Type>(),
+                &UInt64Array::from(vec![2, 2, 0, 2])
+            );
+            assert_eq!(
+                state[1].as_primitive::<Float64Type>(),
+                &Float64Array::from(vec![3.0, 3.0, 0.0, 3.0])
+            );
+            assert_eq!(
+                state[2].as_primitive::<Float64Type>(),
+                &Float64Array::from(vec![4.0, 6.0, 0.0, 4.0])
+            );
+            assert_eq!(
+                state[3].as_primitive::<Float64Type>(),
+                &Float64Array::from(vec![5.0, 10.0, 0.0, 5.0])
+            );
+            assert_eq!(
+                state[4].as_primitive::<Float64Type>(),
+                &Float64Array::from(vec![5.0, 5.0, 0.0, 5.0])
+            );
+            assert_eq!(
+                state[5].as_primitive::<Float64Type>(),
+                &Float64Array::from(vec![10.0, 20.0, 0.0, 10.0])
+            );
+        }
+
+        let empty_selection = GroupSelection::try_from_indices(&[], 4)?;
+        assert!(accumulator.evaluate_preserving(empty_selection)?.is_empty());
+        assert!(
+            accumulator
+                .state_preserving(empty_selection)?
+                .iter()
+                .all(|array| array.is_empty())
+        );
+
+        let x = Arc::new(Float64Array::from(vec![2.0, 1.0, 4.0]));
+        let y = Arc::new(Float64Array::from(vec![4.0, 2.0, 8.0]));
+        accumulator.update_batch(&[x, y], &[1, 3, 3], None, 4)?;
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_primitive::<Float64Type>(),
+            &Float64Array::from(vec![1.0, 1.0, -1.0, 1.0])
+        );
+        Ok(())
     }
 
     #[test]

@@ -73,12 +73,7 @@ pub async fn exec_from_lines(
 
     for line in reader.lines() {
         match line {
-            Ok(line) if line.starts_with("#!") => {
-                continue;
-            }
-            Ok(line) if line.starts_with("--") => {
-                continue;
-            }
+            Ok(line) if line.starts_with("#!") || line.starts_with("--") => {}
             Ok(line) => {
                 let line = line.trim_end();
                 query.push_str(line);
@@ -197,7 +192,6 @@ pub async fn exec_from_repl(
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
                 rl.helper().unwrap().reset_hint();
-                continue;
             }
             Err(ReadlineError::Eof) => {
                 println!("\\q");
