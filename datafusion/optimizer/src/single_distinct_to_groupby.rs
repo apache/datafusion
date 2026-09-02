@@ -23,10 +23,12 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    DataFusionError, HashSet, Result, assert_eq_or_internal_err, tree_node::Transformed,
+    DFSchema, DataFusionError, HashSet, Result, assert_eq_or_internal_err,
+    tree_node::Transformed,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
+use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
     AggregateUDF, Expr, col,
     expr::AggregateFunction,
@@ -78,6 +80,9 @@ use datafusion_expr::{
 /// The `CASE` covers the one input on which the two phases disagree: over an
 /// empty input the inner group by produces no rows at all, and a `sum` of no
 /// rows is NULL where `count` is 0.
+///
+/// That `count` is allowed only when the distinct argument has no specialized
+/// `GroupsAccumulator` of its own. See [`rewrite_pays_for_count`].
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -120,10 +125,13 @@ impl CountRollup {
 /// Check whether all aggregate exprs are distinct on a single field.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
+    input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
+    let mut distinct_aggs = vec![];
+    let mut has_count_rollup = false;
     for expr in aggr_expr {
         if let Expr::AggregateFunction(AggregateFunction {
             func,
@@ -145,10 +153,12 @@ fn is_single_distinct_agg(
                 for e in args {
                     fields_set.insert(e);
                 }
+                distinct_aggs.push((func, args));
+            } else if count_rollup.is_some_and(|rollup| rollup.is_count(func)) {
+                has_count_rollup = true;
             } else if func.name() != "sum"
                 && func.name().to_lowercase() != "min"
                 && func.name().to_lowercase() != "max"
-                && !count_rollup.is_some_and(|rollup| rollup.is_count(func))
             {
                 return Ok(false);
             }
@@ -156,7 +166,45 @@ fn is_single_distinct_agg(
             return Ok(false);
         }
     }
-    Ok(aggregate_count == aggr_expr.len() && fields_set.len() == 1)
+    if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
+        return Ok(false);
+    }
+    if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Whether the rewrite is worth extending to a plan that only qualifies because
+/// of the non-distinct `count`.
+///
+/// The rewrite is not free: every other aggregate moves down to the inner group
+/// by, which has a row per `(group, distinct value)` pair rather than per group,
+/// and each one keeps its state at that finer grain. What pays for it is taking
+/// the distinct aggregate off `GroupsAccumulatorAdapter`, whose one boxed
+/// accumulator per group is the expensive shape. A distinct aggregate that
+/// already has a specialized `GroupsAccumulator` never went near the adapter, so
+/// there is nothing to buy and only the inner group by to pay for: ClickBench
+/// Q22, whose `count(DISTINCT "UserID")` is over an `Int64`, measured a 132%
+/// increase in peak memory pool reservation when the rewrite applied to it.
+///
+/// The existing tolerance of a non-distinct `sum`, `min` or `max` predates this
+/// and is left alone: narrowing it would change plans that have always been
+/// rewritten, which no measurement here calls for.
+fn rewrite_pays_for_count(
+    distinct_aggs: &[(&Arc<AggregateUDF>, &Vec<Expr>)],
+    input_schema: &DFSchema,
+) -> Result<bool> {
+    for (func, args) in distinct_aggs {
+        let arg_types = args
+            .iter()
+            .map(|arg| arg.get_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        if !func.groups_accumulator_supported_for_types(&arg_types, true) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Check if the first expr is [Expr::GroupingSet].
@@ -193,8 +241,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 schema,
                 group_expr,
                 ..
-            }) if is_single_distinct_agg(&aggr_expr, count_rollup.as_ref())?
-                && !contains_grouping_set(&group_expr) =>
+            }) if is_single_distinct_agg(
+                &aggr_expr,
+                input.schema(),
+                count_rollup.as_ref(),
+            )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
                 // alias all original group_by exprs
@@ -387,13 +438,17 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
     use crate::{Optimizer, OptimizerContext};
+    use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
     use datafusion_common::alias::AliasGenerator;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::registry::{FunctionRegistry, MemoryFunctionRegistry};
-    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
+    use datafusion_expr::{
+        lit,
+        logical_plan::builder::{LogicalPlanBuilder, table_scan},
+    };
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
     use datafusion_functions_aggregate::min_max::max_udaf;
@@ -419,6 +474,20 @@ mod tests {
             vec![],
             None,
         ))
+    }
+
+    /// `test` with a `Utf8` `b`, the column the distinct aggregate reads.
+    ///
+    /// `count(DISTINCT b)` over a string has no specialized
+    /// `GroupsAccumulator`, so it is the case a non-distinct `count` may join.
+    /// The `UInt32` `b` of [`test_table_scan`] is the case it may not.
+    fn test_table_scan_utf8_b() -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        table_scan(Some("test"), &schema, None)?.build()
     }
 
     /// An [`OptimizerConfig`] that resolves functions the way a session does.
@@ -667,7 +736,7 @@ mod tests {
 
     #[test]
     fn distinct_and_common() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan_utf8_b()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
@@ -683,7 +752,55 @@ mod tests {
             @r"
         Projection: test.a, count(alias1) AS count(DISTINCT test.b), CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(test.c) [a:UInt32, count(DISTINCT test.b):Int64, count(test.c):Int64]
           Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), sum(alias2)]] [a:UInt32, count(alias1):Int64, sum(alias2):Int64;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(test.c) AS alias2]] [a:UInt32, alias1:Utf8, alias2:Int64]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn distinct_and_common_over_a_natively_supported_type() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count_distinct(col("b")), count(col("c"))],
+            )?
+            .build()?;
+
+        // Should not work: `count(DISTINCT b)` over a `UInt32` has its own
+        // `GroupsAccumulator`, so the rewrite would add an inner group-by
+        // without taking anything off `GroupsAccumulatorAdapter`
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, count(test.c):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn distinct_over_a_natively_supported_type_without_a_count() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count_distinct(col("b")), sum(col("c"))],
+            )?
+            .build()?;
+
+        // Should work: the gate covers only the `count` this change added, so a
+        // plan that already qualified through `sum`, `min` or `max` is rewritten
+        // exactly as before
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b), sum(alias2) AS sum(test.c) [a:UInt32, count(DISTINCT test.b):Int64, sum(test.c):UInt64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), sum(alias2)]] [a:UInt32, count(alias1):Int64, sum(alias2):UInt64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
@@ -911,7 +1028,7 @@ mod tests {
 
     #[test]
     fn count_star_and_distinct_without_groupby() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan_utf8_b()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
@@ -928,15 +1045,15 @@ mod tests {
             @r"
         Projection: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), count(alias1) AS count(DISTINCT test.b) [count(Int64(1)):Int64, count(DISTINCT test.b):Int64]
           Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Int64;N, count(alias1):Int64]
-            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [alias1:UInt32, alias2:Int64]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [alias1:Utf8, alias2:Int64]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
     }
 
     #[test]
     fn count_star_min_max_sum_and_distinct_with_groupby() -> Result<()> {
-        let table_scan = test_table_scan()?;
+        let table_scan = test_table_scan_utf8_b()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
@@ -958,8 +1075,8 @@ mod tests {
             @r"
         Projection: test.a, CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), count(alias1) AS count(DISTINCT test.b), min(alias3) AS min(test.c), max(alias4) AS max(test.c), sum(alias5) AS sum(test.c) [a:UInt32, count(Int64(1)):Int64, count(DISTINCT test.b):Int64, min(test.c):UInt32;N, max(test.c):UInt32;N, sum(test.c):UInt64;N]
           Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), count(alias1), min(alias3), max(alias4), sum(alias5)]] [a:UInt32, sum(alias2):Int64;N, count(alias1):Int64, min(alias3):UInt32;N, max(alias4):UInt32;N, sum(alias5):UInt64;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2, min(test.c) AS alias3, max(test.c) AS alias4, sum(test.c) AS alias5]] [a:UInt32, alias1:UInt32, alias2:Int64, alias3:UInt32;N, alias4:UInt32;N, alias5:UInt64;N]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2, min(test.c) AS alias3, max(test.c) AS alias4, sum(test.c) AS alias5]] [a:UInt32, alias1:Utf8, alias2:Int64, alias3:UInt32;N, alias4:UInt32;N, alias5:UInt64;N]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
     }

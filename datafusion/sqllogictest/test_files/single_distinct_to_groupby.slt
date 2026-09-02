@@ -20,25 +20,30 @@
 # asserted twice: once with the optimizer disabled
 # (`datafusion.optimizer.max_passes = 0`, so the aggregate runs as written) and
 # once with it enabled. The two must agree.
+#
+# A non-distinct `count` may only join the distinct aggregate when the distinct
+# argument has no specialized `GroupsAccumulator` of its own. `x` is the
+# `VARCHAR` that qualifies, `xi` the `INT` that does not; both hold the same
+# values so the two sides can be compared directly.
 
 statement ok
-CREATE TABLE t(g INT, x INT, v INT);
+CREATE TABLE t(g INT, x VARCHAR, xi INT, v INT);
 
 # g = 1: four rows, two distinct x, one NULL x, one NULL v
 # g = 2: two rows, x is NULL throughout
 # g = 3: a single row
 statement ok
 INSERT INTO t VALUES
-  (1, 10, 100),
-  (1, 10, NULL),
-  (1, NULL, 5),
-  (1, 20, 7),
-  (2, NULL, NULL),
-  (2, NULL, 3),
-  (3, 30, 1);
+  (1, '10', 10, 100),
+  (1, '10', 10, NULL),
+  (1, NULL, NULL, 5),
+  (1, '20', 20, 7),
+  (2, NULL, NULL, NULL),
+  (2, NULL, NULL, 3),
+  (3, '30', 30, 1);
 
 statement ok
-CREATE TABLE empty_t(g INT, x INT, v INT);
+CREATE TABLE empty_t(g INT, x VARCHAR, xi INT, v INT);
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -87,6 +92,33 @@ logical_plan
 01)Projection: t.g, avg(t.v) AS avg_v, count(DISTINCT t.x) AS distinct_x
 02)--Aggregate: groupBy=[[t.g]], aggr=[[avg(CAST(t.v AS Float64)), count(DISTINCT t.x)]]
 03)----TableScan: t projection=[g, x, v]
+
+########
+# The other side of the gate: a distinct argument that has its own
+# `GroupsAccumulator` keeps the count out
+########
+
+# `count(DISTINCT xi)` over an INT is served by
+# `PrimitiveDistinctCountGroupsAccumulator`, so the rewrite would add an inner
+# group by without taking anything off `GroupsAccumulatorAdapter`
+query TT
+EXPLAIN SELECT g, count(*) AS records, count(DISTINCT xi) AS distinct_xi FROM t GROUP BY g;
+----
+logical_plan
+01)Projection: t.g, count(Int64(1)) AS count(*) AS records, count(DISTINCT t.xi) AS distinct_xi
+02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), count(DISTINCT t.xi)]]
+03)----TableScan: t projection=[g, xi]
+
+# The gate covers only the count. A plan that already qualified through sum,
+# min or max is still rewritten over the same INT column
+query TT
+EXPLAIN SELECT g, sum(v) AS sum_v, count(DISTINCT xi) AS distinct_xi FROM t GROUP BY g;
+----
+logical_plan
+01)Projection: t.g, sum(alias2) AS sum_v, count(alias1) AS distinct_xi
+02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), count(alias1)]]
+03)----Aggregate: groupBy=[[t.g, t.xi AS alias1]], aggr=[[sum(CAST(t.v AS Int64)) AS alias2]]
+04)------TableScan: t projection=[g, xi, v]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
@@ -265,10 +297,10 @@ ORDER BY count(*) DESC, g;
 ########
 
 statement ok
-CREATE TABLE failed(x INT);
+CREATE TABLE failed(x VARCHAR);
 
 statement ok
-INSERT INTO failed VALUES (10), (30);
+INSERT INTO failed VALUES ('10'), ('30');
 
 statement ok
 set datafusion.optimizer.max_passes = 0;
@@ -293,6 +325,80 @@ GROUP BY t.g ORDER BY t.g;
 ----
 1 2 1 100 100 100
 3 1 1 1 1 1
+
+########
+# Both sides of the gate produce the same results as the unoptimized plan
+########
+
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+# gated: the count keeps the INT distinct unrewritten
+query IIIII
+SELECT g, count(*) AS records, count(DISTINCT xi) AS distinct_xi, sum(v) AS sum_v, max(v) AS max_v
+FROM t GROUP BY g ORDER BY g;
+----
+1 4 2 112 100
+2 2 0 3 3
+3 1 1 1 1
+
+# rewritten: the same shape over the VARCHAR distinct
+query IIIII
+SELECT g, count(*) AS records, count(DISTINCT x) AS distinct_x, sum(v) AS sum_v, max(v) AS max_v
+FROM t GROUP BY g ORDER BY g;
+----
+1 4 2 112 100
+2 2 0 3 3
+3 1 1 1 1
+
+# rewritten through sum alone, over the INT distinct the gate excludes
+query III
+SELECT g, count(DISTINCT xi) AS distinct_xi, sum(v) AS sum_v
+FROM t GROUP BY g ORDER BY g;
+----
+1 2 112
+2 0 3
+3 1 1
+
+query II
+SELECT count(*) AS records, count(DISTINCT xi) AS distinct_xi FROM empty_t;
+----
+0 0
+
+statement ok
+set datafusion.optimizer.max_passes = 3;
+
+# gated: the count keeps the INT distinct unrewritten
+query IIIII
+SELECT g, count(*) AS records, count(DISTINCT xi) AS distinct_xi, sum(v) AS sum_v, max(v) AS max_v
+FROM t GROUP BY g ORDER BY g;
+----
+1 4 2 112 100
+2 2 0 3 3
+3 1 1 1 1
+
+# rewritten: the same shape over the VARCHAR distinct
+query IIIII
+SELECT g, count(*) AS records, count(DISTINCT x) AS distinct_x, sum(v) AS sum_v, max(v) AS max_v
+FROM t GROUP BY g ORDER BY g;
+----
+1 4 2 112 100
+2 2 0 3 3
+3 1 1 1 1
+
+# rewritten through sum alone, over the INT distinct the gate excludes
+query III
+SELECT g, count(DISTINCT xi) AS distinct_xi, sum(v) AS sum_v
+FROM t GROUP BY g ORDER BY g;
+----
+1 2 112
+2 0 3
+3 1 1
+
+query II
+SELECT count(*) AS records, count(DISTINCT xi) AS distinct_xi FROM empty_t;
+----
+0 0
 
 statement ok
 DROP TABLE failed;

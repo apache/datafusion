@@ -346,14 +346,30 @@ impl AggregateUDFImpl for Count {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        if args.exprs.len() != 1 {
+        // The answer depends on nothing but the argument types and `DISTINCT`,
+        // so defer to the logical form and keep one list of supported types.
+        let arg_types = args
+            .expr_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        self.groups_accumulator_supported_for_types(&arg_types, args.is_distinct)
+    }
+
+    fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> bool {
+        if arg_types.len() != 1 {
             return false;
         }
-        if !args.is_distinct {
+        if !is_distinct {
             return true;
         }
+        // Keep in step with `create_distinct_count_groups_accumulator`.
         matches!(
-            args.expr_fields[0].data_type(),
+            arg_types[0],
             DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
