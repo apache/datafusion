@@ -601,16 +601,6 @@ impl PartialHashAggregateStream {
 
             // True branch: a decision has been made to skip partial aggregation.
             if self.should_skip_aggregation() {
-                // let timer = elapsed_compute.timer();
-                // let skip_hash_table = hash_table.partial_skip_table()?;
-                // self.start_output(hash_table, false)?;
-                // timer.done();
-                //
-                // // Move to `ProducingOutput` first. Its `skip_hash_table`
-                // // field moves the stream to skip-partial aggregation after
-                // // the accumulated batches have been output.
-                // return Ok(Some(skip_hash_table));
-
                 return Ok(true);
             }
 
@@ -776,7 +766,6 @@ impl PartialHashAggregateStream {
 
         let input_schema = self.input.schema();
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-        // ControlFlow::Continue(PartialHashAggregateState::Done)
         Ok(())
     }
 }
