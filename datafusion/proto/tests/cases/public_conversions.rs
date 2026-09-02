@@ -35,8 +35,8 @@ use datafusion_common::config::{
 };
 use datafusion_common::display::StringifiedPlan;
 use datafusion_common::{
-    DataFusionError, JoinConstraint, JoinType, NullEquality, TableReference,
-    UnnestOptions,
+    Constraint, Constraints, DataFusionError, JoinConstraint, JoinType, NullEquality,
+    TableReference, UnnestOptions,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
@@ -49,6 +49,7 @@ use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_proto::protobuf;
+use datafusion_proto_common::protobuf_common;
 
 /// Asserts `T: From<F>` by naming the conversion.
 fn assert_from<F, T: From<F>>() {
@@ -119,6 +120,10 @@ fn common_type_conversions_are_std_traits() {
     assert_from::<JoinConstraint, protobuf::JoinConstraint>();
     assert_from::<protobuf::NullEquality, NullEquality>();
     assert_from::<NullEquality, protobuf::NullEquality>();
+    assert_datafusion_try_from::<protobuf_common::Constraint, Constraint>();
+    assert_datafusion_try_from::<&protobuf_common::Constraint, Constraint>();
+    assert_datafusion_try_from::<protobuf_common::Constraints, Constraints>();
+    assert_datafusion_try_from::<&protobuf_common::Constraints, Constraints>();
 }
 
 #[test]

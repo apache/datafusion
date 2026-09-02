@@ -1252,9 +1252,9 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
             global: value
                 .global
                 .as_ref()
-                .map(|v| v.try_into())
-                .unwrap()
-                .unwrap(),
+                .map(ParquetOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
             column_specific_options,
             ..Default::default()
         };
@@ -1390,6 +1390,58 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Constraint: missing required field 'constraint_mode'")
+        );
+    }
+
+    #[test]
+    fn table_parquet_options_defaults_missing_global() {
+        let recovered = TableParquetOptions::try_from(
+            &crate::protobuf_common::TableParquetOptions::default(),
+        )
+        .expect("missing global should use defaults");
+
+        assert_eq!(recovered, TableParquetOptions::default());
+    }
+
+    #[test]
+    fn table_parquet_options_checks_nested_usize_conversion() {
+        let proto = crate::protobuf_common::TableParquetOptions {
+            global: Some(crate::protobuf_common::ParquetOptions {
+                data_pagesize_limit: u64::MAX,
+                writer_version: "1.0".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let recovered = TableParquetOptions::try_from(&proto);
+
+        if usize::BITS >= u64::BITS {
+            assert_eq!(recovered.unwrap().global.data_pagesize_limit, usize::MAX);
+        } else {
+            assert_eq!(
+                recovered.unwrap_err().strip_backtrace(),
+                "Error during planning: ParquetOptions: data_pagesize_limit wire value 18446744073709551615 is out of range for usize"
+            );
+        }
+    }
+
+    #[test]
+    fn table_parquet_options_propagates_nested_conversion_error() {
+        let proto = crate::protobuf_common::TableParquetOptions {
+            global: Some(crate::protobuf_common::ParquetOptions {
+                writer_version: "1.0".to_string(),
+                max_row_group_bytes_opt: Some(
+                    crate::protobuf_common::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(0),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = TableParquetOptions::try_from(&proto).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Invalid or Unsupported Configuration: max_row_group_bytes must be greater than 0"
         );
     }
 
