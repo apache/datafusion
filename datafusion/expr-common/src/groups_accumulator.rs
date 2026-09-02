@@ -785,6 +785,28 @@ pub trait BlockedGroupsAccumulator: Send + std::any::Any {
   /// `n`. See [`EmitTo::First`] for more details.
   fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>>;
 
+  /// Returns final aggregate values without changing the logical state or
+  /// group indices.
+  ///
+  /// Rows are returned in the order specified by `selection`. An empty
+  /// selection returns a correctly typed array with no rows.
+  ///
+  /// This method requires exclusive access because implementations may mutate
+  /// internal caches or builders. However, repeated calls and later updates
+  /// must observe the same logical accumulator state.
+  fn evaluate_preserving(
+    &mut self,
+    _selection: BlockedGroupSelection<'_>,
+  ) -> Result<ArrayRef> {
+    not_impl_err!("Preserving grouped evaluation is not implemented")
+  }
+
+  /// Returns `true` if [`Self::evaluate_preserving`] is implemented.
+  fn supports_evaluate_preserving(&self) -> bool {
+    false
+  }
+
+
   /// Returns the intermediate aggregate state for this accumulator,
   /// used for multi-phase grouping, resetting its internal state.
   ///

@@ -136,6 +136,27 @@ impl BlockedGroupsAccumulator for BlockedGroupsAccumulatorAdapter {
         Ok(output)
     }
 
+    fn supports_evaluate_preserving(&self) -> bool {
+        self.inner.supports_evaluate_preserving()
+    }
+
+    fn evaluate_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef> {
+        match selection.indices() {
+            None => {
+                let selection = GroupSelection::all(selection.total_num_groups());
+
+                self.inner.evaluate_preserving(selection)
+            }
+            Some(indices) => {
+                let indices_flatten = indices.iter().map(|index| index.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
+
+                let selection = GroupSelection::try_from_indices(&indices_flatten, selection.total_num_groups())?;
+
+                self.inner.evaluate_preserving(selection)
+            }
+        }
+    }
+
     fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
         let iter = emit_to.into_emit_to(self.number_of_groups, self.batch_size)?;
 
@@ -148,12 +169,6 @@ impl BlockedGroupsAccumulator for BlockedGroupsAccumulatorAdapter {
         self.update_number_of_groups_after_emit(emit_to);
 
         Ok(output)
-    }
-
-    fn merge_batch(&mut self, values: &[ArrayRef], group_indices: &[BlocksIndex], total_num_groups: usize) -> Result<()> {
-        let group_indices_flatten = group_indices.iter().map(|index| index.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
-        self.number_of_groups = total_num_groups;
-        self.inner.merge_batch(values, &group_indices_flatten, total_num_groups)
     }
 
     fn supports_state_preserving(&self) -> bool {
@@ -175,6 +190,12 @@ impl BlockedGroupsAccumulator for BlockedGroupsAccumulatorAdapter {
                 self.inner.state_preserving(selection)
             }
         }
+    }
+
+    fn merge_batch(&mut self, values: &[ArrayRef], group_indices: &[BlocksIndex], total_num_groups: usize) -> Result<()> {
+        let group_indices_flatten = group_indices.iter().map(|index| index.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
+        self.number_of_groups = total_num_groups;
+        self.inner.merge_batch(values, &group_indices_flatten, total_num_groups)
     }
 
     fn convert_to_state(&self, values: &[ArrayRef], opt_filter: Option<&BooleanArray>) -> Result<Vec<ArrayRef>> {
