@@ -677,6 +677,24 @@ physical_plan
 statement ok
 SET datafusion.explain.physical_plan_only = false;
 
+# Republish this fixture as a *sorted* source for the streaming-path section at
+# the end of this file. Copying the table (rather than re-declaring the same
+# VALUES) is what guarantees the heap and streaming paths are compared on
+# byte-identical data.
+query I
+COPY (SELECT * FROM window_topn_t ORDER BY pk, val)
+TO 'test_files/scratch/window_topn/rn_asc.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+10
+
+query I
+COPY (SELECT * FROM window_topn_t ORDER BY pk, val DESC)
+TO 'test_files/scratch/window_topn/rn_desc.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+10
+
 statement ok
 DROP TABLE window_topn_t;
 
@@ -766,6 +784,38 @@ physical_plan
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;
+
+# Republish this fixture as a *sorted* source for the streaming-path section at
+# the end of this file. Copying the table (rather than re-declaring the same
+# VALUES) is what guarantees the heap and streaming paths are compared on
+# byte-identical data.
+query I
+COPY (SELECT * FROM window_topn_nulls ORDER BY pk, val ASC NULLS LAST)
+TO 'test_files/scratch/window_topn/nulls_al.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+7
+
+query I
+COPY (SELECT * FROM window_topn_nulls ORDER BY pk, val ASC NULLS FIRST)
+TO 'test_files/scratch/window_topn/nulls_af.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+7
+
+query I
+COPY (SELECT * FROM window_topn_nulls ORDER BY pk, val DESC NULLS FIRST)
+TO 'test_files/scratch/window_topn/nulls_df.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+7
+
+query I
+COPY (SELECT * FROM window_topn_nulls ORDER BY pk, val DESC NULLS LAST)
+TO 'test_files/scratch/window_topn/nulls_dl.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+7
 
 statement ok
 DROP TABLE window_topn_nulls;
@@ -990,6 +1040,24 @@ QUALIFY rk <= 1;
 6 2 5 1
 9 3 100 1
 
+# Republish this fixture as a *sorted* source for the streaming-path section at
+# the end of this file. Copying the table (rather than re-declaring the same
+# VALUES) is what guarantees the heap and streaming paths are compared on
+# byte-identical data.
+query I
+COPY (SELECT * FROM window_topn_rank_t ORDER BY pk, val)
+TO 'test_files/scratch/window_topn/rk_asc.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+14
+
+query I
+COPY (SELECT * FROM window_topn_rank_t ORDER BY pk, val DESC)
+TO 'test_files/scratch/window_topn/rk_desc.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+14
+
 statement ok
 DROP TABLE window_topn_rank_t;
 
@@ -1191,6 +1259,31 @@ SELECT id, pk, val FROM (
 4 1 NULL
 6 2 NULL
 7 2 NULL
+
+# Republish this fixture as a *sorted* source for the streaming-path section at
+# the end of this file. Copying the table (rather than re-declaring the same
+# VALUES) is what guarantees the heap and streaming paths are compared on
+# byte-identical data.
+query I
+COPY (SELECT * FROM window_topn_rank_null_t ORDER BY pk, val ASC NULLS LAST)
+TO 'test_files/scratch/window_topn/rkn_al.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+7
+
+query I
+COPY (SELECT * FROM window_topn_rank_null_t ORDER BY pk, val DESC NULLS LAST)
+TO 'test_files/scratch/window_topn/rkn_dl.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+7
+
+query I
+COPY (SELECT * FROM window_topn_rank_null_t ORDER BY pk, val ASC NULLS FIRST)
+TO 'test_files/scratch/window_topn/rkn_af.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+7
 
 statement ok
 DROP TABLE window_topn_rank_null_t;
@@ -1476,6 +1569,24 @@ SELECT id, pk, val FROM (
 8 2 5
 9 2 15
 
+# Republish this fixture as a *sorted* source for the streaming-path section at
+# the end of this file. Copying the table (rather than re-declaring the same
+# VALUES) is what guarantees the heap and streaming paths are compared on
+# byte-identical data.
+query I
+COPY (SELECT * FROM window_topn_dense_rank_t ORDER BY pk, val)
+TO 'test_files/scratch/window_topn/dr_asc.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+16
+
+query I
+COPY (SELECT * FROM window_topn_dense_rank_t ORDER BY pk, val DESC)
+TO 'test_files/scratch/window_topn/dr_desc.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+16
+
 statement ok
 DROP TABLE window_topn_dense_rank_t;
 
@@ -1539,6 +1650,24 @@ SELECT id, pk, val FROM (
 3 1 10
 4 1 20
 
+# Republish this fixture as a *sorted* source for the streaming-path section at
+# the end of this file. Copying the table (rather than re-declaring the same
+# VALUES) is what guarantees the heap and streaming paths are compared on
+# byte-identical data.
+query I
+COPY (SELECT * FROM window_topn_dr_null_t ORDER BY pk, val ASC NULLS FIRST)
+TO 'test_files/scratch/window_topn/drn_af.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+5
+
+query I
+COPY (SELECT * FROM window_topn_dr_null_t ORDER BY pk, val ASC NULLS LAST)
+TO 'test_files/scratch/window_topn/drn_al.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+5
+
 statement ok
 DROP TABLE window_topn_dr_null_t;
 
@@ -1592,3 +1721,884 @@ set datafusion.execution.batch_size = 8192;
 
 statement ok
 set datafusion.optimizer.enable_window_topn = false;
+
+# ------------------------------------------------------------------
+# Streaming path: input already sorted by (partition, order) so there is no
+# SortExec below the window -> StreamingPartitionedTopKExec is inserted. This
+# is a pure win, so it applies even with `enable_window_topn` disabled.
+# ------------------------------------------------------------------
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE window_topn_sorted (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+# enable_window_topn is currently false, yet the streaming rewrite still fires:
+# no SortExec, no FilterExec, and a StreamingPartitionedTopKExec below the window.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) as rn
+  FROM window_topn_sorted
+) WHERE rn <= 2;
+----
+logical_plan
+01)Projection: window_topn_sorted.a, window_topn_sorted.b, row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Filter: row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_sorted projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----StreamingPartitionedTopKExec: fn=row_number, fetch=2, partition=[a@0], order=[b@1 ASC NULLS LAST]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+query III rowsort
+SELECT a, b, rn FROM (
+  SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) as rn
+  FROM window_topn_sorted
+) WHERE rn <= 2;
+----
+0 0 1
+0 0 2
+1 2 1
+1 2 2
+
+query III rowsort
+SELECT a, b, rk FROM (
+  SELECT a, b, RANK() OVER (PARTITION BY a ORDER BY b) as rk
+  FROM window_topn_sorted
+) WHERE rk <= 2;
+----
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+1 2 1
+
+# DENSE_RANK on the streaming path. Same single-pass shape as RANK, but the rank
+# advances by one per *distinct* ORDER BY value instead of jumping to the row
+# position, so it retains strictly more rows.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT a, b, DENSE_RANK() OVER (PARTITION BY a ORDER BY b) as dr
+  FROM window_topn_sorted
+) WHERE dr <= 2;
+----
+logical_plan
+01)Projection: window_topn_sorted.a, window_topn_sorted.b, dense_rank() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS dr
+02)--Filter: dense_rank() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[dense_rank() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_sorted projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, dense_rank() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as dr]
+02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----StreamingPartitionedTopKExec: fn=dense_rank, fetch=2, partition=[a@0], order=[b@1 ASC NULLS LAST]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Each partition has exactly two distinct `b` values, 25 rows each, so
+# `dr <= 2` retains all 100 rows. This is the discriminating case against RANK:
+# the second distinct value sits at RANK 26, so `rk <= 2` would drop it.
+query IIII
+SELECT a, b, dr, count(*) FROM (
+  SELECT a, b, DENSE_RANK() OVER (PARTITION BY a ORDER BY b) as dr
+  FROM window_topn_sorted
+) WHERE dr <= 2 GROUP BY a, b, dr ORDER BY a, b;
+----
+0 0 1 25
+0 1 2 25
+1 2 1 25
+1 3 2 25
+
+# ...and `dr <= 1` drops the second distinct value in each partition.
+query IIII
+SELECT a, b, dr, count(*) FROM (
+  SELECT a, b, DENSE_RANK() OVER (PARTITION BY a ORDER BY b) as dr
+  FROM window_topn_sorted
+) WHERE dr <= 1 GROUP BY a, b, dr ORDER BY a, b;
+----
+0 0 1 25
+1 2 1 25
+
+# Sibling prune-safety on the streaming path. Tail-pruning drops rows, so a
+# sibling window expression that reads *following* rows (LEAD) would resolve to a
+# dropped row. The rule must decline: FilterExec stays, no
+# StreamingPartitionedTopKExec. The heap-path equivalent of this test uses the
+# unsorted table, so it cannot catch a streaming-path regression.
+query TT
+EXPLAIN SELECT a, b, rn, next_b FROM (
+  SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) as rn,
+               LEAD(b)      OVER (PARTITION BY a ORDER BY b) as next_b
+  FROM window_topn_sorted
+) WHERE rn <= 2;
+----
+logical_plan
+01)Projection: window_topn_sorted.a, window_topn_sorted.b, row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, lead(window_topn_sorted.b) PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS next_b
+02)--Filter: row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(window_topn_sorted.b) PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: window_topn_sorted projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn, lead(window_topn_sorted.b) PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as next_b]
+02)--FilterExec: row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 2
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(window_topn_sorted.b) PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(window_topn_sorted.b) PARTITION BY [window_topn_sorted.a] ORDER BY [window_topn_sorted.b ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# ...and the LEAD values are the true ones: rn=2 rows must see their real
+# successor, not NULL from a pruned tail.
+query IIII
+SELECT a, b, rn, next_b FROM (
+  SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) as rn,
+               LEAD(b)      OVER (PARTITION BY a ORDER BY b) as next_b
+  FROM window_topn_sorted
+) WHERE rn <= 2 ORDER BY a, b LIMIT 4;
+----
+0 0 1 0
+0 0 2 0
+1 2 1 2
+1 2 2 2
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.enable_window_topn = false;
+
+###############################################################################
+# Streaming path: the heap-path fixtures replayed over sorted sources
+###############################################################################
+#
+# Everything above this point (apart from the `window_topn_sorted` section)
+# reaches `PartitionedTopKExec` — the child is unsorted, so the rule takes the
+# heap branch. The streaming branch is chosen purely on the child's *declared*
+# output ordering (`WindowTopN` runs before `EnsureRequirements`, so there is no
+# `SortExec` to pattern-match on yet), which those fixtures can never produce.
+#
+# So the same fixtures are re-published as `WITH ORDER` external tables, written
+# by `COPY ... ORDER BY` from the very same in-memory tables. The queries and
+# expected results below are copied verbatim from their heap counterparts, and
+# the test id of each origin is named. Two operators computing the same window
+# function over the same rows must agree; where they legitimately differ the
+# comment says so.
+#
+# `enable_window_topn` stays **false** throughout: the streaming rewrite is not
+# gated on it, so leaving it off also proves the flag only governs the heap.
+
+statement ok
+set datafusion.optimizer.enable_window_topn = false;
+
+statement ok
+CREATE EXTERNAL TABLE st_rn_asc (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC)
+LOCATION 'test_files/scratch/window_topn/rn_asc.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_rn_desc (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val DESC)
+LOCATION 'test_files/scratch/window_topn/rn_desc.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_nulls_al (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC NULLS LAST)
+LOCATION 'test_files/scratch/window_topn/nulls_al.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_nulls_af (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC NULLS FIRST)
+LOCATION 'test_files/scratch/window_topn/nulls_af.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_nulls_df (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val DESC NULLS FIRST)
+LOCATION 'test_files/scratch/window_topn/nulls_df.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_nulls_dl (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val DESC NULLS LAST)
+LOCATION 'test_files/scratch/window_topn/nulls_dl.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_rk_asc (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC)
+LOCATION 'test_files/scratch/window_topn/rk_asc.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_rk_desc (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val DESC)
+LOCATION 'test_files/scratch/window_topn/rk_desc.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_rkn_al (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC NULLS LAST)
+LOCATION 'test_files/scratch/window_topn/rkn_al.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_rkn_dl (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val DESC NULLS LAST)
+LOCATION 'test_files/scratch/window_topn/rkn_dl.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_rkn_af (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC NULLS FIRST)
+LOCATION 'test_files/scratch/window_topn/rkn_af.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_dr_asc (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC)
+LOCATION 'test_files/scratch/window_topn/dr_asc.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_dr_desc (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val DESC)
+LOCATION 'test_files/scratch/window_topn/dr_desc.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_drn_af (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC NULLS FIRST)
+LOCATION 'test_files/scratch/window_topn/drn_af.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE st_drn_al (id INT, pk INT, val INT)
+STORED AS CSV WITH ORDER (pk ASC, val ASC NULLS LAST)
+LOCATION 'test_files/scratch/window_topn/drn_al.csv'
+OPTIONS ('format.has_header' 'true');
+
+# --------------------------------------------------------------------------
+# ROW_NUMBER — mirrors Tests 1, 3, 15
+# --------------------------------------------------------------------------
+
+# S1 (= Test 1): top-3 per partition.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn <= 3;
+----
+1 1 10
+10 3 75
+2 1 20
+3 1 30
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# S2 (= Test 3): `rn < 4` is the same fetch=3.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn < 4;
+----
+1 1 10
+10 3 75
+2 1 20
+3 1 30
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# S3 (= Test 15): DESC ordering.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC) as rn FROM st_rn_desc
+) WHERE rn <= 3;
+----
+10 3 75
+2 1 20
+3 1 30
+4 1 40
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# --------------------------------------------------------------------------
+# ROW_NUMBER NULL sort options — mirrors Tests 23-26
+# --------------------------------------------------------------------------
+
+# S4 (= Test 23): ASC NULLS LAST.
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val ASC NULLS LAST) as rn FROM st_nulls_al
+) WHERE rn <= 2;
+----
+1 1 10 1
+3 1 30 2
+5 2 5 1
+6 2 15 2
+
+# S5 (= Test 24): ASC NULLS FIRST.
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as rn FROM st_nulls_af
+) WHERE rn <= 2;
+----
+1 1 10 2
+2 1 NULL 1
+4 2 NULL 1
+7 2 NULL 2
+
+# S6 (= Test 25): DESC NULLS FIRST.
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC NULLS FIRST) as rn FROM st_nulls_df
+) WHERE rn <= 2;
+----
+2 1 NULL 1
+3 1 30 2
+4 2 NULL 1
+7 2 NULL 2
+
+# S7 (= Test 26): DESC NULLS LAST.
+query IIII rowsort
+SELECT id, pk, val, rn FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC NULLS LAST) as rn FROM st_nulls_dl
+) WHERE rn <= 2;
+----
+1 1 10 2
+3 1 30 1
+5 2 5 2
+6 2 15 1
+
+# --------------------------------------------------------------------------
+# RANK — mirrors Tests R1, R9, R16, R19, R20
+# --------------------------------------------------------------------------
+
+# S8 (= Test R1): ties at the boundary are retained (12 rows for rk <= 3).
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM st_rk_asc
+) WHERE rk <= 3;
+----
+1 1 10
+10 3 200
+11 3 200
+12 3 200
+13 3 200
+2 1 20
+3 1 20
+4 1 20
+6 2 5
+7 2 15
+8 2 25
+9 3 100
+
+# S9 (= Test R9): DESC ordering.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val DESC) as rk FROM st_rk_desc
+) WHERE rk <= 1;
+----
+14 3 300
+5 1 30
+8 2 25
+
+# S10 (= Test R16): ASC NULLS LAST with NULL order keys.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val ASC NULLS LAST) as rk FROM st_rkn_al
+) WHERE rk <= 4;
+----
+1 1 1
+2 1 2
+3 1 3
+4 1 NULL
+5 2 5
+6 2 NULL
+7 2 NULL
+
+# S11 (= Test R19): DESC NULLS LAST.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val DESC NULLS LAST) as rk FROM st_rkn_dl
+) WHERE rk <= 4;
+----
+1 1 1
+2 1 2
+3 1 3
+4 1 NULL
+5 2 5
+6 2 NULL
+7 2 NULL
+
+# S12 (= Test R20): ASC NULLS FIRST — tied NULLs at the boundary.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as rk FROM st_rkn_af
+) WHERE rk <= 2;
+----
+1 1 1
+4 1 NULL
+6 2 NULL
+7 2 NULL
+
+# --------------------------------------------------------------------------
+# DENSE_RANK — mirrors Tests DR1, DR5, DR8, DR12, DR14
+# --------------------------------------------------------------------------
+
+# S13 (= Test DR1): every row at the K distinct smallest values is retained.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM st_dr_asc
+) WHERE dr <= 2;
+----
+1 1 10
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+2 1 20
+3 1 20
+4 1 20
+7 2 5
+8 2 5
+9 2 15
+
+# S14 (= Test DR5): K exceeds every partition's distinct count — nothing
+# dropped. On the streaming path this is the "partition never satisfied" case,
+# so no run is ever skipped.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM st_dr_asc
+) WHERE dr <= 100;
+----
+1 1 10
+10 2 25
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+16 3 300
+2 1 20
+3 1 20
+4 1 20
+5 1 30
+6 1 40
+7 2 5
+8 2 5
+9 2 15
+
+# S15 (= Test DR8): DESC ordering — distinct-top-2 per partition.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val DESC) as dr FROM st_dr_desc
+) WHERE dr <= 2;
+----
+10 2 25
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+16 3 300
+5 1 30
+6 1 40
+9 2 15
+
+# S16 (= Test DR12): NULLS FIRST — NULL is the smallest distinct value (dr 1).
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as dr
+  FROM st_drn_af
+) WHERE dr <= 2;
+----
+1 1 NULL
+2 1 NULL
+3 1 10
+
+# S17 (= Test DR14): NULLS LAST — NULL is the largest distinct value, excluded.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val ASC NULLS LAST) as dr
+  FROM st_drn_al
+) WHERE dr <= 2;
+----
+3 1 10
+4 1 20
+
+# --------------------------------------------------------------------------
+# Guards: the shared `match_window` bail-outs must hold on the sorted path too
+# --------------------------------------------------------------------------
+
+# S18 (= Tests 3b/3c/3d): fetch = 0 keeps nothing and must not panic
+# (a fetch=0 operator is rejected). All three predicate spellings.
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn < 1;
+----
+
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE 1 > rn;
+----
+
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn <= 0;
+----
+
+# S19 (= Test 4): no PARTITION BY — a global top-K, which SortExec already
+# handles. The rule must decline even though the source is sorted.
+query II rowsort
+SELECT id, val FROM (
+  SELECT *, ROW_NUMBER() OVER (ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn <= 3;
+----
+1 10
+5 5
+6 15
+
+query TT
+EXPLAIN SELECT id, val FROM (
+  SELECT *, ROW_NUMBER() OVER (ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn <= 3;
+----
+logical_plan
+01)Projection: st_rn_asc.id, st_rn_asc.val
+02)--Filter: row_number() ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+03)----WindowAggr: windowExpr=[[row_number() ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: st_rn_asc projection=[id, val]
+physical_plan
+01)FilterExec: row_number() ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 <= 3, projection=[id@0, val@1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[val@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/rn_asc.csv]]}, projection=[id, val], file_type=csv, has_header=true
+
+# S20 (= Test 9): `3 < rn` is not a top-K pattern — no rewrite.
+query TT
+EXPLAIN SELECT id, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE 3 < rn;
+----
+logical_plan
+01)Projection: st_rn_asc.id, st_rn_asc.val
+02)--Filter: row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW > UInt64(3)
+03)----Projection: st_rn_asc.id, st_rn_asc.val, row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+04)------WindowAggr: windowExpr=[[row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------TableScan: st_rn_asc projection=[id, pk, val]
+physical_plan
+01)FilterExec: row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 > 3, projection=[id@0, val@1]
+02)--ProjectionExec: expr=[id@0 as id, val@2 as val, row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/rn_asc.csv]]}, projection=[id, pk, val], output_ordering=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], file_type=csv, has_header=true
+
+# S21: the streaming rewrite is chosen for all three functions, and — unlike
+# the heap — it fires with `enable_window_topn = false` (still false here).
+# One EXPLAIN per function pins `fn=` and the absence of SortExec/FilterExec.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----StreamingPartitionedTopKExec: fn=row_number, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+04)------RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/rn_asc.csv]]}, projection=[id, pk, val], output_ordering=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], file_type=csv, has_header=true
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM st_rk_asc
+) WHERE rk <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, rank() PARTITION BY [st_rk_asc.pk] ORDER BY [st_rk_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
+02)--BoundedWindowAggExec: wdw=[rank() PARTITION BY [st_rk_asc.pk] ORDER BY [st_rk_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [st_rk_asc.pk] ORDER BY [st_rk_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----StreamingPartitionedTopKExec: fn=rank, fetch=3, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+04)------RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/rk_asc.csv]]}, projection=[id, pk, val], output_ordering=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], file_type=csv, has_header=true
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM st_dr_asc
+) WHERE dr <= 2;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, dense_rank() PARTITION BY [st_dr_asc.pk] ORDER BY [st_dr_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as dr]
+02)--BoundedWindowAggExec: wdw=[dense_rank() PARTITION BY [st_dr_asc.pk] ORDER BY [st_dr_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() PARTITION BY [st_dr_asc.pk] ORDER BY [st_dr_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----StreamingPartitionedTopKExec: fn=dense_rank, fetch=2, partition=[pk@1], order=[val@2 ASC NULLS LAST]
+04)------RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/dr_asc.csv]]}, projection=[id, pk, val], output_ordering=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], file_type=csv, has_header=true
+
+# S22 (= Test 27): the declared sort options reach the operator verbatim —
+# `order=[val@2 ASC]` for NULLS FIRST vs `ASC NULLS LAST` for the default.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val ASC NULLS FIRST) as rn FROM st_nulls_af
+) WHERE rn <= 2;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [st_nulls_af.pk] ORDER BY [st_nulls_af.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [st_nulls_af.pk] ORDER BY [st_nulls_af.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [st_nulls_af.pk] ORDER BY [st_nulls_af.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----StreamingPartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@1], order=[val@2 ASC]
+04)------RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/nulls_af.csv]]}, projection=[id, pk, val], output_ordering=[pk@1 ASC NULLS LAST, val@2 ASC], file_type=csv, has_header=true
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val DESC NULLS LAST) as rn FROM st_nulls_dl
+) WHERE rn <= 2;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [st_nulls_dl.pk] ORDER BY [st_nulls_dl.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [st_nulls_dl.pk] ORDER BY [st_nulls_dl.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [st_nulls_dl.pk] ORDER BY [st_nulls_dl.val DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----StreamingPartitionedTopKExec: fn=row_number, fetch=2, partition=[pk@1], order=[val@2 DESC NULLS LAST]
+04)------RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/nulls_dl.csv]]}, projection=[id, pk, val], output_ordering=[pk@1 ASC NULLS LAST, val@2 DESC NULLS LAST], file_type=csv, has_header=true
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# S23 (= Test 11): a RANK sibling alongside the matched ROW_NUMBER is
+# prune-safe (both read only at-or-before the current row), so the rewrite
+# still applies and both columns stay correct.
+query IIIII rowsort
+SELECT id, pk, val, rn, rk FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+            RANK()       OVER (PARTITION BY pk ORDER BY val) as rk
+  FROM st_rk_asc
+) WHERE rn <= 2;
+----
+1 1 10 1 1
+10 3 200 2 2
+2 1 20 2 2
+6 2 5 1 1
+7 2 15 2 2
+9 3 100 1 1
+
+# S24: a SUM sibling is NOT prune-safe over the same frame, so `all_prune_safe`
+# must decline — mirrors the sibling-safety guard, on the streaming path.
+query TT
+EXPLAIN SELECT id, pk, val, rn, s FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+            SUM(val)     OVER (PARTITION BY pk ORDER BY val) as s
+  FROM st_rn_asc
+) WHERE rn <= 2;
+----
+logical_plan
+01)Projection: st_rn_asc.id, st_rn_asc.pk, st_rn_asc.val, row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, sum(st_rn_asc.val) PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS s
+02)--Filter: row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(CAST(st_rn_asc.val AS Int64)) PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: st_rn_asc projection=[id, pk, val]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, sum(st_rn_asc.val) PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as s]
+02)--FilterExec: row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 2
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(st_rn_asc.val) PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(st_rn_asc.val) PARTITION BY [st_rn_asc.pk] ORDER BY [st_rn_asc.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------RepartitionExec: partitioning=Hash([pk@1], 4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_topn/rn_asc.csv]]}, projection=[id, pk, val], output_ordering=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], file_type=csv, has_header=true
+
+# S25: QUALIFY desugars to the same plan and must also stream.
+query III rowsort
+SELECT id, pk, val FROM st_rn_asc
+QUALIFY ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) <= 3;
+----
+1 1 10
+10 3 75
+2 1 20
+3 1 30
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# --------------------------------------------------------------------------
+# S27: batch_size = 1 — the cross-batch carry
+# --------------------------------------------------------------------------
+#
+# Every block above runs at the default batch_size of 8192, and these fixtures
+# are 10-16 rows, so each arrives as a single batch and the operator's
+# cross-batch state (`prev_partition` / `prev_order` / `partition_satisfied`) is
+# never carried anywhere. At batch_size = 1 every partition run straddles a
+# boundary, so that carry has to be correct for these to come back unchanged.
+#
+# The expected rows are therefore identical to S1 / S8 / S13 — batch size selects
+# how the work is chunked, never the answer.
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+# ROW_NUMBER: exercises the partition-key carry and the running `count`
+# (= S1).
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn FROM st_rn_asc
+) WHERE rn <= 3;
+----
+1 1 10
+10 3 75
+2 1 20
+3 1 30
+5 2 5
+6 2 15
+7 2 25
+8 3 100
+9 3 50
+
+# RANK: additionally exercises `prev_order`, since a tie group split across
+# batches must still be detected as a tie (= S8).
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, RANK() OVER (PARTITION BY pk ORDER BY val) as rk FROM st_rk_asc
+) WHERE rk <= 3;
+----
+1 1 10
+10 3 200
+11 3 200
+12 3 200
+13 3 200
+2 1 20
+3 1 20
+4 1 20
+6 2 5
+7 2 15
+8 2 25
+9 3 100
+
+# DENSE_RANK: same carry, gapless advance (= S13).
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM st_dr_asc
+) WHERE dr <= 2;
+----
+1 1 10
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+2 1 20
+3 1 20
+4 1 20
+7 2 5
+8 2 5
+9 2 15
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+statement ok
+DROP TABLE st_rn_asc;
+
+statement ok
+DROP TABLE st_rn_desc;
+
+statement ok
+DROP TABLE st_nulls_al;
+
+statement ok
+DROP TABLE st_nulls_af;
+
+statement ok
+DROP TABLE st_nulls_df;
+
+statement ok
+DROP TABLE st_nulls_dl;
+
+statement ok
+DROP TABLE st_rk_asc;
+
+statement ok
+DROP TABLE st_rk_desc;
+
+statement ok
+DROP TABLE st_rkn_al;
+
+statement ok
+DROP TABLE st_rkn_dl;
+
+statement ok
+DROP TABLE st_rkn_af;
+
+statement ok
+DROP TABLE st_dr_asc;
+
+statement ok
+DROP TABLE st_dr_desc;
+
+statement ok
+DROP TABLE st_drn_af;
+
+statement ok
+DROP TABLE st_drn_al;

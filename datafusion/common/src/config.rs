@@ -1574,12 +1574,17 @@ config_namespace! {
         pub enable_window_limits: bool, default = true
 
         /// When set to true, the optimizer will replace
-        /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
-        /// PartitionedTopKExec that maintains per-partition heaps, avoiding
-        /// a full sort of the input.
+        /// Filter(rank<=K) → Window(ROW_NUMBER/RANK/DENSE_RANK) patterns over
+        /// unordered input with a PartitionedTopKExec that maintains
+        /// per-partition heaps, avoiding a full sort of the input.
         /// When the window partition key has low cardinality, enabling this optimization
         /// can improve performance. However, for high cardinality keys, it may
         /// cause regressions in both memory usage and runtime.
+        /// This flag gates the unordered case only. When the input is already
+        /// ordered by (partition keys, order keys) the optimizer instead inserts a
+        /// StreamingPartitionedTopKExec, which culls rows in a single pass with
+        /// O(1) state; that rewrite is a pure win and applies regardless of this
+        /// setting.
         pub enable_window_topn: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
