@@ -1062,7 +1062,7 @@ impl FinalHashAggregateStream {
                         .await?
                 }
                 // Either all the input fit in memory or hit soft group limit with no spilling
-                None => self.produce_output(hash_table, emitter).await?,
+                None => self.produce_output_from_memory(hash_table, emitter).await?,
             }
 
             Ok(())
@@ -1235,7 +1235,7 @@ impl FinalHashAggregateStream {
 
     /// Emit final aggregate value batches:
     /// Input was exhausted without spilling, or the soft group limit was reached.
-    async fn produce_output(
+    async fn produce_output_from_memory(
         &mut self,
         mut hash_table: AggregateHashTable<FinalMarker>,
         mut emitter: TryEmitter<RecordBatch, DataFusionError>,
