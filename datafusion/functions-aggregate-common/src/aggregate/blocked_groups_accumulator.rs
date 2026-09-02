@@ -125,9 +125,6 @@ impl BlockedGroupsAccumulator for BlockedGroupsAccumulatorAdapter {
     fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
         let iter = emit_to.into_emit_to(self.number_of_groups, self.batch_size)?;
 
-        println!("num groups {}, batch size {} emit to {emit_to:?} mapped to {:?}", self.number_of_groups, self.batch_size, iter.clone().collect::<Vec<_>>());
-
-
         let mut output = vec![];
         for mapped_emit_to in iter {
             let item = self.inner.evaluate(mapped_emit_to)?;
