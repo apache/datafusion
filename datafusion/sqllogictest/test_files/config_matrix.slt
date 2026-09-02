@@ -1,0 +1,86 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# End-to-end cover for the `# configMatrix:` runner path added in #24493, over
+# the predicate shape #24763 fixed.
+#
+# config_matrix.rs unit-tests directive parsing and expansion, and
+# apply_config_overrides is tested against a context directly. Neither reaches
+# the wiring that builds a fresh context per combination and applies that
+# combination's overrides before the engine snapshots config.
+#
+# batch_size is swept to two values the default is not, so a run that applied no
+# overrides at all reads 8192 and fails the first query. It cannot tell one
+# combination from another, and it has no bearing on the predicate below; it is
+# here to catch a sweep that silently no-ops.
+#
+# map_string_types_to_utf8view decides whether `s` plans as Utf8View or Utf8.
+# That is the distinction #24763 turned on: under Utf8View both sides of the
+# conjunction reach the optimizer as `CAST(Utf8("a") AS Utf8View)`, which is why
+# the literal-on-left orientation was not recognised; under Utf8 the literal is
+# already a `Literal`. Sweeping it runs the repaired predicate over both column
+# types in one file. The arrow_typeof check below only proves the setting
+# reached DDL planning; the count query is what covers the predicate itself.
+#
+# What this cannot see: a runner that applied one combination four times still
+# passes, because each replay is independent and a file has no cross-run state.
+# run_each_configuration_runs_every_combination_past_failures in config_matrix.rs
+# pins that half. Neither does it fail against the pre-#24763 optimizer on
+# current main: reverting simplify_predicates.rs alone no longer reproduces the
+# collapse. See the PR thread for the commands and output.
+#
+# Matrix rules: no EXPLAIN, no in-file SET of a swept knob.
+
+# configMatrix: datafusion.execution.batch_size=1,2
+# configMatrix: datafusion.sql_parser.map_string_types_to_utf8view=true,false
+
+statement ok
+set datafusion.catalog.information_schema = true;
+
+# Never dropped: a combination handed the previous one's context fails here
+# rather than sharing its state silently.
+statement ok
+CREATE TABLE cm_predicate(s VARCHAR);
+
+statement ok
+INSERT INTO cm_predicate VALUES ('a'), ('b'), (NULL);
+
+query B
+SELECT (SELECT value FROM information_schema.df_settings
+        WHERE name = 'datafusion.execution.batch_size') IN ('1', '2');
+----
+true
+
+# The sweep has to reach SQL planning, not just the config map: the column's
+# type is what decides which branch the query below exercises.
+query B
+SELECT (arrow_typeof(s) = 'Utf8View')
+       = ((SELECT value FROM information_schema.df_settings
+           WHERE name = 'datafusion.sql_parser.map_string_types_to_utf8view') = 'true')
+FROM cm_predicate
+LIMIT 1;
+----
+true
+
+query I
+SELECT count(*) FROM cm_predicate WHERE s = 'a' AND 'a' = s;
+----
+1
+
+statement ok
+set datafusion.catalog.information_schema = false;
