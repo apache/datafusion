@@ -121,8 +121,9 @@ impl BlockedGroupValues for GroupValuesBoolean {
         if len == 0 {
             return Ok(None);
         }
-        let mut builder = BooleanBufferBuilder::new(self.block_size);
-        let emit_count = self.block_size;
+        // Group indices are always contiguous from 0, so the last block holds the remaining groups
+        let emit_count = self.block_size.min(len);
+        let mut builder = BooleanBufferBuilder::new(emit_count);
         builder.append_n(emit_count, false);
         if let Some(idx) = self.true_group.as_mut() {
             if *idx < emit_count {
@@ -218,5 +219,63 @@ impl BlockedGroupValues for GroupValuesBoolean {
         self.false_group = None;
         self.true_group = None;
         self.null_group = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn intern(group_values: &mut GroupValuesBoolean, values: &[Option<bool>]) -> Vec<BlocksIndex> {
+        let mut groups = vec![];
+        let array: ArrayRef = Arc::new(BooleanArray::from(values.to_vec()));
+        group_values.intern(&[array], &mut groups).unwrap();
+        groups
+    }
+
+    fn emitted(blocks: Vec<Vec<ArrayRef>>) -> Vec<Vec<Option<bool>>> {
+        blocks
+            .into_iter()
+            .map(|block| block[0].as_boolean().iter().collect())
+            .collect()
+    }
+
+    #[test]
+    fn emit_all_only_emits_existing_groups() {
+        let mut group_values = GroupValuesBoolean::new(531);
+        let groups = intern(&mut group_values, &[Some(true), None, Some(true), Some(false)]);
+        assert_eq!(
+            groups,
+            [0, 1, 0, 2].map(BlocksIndex::new_in_first_block).to_vec()
+        );
+        assert_eq!(group_values.len(), 3);
+
+        let blocks = emitted(group_values.emit_all().unwrap());
+        assert_eq!(blocks, vec![vec![Some(true), None, Some(false)]]);
+        assert!(group_values.is_empty());
+        assert!(group_values.emit_block().unwrap().is_none());
+    }
+
+    #[test]
+    fn emit_all_splits_into_blocks() {
+        let mut group_values = GroupValuesBoolean::new(2);
+        intern(&mut group_values, &[Some(false), Some(true), None]);
+
+        let blocks = emitted(group_values.emit_all().unwrap());
+        assert_eq!(blocks, vec![vec![Some(false), Some(true)], vec![None]]);
+        assert!(group_values.is_empty());
+    }
+
+    #[test]
+    fn emit_first_n_shifts_remaining() {
+        let mut group_values = GroupValuesBoolean::new(4);
+        intern(&mut group_values, &[None, Some(false), Some(true)]);
+
+        let first = group_values.emit_first_n(1).unwrap();
+        assert_eq!(first[0].as_boolean().iter().collect::<Vec<_>>(), vec![None]);
+        assert_eq!(group_values.len(), 2);
+
+        let blocks = emitted(group_values.emit_all().unwrap());
+        assert_eq!(blocks, vec![vec![Some(false), Some(true)]]);
     }
 }
