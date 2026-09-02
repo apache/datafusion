@@ -3385,6 +3385,7 @@ fn build_unmatched_batch(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::pin::Pin;
     use std::time::Duration;
 
     use super::*;
@@ -3396,10 +3397,15 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
+    use bytes::Bytes;
     use datafusion_common::assert_contains;
     use datafusion_common::instant::Instant;
     use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_execution::disk_manager::{
+        DiskManager, DiskManagerBuilder, DiskManagerMode,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_execution::spill_file::{SpillFile, SpillWriter, TempFileFactory};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
@@ -3418,6 +3424,62 @@ pub(crate) mod tests {
                 Ok(batch)
             }),
         ))
+    }
+
+    /// Delays the first item while the spill stream is polled, making an
+    /// incorrectly scoped operator timer include the delay.
+    struct DelayedReadSpillFile {
+        inner: Arc<dyn SpillFile>,
+        delay: Duration,
+        read_count: Arc<AtomicUsize>,
+    }
+
+    impl SpillFile for DelayedReadSpillFile {
+        fn path(&self) -> Option<&std::path::Path> {
+            self.inner.path()
+        }
+
+        fn size(&self) -> Option<u64> {
+            self.inner.size()
+        }
+
+        fn read_stream(
+            &self,
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+            let delay = self.delay;
+            let read_count = Arc::clone(&self.read_count);
+            let mut delay_first_item = true;
+            let stream = self.inner.read_stream()?.map(move |item| {
+                if delay_first_item {
+                    delay_first_item = false;
+                    read_count.fetch_add(1, Ordering::Relaxed);
+                    std::thread::sleep(delay);
+                }
+                item
+            });
+            Ok(Box::pin(stream))
+        }
+
+        fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+            self.inner.open_writer()
+        }
+    }
+
+    /// Wraps local spill files so replay reads can be delayed deterministically.
+    struct DelayedReadTempFileFactory {
+        inner: Arc<DiskManager>,
+        delay: Duration,
+        read_count: Arc<AtomicUsize>,
+    }
+
+    impl TempFileFactory for DelayedReadTempFileFactory {
+        fn create_temp_file(&self, description: &str) -> Result<Arc<dyn SpillFile>> {
+            Ok(Arc::new(DelayedReadSpillFile {
+                inner: self.inner.create_tmp_file(description)?,
+                delay: self.delay,
+                read_count: Arc::clone(&self.read_count),
+            }))
+        }
     }
 
     fn build_table(
@@ -3580,6 +3642,23 @@ pub(crate) mod tests {
         right_delay: Duration,
         memory_limited: bool,
     ) -> Result<(Duration, Duration, Duration)> {
+        run_join_with_poll_delays(
+            left_delay,
+            right_delay,
+            memory_limited,
+            JoinType::Inner,
+            None,
+        )
+        .await
+    }
+
+    async fn run_join_with_poll_delays(
+        left_delay: Duration,
+        right_delay: Duration,
+        memory_limited: bool,
+        join_type: JoinType,
+        spill_read_delay: Option<(Duration, Arc<AtomicUsize>)>,
+    ) -> Result<(Duration, Duration, Duration)> {
         let left_batch =
             build_table_i32(("a1", &vec![1]), ("b1", &vec![2]), ("c1", &vec![3]));
         let right_batch =
@@ -3590,7 +3669,25 @@ pub(crate) mod tests {
         let left_stream = delayed_stream(left_batch.clone(), left_delay);
         let right_stream = delayed_stream(right_batch, right_delay);
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if let Some((delay, read_count)) = spill_read_delay {
+            let inner = Arc::new(
+                DiskManagerBuilder::default()
+                    .with_mode(DiskManagerMode::OsTmpDirectory)
+                    .build()?,
+            );
+            let runtime = RuntimeEnvBuilder::new()
+                .with_disk_manager_builder(DiskManagerBuilder::default().with_mode(
+                    DiskManagerMode::Custom(Arc::new(DelayedReadTempFileFactory {
+                        inner,
+                        delay,
+                        read_count,
+                    })),
+                ))
+                .build_arc()?;
+            Arc::new(TaskContext::default().with_runtime(runtime))
+        } else {
+            Arc::new(TaskContext::default())
+        };
         let metrics_set = ExecutionPlanMetricsSet::new();
         let metrics = NestedLoopJoinMetrics::new(&metrics_set, 0);
         let build_time = metrics.join_metrics.build_time.clone();
@@ -3661,11 +3758,11 @@ pub(crate) mod tests {
             )
         };
         let (output_schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Inner);
+            build_join_schema(&left_schema, &right_schema, &join_type);
         let stream = NestedLoopJoinStream::new(
             Arc::new(output_schema),
             None,
-            JoinType::Inner,
+            join_type,
             right_stream,
             left_data,
             column_indices,
@@ -3751,6 +3848,30 @@ pub(crate) mod tests {
         check_child_poll_time_excluded(|delay| async move {
             let (_, join_time, wall_time) =
                 run_join_with_child_poll_delays(Duration::ZERO, delay, true).await?;
+            Ok((join_time, wall_time))
+        })
+        .await
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn join_time_excludes_global_right_unmatched_replay_poll() -> Result<()> {
+        check_child_poll_time_excluded(|delay| async move {
+            let read_count = Arc::new(AtomicUsize::new(0));
+            // The only left chunk is supplied directly, so the sole spill read
+            // is the final right replay in EmitGlobalRightUnmatched.
+            let (_, join_time, wall_time) = run_join_with_poll_delays(
+                Duration::ZERO,
+                Duration::ZERO,
+                true,
+                JoinType::Right,
+                Some((delay, Arc::clone(&read_count))),
+            )
+            .await?;
+            assert_eq!(
+                read_count.load(Ordering::Relaxed),
+                1,
+                "EmitGlobalRightUnmatched should replay the right spill exactly once"
+            );
             Ok((join_time, wall_time))
         })
         .await
