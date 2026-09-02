@@ -948,6 +948,20 @@ SELECT octet_length(arrow_cast(NULL, 'Binary'))
 ----
 NULL
 
+# A bare NULL coerces through the string branch and keeps a typed Int32 result
+query IT
+SELECT octet_length(NULL), arrow_typeof(octet_length(NULL))
+----
+NULL Int32
+
+# A dictionary over Null coerces to a string dictionary rather than reaching
+# the arrow length kernel, which rejects Null values
+query ?T
+SELECT octet_length(arrow_cast(NULL, 'Dictionary(Int32, Null)')),
+       arrow_typeof(octet_length(arrow_cast(NULL, 'Dictionary(Int32, Null)')))
+----
+NULL Dictionary(Int32, Int32)
+
 # Dictionary encoding is preserved over binary values too
 query ?T
 SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'Dictionary(Int32, Binary)')),
@@ -955,10 +969,19 @@ SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'Dictionary(Int32, B
 ----
 3 Dictionary(Int32, Int32)
 
-# FixedSizeBinary is a distinct logical type and is deliberately not accepted,
-# matching md5 and the other Native(logical_binary()) signatures.
-query error Function 'octet_length' failed to match any signature
-SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)'))
+# FixedSizeBinary reports its fixed width
+query IT
+SELECT octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)')),
+       arrow_typeof(octet_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)')))
+----
+3 Int32
+
+# Dictionary encoding is preserved over FixedSizeBinary as well
+query ?T
+SELECT octet_length(arrow_cast(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)'), 'Dictionary(Int32, FixedSizeBinary(3))')),
+       arrow_typeof(octet_length(arrow_cast(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)'), 'Dictionary(Int32, FixedSizeBinary(3))')))
+----
+3 Dictionary(Int32, Int32)
 
 query ??TT
 SELECT character_length(dict_col), character_length(nested_dict_col),

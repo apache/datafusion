@@ -19,7 +19,7 @@ use arrow::compute::kernels::length::length;
 use arrow::datatypes::DataType;
 
 use crate::utils::{transform_leaf_type_preserving_encoding, utf8_to_int_type};
-use datafusion_common::types::{logical_binary, logical_string};
+use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
@@ -30,7 +30,7 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns the length of a string in bytes.",
+    description = "Returns the length of a string or binary in bytes.",
     syntax_example = "octet_length(str)",
     sql_example = r#"```sql
 > select octet_length('Ångström');
@@ -40,7 +40,10 @@ use datafusion_macros::user_doc;
 | 10                             |
 +--------------------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "str",
+        description = "String or binary expression to operate on. Can be a constant, column, or function, and any combination of operators."
+    ),
     related_udf(name = "bit_length"),
     related_udf(name = "length")
 )]
@@ -66,8 +69,10 @@ impl OctetLengthFunc {
                                 EncodingPreservation::dictionary(),
                             ),
                     ]),
+                    // `TypeSignatureClass::Binary` also admits FixedSizeBinary,
+                    // which `Native(logical_binary())` would reject.
                     TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_binary()))
+                        Coercion::new_exact(TypeSignatureClass::Binary)
                             .with_encoding_preservation(
                                 EncodingPreservation::dictionary(),
                             ),
@@ -124,6 +129,9 @@ fn octet_length_scalar(value: &ScalarValue) -> ScalarValue {
         ScalarValue::BinaryView(v) => {
             ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32))
         }
+        ScalarValue::FixedSizeBinary(_, v) => {
+            ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32))
+        }
         ScalarValue::Dictionary(key_type, value) => ScalarValue::Dictionary(
             key_type.clone(),
             Box::new(octet_length_scalar(value)),
@@ -137,8 +145,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, BinaryArray, BinaryViewArray, Int32Array, Int64Array, LargeBinaryArray,
-        StringArray,
+        Array, BinaryArray, BinaryViewArray, FixedSizeBinaryArray, Int32Array,
+        Int64Array, LargeBinaryArray, StringArray,
     };
     use arrow::datatypes::DataType::{Int32, Int64};
 
@@ -155,7 +163,7 @@ mod tests {
             OctetLengthFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(12)))],
             exec_err!(
-                "The OCTET_LENGTH function can only accept strings or binary, but got Int32."
+                "The OCTET_LENGTH function can only accept strings, but got Int32."
             ),
             i32,
             Int32,
@@ -318,6 +326,38 @@ mod tests {
                 b"chars".to_vec()
             )))],
             Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        // FixedSizeBinary reports its fixed width per non-null row.
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Array(Arc::new(
+                FixedSizeBinaryArray::try_from_iter(
+                    vec![&b"abc"[..], &b"def"[..]].into_iter()
+                )?
+            ))],
+            Ok(Some(3)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(
+                5,
+                Some(b"chars".to_vec())
+            ))],
+            Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(5, None))],
+            Ok(None),
             i32,
             Int32,
             Int32Array

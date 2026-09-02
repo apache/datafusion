@@ -32,7 +32,8 @@ use std::sync::Arc;
 ///
 /// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
 ///
-/// If the input type is `Utf8View` the return type is $utf8Type,
+/// If the input type is `Utf8View`, `BinaryView` or `FixedSizeBinary` the
+/// return type is `$utf8Type`,
 macro_rules! get_optimal_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         pub(crate) fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
@@ -43,14 +44,17 @@ macro_rules! get_optimal_return_type {
                 DataType::Utf8 | DataType::Binary => $utf8Type,
                 // Utf8View max offset size is u32::MAX, the same as UTF8
                 DataType::Utf8View | DataType::BinaryView => $utf8Type,
+                // FixedSizeBinary sizes are declared as i32
+                DataType::FixedSizeBinary(_) => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
                     DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
                     DataType::Utf8 | DataType::Binary => $utf8Type,
+                    DataType::FixedSizeBinary(_) => $utf8Type,
                     DataType::Null => DataType::Null,
                     _ => {
                         return datafusion_common::exec_err!(
-                            "The {} function can only accept strings or binary, but got {:?}.",
+                            "The {} function can only accept strings, but got {:?}.",
                             name.to_uppercase(),
                             **value_type
                         );
@@ -58,7 +62,7 @@ macro_rules! get_optimal_return_type {
                 },
                 data_type => {
                     return datafusion_common::exec_err!(
-                        "The {} function can only accept strings or binary, but got {:?}.",
+                        "The {} function can only accept strings, but got {:?}.",
                         name.to_uppercase(),
                         data_type
                     );
