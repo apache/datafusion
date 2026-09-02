@@ -26,7 +26,7 @@ use arrow::{
 };
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex, EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex, EmitTo, GroupSelection, GroupsAccumulator};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -154,6 +154,27 @@ impl BlockedGroupsAccumulator for BlockedGroupsAccumulatorAdapter {
         let group_indices_flatten = group_indices.iter().map(|index| index.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
         self.number_of_groups = total_num_groups;
         self.inner.merge_batch(values, &group_indices_flatten, total_num_groups)
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        self.inner.supports_state_preserving()
+    }
+
+    fn state_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<Vec<ArrayRef>> {
+        match selection.indices() {
+            None => {
+                let selection = GroupSelection::all(selection.total_num_groups());
+
+                self.inner.state_preserving(selection)
+            }
+            Some(indices) => {
+                let indices_flatten = indices.iter().map(|index| index.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
+
+                let selection = GroupSelection::try_from_indices(&indices_flatten, selection.total_num_groups())?;
+
+                self.inner.state_preserving(selection)
+            }
+        }
     }
 
     fn convert_to_state(&self, values: &[ArrayRef], opt_filter: Option<&BooleanArray>) -> Result<Vec<ArrayRef>> {

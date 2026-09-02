@@ -63,78 +63,173 @@ impl EmitTo {
 /// Construct a new selection if the number or indexing of those groups changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GroupSelection<'a> {
-    total_num_groups: usize,
-    indices: Option<&'a [usize]>,
+  total_num_groups: usize,
+  indices: Option<&'a [usize]>,
 }
 
 impl<'a> GroupSelection<'a> {
-    /// Selects all `total_num_groups` groups in group-index order.
-    pub fn all(total_num_groups: usize) -> Self {
-        Self {
-            total_num_groups,
-            indices: None,
-        }
+  /// Selects all `total_num_groups` groups in group-index order.
+  pub fn all(total_num_groups: usize) -> Self {
+    Self {
+      total_num_groups,
+      indices: None,
     }
+  }
 
-    /// Selects groups in the order specified by `indices`.
-    ///
-    /// Returns an error if an index is not less than `total_num_groups`. Empty
-    /// selections are valid, and duplicate indices are preserved.
-    pub fn try_from_indices(
-        indices: &'a [usize],
-        total_num_groups: usize,
-    ) -> Result<Self> {
-        if let Some(index) = indices.iter().find(|&&index| index >= total_num_groups) {
-            return exec_err!(
+  /// Selects groups in the order specified by `indices`.
+  ///
+  /// Returns an error if an index is not less than `total_num_groups`. Empty
+  /// selections are valid, and duplicate indices are preserved.
+  pub fn try_from_indices(
+    indices: &'a [usize],
+    total_num_groups: usize,
+  ) -> Result<Self> {
+    if let Some(index) = indices.iter().find(|&&index| index >= total_num_groups) {
+      return exec_err!(
                 "Group index {index} is out of bounds for {total_num_groups} groups"
             );
-        }
-        Ok(Self {
-            total_num_groups,
-            indices: Some(indices),
-        })
     }
+    Ok(Self {
+      total_num_groups,
+      indices: Some(indices),
+    })
+  }
 
-    /// Returns the group count against which this selection was constructed.
-    pub fn total_num_groups(self) -> usize {
-        self.total_num_groups
-    }
+  /// Returns the group count against which this selection was constructed.
+  pub fn total_num_groups(self) -> usize {
+    self.total_num_groups
+  }
 
-    /// Ensures this selection is being applied to the same number of groups
-    /// against which it was constructed.
-    ///
-    /// Preserving-read implementations should call this method with their
-    /// stored group count before using [`Self::iter`]. This check is `O(1)`;
-    /// the selected indices were already checked by [`Self::try_from_indices`].
-    pub fn validate_num_groups(self, actual_num_groups: usize) -> Result<()> {
-        if actual_num_groups != self.total_num_groups {
-            return exec_err!(
+  /// Ensures this selection is being applied to the same number of groups
+  /// against which it was constructed.
+  ///
+  /// Preserving-read implementations should call this method with their
+  /// stored group count before using [`Self::iter`]. This check is `O(1)`;
+  /// the selected indices were already checked by [`Self::try_from_indices`].
+  pub fn validate_num_groups(self, actual_num_groups: usize) -> Result<()> {
+    if actual_num_groups != self.total_num_groups {
+      return exec_err!(
                 "Group selection was constructed for {} groups but applied to {actual_num_groups} groups",
                 self.total_num_groups
             );
-        }
-        Ok(())
     }
+    Ok(())
+  }
 
-    /// Returns the number of selected groups.
-    pub fn len(self) -> usize {
-        self.indices
-            .map_or(self.total_num_groups, |indices| indices.len())
-    }
+  /// Returns the number of selected groups.
+  pub fn len(self) -> usize {
+    self.indices
+      .map_or(self.total_num_groups, |indices| indices.len())
+  }
 
-    /// Returns `true` if no groups are selected.
-    pub fn is_empty(self) -> bool {
-        self.len() == 0
-    }
+  /// Returns `true` if no groups are selected.
+  pub fn is_empty(self) -> bool {
+    self.len() == 0
+  }
 
-    /// Returns the selected group indices in output order.
-    pub fn iter(self) -> impl Iterator<Item = usize> + 'a {
-        let (all, indices): (_, &'a [usize]) = match self.indices {
-            None => (0..self.total_num_groups, &[]),
-            Some(indices) => (0..0, indices),
-        };
-        all.chain(indices.iter().copied())
+  /// Returns the selected group indices in output order.
+  pub fn iter(self) -> impl Iterator<Item = usize> + 'a {
+    let (all, indices): (_, &'a [usize]) = match self.indices {
+      None => (0..self.total_num_groups, &[]),
+      Some(indices) => (0..0, indices),
+    };
+    all.chain(indices.iter().copied())
+  }
+}
+
+/// Selects groups for a non-destructive grouped aggregation read.
+///
+/// Unlike [`BlockedEmitTo`], this selection does not remove groups or change their
+/// indices. Selections created by [`Self::try_from_indices`] preserve the
+/// requested order and support duplicate indices.
+///
+/// A selection is validated once when it is constructed and can then be reused
+/// for the group values and accumulators participating in the same snapshot.
+/// Construct a new selection if the number or indexing of those groups changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockedGroupSelection<'a> {
+  block_size: usize,
+  total_num_groups: usize,
+  indices: Option<&'a [BlocksIndex]>,
+}
+
+impl<'a> BlockedGroupSelection<'a> {
+  /// Selects all `total_num_groups` groups in group-index order.
+  pub fn all(total_num_groups: usize, block_size: usize,) -> Self {
+    Self {
+      total_num_groups,
+      indices: None,
+      block_size,
     }
+  }
+
+  /// Selects groups in the order specified by `indices`.
+  ///
+  /// Returns an error if an index is not less than `total_num_groups`. Empty
+  /// selections are valid, and duplicate indices are preserved.
+  pub fn try_from_indices(
+    indices: &'a [BlocksIndex],
+    total_num_groups: usize,
+    block_size: usize,
+  ) -> Result<Self> {
+    let total_num_groups_parsed = BlocksIndex::from_index_in_fixed_block_size(total_num_groups, block_size);
+    if let Some(index) = indices.iter().find(|&&index| index >= total_num_groups_parsed) {
+      return exec_err!(
+                "Group index {index:?} is out of bounds for {total_num_groups_parsed:?} ({total_num_groups}) groups"
+            );
+    }
+    Ok(Self {
+      total_num_groups,
+      indices: Some(indices),
+      block_size
+    })
+  }
+
+  /// Returns the group count against which this selection was constructed.
+  pub fn total_num_groups(self) -> usize {
+    self.total_num_groups
+  }
+
+  /// Ensures this selection is being applied to the same number of groups
+  /// against which it was constructed.
+  ///
+  /// Preserving-read implementations should call this method with their
+  /// stored group count before using [`Self::iter`]. This check is `O(1)`;
+  /// the selected indices were already checked by [`Self::try_from_indices`].
+  pub fn validate_num_groups(self, actual_num_groups: usize) -> Result<()> {
+    if actual_num_groups != self.total_num_groups {
+      return exec_err!(
+                "Group selection was constructed for {} groups but applied to {actual_num_groups} groups",
+                self.total_num_groups
+            );
+    }
+    Ok(())
+  }
+
+  /// Returns the number of selected groups.
+  pub fn len(self) -> usize {
+    self.indices
+      .map_or(self.total_num_groups, |indices| indices.len())
+  }
+
+  /// Returns `true` if no groups are selected.
+  pub fn is_empty(self) -> bool {
+    self.len() == 0
+  }
+
+  /// Returns the selected group indices in output order.
+  pub fn iter(self) -> impl Iterator<Item = BlocksIndex> + 'a {
+    let (all, indices): (_, &'a [BlocksIndex]) = match self.indices {
+      None => (0..self.total_num_groups, &[]),
+      Some(indices) => (0..0, indices),
+    };
+    all.chain(indices.iter().copied())
+  }
+
+  #[doc(hidden)]
+  pub fn indices(&self) -> Option<&[BlocksIndex]> {
+    self.indices
+  }
 }
 
 /// `GroupsAccumulator` implements a single aggregate (e.g. AVG) and
@@ -251,8 +346,8 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// internal caches or builders. However, repeated calls and later updates
     /// must observe the same logical accumulator state.
     fn evaluate_preserving(
-        &mut self,
-        _selection: GroupSelection<'_>,
+      &mut self,
+      _selection: GroupSelection<'_>,
     ) -> Result<ArrayRef> {
         not_impl_err!("Preserving grouped evaluation is not implemented")
     }
@@ -291,8 +386,8 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// internal caches or builders. However, repeated calls and later updates
     /// must observe the same logical accumulator state.
     fn state_preserving(
-        &mut self,
-        _selection: GroupSelection<'_>,
+      &mut self,
+      _selection: GroupSelection<'_>,
     ) -> Result<Vec<ArrayRef>> {
         not_impl_err!("Preserving grouped state is not implemented")
     }
@@ -720,7 +815,7 @@ pub trait BlockedGroupsAccumulator: Send + std::any::Any {
   /// must observe the same logical accumulator state.
   fn state_preserving(
     &mut self,
-    _selection: GroupSelection<'_>,
+    _selection: BlockedGroupSelection<'_>,
   ) -> Result<Vec<ArrayRef>> {
     not_impl_err!("Preserving grouped state is not implemented")
   }
