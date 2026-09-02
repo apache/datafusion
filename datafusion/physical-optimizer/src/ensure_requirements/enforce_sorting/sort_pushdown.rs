@@ -816,7 +816,7 @@ fn expr_source_side(
                         }
                         false
                     });
-                };
+                }
                 if !(valid_left || valid_right) {
                     return None;
                 }

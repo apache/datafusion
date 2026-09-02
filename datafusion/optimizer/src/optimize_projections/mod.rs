@@ -282,7 +282,7 @@ fn optimize_projections(
         }
         // Other node types are handled below
         _ => {}
-    };
+    }
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children

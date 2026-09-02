@@ -63,7 +63,7 @@ pub use normalize_float_zero::NormalizeFloatZeroExpr;
 pub use not::{NotExpr, not};
 pub(crate) use similar_to_pattern::translate_scalar;
 pub use similar_to_pattern::{SqlSimilarToPattern, sql_similar_to_regex};
-pub use try_cast::{TryCastExpr, try_cast};
+pub use try_cast::{TryCastExpr, try_cast, try_cast_with_target_field};
 pub use unknown_column::UnKnownColumn;
 
 pub(crate) use cast::cast_with_target_field;

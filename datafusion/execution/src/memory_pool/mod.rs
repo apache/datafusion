@@ -457,7 +457,7 @@ impl MemoryReservation {
                 self.try_shrink(size - capacity)?;
             }
             _ => {}
-        };
+        }
         Ok(())
     }
 

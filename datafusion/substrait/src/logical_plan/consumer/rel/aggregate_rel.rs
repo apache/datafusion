@@ -71,7 +71,7 @@ pub async fn from_aggregate_rel(
                 group_exprs
                     .push(Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)));
             }
-        };
+        }
 
         for m in &agg.measures {
             let filter = match &m.filter {
