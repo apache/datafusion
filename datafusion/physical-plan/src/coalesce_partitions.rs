@@ -21,7 +21,9 @@
 use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::stream::{ObservedStream, RecordBatchReceiverStream};
+use super::stream::{
+    ObservedStream, RecordBatchReceiverStream, RecordBatchStreamAdapter,
+};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
@@ -38,6 +40,7 @@ use crate::{
     ReplaceChildrenOptions, validate_child_count,
 };
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use futures::stream::{StreamExt, TryStreamExt};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -229,6 +232,27 @@ impl ExecutionPlan for CoalescePartitionsExec {
             }
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+
+                // Single-threaded path: drain sequentially to avoid
+                // `JoinSet::spawn`, which needs a tokio reactor and panics
+                // on wasm32-unknown-unknown.
+                if context.session_config().target_partitions() == 1 {
+                    // mirror the slow path so elapsed_compute isn't 0 here
+                    let elapsed_compute = baseline_metrics.elapsed_compute().clone();
+                    let _timer = elapsed_compute.timer();
+
+                    let input = Arc::clone(&self.input);
+                    let ctx = Arc::clone(&context);
+                    let stream = futures::stream::iter(0..input_partitions)
+                        .map(move |i| input.execute(i, Arc::clone(&ctx)))
+                        .try_flatten();
+                    return Ok(Box::pin(ObservedStream::new(
+                        Box::pin(RecordBatchStreamAdapter::new(self.schema(), stream)),
+                        baseline_metrics,
+                        self.fetch,
+                    )));
+                }
+
                 // record the (very) minimal work done so that
                 // elapsed_compute is not reported as 0
                 let elapsed_compute = baseline_metrics.elapsed_compute().clone();

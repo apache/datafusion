@@ -235,6 +235,29 @@ mod test {
     }
 
     #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn test_union_all() {
+        // Regression: UNION ALL used to panic on wasm via `JoinSet::spawn`.
+        let ctx = get_ctx();
+        let result = ctx
+            .sql("SELECT 1 AS n UNION ALL SELECT 2 AS n")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            batches_to_string(&result),
+            "+---+\n\
+             | n |\n\
+             +---+\n\
+             | 1 |\n\
+             | 2 |\n\
+             +---+"
+        );
+    }
+
+    #[wasm_bindgen_test(unsupported = tokio::test)]
     async fn test_parquet_write() {
         let (schema, batch) = create_test_data();
         let mut buffer = Vec::new();
