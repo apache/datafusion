@@ -1390,7 +1390,7 @@ config_namespace! {
         /// a user-supplied schema are not promoted because the Parquet footer is
         /// not read at DDL time, so dictionary pages cannot be detected per column.
         /// See <https://github.com/apache/datafusion/issues/24112>
-        pub enable_rle_to_dictionary: bool, default = true
+        pub enable_rle_to_dictionary: bool, default = false
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
