@@ -4462,6 +4462,25 @@ impl AsOfMatch {
     }
 }
 
+impl TryFrom<Expr> for AsOfMatch {
+    type Error = DataFusionError;
+
+    fn try_from(condition: Expr) -> Result<Self> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = condition else {
+            return plan_err!("ASOF MATCH_CONDITION must be a single comparison");
+        };
+        if !matches!(
+            op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return plan_err!(
+                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {op}"
+            );
+        }
+        Ok(Self::new(*left, op, *right))
+    }
+}
+
 impl Display for AsOfMatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} {} {}", self.left, self.op, self.right)

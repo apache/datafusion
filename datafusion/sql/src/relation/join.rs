@@ -16,13 +16,8 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{
-    Column, DFSchema, Result, not_impl_err, plan_datafusion_err, plan_err,
-};
-use datafusion_expr::utils::split_conjunction_owned;
-use datafusion_expr::{
-    AsOfMatch, BinaryExpr, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
-};
+use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
+use datafusion_expr::{AsOfMatch, JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
@@ -128,64 +123,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let join_schema = left.schema().join(right.schema())?;
         let match_condition =
             self.sql_to_expr(sql_match_condition, &join_schema, planner_context)?;
-        let Expr::BinaryExpr(BinaryExpr {
-            left: match_left,
-            op,
-            right: match_right,
-        }) = match_condition
-        else {
-            return plan_err!("ASOF MATCH_CONDITION must be a single comparison");
-        };
-        if !matches!(
-            op,
-            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
-        ) {
-            return plan_err!(
-                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {op}"
-            );
-        }
-        if !expr_owned_by(&match_left, left.schema())
-            || !expr_owned_by(&match_right, right.schema())
-        {
-            return plan_err!(
-                "ASOF MATCH_CONDITION left operand must reference only the left input and right operand only the right input"
-            );
-        }
-        let match_condition = AsOfMatch::new(*match_left, op, *match_right);
 
         match constraint {
             JoinConstraint::On(sql_on) => {
                 let on = self.sql_to_expr(sql_on, &join_schema, planner_context)?;
-                let on = split_conjunction_owned(on)
-                    .into_iter()
-                    .map(|predicate| {
-                        let Expr::BinaryExpr(BinaryExpr {
-                            left: on_left,
-                            op: Operator::Eq,
-                            right: on_right,
-                        }) = predicate
-                        else {
-                            return plan_err!(
-                                "ASOF ON accepts only equality conditions combined with AND"
-                            );
-                        };
-                        if expr_owned_by(&on_left, left.schema())
-                            && expr_owned_by(&on_right, right.schema())
-                        {
-                            Ok((*on_left, *on_right))
-                        } else if expr_owned_by(&on_right, left.schema())
-                            && expr_owned_by(&on_left, right.schema())
-                        {
-                            Ok((*on_right, *on_left))
-                        } else {
-                            plan_err!(
-                                "Each ASOF equality condition must compare one left expression with one right expression"
-                            )
-                        }
-                    })
-                    .collect::<Result<_>>()?;
                 LogicalPlanBuilder::from(left)
-                    .asof_join(right, on, match_condition)?
+                    .asof_join_on(right, [on], match_condition)?
                     .build()
             }
             JoinConstraint::Using(object_names) => {
@@ -214,11 +157,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 LogicalPlanBuilder::from(left)
-                    .asof_join_using(right, keys, match_condition)?
+                    .asof_join_using(right, keys, AsOfMatch::try_from(match_condition)?)?
                     .build()
             }
             JoinConstraint::None => LogicalPlanBuilder::from(left)
-                .asof_join(right, vec![], match_condition)?
+                .asof_join_on(right, [], match_condition)?
                 .build(),
             JoinConstraint::Natural => {
                 not_impl_err!("NATURAL ASOF JOIN is not supported")
@@ -302,14 +245,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .build(),
         }
     }
-}
-
-fn expr_owned_by(expr: &Expr, schema: &DFSchema) -> bool {
-    let columns = expr.column_refs();
-    !columns.is_empty()
-        && columns
-            .iter()
-            .all(|column| schema.is_column_from_schema(column))
 }
 
 /// Returns `true` if the given [`TableFactor`] is lateral.
