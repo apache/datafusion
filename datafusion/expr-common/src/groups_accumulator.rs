@@ -223,7 +223,8 @@ impl<'a> BlockedGroupSelection<'a> {
       None => (0..self.total_num_groups, &[]),
       Some(indices) => (0..0, indices),
     };
-    all.chain(indices.iter().copied())
+    let block_size = self.block_size;
+    all.map(move |index| BlocksIndex::from_index_in_fixed_block_size(index, block_size)).chain(indices.iter().copied())
   }
 
   #[doc(hidden)]
