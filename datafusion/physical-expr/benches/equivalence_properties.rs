@@ -22,15 +22,23 @@
 //! windows, joins and aggregates), so their cost shows up directly in planning
 //! time.
 //!
+//! # Scope
+//!
+//! These measure the satisfaction check itself, not the cost of assembling its
+//! arguments. The sort expressions, requirements and orderings are built once,
+//! up front. Because the checks take their input by value, each iteration gets a
+//! fresh copy from the untimed setup step of `iter_batched`; only the call is
+//! timed. Any copying the check does internally is part of what is measured.
+//!
 //! The benchmarks are parameterized by the number of equivalence classes, since
-//! that -- not the schema width, which is behind an `Arc` -- is what these
+//! that -- not the schema width, which sits behind an `Arc` -- is what these
 //! checks carry around.
 
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
@@ -76,69 +84,80 @@ fn properties(n_classes: usize) -> EquivalenceProperties {
 fn bench_ordering_satisfaction(c: &mut Criterion) {
     let mut group = c.benchmark_group("equivalence_properties");
 
+    // Built once; see the "Scope" note at the top of this file.
+    let one_key = vec![asc(0)];
+    // `c7` leads none of the orderings, so this exits on the first key.
+    let one_key_unsatisfied = vec![asc(7)];
+    let four_keys = (0..4).map(asc).collect::<Vec<_>>();
+    let four_key_ordering = LexOrdering::new(four_keys.clone()).unwrap();
+    let one_req = vec![PhysicalSortRequirement::new(col(0), None)];
+    let four_reqs = (0..4)
+        .map(|i| PhysicalSortRequirement::new(col(i), None))
+        .collect::<Vec<_>>();
+
     for n_classes in [2, 8, 32] {
         let props = properties(n_classes);
 
         // A single sort key: the most common shape by far.
-        group.bench_with_input(
+        group.bench_function(
             BenchmarkId::new("ordering_satisfy/1_key", n_classes),
-            &n_classes,
-            |b, _| b.iter(|| props.ordering_satisfy([asc(0)]).unwrap()),
+            |b| {
+                b.iter_batched(
+                    || one_key.clone(),
+                    |keys| props.ordering_satisfy(keys).unwrap(),
+                    BatchSize::SmallInput,
+                )
+            },
         );
-        // A single sort key that is not satisfied: exits on the first key.
-        group.bench_with_input(
+        group.bench_function(
             BenchmarkId::new("ordering_satisfy/1_key_unsatisfied", n_classes),
-            &n_classes,
-            |b, _| b.iter(|| props.ordering_satisfy([asc(7)]).unwrap()),
+            |b| {
+                b.iter_batched(
+                    || one_key_unsatisfied.clone(),
+                    |keys| props.ordering_satisfy(keys).unwrap(),
+                    BatchSize::SmallInput,
+                )
+            },
         );
         // Four sort keys: exercises the per-key constant registration.
-        group.bench_with_input(
+        group.bench_function(
             BenchmarkId::new("ordering_satisfy/4_keys", n_classes),
-            &n_classes,
-            |b, _| {
-                b.iter(|| {
-                    props
-                        .ordering_satisfy([asc(0), asc(1), asc(2), asc(3)])
-                        .unwrap()
-                })
+            |b| {
+                b.iter_batched(
+                    || four_keys.clone(),
+                    |keys| props.ordering_satisfy(keys).unwrap(),
+                    BatchSize::SmallInput,
+                )
             },
         );
-        group.bench_with_input(
+        group.bench_function(
             BenchmarkId::new("ordering_satisfy_requirement/1_key", n_classes),
-            &n_classes,
-            |b, _| {
-                b.iter(|| {
-                    props
-                        .ordering_satisfy_requirement([PhysicalSortRequirement::new(
-                            col(0),
-                            None,
-                        )])
-                        .unwrap()
-                })
+            |b| {
+                b.iter_batched(
+                    || one_req.clone(),
+                    |reqs| props.ordering_satisfy_requirement(reqs).unwrap(),
+                    BatchSize::SmallInput,
+                )
             },
         );
-        group.bench_with_input(
+        group.bench_function(
             BenchmarkId::new("ordering_satisfy_requirement/4_keys", n_classes),
-            &n_classes,
-            |b, _| {
-                b.iter(|| {
-                    props
-                        .ordering_satisfy_requirement(
-                            (0..4).map(|i| PhysicalSortRequirement::new(col(i), None)),
-                        )
-                        .unwrap()
-                })
+            |b| {
+                b.iter_batched(
+                    || four_reqs.clone(),
+                    |reqs| props.ordering_satisfy_requirement(reqs).unwrap(),
+                    BatchSize::SmallInput,
+                )
             },
         );
-        group.bench_with_input(
+        group.bench_function(
             BenchmarkId::new("extract_common_sort_prefix/4_keys", n_classes),
-            &n_classes,
-            |b, _| {
-                b.iter(|| {
-                    let ordering =
-                        LexOrdering::new((0..4).map(asc).collect::<Vec<_>>()).unwrap();
-                    props.extract_common_sort_prefix(ordering).unwrap()
-                })
+            |b| {
+                b.iter_batched(
+                    || four_key_ordering.clone(),
+                    |ordering| props.extract_common_sort_prefix(ordering).unwrap(),
+                    BatchSize::SmallInput,
+                )
             },
         );
     }
