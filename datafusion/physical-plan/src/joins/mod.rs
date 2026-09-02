@@ -17,11 +17,10 @@
 
 //! DataFusion Join implementations
 
-use core::fmt;
-use std::fmt::{Display, Formatter};
-
+pub use array_map::ArrayMap;
 use arrow::array::BooleanBufferBuilder;
 pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
+use core::fmt;
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::{
@@ -29,6 +28,7 @@ pub use hash_join::{
 };
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;
+use std::fmt::{Display, Formatter};
 // Note: SortMergeJoin is not used in plans yet
 pub use piecewise_merge_join::PiecewiseMergeJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
@@ -54,7 +54,6 @@ mod join_filter;
 /// and is not guaranteed to be stable across versions.
 pub mod join_hash_map;
 
-use array_map::ArrayMap;
 use utils::JoinHashMapType;
 
 /// The build-side map of a hash join, indexing build rows by join key.

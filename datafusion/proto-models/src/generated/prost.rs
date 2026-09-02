@@ -1561,7 +1561,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1630,6 +1630,8 @@ pub mod physical_expr_node {
         SqlSimilarToPattern(
             ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
         ),
+        #[prost(message, tag = "29")]
+        HashTableLookupExpr(super::PhysicalHashTableLookupExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1874,6 +1876,64 @@ pub struct PhysicalHashExprNode {
     pub seed0: u64,
     #[prost(string, tag = "6")]
     pub description: ::prost::alloc::string::String,
+}
+/// Serialized form of `HashTableLookupExpr`: a dynamic-filter expression that
+/// tests probe-side join keys for membership in a hash join's build side.
+///
+/// The build-side map is encoded membership-only: the deserialized expression
+/// supports membership checks but cannot serve as a join's build map.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHashTableLookupExprNode {
+    /// Probe-side key columns evaluated to produce lookup keys.
+    #[prost(message, repeated, tag = "1")]
+    pub on_columns: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Seed for the hash function applied to `on_columns` when probing a
+    /// `HashMapMembership` map. Hashes are only comparable between identical
+    /// DataFusion builds: the hash function (ahash) is not stable across
+    /// versions or platforms, and a mismatch silently drops join rows.
+    #[prost(uint64, tag = "2")]
+    pub seed0: u64,
+    /// Display string for EXPLAIN output; preserved verbatim across the roundtrip.
+    #[prost(string, tag = "3")]
+    pub description: ::prost::alloc::string::String,
+    #[prost(oneof = "physical_hash_table_lookup_expr_node::Map", tags = "4, 5")]
+    pub map: ::core::option::Option<physical_hash_table_lookup_expr_node::Map>,
+}
+/// Nested message and enum types in `PhysicalHashTableLookupExprNode`.
+pub mod physical_hash_table_lookup_expr_node {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Map {
+        #[prost(message, tag = "4")]
+        HashMapMembership(super::HashMapMembership),
+        #[prost(message, tag = "5")]
+        ArrayMapMembership(super::ArrayMapMembership),
+    }
+}
+/// Membership-only encoding of a hash join's build-side hash table: the set
+/// of distinct join-key hashes present on the build side.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HashMapMembership {
+    /// Distinct 64-bit key hashes, computed with `seed0`. Order is unspecified.
+    #[prost(fixed64, repeated, tag = "1")]
+    pub build_hashes: ::prost::alloc::vec::Vec<u64>,
+}
+/// Membership-only encoding of an `ArrayMap` (single-column integer join keys
+/// within a bounded range), as a presence bitmap over the key range.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArrayMapMembership {
+    /// Minimum build-side key value as a raw wrapped u64 (two's complement bit
+    /// pattern for signed key types). Bitmap slot `i` corresponds to key
+    /// `offset + i`, computed with wrapping arithmetic.
+    #[prost(uint64, tag = "1")]
+    pub offset: u64,
+    /// Width of the key range, i.e. the number of bitmap slots. `presence`
+    /// must be exactly ceil(num_slots / 8) bytes or decoding fails.
+    #[prost(uint64, tag = "2")]
+    pub num_slots: u64,
+    /// Presence bitmap, LSB-first within each byte (Arrow validity-buffer bit
+    /// order): bit `i` set means key `offset + i` exists on the build side.
+    #[prost(bytes = "vec", tag = "3")]
+    pub presence: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeExprNode {

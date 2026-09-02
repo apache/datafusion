@@ -24,7 +24,7 @@ use crate::joins::chain::traverse_chain;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowNumericType;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, internal_err};
 
 /// A macro to downcast only supported integer types (up to 64-bit) and invoke a generic function.
 ///
@@ -172,7 +172,10 @@ impl ArrayMap {
     /// Note: This function processes only the non-null values in the input `array`,
     /// ignoring any rows where the key is `NULL`.
     ///
-    pub(crate) fn try_new(array: &ArrayRef, min_val: u64, max_val: u64) -> Result<Self> {
+    /// # Note
+    /// This is public for internal testing purposes only and is not
+    /// guaranteed to be stable across versions.
+    pub fn try_new(array: &ArrayRef, min_val: u64, max_val: u64) -> Result<Self> {
         let range = Self::calculate_range(min_val, max_val);
         if range >= usize::MAX as u64 {
             return internal_err!("ArrayMap key range is too large to be allocated.");
@@ -414,6 +417,47 @@ impl ArrayMap {
             self.get_value(key).is_some()
         });
         Ok(BooleanArray::new(buffer, None))
+    }
+
+    #[cfg(feature = "proto")]
+    pub(crate) fn to_proto_membership_only(
+        &self,
+    ) -> datafusion_proto_models::protobuf::ArrayMapMembership {
+        use datafusion_proto_models::protobuf;
+
+        let bits = BooleanBuffer::collect_bool(self.data.len(), |i| self.data[i] != 0);
+        let presence = bits.sliced().as_slice().to_vec();
+        protobuf::ArrayMapMembership {
+            offset: self.offset,
+            num_slots: self.data.len() as u64,
+            presence,
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    pub(crate) fn try_from_proto_membership_only(
+        node: &datafusion_proto_models::protobuf::ArrayMapMembership,
+    ) -> Result<Self> {
+        use arrow::util::bit_iterator::BitIndexIterator;
+
+        // Assert that i < num_slots is a valid index into node.presence
+        assert_eq_or_internal_err!(
+            node.presence.len() as u64,
+            node.num_slots.div_ceil(8)
+        );
+
+        let mut data = vec![0u32; node.num_slots as usize];
+        let mut num_of_distinct_key = 0;
+        for slot in BitIndexIterator::new(&node.presence, 0, node.num_slots as usize) {
+            data[slot] = 1;
+            num_of_distinct_key += 1;
+        }
+        Ok(Self {
+            data,
+            offset: node.offset,
+            next: Vec::new(),
+            num_of_distinct_key,
+        })
     }
 }
 

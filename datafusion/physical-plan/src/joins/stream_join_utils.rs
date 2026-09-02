@@ -112,6 +112,10 @@ impl JoinHashMapType for PruningJoinHashMap {
     fn len(&self) -> usize {
         self.map.len()
     }
+
+    fn hashes(&self) -> Vec<u64> {
+        self.map.iter().map(|(hash, _)| *hash).collect()
+    }
 }
 
 /// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with
