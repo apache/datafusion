@@ -1828,7 +1828,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         let simplified = inlist_intersection(l1.clone(), &l2, false)?;
                         if let Some(simplified) =
-                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
                         {
                             Transformed::yes(simplified)
                         } else {
@@ -1875,7 +1875,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         let simplified = inlist_except(l1.clone(), &l2)?;
                         if let Some(simplified) =
-                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
                         {
                             Transformed::yes(simplified)
                         } else {
@@ -1902,7 +1902,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         let simplified = inlist_except(l2.clone(), &l1)?;
                         if let Some(simplified) =
-                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
                         {
                             Transformed::yes(simplified)
                         } else {
@@ -1929,7 +1929,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     (Expr::InList(l1), Expr::InList(l2)) => {
                         let simplified = inlist_intersection(l1.clone(), &l2, true)?;
                         if let Some(simplified) =
-                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)?
                         {
                             Transformed::yes(simplified)
                         } else {
@@ -2340,29 +2340,24 @@ fn simplify_inlist_set_operation(
     left: &InList,
     right: &InList,
     result: Expr,
-) -> Option<Expr> {
-    let list_items_are_non_nullable = left
-        .list
-        .iter()
-        .chain(&right.list)
-        .all(|item| matches!(info.nullable(item), Ok(false)));
-
-    if !list_items_are_non_nullable {
-        return None;
+) -> Result<Option<Expr>> {
+    for item in left.list.iter().chain(&right.list) {
+        if info.nullable(item)? {
+            return Ok(None);
+        }
     }
 
     if !is_true(&result) && !is_false(&result) {
-        return Some(result);
+        return Ok(Some(result));
     }
 
-    match info.nullable(left.expr.as_ref()) {
-        Ok(false) => Some(result),
-        Ok(true) if is_true(&result) => {
-            Some(Expr::IsNotNull(left.expr.clone()).or(lit_bool_null()))
-        }
-        Ok(true) => Some(Expr::IsNull(left.expr.clone()).and(lit_bool_null())),
-        Err(_) => None,
-    }
+    Ok(Some(if !info.nullable(left.expr.as_ref())? {
+        result
+    } else if is_true(&result) {
+        Expr::IsNotNull(left.expr.clone()).or(lit_bool_null())
+    } else {
+        Expr::IsNull(left.expr.clone()).and(lit_bool_null())
+    }))
 }
 
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
@@ -4682,6 +4677,64 @@ mod tests {
         // https://github.com/apache/datafusion/issues/8970
         // assert_eq!(simplify(expr.clone()), lit(true));
         assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_inlist_set_operation_propagates_nullability_errors() {
+        let info = SimplifyContext::builder()
+            .with_schema(expr_test_schema())
+            .build();
+        let valid = InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit("a")],
+            negated: false,
+        };
+
+        let invalid_list_item = InList {
+            expr: Box::new(col("c1")),
+            list: vec![col("missing")],
+            negated: false,
+        };
+        let error =
+            simplify_inlist_set_operation(&info, &invalid_list_item, &valid, lit(false))
+                .unwrap_err();
+        assert_contains!(error.to_string(), "No field named missing");
+
+        let invalid_tested_expr = InList {
+            expr: Box::new(col("missing")),
+            list: vec![lit("a")],
+            negated: false,
+        };
+        let error = simplify_inlist_set_operation(
+            &info,
+            &invalid_tested_expr,
+            &valid,
+            lit(false),
+        )
+        .unwrap_err();
+        assert_contains!(error.to_string(), "No field named missing");
+    }
+
+    #[test]
+    fn simplify_inlist_set_operation_preserves_null_result() {
+        let info = SimplifyContext::builder()
+            .with_schema(expr_test_schema())
+            .build();
+        let left = InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit("a")],
+            negated: false,
+        };
+        let right = InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit("b")],
+            negated: false,
+        };
+
+        assert_eq!(
+            simplify_inlist_set_operation(&info, &left, &right, lit_bool_null()).unwrap(),
+            Some(lit_bool_null())
+        );
     }
 
     #[test]
