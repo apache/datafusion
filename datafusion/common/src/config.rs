@@ -4619,6 +4619,19 @@ mod tests {
         config.execution.parquet.statistics_enabled = Some(DFParquetStatistics::Page);
         assert!(
             config
+                .set(
+                    "datafusion.execution.parquet.statistics_enabled.typo",
+                    "none"
+                )
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.statistics_enabled,
+            Some(DFParquetStatistics::Page)
+        );
+
+        assert!(
+            config
                 .reset("datafusion.execution.parquet.statistics_enabled.typo")
                 .is_err()
         );
@@ -4626,6 +4639,10 @@ mod tests {
             config.execution.parquet.statistics_enabled,
             Some(DFParquetStatistics::Page)
         );
+
+        let mut scalar = DFParquetStatistics::Page;
+        assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
+        assert_eq!(scalar, DFParquetStatistics::Page);
     }
 
     #[cfg(feature = "parquet")]
