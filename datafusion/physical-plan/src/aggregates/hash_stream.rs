@@ -360,6 +360,7 @@ impl FinalSpillContext {
 enum HandleInputResult {
     ProcessNext,
     ReachedLimit,
+    #[expect(clippy::upper_case_acronyms)]
     OOM,
     SwitchToSkipAggregation,
 }
@@ -452,7 +453,7 @@ impl PartialHashAggregateStream {
             let mut last_state = HandleInputResult::ProcessNext;
             while let Some(batch) = self.input.next().await.transpose()? {
                 let timer = elapsed_compute.timer();
-                last_state = self.handle_input_batch(batch, &mut hash_table)?;
+                last_state = self.handle_input_batch(&batch, &mut hash_table)?;
 
                 match last_state {
                     HandleInputResult::ProcessNext => {}
@@ -486,7 +487,7 @@ impl PartialHashAggregateStream {
             let timer = elapsed_compute.timer();
 
             let skip_hash_table =
-                if last_state != HandleInputResult::SwitchToSkipAggregation {
+                if last_state == HandleInputResult::SwitchToSkipAggregation {
                     Some(hash_table.partial_skip_table()?)
                 } else {
                     self.close_input();
@@ -497,7 +498,7 @@ impl PartialHashAggregateStream {
 
             timer.done();
 
-            self.produce_output(hash_table, emitter).await?;
+            self.produce_output(hash_table, &mut emitter).await?;
 
             if let Some(hash_table) = skip_hash_table {
                 self.skip_rest_of_aggregation(hash_table, emitter).await?;
@@ -531,13 +532,6 @@ impl PartialHashAggregateStream {
             .is_some_and(|probe| probe.should_skip())
     }
 
-    fn start_output(
-        &mut self,
-        hash_table: &mut AggregateHashTable<PartialMarker>,
-    ) -> Result<()> {
-        hash_table.start_output()
-    }
-
     fn close_input(&mut self) {
         let input_schema = self.input.schema();
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
@@ -546,7 +540,7 @@ impl PartialHashAggregateStream {
     /// Aggregate input batch into the hash table
     fn handle_input_batch(
         &mut self,
-        batch: RecordBatch,
+        batch: &RecordBatch,
         hash_table: &mut AggregateHashTable<PartialMarker>,
     ) -> Result<HandleInputResult> {
         // ----------------------------------
@@ -554,7 +548,7 @@ impl PartialHashAggregateStream {
         // ----------------------------------
         let input_rows = batch.num_rows();
         self.reduction_factor.add_total(input_rows);
-        hash_table.aggregate_batch(&batch)?;
+        hash_table.aggregate_batch(batch)?;
 
         // --------------------------------
         // Step 2: Soft limit optimization
@@ -624,7 +618,7 @@ impl PartialHashAggregateStream {
     async fn produce_output(
         &mut self,
         mut hash_table: AggregateHashTable<PartialMarker>,
-        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         debug_assert!(!hash_table.is_building());
 
