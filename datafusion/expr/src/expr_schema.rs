@@ -33,7 +33,6 @@ use crate::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
@@ -91,27 +90,14 @@ fn cast_output_field(
     target_field: &FieldRef,
     force_nullable: bool,
 ) -> Arc<Field> {
-    // Check if this is a "type-only" cast (target_field == DataType::X.into_nullable_field())
-    let is_type_only = target_field.name().is_empty()
-        && target_field.is_nullable()
-        && target_field.metadata().is_empty();
-
-    let metadata = if is_type_only {
-        // Type-only cast: propagate source metadata, stripping extension type keys
-        let mut meta = source_field.metadata().clone();
-        meta.remove(EXTENSION_TYPE_NAME_KEY);
-        meta.remove(EXTENSION_TYPE_METADATA_KEY);
-        meta
-    } else {
-        // Explicit target field: use target metadata exactly
-        target_field.metadata().clone()
-    };
-
+    // The cast target's metadata is authoritative: a cast produces the field its
+    // target describes. A type-only target describes a field with no metadata, so
+    // a plain `CAST(expr AS type)` produces no metadata.
     let mut f = source_field
         .as_ref()
         .clone()
         .with_data_type(target_field.data_type().clone())
-        .with_metadata(metadata);
+        .with_metadata(target_field.metadata().clone());
     if force_nullable {
         f = f.with_nullable(true);
     }
@@ -1184,11 +1170,12 @@ mod tests {
             .with_data_type(DataType::Int32)
             .with_metadata(meta.clone());
 
-        // col, alias, and cast should be metadata-preserving
+        // col and alias are metadata-preserving; a cast is not, because its
+        // target's metadata is authoritative and a type-only target carries none
         assert_eq!(meta, expr.metadata(&schema).unwrap());
         assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
         assert_eq!(
-            meta,
+            FieldMetadata::from(HashMap::new()),
             expr.clone()
                 .cast_to(&DataType::Int64, &schema)
                 .unwrap()
@@ -1515,10 +1502,9 @@ mod tests {
                     .is_none(),
                 "{cast_name}: Extension type name should be stripped when target has no extension metadata"
             );
-            assert_eq!(
-                result_field.metadata().get("custom_key"),
-                Some(&"custom_value".to_string()),
-                "{cast_name}: Non-extension metadata should be preserved"
+            assert!(
+                result_field.metadata().get("custom_key").is_none(),
+                "{cast_name}: source metadata should not survive a type-only cast"
             );
             if use_try_cast {
                 assert!(

@@ -25,7 +25,6 @@ use crate::physical_expr::PhysicalExpr;
 use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::nested_struct::{
@@ -232,19 +231,16 @@ impl CastExpr {
             ));
         }
 
-        // Type-only cast: pass through the source metadata and nullability,
-        // stripping extension type keys (the cast is to a plain storage type).
+        // Type-only cast: the target's metadata is authoritative and a type-only
+        // target carries none, so the output carries none. Nullability still
+        // follows the source, which a type-only target says nothing about.
         source_result.map(|source_field| {
-            let mut metadata = source_field.metadata().clone();
-            metadata.remove(EXTENSION_TYPE_NAME_KEY);
-            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
-
             Arc::new(
                 source_field
                     .as_ref()
                     .clone()
                     .with_data_type(self.cast_type().clone())
-                    .with_metadata(metadata),
+                    .with_metadata(self.target_field.metadata().clone()),
             )
         })
     }
@@ -494,16 +490,13 @@ pub fn cast_with_target_field(
         && target_field.is_nullable()
         && target_field.metadata().is_empty();
 
-    // For same-type casts, we can skip creating a CastExpr only if:
-    // 1. The target is type-only (no explicit metadata)
-    // 2. The source has no extension metadata that needs to be stripped
-    // Otherwise we need the CastExpr to strip extension metadata from the source.
+    // For same-type casts we can skip creating a CastExpr only if the cast would
+    // be a genuine no-op: the target is type-only, and the source carries no
+    // metadata for the cast to drop. Because the target's metadata is
+    // authoritative, a same-type cast is still meaningful when it clears metadata.
     if expr_type == *cast_type && is_type_only {
         let source_field = expr.return_field(input_schema)?;
-        let has_extension_metadata = source_field
-            .metadata()
-            .contains_key(EXTENSION_TYPE_NAME_KEY);
-        if !has_extension_metadata {
+        if source_field.metadata().is_empty() {
             return Ok(Arc::clone(&expr));
         }
     }
@@ -556,6 +549,7 @@ pub fn cast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 
     use crate::expressions::column::col;
 
@@ -1395,10 +1389,9 @@ mod tests {
             field.metadata().get(EXTENSION_TYPE_NAME_KEY).is_none(),
             "Type-only cast should strip extension type name from source"
         );
-        assert_eq!(
-            field.metadata().get("custom_key"),
-            Some(&"custom_value".to_string()),
-            "Type-only cast should preserve non-extension metadata"
+        assert!(
+            field.metadata().get("custom_key").is_none(),
+            "Type-only cast should not carry source metadata"
         );
 
         Ok(())
