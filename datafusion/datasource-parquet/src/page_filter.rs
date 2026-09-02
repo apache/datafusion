@@ -32,7 +32,7 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
-use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
+use datafusion_pruning::{MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder};
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -138,15 +138,25 @@ impl PagePruningResult {
 
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
-    /// expression.
+    /// expression, using the default `IN (...)` pruning limit.
     #[expect(clippy::needless_pass_by_value)]
     pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
+        Self::new_with_max_in_list_size(expr, &schema, MAX_IN_LIST_SIZE)
+    }
+
+    /// Create a page filter using the same `IN (...)` limit as row-group pruning.
+    pub(crate) fn new_with_max_in_list_size(
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+        max_in_list_size: usize,
+    ) -> Self {
         // extract any single column predicates
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
                 let pp = match PruningPredicateBuilder::new()
-                    .with_file_schema(Arc::clone(&schema))
+                    .with_file_schema(Arc::clone(schema))
+                    .with_max_in_list_size(max_in_list_size)
                     .try_build(Arc::clone(predicate))
                 {
                     Ok(pp) => pp,
@@ -224,7 +234,7 @@ impl PagePruningAccessPlanFilter {
                 parquet_metadata.column_index().is_some()
             );
             return PagePruningResult::new(access_plan, 0);
-        };
+        }
 
         // track the total number of rows that should be skipped
         let mut total_skip = 0;

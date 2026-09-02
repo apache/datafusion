@@ -65,7 +65,7 @@ use datafusion_common::{
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_err, validate_range_split_points,
+    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
 use indexmap::IndexSet;
 use itertools::Itertools as _;
@@ -2071,7 +2071,7 @@ impl LogicalPlan {
                                     ", full_filters=[{}]",
                                     expr_vec_fmt!(full_filter)
                                 )?;
-                            };
+                            }
                             if !partial_filter.is_empty() {
                                 write!(
                                     f,
@@ -2189,7 +2189,7 @@ impl LogicalPlan {
                         };
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "{join_type} Join:",)?;
+                                write!(f, "{join_type} Join:")?;
                                 if !join_expr.is_empty() || !filter_expr.is_empty() {
                                     write!(
                                         f,
@@ -2260,7 +2260,7 @@ impl LogicalPlan {
                                 .as_ref()
                                 .map_or_else(|| "None".to_string(), |x| x.to_string()),
                         };
-                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}",)
+                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}")
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
                         write!(f, "Subquery:")
@@ -3782,7 +3782,12 @@ impl Limit {
                     // `skip = NULL` is equivalent to `skip = 0`
                     let s = s.unwrap_or(0);
                     if s >= 0 {
-                        Ok(SkipType::Literal(s as usize))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "OFFSET value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(SkipType::Literal(s))
                     } else {
                         plan_err!("OFFSET must be >=0, '{}' was provided", s)
                     }
@@ -3800,7 +3805,12 @@ impl Limit {
             Some(expr) => match *expr {
                 Expr::Literal(ScalarValue::Int64(Some(s)), _) => {
                     if s >= 0 {
-                        Ok(FetchType::Literal(Some(s as usize)))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "LIMIT value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(FetchType::Literal(Some(s)))
                     } else {
                         plan_err!("LIMIT must be >= 0, '{}' was provided", s)
                     }
@@ -4323,13 +4333,13 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
-    /// Whether this is a null-aware anti join (for NOT IN semantics).
+    /// Whether this join needs null-aware NOT IN semantics.
     ///
-    /// Only applies to LeftAnti joins. When true, implements SQL NOT IN semantics where:
-    /// - If the right side (subquery) contains any NULL in join keys, no rows are output
-    /// - Left side rows with NULL in join keys are not output
+    /// For `LeftAnti`, if the right side contains any NULL in join keys, no rows are output and
+    /// left rows with NULL join keys are also excluded.
     ///
-    /// This is required for correct NOT IN subquery behavior with three-valued logic.
+    /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
+    /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
 }
 
@@ -4348,7 +4358,7 @@ impl Join {
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
     /// * `null_equality` - How to handle nulls in join comparisons
-    /// * `null_aware` - Whether this is a null-aware anti join (for NOT IN semantics)
+    /// * `null_aware` - Whether this join needs null-aware NOT IN semantics
     ///
     /// # Returns
     ///
@@ -4855,7 +4865,7 @@ impl Unnest {
                                     ));
                                 }
                                 _ => {}
-                            };
+                            }
                         }
 
                         // new columns dependent on the same original index
@@ -4946,7 +4956,7 @@ fn get_unnested_columns(
         _ => {
             return internal_err!("trying to unnest on invalid data type {data_type}");
         }
-    };
+    }
     Ok(qualified_columns)
 }
 
@@ -4968,7 +4978,7 @@ fn get_unnested_list_datatype_recursive(
             return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
         }
         _ => {}
-    };
+    }
 
     internal_err!("trying to unnest on invalid data type {data_type}")
 }
@@ -5029,6 +5039,33 @@ mod tests {
             8,
             "CreateFunction should be Box'd inside DdlStatement"
         );
+    }
+
+    #[test]
+    fn limit_literals_use_checked_usize_conversion() -> Result<()> {
+        let value = i64::from(u32::MAX) + 1;
+        let input = Arc::new(LogicalPlanBuilder::empty(false).build()?);
+        let limit = Limit {
+            skip: Some(Box::new(lit(value))),
+            fetch: Some(Box::new(lit(value))),
+            input,
+        };
+
+        if usize::BITS < 64 {
+            assert!(limit.get_skip_type().is_err());
+            assert!(limit.get_fetch_type().is_err());
+        } else {
+            let expected = usize::try_from(value).unwrap();
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                panic!("expected literal skip")
+            };
+            let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
+                panic!("expected literal fetch")
+            };
+            assert_eq!(skip, expected);
+            assert_eq!(fetch, expected);
+        }
+        Ok(())
     }
 
     fn employee_schema() -> Schema {
@@ -6600,7 +6637,9 @@ mod tests {
 
                     assert!(!fields[0].is_nullable());
                     assert!(!fields[1].is_nullable());
-                    assert!(!fields[2].is_nullable());
+                    // The mark column is always nullable: null-aware `LeftMark`
+                    // joins use NULL to represent SQL UNKNOWN for `NOT IN`.
+                    assert!(fields[2].is_nullable());
                 }
                 _ => {
                     assert_eq!(join.schema.fields().len(), 4);

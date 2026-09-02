@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::{collections::HashSet, str::FromStr};
 
 use rand::{Rng, rng, seq::SliceRandom};
@@ -342,7 +343,7 @@ impl QueryBuilder {
         let mut result = String::from_str(" order by ").unwrap();
         for col in selected_columns {
             let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
-            result.push_str(&format!("{col} {order},"));
+            write!(result, "{col} {order},").ok();
         }
 
         result.strip_suffix(",").unwrap().to_string()

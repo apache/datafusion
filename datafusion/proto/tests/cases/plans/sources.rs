@@ -113,6 +113,41 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
 }
 
 #[test]
+fn file_scan_rejects_zero_batch_size() -> Result<()> {
+    let schema = Arc::new(Schema::empty());
+    let scan_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        Arc::new(ParquetSource::new(schema)),
+    )
+    .build();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let mut node = PhysicalPlanNode::try_from_physical_plan(
+        DataSourceExec::from_data_source(scan_config),
+        &codec,
+    )?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+        node.physical_plan_type.as_mut()
+    else {
+        return internal_err!("Expected ParquetScan node");
+    };
+    scan.base_conf
+        .as_mut()
+        .expect("Parquet scan has a base config")
+        .batch_size = Some(0);
+
+    let ctx = SessionContext::new();
+    let err = node
+        .try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)
+        .expect_err("zero file scan batch size must fail");
+    assert!(
+        err.to_string()
+            .contains("FileScanConfig: batch_size must be greater than 0"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
