@@ -1036,66 +1036,9 @@ impl FinalHashAggregateStream {
         Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream()))
     }
 
-    /// Entry point for the final hash aggregate state machine.
+    /// Entry point for the final hash aggregate flow
     ///
     /// See comments in [`FinalHashAggregateStream`] for high-level ideas.
-    ///
-    /// State transition graph:
-    ///
-    /// ```text
-    /// (start)
-    ///   -> ReadingInput
-    ///      The stream starts by polling partial-state input and aggregating
-    ///      those states into the final hash table.
-    ///
-    /// ReadingInput
-    ///   -> ReadingInput
-    ///      Aggregate one partial-state input batch. If it fits in memory,
-    ///      continue with the next input batch.
-    ///   -> Spilling
-    ///      The table cannot reserve enough memory. Move all current states into
-    ///      one fully group-key-sorted spill run.
-    ///   -> ProducingOutput
-    ///      Input was exhausted without spilling, or the soft group limit was
-    ///      reached. Start outputting final aggregate values.
-    ///   -> PreparingMergeInput
-    ///      Input was exhausted after spilling. Spill the last in-memory run and
-    ///      construct the ordered input used to merge all spill files.
-    ///
-    /// Spilling
-    ///   -> ReadingInput
-    ///      One sorted run was written; resume reading the original input.
-    ///
-    /// PreparingMergeInput
-    ///   Spill the final in-memory run and build the input ordered replay stream.
-    ///   -> MergingSpills
-    ///      The final run was spilled and the ordered replay stream was built.
-    ///
-    /// MergingSpills
-    ///   Aggregate the merged spill runs and emit final results.
-    ///   -> MergingSpills
-    ///      Forward one result batch from the fully ordered replay stream that
-    ///      consumes the sort-preserving merge.
-    ///   -> Done
-    ///      The merged spill input was fully aggregated.
-    ///
-    /// ProducingOutput
-    ///   -> ProducingOutput
-    ///      One final output batch was yielded; repeat to continue producing
-    ///      output incrementally.
-    ///   -> Done
-    ///      All final output was emitted.
-    ///
-    /// Any active state
-    ///   -> Error
-    ///      An error drops state-owned resources before it is returned.
-    ///
-    /// Error
-    ///   -> (end)
-    ///
-    /// Done
-    ///   -> (end)
-    /// ```
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
             let mut hash_table = self
@@ -1114,6 +1057,7 @@ impl FinalHashAggregateStream {
                 Some(mut spill_context) => {
                     // perform merging spill runs
 
+                    // Input was exhausted after spilling. Spill the last in-memory run
                     {
                         let elapsed_compute =
                             self.baseline_metrics.elapsed_compute().clone();
@@ -1121,6 +1065,7 @@ impl FinalHashAggregateStream {
                         spill_context.spill_table(&mut hash_table)?;
                     }
 
+                    // Construct the ordered input used to merge all spill files.
                     let mut output_stream =
                         self.switch_to_ordered_final_stream(hash_table, spill_context)?;
 
@@ -1177,7 +1122,8 @@ impl FinalHashAggregateStream {
 
     /// Read input stream, if no memory, then spill and continue reading - aggregate partial state batches into the hash table.
     ///
-    /// See comments at `create_stream()` for details.
+    /// Spilling: The table cannot reserve enough memory.
+    ///           Move all current states into one fully group-key-sorted spill run.
     async fn consume_input(
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
@@ -1257,8 +1203,6 @@ impl FinalHashAggregateStream {
     /// 2. Constructs a replay stream: an ordered final aggregate stream over the
     ///    fully ordered input constructed from the spills.
     ///
-    /// See comments at `create_stream()` for details.
-    ///
     /// Returns the replay stream
     fn switch_to_ordered_final_stream(
         &mut self,
@@ -1278,11 +1222,8 @@ impl FinalHashAggregateStream {
         )
     }
 
-    /// Handle ProducingOutput state - emit final aggregate value batches.
-    ///
-    /// See comments at `create_stream()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
+    /// Emit final aggregate value batches:
+    /// Input was exhausted without spilling, or the soft group limit was reached.
     async fn produce_output(
         &mut self,
         mut hash_table: AggregateHashTable<FinalMarker>,
