@@ -1475,16 +1475,6 @@ impl FallbackCoordinator {
         {
             inner.current = None;
             inner.next_chunk_index = released_chunk_index + 1;
-            // Give the chunk's bytes back now rather than waiting for the next
-            // `load_one_chunk` to `resize(0)`: after the final chunk there is no
-            // next load, and the coordinator outlives the streams because it
-            // hangs off the exec, so anything still reserved here would stay
-            // accounted against the pool for the life of the plan.
-            if inner.left_exhausted
-                && let Some(reservation) = inner.reservation.as_mut()
-            {
-                reservation.resize(0);
-            }
         }
         // Always notify: waiters may be blocked because they couldn't
         // become leader while a previous chunk was current.
@@ -1649,8 +1639,9 @@ impl FallbackCoordinator {
         left_schema: SchemaRef,
         build_time: metrics::Time,
     ) -> Result<LoadOutcome> {
-        // Reset the per-chunk reservation budget. The previous chunk's
-        // memory has been released when its `JoinLeftData` was dropped.
+        // The previous chunk's bytes were moved into its `JoinLeftData`, so
+        // this reservation is already back to zero; resize defensively in case
+        // a load bailed out after growing it (an error path, or `Empty`).
         reservation.resize(0);
 
         let mut pending_batches: Vec<RecordBatch> = Vec::new();
@@ -1714,16 +1705,26 @@ impl FallbackCoordinator {
             BooleanBufferBuilder::new(0)
         };
 
-        // The chunk's reservation is owned by the coordinator (so it
-        // can be reset between chunks). `JoinLeftData` carries an empty
-        // RAII placeholder.
-        let dummy_reservation = reservation.new_empty();
+        // Move the bytes accounted for this chunk out of the coordinator's
+        // reservation and into the chunk's `JoinLeftData`, whose reservation is
+        // released on drop. The coordinator elects the unmatched-left emitter
+        // from the probe-threads counter, but that is the last stream to finish
+        // *probing* -- not necessarily the last to drop its `Arc` to the chunk,
+        // since a stream can flush a completed output batch and return while
+        // still holding one. Tying the reservation to the data means the bytes
+        // stay accounted until the final reference goes away, whichever stream
+        // holds it, instead of being released when the slot is freed.
+        //
+        // `take` keeps the same `MemoryConsumer`, so this is a transfer of
+        // ownership rather than a new registration, and it leaves the
+        // coordinator's reservation at zero for the next chunk.
+        let chunk_reservation = reservation.take();
 
         let data = JoinLeftData::new(
             merged_batch,
             Mutex::new(visited_left_side),
             AtomicUsize::new(self.right_partition_count),
-            dummy_reservation,
+            chunk_reservation,
         );
 
         Ok(LoadOutcome::Chunk {
@@ -2161,7 +2162,7 @@ impl Stream for NestedLoopJoinStream {
                 // Release the final chunk before finishing the stream.
                 NLJState::ReleasingFinalChunk => {
                     match self.handle_releasing_final_chunk(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -5588,6 +5589,93 @@ pub(crate) mod tests {
     /// until the current one is released. Collecting partitions
     /// sequentially would therefore deadlock; concurrent collection mirrors
     /// how partitions actually run under the runtime.
+    /// Spills a plan's single partition to a `LeftSpillData`, so a test can hand
+    /// the coordinator the same input the fallback path would.
+    async fn spill_left_for_test(
+        left: Arc<dyn ExecutionPlan>,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<Arc<LeftSpillData>> {
+        let mut stream = left.execute(0, Arc::clone(&task_ctx))?;
+        let schema = stream.schema();
+        let spill_manager = SpillManager::new(
+            task_ctx.runtime_env(),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+        let mut spill_file =
+            spill_manager.create_in_progress_file("NLJ left spill (test)")?;
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            if batch.num_rows() > 0 {
+                spill_file.append_batch(&batch)?;
+            }
+        }
+        let file = spill_file
+            .finish()?
+            .expect("the fixture has rows, so a spill file must exist");
+        Ok(Arc::new(LeftSpillData {
+            spill_manager,
+            spill_file: file,
+            schema,
+        }))
+    }
+
+    /// The chunk's memory must be owned by the chunk's `JoinLeftData`, so it
+    /// stays accounted while *any* holder still references it.
+    ///
+    /// The emitter elected in `ProbeEnd` is the last stream to finish probing,
+    /// which is not necessarily the last to drop its `Arc<JoinLeftData>`: a
+    /// non-emitter can flush a completed output batch from
+    /// `maybe_flush_ready_batch` and return while still holding one, since that
+    /// return happens before `buffered_left_data = None`. Freeing the bytes when
+    /// the coordinator slot is released would therefore under-account memory
+    /// that is still live.
+    ///
+    /// This drives the coordinator directly so the check does not depend on
+    /// scheduling: after releasing the slot, the pool must still account for the
+    /// chunk while a reference is held, and drop to zero only once it is gone.
+    #[tokio::test]
+    async fn test_nlj_chunk_memory_is_owned_by_the_chunk_data() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
+        let pool = Arc::clone(&runtime.memory_pool);
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        // One chunk, tracked bitmap, two nominal probe partitions.
+        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
+        let left = build_left_table();
+        let spill = spill_left_for_test(Arc::clone(&left), Arc::clone(&task_ctx)).await?;
+
+        let (chunk, is_last) = Arc::clone(&coordinator)
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx))
+            .await?
+            .expect("the left side has rows, so a chunk must be produced");
+        assert!(is_last, "the fixture fits in a single chunk");
+
+        let accounted_while_held = pool.reserved();
+        assert!(
+            accounted_while_held > 0,
+            "loading a chunk must account for its batch and bitmap"
+        );
+
+        // Release the coordinator slot while still holding the chunk. This is
+        // the emitter's release: the slot is freed, but the data is alive.
+        coordinator.release_chunk(0).await;
+        assert_eq!(
+            pool.reserved(),
+            accounted_while_held,
+            "releasing the slot must not release memory that is still referenced"
+        );
+
+        // Dropping the last reference is what returns the bytes.
+        drop(chunk);
+        assert_eq!(
+            pool.reserved(),
+            0,
+            "dropping the last chunk reference must release its memory"
+        );
+        Ok(())
+    }
+
     /// The final chunk must be released before the stream finishes.
     ///
     /// `release_chunk` is what drops the coordinator's `Arc<JoinLeftData>` and
