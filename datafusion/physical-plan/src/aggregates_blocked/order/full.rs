@@ -17,6 +17,7 @@
 
 use datafusion_expr::EmitTo;
 use std::mem::size_of;
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
 
 /// Tracks grouping state when the data is ordered entirely by its
 /// group keys
@@ -57,6 +58,7 @@ use std::mem::size_of;
 #[derive(Debug, Clone)]
 pub struct GroupOrderingFull {
     state: State,
+    batch_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -66,16 +68,17 @@ enum State {
 
     /// Data is in progress. `current` is the current group for which
     /// values are being generated. Can emit `current` - 1
-    InProgress { current: usize },
+    InProgress { current: BlocksIndex },
 
     /// Seen end of input: all groups can be emitted
     Complete,
 }
 
 impl GroupOrderingFull {
-    pub fn new() -> Self {
+    pub fn new(batch_size: usize) -> Self {
         Self {
             state: State::Start,
+            batch_size,
         }
     }
 
@@ -84,15 +87,35 @@ impl GroupOrderingFull {
         match &self.state {
             State::Start => None,
             State::InProgress { current, .. } => {
-                if *current == 0 {
+                if *current == BlocksIndex::ZERO {
                     // Can not emit if still on the first row
                     None
                 } else {
                     // otherwise emit all rows prior to the current group
-                    Some(EmitTo::First(*current))
+                    Some(EmitTo::First(current.into_index_in_fixed_block_size(self.batch_size)))
                 }
             }
             State::Complete => Some(EmitTo::All),
+        }
+    }
+
+    // How many groups be emitted, or None if no data can be emitted
+    pub fn next_emit_to(&self, current_total_num_groups: usize) -> Option<BlockedEmitTo> {
+        match &self.state {
+            State::Start => None,
+            State::InProgress { current, .. } => {
+                if *current == BlocksIndex::ZERO {
+                    // Can not emit if still on the first row
+                    None
+                } else if current.block_index() != 0 {
+                    Some(BlockedEmitTo::NextBlock)
+                } else {
+                    // otherwise emit all rows prior to the current group
+                    Some(BlockedEmitTo::First(current.index_in_block() + 1))
+                }
+            }
+            State::Complete if current_total_num_groups <= self.batch_size => Some(BlockedEmitTo::All),
+            State::Complete => Some(BlockedEmitTo::NextBlock),
         }
     }
 
@@ -102,9 +125,10 @@ impl GroupOrderingFull {
         match &mut self.state {
             State::Start => panic!("invalid state: start"),
             State::InProgress { current } => {
+                let n = BlocksIndex::from_index_in_fixed_block_size(n, self.batch_size);
                 // shift down by n
                 assert!(*current >= n);
-                *current -= n;
+                current.sub_assign(n, self.batch_size);
             }
             State::Complete => panic!("invalid state: complete"),
         }
@@ -113,6 +137,10 @@ impl GroupOrderingFull {
     /// Note that the input is complete so any outstanding groups are done as well
     pub fn input_done(&mut self) {
         self.state = State::Complete;
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        matches!(self.state, State::Complete)
     }
 
     /// Starts tracking a new fully ordered input segment.
@@ -126,14 +154,14 @@ impl GroupOrderingFull {
         assert_ne!(total_num_groups, 0);
 
         // Update state
-        let max_group_index = total_num_groups - 1;
+        let max_group_index = BlocksIndex::from_index_in_fixed_block_size(total_num_groups - 1, self.batch_size);
         self.state = match self.state {
             State::Start => State::InProgress {
                 current: max_group_index,
             },
             State::InProgress { current } => {
                 // expect to see new group indexes when called again
-                assert!(current <= max_group_index, "{current} <= {max_group_index}");
+                assert!(current <= max_group_index, "{current:?} <= {max_group_index:?}");
                 State::InProgress {
                     current: max_group_index,
                 }
@@ -151,24 +179,12 @@ impl GroupOrderingFull {
 
 impl From<GroupOrderingFull> for crate::aggregates::order::GroupOrderingFull {
     fn from(value: GroupOrderingFull) -> Self {
-        Self::new_from_state(value.state.into())
-    }
-}
-
-impl From<State> for crate::aggregates::order::full::State {
-    fn from(value: State) -> Self {
-        match value {
-            State::Start => Self::Start,
-            State::InProgress { current } => Self::InProgress {
-                current
+        Self::new_from_state(match value.state {
+            State::Start => crate::aggregates::order::full::State::Start,
+            State::InProgress { current } => crate::aggregates::order::full::State::InProgress {
+                current: current.into_index_in_fixed_block_size(value.batch_size),
             },
-            State::Complete => Self::Complete
-        }
-    }
-}
-
-impl Default for GroupOrderingFull {
-    fn default() -> Self {
-        Self::new()
+            State::Complete => crate::aggregates::order::full::State::Complete
+        })
     }
 }

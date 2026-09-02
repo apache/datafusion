@@ -18,6 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use std::cmp::Ordering;
+use std::ops::{Sub, SubAssign};
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{assert_ne_or_internal_err, utils::split_vec_min_alloc, Result, assert_or_internal_err};
 
@@ -253,6 +254,10 @@ pub struct BlocksIndex {
 }
 
 impl BlocksIndex {
+    pub const ZERO: Self = Self {
+        block_index: 0,
+        index_in_block: 0,
+    };
     pub const MAX: Self = Self {
         block_index: usize::MAX,
         index_in_block: usize::MAX,
@@ -362,6 +367,28 @@ impl BlocksIndex {
                 index_in_block: self.index_in_block
             }
         })
+    }
+
+    pub fn sub(self, rhs: Self, batch_size: usize) -> Self {
+        if self.index_in_block >= rhs.index_in_block {
+            BlocksIndex::new(self.block_index - rhs.block_index, self.index_in_block - rhs.index_in_block)
+        } else {
+            BlocksIndex::new(self.block_index - rhs.block_index - 1, batch_size - (rhs.index_in_block - self.index_in_block))
+        }
+    }
+
+    pub fn sub_flat(self, rhs_flat: usize, batch_size: usize) -> Self {
+        BlocksIndex::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(batch_size) - rhs_flat, batch_size)
+    }
+
+    pub fn sub_assign(&mut self, rhs: Self, batch_size: usize) {
+        if self.index_in_block >= rhs.index_in_block {
+            self.block_index -= rhs.block_index;
+            self.index_in_block -= rhs.index_in_block;
+        } else {
+            self.block_index = self.block_index - rhs.block_index - 1;
+            self.index_in_block = batch_size - (rhs.index_in_block - self.index_in_block);
+        }
     }
 }
 

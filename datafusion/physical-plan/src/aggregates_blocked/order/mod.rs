@@ -20,6 +20,7 @@ use std::mem::size_of;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
 
 mod full;
 mod partial;
@@ -43,14 +44,14 @@ pub enum GroupOrdering {
 
 impl GroupOrdering {
     /// Create a `GroupOrdering` for the specified ordering
-    pub fn try_new(mode: &InputOrderMode) -> Result<Self> {
+    pub fn try_new(mode: &InputOrderMode, batch_size: usize) -> Result<Self> {
         match mode {
             InputOrderMode::Linear => Ok(GroupOrdering::None),
             InputOrderMode::PartiallySorted(order_indices) => {
-                GroupOrderingPartial::try_new(order_indices.clone())
+                GroupOrderingPartial::try_new(order_indices.clone(), batch_size)
                     .map(GroupOrdering::Partial)
             }
-            InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new())),
+            InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new(batch_size))),
         }
     }
 
@@ -61,6 +62,16 @@ impl GroupOrdering {
             GroupOrdering::None => None,
             GroupOrdering::Partial(partial) => partial.emit_to(),
             GroupOrdering::Full(full) => full.emit_to(),
+        }
+    }
+
+    /// Returns how many groups can be emitted while respecting the current
+    /// ordering guarantees, or `None` if no data can be emitted.
+    pub fn next_emit_to(&self, current_total_num_groups: usize) -> Option<BlockedEmitTo> {
+        match self {
+            GroupOrdering::None => None,
+            GroupOrdering::Partial(partial) => partial.next_emit_to(current_total_num_groups),
+            GroupOrdering::Full(full) => full.next_emit_to(current_total_num_groups),
         }
     }
 
@@ -92,6 +103,14 @@ impl GroupOrdering {
             GroupOrdering::None => {}
             GroupOrdering::Partial(partial) => partial.input_done(),
             GroupOrdering::Full(full) => full.input_done(),
+        }
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        match self {
+            GroupOrdering::None => false,
+            GroupOrdering::Partial(p) => p.is_done(),
+            GroupOrdering::Full(f) => f.is_done(),
         }
     }
 
@@ -130,7 +149,7 @@ impl GroupOrdering {
     pub fn new_groups(
         &mut self,
         batch_group_values: &[ArrayRef],
-        group_indices: &[usize],
+        group_indices: &[BlocksIndex],
         total_num_groups: usize,
     ) -> Result<()> {
         match self {
@@ -178,6 +197,8 @@ mod tests {
 
     use arrow::array::Int32Array;
 
+    const DEFAULT_BLOCK_SIZE: usize = 8192;
+
     #[test]
     fn test_oom_emit_to_none_ordering() {
         let group_ordering = GroupOrdering::None;
@@ -193,13 +214,13 @@ mod tests {
     /// values such as `[1, 1, 1]` do not.
     fn partial_ordering(sort_key_values: Vec<i32>) -> Result<GroupOrdering> {
         let mut group_ordering =
-            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0])?);
+            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0], DEFAULT_BLOCK_SIZE)?);
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(sort_key_values)),
             Arc::new(Int32Array::from(vec![10, 20, 30])),
         ];
-        let group_indices = vec![0, 1, 2];
+        let group_indices = [0, 1, 2].map(|i| BlocksIndex::from_index_in_fixed_block_size(i, DEFAULT_BLOCK_SIZE)).to_vec();
 
         group_ordering.new_groups(&batch_group_values, &group_indices, 3)?;
 

@@ -191,7 +191,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             "OrderedAggregateTable requires config batch_size >= 1"
         );
 
-        let group_ordering = GroupOrdering::try_new(input_order_mode)?;
+        let group_ordering = GroupOrdering::try_new(input_order_mode, batch_size)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;
         let group_values = new_group_values(group_schema, &group_ordering, batch_size)?;
         let aggregate_arguments = aggregate_expressions(
@@ -392,7 +392,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             EmitTo::First(n) if n < self.batch_size => (BlockedEmitTo::First(n), true),
             EmitTo::First(_) => (BlockedEmitTo::NextBlock, true),
             EmitTo::All if group_count <= self.batch_size => (BlockedEmitTo::All, false),
-            EmitTo::All => (BlockedEmitTo::NextBlock, false),
+            EmitTo::All => (BlockedEmitTo::NextBlock, !self.group_ordering().is_done()),
         }
     }
 
@@ -416,12 +416,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             self.buffer
               .group_values
               .intern(group_values, &mut self.buffer.group_indices)?;
-            let group_indices_flattened = self.buffer.group_indices.iter().map(|i| i.into_index_in_fixed_block_size(self.batch_size)).collect::<Vec<_>>();
             let total_num_groups = self.buffer.group_values.len();
             if total_num_groups > starting_num_groups {
                 self.buffer.group_ordering.new_groups(
                     group_values,
-                    &group_indices_flattened,
+                    &self.buffer.group_indices,
                     total_num_groups,
                 )?;
             }
@@ -465,11 +464,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             return Ok(None);
         }
 
-        let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
+        let Some(emit_to) = self.buffer.group_ordering.next_emit_to(self.buffer.group_values.len()) else {
             return Ok(None);
         };
-        let (emit_to, should_remove_groups) =
-            self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
+        let should_remove_groups = !self.group_ordering().is_done() && emit_to != BlockedEmitTo::All;
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let timer = self.group_by_metrics.emitting_time.timer();
@@ -481,7 +479,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 BlockedEmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
                 BlockedEmitTo::NextBlock => self.buffer.group_ordering.remove_groups(self.batch_size),
 
-                // `EmitTo::All` is only used after `input_done`, when all
+                // `BlockedEmitTo::All` is only used after `input_done`, when all
                 // buffered groups are known complete and the ordering state is
                 // no longer needed.
                 BlockedEmitTo::All => {}

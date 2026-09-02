@@ -26,6 +26,7 @@ use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
 
 /// Tracks grouping state when the data is ordered by some subset of
 /// the group keys.
@@ -67,6 +68,8 @@ pub struct GroupOrderingPartial {
     /// State machine
     state: State,
 
+    batch_size: usize,
+
     /// The indexes of the group by columns that form the sort key.
     /// For example if grouping by `id, state` and ordered by `state`
     /// this would be `[1]`.
@@ -89,12 +92,12 @@ enum State {
     /// Data is in progress.
     InProgress {
         /// Smallest group index with the sort_key
-        current_sort: usize,
+        current_sort: BlocksIndex,
         /// The sort key of group_index `current_sort`
         sort_key: Vec<ScalarValue>,
         /// index of the current group for which values are being
         /// generated
-        current: usize,
+        current: BlocksIndex,
     },
 
     /// Seen end of input, all groups can be emitted
@@ -117,11 +120,12 @@ impl State {
 
 impl GroupOrderingPartial {
     /// TODO: Remove unnecessary `input_schema` parameter.
-    pub fn try_new(order_indices: Vec<usize>) -> Result<Self> {
+    pub fn try_new(order_indices: Vec<usize>, batch_size: usize) -> Result<Self> {
         debug_assert!(!order_indices.is_empty());
         Ok(Self {
             state: State::Start,
             order_indices,
+            batch_size,
         })
     }
 
@@ -147,13 +151,35 @@ impl GroupOrderingPartial {
                 // Can not emit if we are still on the first row sort
                 // row otherwise we can emit all groups that had earlier sort keys
                 //
-                if *current_sort == 0 {
+                if *current_sort == BlocksIndex::ZERO {
                     None
                 } else {
-                    Some(EmitTo::First(*current_sort))
+                    Some(EmitTo::First(current_sort.into_index_in_fixed_block_size(self.batch_size)))
                 }
             }
             State::Complete => Some(EmitTo::All),
+        }
+    }
+
+    /// How many groups be emitted, or None if no data can be emitted
+    pub fn next_emit_to(&self, current_total_num_groups: usize) -> Option<BlockedEmitTo> {
+        match &self.state {
+            State::Taken => unreachable!("State previously taken"),
+            State::Start => None,
+            State::InProgress { current_sort, .. } => {
+                // Can not emit if we are still on the first row sort
+                // row otherwise we can emit all groups that had earlier sort keys
+                //
+                if *current_sort == BlocksIndex::ZERO {
+                    None
+                } else if current_sort.block_index() > 0 {
+                    Some(BlockedEmitTo::NextBlock)
+                } else {
+                    Some(BlockedEmitTo::First(current_sort.index_in_block() + 1))
+                }
+            }
+            State::Complete if current_total_num_groups <= self.batch_size => Some(BlockedEmitTo::All),
+            State::Complete => Some(BlockedEmitTo::NextBlock),
         }
     }
 
@@ -168,11 +194,12 @@ impl GroupOrderingPartial {
                 current,
                 sort_key: _,
             } => {
+                let n = BlocksIndex::from_index_in_fixed_block_size(n, self.batch_size);
                 // shift indexes down by n
                 assert!(*current >= n);
-                *current -= n;
+                current.sub_assign(n, self.batch_size);
                 assert!(*current_sort >= n);
-                *current_sort -= n;
+                current_sort.sub_assign(n, self.batch_size);
             }
             State::Complete => panic!("invalid state: complete"),
         }
@@ -186,6 +213,10 @@ impl GroupOrderingPartial {
         };
     }
 
+    pub(crate) fn is_done(&self) -> bool {
+        self.state == State::Complete
+    }
+
     /// Starts tracking a new ordered input segment with the same sort-key
     /// columns.
     pub fn reset(&mut self) {
@@ -193,11 +224,11 @@ impl GroupOrderingPartial {
     }
 
     fn updated_sort_key(
-        current_sort: usize,
+        current_sort: BlocksIndex,
         sort_key: Option<Vec<ScalarValue>>,
-        range_current_sort: usize,
+        range_current_sort: BlocksIndex,
         range_sort_key: Vec<ScalarValue>,
-    ) -> Result<(usize, Vec<ScalarValue>)> {
+    ) -> Result<(BlocksIndex, Vec<ScalarValue>)> {
         if let Some(sort_key) = sort_key {
             let sort_options = vec![SortOptions::new(false, false); sort_key.len()];
             let ordering = compare_rows(&sort_key, &range_sort_key, &sort_options)?;
@@ -214,17 +245,17 @@ impl GroupOrderingPartial {
     pub fn new_groups(
         &mut self,
         batch_group_values: &[ArrayRef],
-        group_indices: &[usize],
+        group_indices: &[BlocksIndex],
         total_num_groups: usize,
     ) -> Result<()> {
         assert!(total_num_groups > 0);
         assert!(!batch_group_values.is_empty());
 
-        let max_group_index = total_num_groups - 1;
+        let max_group_index = BlocksIndex::from_index_in_fixed_block_size(total_num_groups - 1, self.batch_size);
 
         let (current_sort, sort_key) = match std::mem::take(&mut self.state) {
             State::Taken => unreachable!("State previously taken"),
-            State::Start => (0, None),
+            State::Start => (BlocksIndex::ZERO, None),
             State::InProgress {
                 current_sort,
                 sort_key,
@@ -275,20 +306,17 @@ impl GroupOrderingPartial {
 
 impl From<GroupOrderingPartial> for crate::aggregates::order::GroupOrderingPartial {
     fn from(value: GroupOrderingPartial) -> Self {
-        Self::new_from_parts(value.state.into(), value.order_indices)
-    }
-}
-
-impl From<State> for crate::aggregates::order::partial::State {
-    fn from(value: State) -> Self {
-        match value {
-            State::Taken => Self::Taken,
-            State::Start => Self::Start,
-            State::InProgress { current_sort, current, sort_key, } => Self::InProgress {
-                current_sort, current, sort_key,
+        let state = match value.state {
+            State::Taken => crate::aggregates::order::partial::State::Taken,
+            State::Start => crate::aggregates::order::partial::State::Start,
+            State::InProgress { current_sort, current, sort_key, } => crate::aggregates::order::partial::State::InProgress {
+                current_sort: current_sort.into_index_in_fixed_block_size(value.batch_size),
+                current: current.into_index_in_fixed_block_size(value.batch_size),
+                sort_key,
             },
-            State::Complete => Self::Complete
-        }
+            State::Complete => crate::aggregates::order::partial::State::Complete
+        };
+        Self::new_from_parts(state, value.order_indices)
     }
 }
 
@@ -298,18 +326,20 @@ mod tests {
 
     use arrow::array::Int32Array;
 
+    const DEFAULT_BATCH_SIZE: usize = 8192;
+
     #[test]
     fn test_group_ordering_partial() -> Result<()> {
         // Ordered on column a
         let order_indices = vec![0];
-        let mut group_ordering = GroupOrderingPartial::try_new(order_indices)?;
+        let mut group_ordering = GroupOrderingPartial::try_new(order_indices, DEFAULT_BATCH_SIZE)?;
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),
             Arc::new(Int32Array::from(vec![2, 1, 3])),
         ];
 
-        let group_indices = vec![0, 1, 2];
+        let group_indices = [0, 1, 2].map(|i| BlocksIndex::from_index_in_fixed_block_size(i, DEFAULT_BATCH_SIZE)).to_vec();
         let total_num_groups = 3;
 
         group_ordering.new_groups(
@@ -321,9 +351,9 @@ mod tests {
         assert_eq!(
             group_ordering.state,
             State::InProgress {
-                current_sort: 2,
+                current_sort: BlocksIndex::from_index_in_fixed_block_size(2, DEFAULT_BATCH_SIZE),
                 sort_key: vec![ScalarValue::Int32(Some(3))],
-                current: 2
+                current: BlocksIndex::from_index_in_fixed_block_size(2, DEFAULT_BATCH_SIZE),
             }
         );
 
@@ -332,7 +362,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![3, 3, 3])),
             Arc::new(Int32Array::from(vec![2, 1, 7])),
         ];
-        let group_indices = vec![3, 4, 5];
+        let group_indices = [3, 4, 5].map(|i| BlocksIndex::from_index_in_fixed_block_size(i, DEFAULT_BATCH_SIZE)).to_vec();
         let total_num_groups = 6;
 
         group_ordering.new_groups(
@@ -344,9 +374,9 @@ mod tests {
         assert_eq!(
             group_ordering.state,
             State::InProgress {
-                current_sort: 2,
+                current_sort: BlocksIndex::from_index_in_fixed_block_size(2, DEFAULT_BATCH_SIZE),
                 sort_key: vec![ScalarValue::Int32(Some(3))],
-                current: 5
+                current: BlocksIndex::from_index_in_fixed_block_size(5, DEFAULT_BATCH_SIZE),
             }
         );
 
@@ -355,7 +385,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![4, 4, 4])),
             Arc::new(Int32Array::from(vec![1, 1, 1])),
         ];
-        let group_indices = vec![6, 7, 8];
+        let group_indices = [6, 7, 8].map(|i| BlocksIndex::from_index_in_fixed_block_size(i, DEFAULT_BATCH_SIZE)).to_vec();
         let total_num_groups = 9;
 
         group_ordering.new_groups(
@@ -366,9 +396,9 @@ mod tests {
         assert_eq!(
             group_ordering.state,
             State::InProgress {
-                current_sort: 6,
+                current_sort: BlocksIndex::from_index_in_fixed_block_size(6, DEFAULT_BATCH_SIZE),
                 sort_key: vec![ScalarValue::Int32(Some(4))],
-                current: 8
+                current: BlocksIndex::from_index_in_fixed_block_size(8, DEFAULT_BATCH_SIZE),
             }
         );
 
