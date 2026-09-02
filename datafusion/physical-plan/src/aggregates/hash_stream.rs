@@ -1054,8 +1054,8 @@ impl FinalHashAggregateStream {
 
             timer.done();
             emitter
-              .emit(batch.record_output(&self.baseline_metrics))
-              .await;
+                .emit(batch.record_output(&self.baseline_metrics))
+                .await;
             timer = elapsed_compute.timer();
         }
     }
