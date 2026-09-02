@@ -17,9 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{Array, MapArray, RecordBatch, StructArray};
 use arrow::datatypes::Schema;
-use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err, plan_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err, plan_err,
+};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -74,4 +76,39 @@ pub(crate) fn validate_percentile_expr(
         );
     }
     Ok(percentile)
+}
+
+/// Reads the key/value scalars out of one row of a `MapArray`.
+pub(crate) fn map_row_to_scalars(
+    map_array: &MapArray,
+    row: usize,
+) -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+    let entries = map_array.value(row);
+    let entries = entries
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| internal_datafusion_err!("map entries must be a StructArray"))?;
+    let key_col = entries.column(0);
+    let val_col = entries.column(1);
+
+    let mut keys = Vec::with_capacity(key_col.len());
+    let mut values = Vec::with_capacity(val_col.len());
+    for i in 0..key_col.len() {
+        keys.push(ScalarValue::try_from_array(key_col, i)?);
+        values.push(ScalarValue::try_from_array(val_col, i)?);
+    }
+    Ok((keys, values))
+}
+
+/// Converts a `StructArray` into per-row scalar tuples: `rows[i][c]` is column
+/// `c` of row `i`.
+pub(crate) fn struct_to_rows(s: &StructArray) -> Result<Vec<Vec<ScalarValue>>> {
+    (0..s.len())
+        .map(|i| {
+            s.columns()
+                .iter()
+                .map(|col| ScalarValue::try_from_array(col, i))
+                .collect()
+        })
+        .collect()
 }
