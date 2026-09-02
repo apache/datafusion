@@ -86,7 +86,7 @@ pub(super) fn unwrap_cast_in_comparison_for_binary(
                     op,
                     right: Box::new(lit(value)),
                 })));
-            };
+            }
 
             // if the lit_value can be casted to the type of internal_left_expr
             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal

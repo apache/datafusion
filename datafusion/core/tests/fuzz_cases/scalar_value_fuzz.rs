@@ -195,19 +195,19 @@ fn type_parameter_mutations(scalar: &ScalarValue) -> Vec<(MutationKind, ScalarVa
         ),
         TimestampSecond(value, timezone) => vec![(
             MutationKind::TimestampTimezone,
-            TimestampSecond(*value, toggled_timezone(timezone)),
+            TimestampSecond(*value, toggled_timezone(timezone.as_ref())),
         )],
         TimestampMillisecond(value, timezone) => vec![(
             MutationKind::TimestampTimezone,
-            TimestampMillisecond(*value, toggled_timezone(timezone)),
+            TimestampMillisecond(*value, toggled_timezone(timezone.as_ref())),
         )],
         TimestampMicrosecond(value, timezone) => vec![(
             MutationKind::TimestampTimezone,
-            TimestampMicrosecond(*value, toggled_timezone(timezone)),
+            TimestampMicrosecond(*value, toggled_timezone(timezone.as_ref())),
         )],
         TimestampNanosecond(value, timezone) => vec![(
             MutationKind::TimestampTimezone,
-            TimestampNanosecond(*value, toggled_timezone(timezone)),
+            TimestampNanosecond(*value, toggled_timezone(timezone.as_ref())),
         )],
         FixedSizeBinary(width, _) => vec![(
             MutationKind::FixedSizeBinaryWidth,
@@ -236,7 +236,7 @@ fn different_scale(scale: i8) -> i8 {
 }
 
 fn toggled_timezone(
-    timezone: &Option<std::sync::Arc<str>>,
+    timezone: Option<&std::sync::Arc<str>>,
 ) -> Option<std::sync::Arc<str>> {
     if timezone.is_some() {
         None

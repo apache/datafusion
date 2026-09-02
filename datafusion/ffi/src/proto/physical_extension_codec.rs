@@ -127,9 +127,9 @@ impl FFI_PhysicalExtensionCodec {
         unsafe { &(*private_data).codec }
     }
 
-    fn runtime(&self) -> &Option<Handle> {
+    fn runtime(&self) -> Option<&Handle> {
         let private_data = self.private_data as *const PhysicalExtensionCodecPrivateData;
-        unsafe { &(*private_data).runtime }
+        unsafe { (*private_data).runtime.as_ref() }
     }
 }
 
@@ -138,7 +138,7 @@ unsafe extern "C" fn try_decode_fn_wrapper(
     buf: SSlice<u8>,
     inputs: SVec<FFI_ExecutionPlan>,
 ) -> FFI_Result<FFI_ExecutionPlan> {
-    let runtime = codec.runtime().clone();
+    let runtime = codec.runtime().cloned();
     let task_ctx: Arc<TaskContext> =
         sresult_return!((&codec.task_ctx_provider).try_into());
     let codec = codec.inner();
@@ -257,8 +257,11 @@ unsafe extern "C" fn try_encode_udwf_fn_wrapper(
 
 unsafe extern "C" fn release_fn_wrapper(codec: &mut FFI_PhysicalExtensionCodec) {
     unsafe {
-        let private_data =
-            Box::from_raw(codec.private_data as *mut PhysicalExtensionCodecPrivateData);
+        let private_data = Box::from_raw(
+            codec
+                .private_data
+                .cast::<PhysicalExtensionCodecPrivateData>(),
+        );
         drop(private_data);
     }
 }
@@ -267,7 +270,7 @@ unsafe extern "C" fn clone_fn_wrapper(
     codec: &FFI_PhysicalExtensionCodec,
 ) -> FFI_PhysicalExtensionCodec {
     let old_codec = Arc::clone(codec.inner());
-    let runtime = codec.runtime().clone();
+    let runtime = codec.runtime().cloned();
 
     FFI_PhysicalExtensionCodec::new(old_codec, runtime, codec.task_ctx_provider.clone())
 }
@@ -319,7 +322,7 @@ impl FFI_PhysicalExtensionCodec {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: crate::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -534,7 +537,7 @@ pub(crate) mod tests {
             let udf = node.inner();
             if !udf.is::<AbsFunc>() {
                 return exec_err!("TestExtensionCodec only expects Abs UDF");
-            };
+            }
 
             buf.push(Self::ABS_FUNC_SERIALIZED);
 
