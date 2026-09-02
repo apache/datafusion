@@ -259,6 +259,28 @@ pub const INITIAL_MAP_CAPACITY: usize = 128;
 /// The size, in bytes, of the string data buffer pre-allocated by
 /// [`ArrowBytesMap::with_capacity`]
 pub const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
+
+/// Appends `value` to a map's value buffer, growing the buffer on a power of
+/// two ladder.
+///
+/// `Vec` doubles from wherever its first allocation landed, so a buffer started
+/// empty by [`ArrowBytesMap::new`] and one started at
+/// [`INITIAL_BUFFER_CAPACITY`] by [`ArrowBytesMap::with_capacity`] sit on
+/// different ladders, and can hold the same values at capacities differing by
+/// up to 2x in either direction depending on the value lengths. Rounding every
+/// growth up to a power of two puts both on one ladder, which is what makes a
+/// lazily allocated map never larger than a pre-allocated one holding the same
+/// values. Growth stays geometric, so appending is still amortized constant
+/// time.
+fn push_value_bytes(buffer: &mut Vec<u8>, value: &[u8]) {
+    let required = buffer.len() + value.len();
+    if required > buffer.capacity() {
+        let target = required.checked_next_power_of_two().unwrap_or(required);
+        buffer.reserve_exact(target - buffer.len());
+    }
+    buffer.extend_from_slice(value);
+}
+
 impl<O: OffsetSizeTrait, V> ArrowBytesMap<O, V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
@@ -471,7 +493,7 @@ where
                     // Put the small values into buffer and offsets so it appears
                     // the output array, but store the actual bytes inline for
                     // comparison
-                    self.buffer.extend_from_slice(value);
+                    push_value_bytes(&mut self.buffer, value);
                     self.offsets.push(O::usize_as(self.buffer.len()));
                     let payload = make_payload_fn(Some(value));
                     let new_header = Entry {
@@ -509,7 +531,7 @@ where
                     // appears the output array, and store that offset
                     // so the bytes can be compared if needed
                     let offset = self.buffer.len(); // offset of start for data
-                    self.buffer.extend_from_slice(value);
+                    push_value_bytes(&mut self.buffer, value);
                     self.offsets.push(O::usize_as(self.buffer.len()));
 
                     let payload = make_payload_fn(Some(value));
@@ -824,6 +846,56 @@ mod tests {
         map.take();
         assert!(map.map.capacity() >= INITIAL_MAP_CAPACITY);
         assert_eq!(map.buffer.capacity(), INITIAL_BUFFER_CAPACITY);
+    }
+
+    #[test]
+    fn lazy_and_pre_allocated_buffers_grow_on_the_same_ladder() {
+        // Value lengths chosen so the buffer requirement lands between powers
+        // of two, which is where the two ladders used to diverge.
+        for value_len in [9usize, 13, 24, 37] {
+            let mut lazy = ArrowBytesMap::<i32, ()>::new(OutputType::Utf8);
+            let mut pre_allocated = ArrowBytesMap::<i32, ()>::with_capacity(
+                OutputType::Utf8,
+                INITIAL_MAP_CAPACITY,
+            );
+
+            for batch in 0..8 {
+                let values: ArrayRef =
+                    Arc::new(StringArray::from_iter_values((0..1_000).map(|i| {
+                        let value = format!("{}:{i}", batch * 1_000 + i);
+                        format!("{value:value_len$}")
+                    })));
+                lazy.insert_if_new(&values, |_| (), |_| ());
+                pre_allocated.insert_if_new(&values, |_| (), |_| ());
+
+                assert_eq!(lazy.buffer.len(), pre_allocated.buffer.len());
+                assert_eq!(
+                    lazy.buffer.capacity(),
+                    pre_allocated.buffer.capacity(),
+                    "value length {value_len}, batch {batch}: a buffer that \
+                     started empty reached {} bytes of capacity against {} for \
+                     one that started at INITIAL_BUFFER_CAPACITY",
+                    lazy.buffer.capacity(),
+                    pre_allocated.buffer.capacity(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_lazy_buffer_stays_below_the_pre_allocated_floor_while_it_is_small() {
+        let mut lazy = ArrowBytesMap::<i32, ()>::new(OutputType::Utf8);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..10).map(|i| format!("distinct value number {i}")),
+        ));
+        lazy.insert_if_new(&values, |_| (), |_| ());
+
+        assert!(
+            lazy.buffer.capacity() < INITIAL_BUFFER_CAPACITY,
+            "expected a small lazy buffer to stay under the {INITIAL_BUFFER_CAPACITY} \
+             byte pre-allocation, got {}",
+            lazy.buffer.capacity()
+        );
     }
 
     #[test]
