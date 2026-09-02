@@ -20,6 +20,7 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
+mod count_distinct_spill;
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 mod nlj_spill_unmatched;
