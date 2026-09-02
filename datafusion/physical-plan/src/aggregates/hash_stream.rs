@@ -1241,23 +1241,22 @@ impl FinalHashAggregateStream {
         mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let mut timer = elapsed_compute.timer();
 
+        let mut timer = elapsed_compute.timer();
         hash_table.start_output()?;
 
-        while let Some(batch) = hash_table.next_output_batch()? {
-            if hash_table.is_done() {
-                drop(hash_table);
+        loop {
+            let Some(batch) = hash_table.next_output_batch()? else {
+                // Only reachable when the table held no groups at all: a
+                // non-empty table always reports its last batch together with
+                // the `Done` state, which the `try_resize` below already zeroes.
                 self.reservation.try_resize(0)?;
-                timer.done();
-
-                emitter
-                    .emit(batch.record_output(&self.baseline_metrics))
-                    .await;
-
                 return Ok(());
-            }
+            };
 
+            // The table hands over its groups as they are materialized and
+            // reports a size of 0 once it reaches `Done`, so this releases the
+            // reservation before the final batch goes downstream.
             self.reservation.try_resize(hash_table.memory_size())?;
 
             timer.done();
@@ -1266,8 +1265,6 @@ impl FinalHashAggregateStream {
                 .await;
             timer = elapsed_compute.timer();
         }
-
-        Ok(())
     }
 }
 
