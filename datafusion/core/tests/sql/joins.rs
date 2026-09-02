@@ -519,7 +519,10 @@ async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
         .to_string();
     assert_contains!(right_plan.as_str(), "SortPreservingMergeExec");
     assert_contains!(right_plan.as_str(), "DataSourceExec: partitions=2");
-    assert!(asof.output_ordering().is_some());
+    assert!(asof.children()[0].output_ordering().is_some());
+    // The embedded output projection drops the match column, so the join no
+    // longer exposes its input ordering.
+    assert!(asof.output_ordering().is_none());
     assert!(matches!(
         &asof.input_distribution_requirements().into_per_child()[..],
         [
