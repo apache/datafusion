@@ -19,6 +19,7 @@ use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::{Column, DFSchemaRef, substrait_err};
 use datafusion::logical_expr::Expr;
 use substrait::proto::Expression;
+use substrait::proto::expression::field_reference::outer_reference::OuterReferenceType;
 use substrait::proto::expression::field_reference::{
     OuterReference, ReferenceType, RootReference, RootType,
 };
@@ -101,8 +102,11 @@ pub fn from_outer_reference_column(
         if let Some(index) = outer_schema.maybe_index_of_column(col) {
             return substrait_field_ref_with_root(
                 index,
+                #[expect(deprecated)]
                 RootType::OuterReference(OuterReference {
-                    steps_out: steps_out as u32,
+                    outer_reference_type: Some(OuterReferenceType::StepsOut(
+                        steps_out as u32,
+                    )),
                 }),
             );
         }

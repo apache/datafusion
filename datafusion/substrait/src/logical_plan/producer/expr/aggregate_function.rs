@@ -54,7 +54,6 @@ pub fn from_aggregate_function(
         });
     }
     let function_anchor = producer.register_function(func.name().to_string());
-    #[expect(deprecated)]
     Ok(Measure {
         measure: Some(AggregateFunction {
             function_reference: function_anchor,
@@ -66,7 +65,6 @@ pub fn from_aggregate_function(
                 false => AggregationInvocation::All as i32,
             },
             phase: AggregationPhase::Unspecified as i32,
-            args: vec![],
             options: vec![],
         }),
         filter: match filter {

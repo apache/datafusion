@@ -144,7 +144,6 @@ pub fn from_empty_relation(
 
         ReadType::VirtualTable(VirtualTable {
             expressions: vec![NestedStruct { fields }],
-            ..Default::default()
         })
     } else {
         ReadType::VirtualTable(VirtualTable::default())
@@ -178,10 +177,7 @@ pub fn from_values(
             best_effort_filter: None,
             projection: None,
             advanced_extension: None,
-            read_type: Some(ReadType::VirtualTable(VirtualTable {
-                expressions,
-                ..Default::default()
-            })),
+            read_type: Some(ReadType::VirtualTable(VirtualTable { expressions })),
         }))),
     }))
 }

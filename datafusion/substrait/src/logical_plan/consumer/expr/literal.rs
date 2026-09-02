@@ -25,9 +25,7 @@ use crate::variation_const::{
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
     LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
-    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{AsArray, MapArray, new_empty_array};
@@ -46,7 +44,6 @@ use substrait::proto::expression::Literal;
 use substrait::proto::expression::literal::user_defined::{TypeAnchorType, Val};
 use substrait::proto::expression::literal::{
     IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, LiteralType,
-    interval_day_to_second,
 };
 
 pub async fn from_literal(
@@ -102,28 +99,6 @@ pub(crate) fn from_substrait_literal(
         },
         Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
         Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
-        #[expect(deprecated)]
-        Some(LiteralType::Timestamp(t)) => {
-            // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-            #[expect(deprecated)]
-            match lit.type_variation_reference {
-                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                    ScalarValue::TimestampSecond(Some(*t), None)
-                }
-                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                    ScalarValue::TimestampMillisecond(Some(*t), None)
-                }
-                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                    ScalarValue::TimestampMicrosecond(Some(*t), None)
-                }
-                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                    ScalarValue::TimestampNanosecond(Some(*t), None)
-                }
-                others => {
-                    return substrait_err!("Unknown type variation reference {others}");
-                }
-            }
-        }
         Some(LiteralType::PrecisionTimestamp(pt)) => match pt.precision {
             0 => ScalarValue::TimestampSecond(Some(pt.value), None),
             3 => ScalarValue::TimestampMillisecond(Some(pt.value), None),
@@ -381,29 +356,17 @@ pub(crate) fn from_substrait_literal(
             days,
             seconds,
             subseconds,
-            precision_mode,
+            precision,
         })) => {
-            use interval_day_to_second::PrecisionMode;
             // DF only supports millisecond precision, so for any more granular type we lose precision
-            let milliseconds = match precision_mode {
-                #[expect(deprecated)]
-                Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
-                None => {
-                    if *subseconds != 0 {
-                        return substrait_err!(
-                            "Cannot set subseconds field of IntervalDayToSecond without setting precision"
-                        );
-                    } else {
-                        0_i32
-                    }
-                }
-                Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
-                Some(PrecisionMode::Precision(3)) => *subseconds as i32,
-                Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
-                Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
-                _ => {
+            let milliseconds = match precision {
+                0 => *subseconds as i32 * 1000,
+                3 => *subseconds as i32,
+                6 => (subseconds / 1000) as i32,
+                9 => (subseconds / 1000 / 1000) as i32,
+                p => {
                     return not_impl_err!(
-                        "Unsupported Substrait interval day to second precision mode: {precision_mode:?}"
+                        "Unsupported Substrait interval day to second precision: {p}"
                     );
                 }
             };
@@ -423,8 +386,7 @@ pub(crate) fn from_substrait_literal(
                     days,
                     seconds,
                     subseconds,
-                    precision_mode:
-                        Some(interval_day_to_second::PrecisionMode::Precision(p)),
+                    precision: p,
                 }),
             ) => {
                 if *p < 0 || *p > 9 {
@@ -607,9 +569,7 @@ mod tests {
                     days: 3,
                     seconds: 4,
                     subseconds: 5,
-                    precision_mode: Some(
-                        interval_day_to_second::PrecisionMode::Precision(6),
-                    ),
+                    precision: 6,
                 }),
             })),
         };

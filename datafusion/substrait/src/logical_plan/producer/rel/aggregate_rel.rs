@@ -64,15 +64,16 @@ pub fn from_distinct(
                 .map(substrait_field_ref)
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
 
-            #[expect(deprecated)]
+            // The keys are declared once on the relation and the single grouping
+            // set references them by index.
+            let expression_references = (0..grouping.len() as u32).collect();
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
-                    grouping_expressions: vec![],
+                    grouping_expressions: grouping,
                     groupings: vec![Grouping {
-                        grouping_expressions: grouping,
-                        expression_references: vec![],
+                        expression_references,
                     }],
                     measures: vec![],
                     advanced_extension: None,
@@ -160,17 +161,13 @@ pub fn parse_flat_grouping_exprs(
     ref_group_exprs: &mut Vec<Expression>,
 ) -> datafusion::common::Result<Grouping> {
     let mut expression_references = vec![];
-    let mut grouping_expressions = vec![];
 
     for e in exprs {
         let rex = producer.handle_expr(e, schema)?;
-        grouping_expressions.push(rex.clone());
         ref_group_exprs.push(rex);
         expression_references.push((ref_group_exprs.len() - 1) as u32);
     }
-    #[expect(deprecated)]
     Ok(Grouping {
-        grouping_expressions,
         expression_references,
     })
 }
