@@ -175,7 +175,7 @@ impl GroupOrderingPartial {
                 } else if current_sort.block_index() > 0 {
                     Some(BlockedEmitTo::NextBlock)
                 } else {
-                    Some(BlockedEmitTo::First(current_sort.index_in_block() + 1))
+                    Some(BlockedEmitTo::First(current_sort.index_in_block()))
                 }
             }
             State::Complete if current_total_num_groups <= self.batch_size => Some(BlockedEmitTo::All),

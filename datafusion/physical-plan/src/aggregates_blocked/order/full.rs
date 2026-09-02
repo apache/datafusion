@@ -111,7 +111,7 @@ impl GroupOrderingFull {
                     Some(BlockedEmitTo::NextBlock)
                 } else {
                     // otherwise emit all rows prior to the current group
-                    Some(BlockedEmitTo::First(current.index_in_block() + 1))
+                    Some(BlockedEmitTo::First(current.index_in_block()))
                 }
             }
             State::Complete if current_total_num_groups <= self.batch_size => Some(BlockedEmitTo::All),
