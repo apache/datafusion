@@ -21,9 +21,9 @@
 use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::stream::{
-    ObservedStream, RecordBatchReceiverStream, RecordBatchStreamAdapter,
-};
+#[cfg(target_arch = "wasm32")]
+use super::stream::RecordBatchStreamAdapter;
+use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
@@ -40,7 +40,6 @@ use crate::{
     ReplaceChildrenOptions, validate_child_count,
 };
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use futures::stream::{StreamExt, TryStreamExt};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -233,21 +232,20 @@ impl ExecutionPlan for CoalescePartitionsExec {
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
-                // Single-threaded path: drain sequentially to avoid
-                // `JoinSet::spawn`, which needs a tokio reactor and panics
-                // on wasm32-unknown-unknown.
-                if context.session_config().target_partitions() == 1 {
-                    // mirror the slow path so elapsed_compute isn't 0 here
+                // wasm has no tokio reactor, so avoid `JoinSet::spawn`; poll
+                // input partitions cooperatively via `select_all` instead.
+                #[cfg(target_arch = "wasm32")]
+                {
                     let elapsed_compute = baseline_metrics.elapsed_compute().clone();
                     let _timer = elapsed_compute.timer();
 
-                    let input = Arc::clone(&self.input);
-                    let ctx = Arc::clone(&context);
-                    let stream = futures::stream::iter(0..input_partitions)
-                        .map(move |i| input.execute(i, Arc::clone(&ctx)))
-                        .try_flatten();
+                    let mut streams = Vec::with_capacity(input_partitions);
+                    for i in 0..input_partitions {
+                        streams.push(self.input.execute(i, Arc::clone(&context))?);
+                    }
+                    let merged = futures::stream::select_all(streams);
                     return Ok(Box::pin(ObservedStream::new(
-                        Box::pin(RecordBatchStreamAdapter::new(self.schema(), stream)),
+                        Box::pin(RecordBatchStreamAdapter::new(self.schema(), merged)),
                         baseline_metrics,
                         self.fetch,
                     )));

@@ -90,7 +90,9 @@ mod test {
         execution::context::SessionContext,
         prelude::CsvReadOptions,
     };
-    use datafusion_common::{DataFusionError, test_util::batches_to_string};
+    use datafusion_common::{
+        DataFusionError, assert_batches_sorted_eq, test_util::batches_to_string,
+    };
     use datafusion_execution::{
         config::SessionConfig,
         disk_manager::{DiskManagerBuilder, DiskManagerMode},
@@ -246,15 +248,10 @@ mod test {
             .await
             .unwrap();
 
-        assert_eq!(
-            batches_to_string(&result),
-            "+---+\n\
-             | n |\n\
-             +---+\n\
-             | 1 |\n\
-             | 2 |\n\
-             +---+"
-        );
+        // CoalescePartitionsExec makes no output-order guarantee; sort
+        // before comparing so the assertion tolerates any valid interleaving.
+        let expected = ["+---+", "| n |", "+---+", "| 1 |", "| 2 |", "+---+"];
+        assert_batches_sorted_eq!(expected, &result);
     }
 
     #[wasm_bindgen_test(unsupported = tokio::test)]
