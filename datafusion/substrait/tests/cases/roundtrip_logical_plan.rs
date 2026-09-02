@@ -1588,6 +1588,45 @@ async fn window_with_rows() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_distinct() -> Result<()> {
+    roundtrip(
+        "SELECT count(DISTINCT a) OVER (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM data;",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn unsupported_window_semantics_are_rejected() -> Result<()> {
+    let ctx = create_context().await?;
+    for (sql, expected_error) in [
+        (
+            "SELECT first_value(a) IGNORE NULLS OVER (ORDER BY a) FROM data;",
+            "IGNORE NULLS",
+        ),
+        (
+            "SELECT first_value(a) RESPECT NULLS OVER (ORDER BY a) FROM data;",
+            "RESPECT NULLS",
+        ),
+        (
+            "SELECT sum(a) FILTER (WHERE a > 0) OVER (PARTITION BY d) FROM data;",
+            "FILTER",
+        ),
+        (
+            "SELECT count(*) OVER (ORDER BY c RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) FROM data;",
+            "Unsupported Substrait window frame offset",
+        ),
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state()).unwrap_err();
+        assert!(
+            err.to_string().contains(expected_error),
+            "expected error containing '{expected_error}', got '{err}'"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn qualified_schema_table_reference() -> Result<()> {
     roundtrip("SELECT * FROM public.data;").await
 }
@@ -2401,10 +2440,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::Set(set)) => {
             for input in &set.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2413,10 +2449,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::ExtensionMulti(ext)) => {
             for input in &ext.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2432,15 +2465,9 @@ fn verify_post_join_filter_value(proto: &Plan) -> Result<()> {
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
-                plan_rel::RelType::Rel(rel) => match check_post_join_filters(rel) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                },
+                plan_rel::RelType::Rel(rel) => check_post_join_filters(rel)?,
                 plan_rel::RelType::Root(root) => {
-                    match check_post_join_filters(root.input.as_ref().unwrap()) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    check_post_join_filters(root.input.as_ref().unwrap())?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),
@@ -2473,19 +2500,10 @@ fn assert_read_filter_count(proto: &Plan, expected_filter_count: u32) -> Result<
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
                 plan_rel::RelType::Rel(rel) => {
-                    match count_read_filters(rel, &mut filter_count) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(rel, &mut filter_count)?
                 }
                 plan_rel::RelType::Root(root) => {
-                    match count_read_filters(
-                        root.input.as_ref().unwrap(),
-                        &mut filter_count,
-                    ) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(root.input.as_ref().unwrap(), &mut filter_count)?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),

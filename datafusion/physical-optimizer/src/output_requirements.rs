@@ -117,7 +117,7 @@ impl OutputRequirementExec {
         dist_requirement: Distribution,
         fetch: Option<usize>,
     ) -> Self {
-        let cache = Self::compute_properties(&input, &fetch);
+        let cache = Self::compute_properties(&input, fetch);
         Self {
             input,
             order_requirement: requirements,
@@ -134,7 +134,7 @@ impl OutputRequirementExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
-        fetch: &Option<usize>,
+        fetch: Option<usize>,
     ) -> PlanProperties {
         let boundedness = if fetch.is_some() {
             Boundedness::Bounded

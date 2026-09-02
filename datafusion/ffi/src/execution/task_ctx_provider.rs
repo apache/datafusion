@@ -102,7 +102,7 @@ unsafe extern "C" fn clone_fn_wrapper(
             task_ctx: task_ctx_fn_wrapper,
             release: release_fn_wrapper,
             clone: clone_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -110,7 +110,7 @@ unsafe extern "C" fn clone_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(ctx: &mut FFI_TaskContextProvider) {
     unsafe {
         let private_data =
-            Box::from_raw(ctx.private_data as *mut TaskContextProviderPrivateData);
+            Box::from_raw(ctx.private_data.cast::<TaskContextProviderPrivateData>());
         drop(private_data);
     }
 }
@@ -135,7 +135,7 @@ impl From<&Arc<dyn TaskContextProvider>> for FFI_TaskContextProvider {
             task_ctx: task_ctx_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

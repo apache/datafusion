@@ -519,7 +519,7 @@ pub(crate) fn date_part_to_sql(
             ));
         }
         _ => {}
-    };
+    }
 
     Ok(None)
 }

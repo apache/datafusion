@@ -1666,7 +1666,9 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 
     (
         table_reference,
-        Arc::new(Field::new("mark", DataType::Boolean, false)),
+        // Nullable: null-aware `LeftMark` joins use NULL to represent SQL
+        // UNKNOWN for `NOT IN`. Other mark joins simply never produce a NULL.
+        Arc::new(Field::new("mark", DataType::Boolean, true)),
     )
 }
 
