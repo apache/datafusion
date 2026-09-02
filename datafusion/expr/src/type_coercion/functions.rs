@@ -1158,6 +1158,16 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
+        (_, RunEndEncoded(_, value_type))
+            if coerced_from(type_into, value_type.data_type()).is_some() =>
+        {
+            Some(type_into.clone())
+        }
+        (RunEndEncoded(_, value_type), _)
+            if coerced_from(value_type.data_type(), type_from).is_some() =>
+        {
+            Some(type_into.clone())
+        }
         // coerced into type_into
         (Int8, Null | Int8) => Some(type_into.clone()),
         (Int16, Null | Int8 | Int16 | UInt8) => Some(type_into.clone()),
@@ -1611,6 +1621,50 @@ mod tests {
         let type_from =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
         let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+    }
+
+    #[test]
+    fn test_coerced_from_run_end_encoded() {
+        let run_end_encoded_of = |value_type: DataType| {
+            DataType::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", value_type, true).into(),
+            )
+        };
+
+        let type_into = run_end_encoded_of(DataType::UInt32);
+        let type_from = DataType::Int64;
+        assert_eq!(coerced_from(&type_into, &type_from), None);
+
+        let type_from = run_end_encoded_of(DataType::UInt32);
+        let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // Signature candidates for functions like `date_bin` are plain
+        // Timestamp, but a REE-encoded column (e.g. a segment written with
+        // REE-dict encoding for that field) should still coerce against
+        // them via the wrapped value type.
+        let type_from =
+            run_end_encoded_of(DataType::Timestamp(TimeUnit::Nanosecond, None));
+        let type_into = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // The reverse direction: a plain type coercing into an REE target
+        // (e.g. a signature that happens to require RunEndEncoded) should
+        // succeed whenever the plain type coerces into the wrapped value
+        // type.
+        let type_into = run_end_encoded_of(DataType::Int64);
+        let type_from = DataType::Int32;
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())
