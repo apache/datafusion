@@ -82,7 +82,9 @@ use datafusion_expr::{
 /// rows is NULL where `count` is 0.
 ///
 /// That `count` is allowed only when the distinct argument has no specialized
-/// `GroupsAccumulator` of its own. See [`rewrite_pays_for_count`].
+/// `GroupsAccumulator` of its own, so that the rewrite is taking the distinct
+/// aggregate off `GroupsAccumulatorAdapter` rather than only adding an inner
+/// group by. See `rewrite_pays_for_count` for the measurements behind that.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
