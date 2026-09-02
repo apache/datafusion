@@ -45,5 +45,6 @@ pub mod signature;
 pub mod sort_properties;
 pub mod statistics;
 pub mod type_coercion;
+pub mod blocked_helpers;
 
 pub use placement::ExpressionPlacement;
