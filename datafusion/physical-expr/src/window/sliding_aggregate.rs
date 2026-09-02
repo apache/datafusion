@@ -22,12 +22,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
+use crate::window::aggregate::reverse_aggregate_window_expr;
 use crate::window::window_expr::{
     AggregateWindowExpr, WindowEvalContext, WindowFn, filter_array,
 };
-use crate::window::{
-    PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
-};
+use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowExpr};
 use crate::{PhysicalExpr, expressions::PhysicalSortExpr};
 
 use arrow::array::{ArrayRef, BooleanArray};
@@ -122,34 +121,13 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
-        self.aggregate.reverse_expr().map(|reverse_expr| {
-            let reverse_window_frame = self.window_frame.reverse();
-            if reverse_window_frame.is_ever_expanding() {
-                Arc::new(PlainAggregateWindowExpr::new(
-                    Arc::new(reverse_expr),
-                    &self.partition_by.clone(),
-                    &self
-                        .order_by
-                        .iter()
-                        .map(|e| e.reverse())
-                        .collect::<Vec<_>>(),
-                    Arc::new(self.window_frame.reverse()),
-                    self.filter.clone(),
-                )) as _
-            } else {
-                Arc::new(SlidingAggregateWindowExpr::new(
-                    Arc::new(reverse_expr),
-                    &self.partition_by.clone(),
-                    &self
-                        .order_by
-                        .iter()
-                        .map(|e| e.reverse())
-                        .collect::<Vec<_>>(),
-                    Arc::new(self.window_frame.reverse()),
-                    self.filter.clone(),
-                )) as _
-            }
-        })
+        reverse_aggregate_window_expr(
+            &self.aggregate,
+            &self.partition_by,
+            &self.order_by,
+            &self.window_frame,
+            self.filter.as_ref(),
+        )
     }
 
     fn uses_bounded_memory(&self) -> bool {
