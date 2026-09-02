@@ -188,10 +188,11 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
             if let Some(cast) = expr.downcast_ref::<CastExpr>() {
                 let input_data_type =
                     cast.expr().data_type(&self.physical_file_schema)?;
-                let output_data_type = cast.target_field().data_type();
+                let output_field = cast.target_field();
                 if !cast.is_bigger_cast(&input_data_type) {
                     return not_impl_err!(
-                        "Unsupported CAST from {input_data_type} to {output_data_type}"
+                        "Unsupported CAST from {input_data_type} to {}",
+                        output_field.data_type()
                     );
                 }
             }
