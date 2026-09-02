@@ -119,7 +119,7 @@ impl ScalarUDFImpl for FindInSetFunc {
                     ),
                     _ => None,
                 };
-                // Int64 when the argument is LargeUtf8, matching what `return_type` promised
+                // match the type promised by `return_type`
                 let res = match return_field.data_type() {
                     DataType::Int32 => ScalarValue::Int32(position.map(|p| p as i32)),
                     DataType::Int64 => ScalarValue::Int64(position.map(|p| p as i64)),
