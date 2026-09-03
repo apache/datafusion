@@ -228,7 +228,7 @@ impl OutputChannel {
         // across an await point.
         let (payload, is_memory_batch) = {
             match self.reservation.try_grow(size) {
-                Ok(_) => (Ok(RepartitionBatch::Memory(batch)), true),
+                Ok(()) => (Ok(RepartitionBatch::Memory(batch)), true),
                 Err(_) => match self.spill_writer.push_batch(&batch) {
                     Ok(()) => (Ok(RepartitionBatch::Spilled), false),
                     Err(err) => (Err(err), false),

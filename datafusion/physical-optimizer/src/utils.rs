@@ -116,14 +116,14 @@ pub fn add_sort_above_with_check<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> Result<PlanContext<T>> {
-    if !node
+    if node
         .plan
         .equivalence_properties()
         .ordering_satisfy_requirement(sort_requirements.clone())?
     {
-        Ok(add_sort_above(node, sort_requirements, fetch))
-    } else {
         Ok(node)
+    } else {
+        Ok(add_sort_above(node, sort_requirements, fetch))
     }
 }
 

@@ -51,14 +51,14 @@ pub fn nth_value(
     order_by: Vec<SortExpr>,
 ) -> datafusion_expr::Expr {
     let args = vec![expr, lit(n)];
-    if !order_by.is_empty() {
+    if order_by.is_empty() {
+        nth_value_udaf().call(args)
+    } else {
         nth_value_udaf()
             .call(args)
             .order_by(order_by)
             .build()
             .unwrap()
-    } else {
-        nth_value_udaf().call(args)
     }
 }
 

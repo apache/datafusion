@@ -723,11 +723,11 @@ impl PartialOrd for ScalarValue {
             (LargeListView(arr1), LargeListView(arr2)) => {
                 partial_cmp_list(arr1.as_ref(), arr2.as_ref())
             }
-            (List(_), _)
-            | (LargeList(_), _)
-            | (FixedSizeList(_), _)
-            | (ListView(_), _)
-            | (LargeListView(_), _) => None,
+            (
+                List(_) | LargeList(_) | FixedSizeList(_) | ListView(_)
+                | LargeListView(_),
+                _,
+            ) => None,
             (Struct(struct_arr1), Struct(struct_arr2)) => {
                 partial_cmp_struct(struct_arr1.as_ref(), struct_arr2.as_ref())
             }
@@ -1703,9 +1703,9 @@ impl ScalarValue {
             | DataType::Date64 => ScalarValue::new_zero(datatype),
 
             // String types
-            DataType::Utf8 => Ok(ScalarValue::Utf8(Some("".to_string()))),
-            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some("".to_string()))),
-            DataType::Utf8View => Ok(ScalarValue::Utf8View(Some("".to_string()))),
+            DataType::Utf8 => Ok(ScalarValue::Utf8(Some(String::new()))),
+            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(String::new()))),
+            DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(String::new()))),
 
             // Binary types
             DataType::Binary => Ok(ScalarValue::Binary(Some(vec![]))),
@@ -3191,10 +3191,8 @@ impl ScalarValue {
             // not supported if the TimeUnit is not valid (Time32 can
             // only be used with Second and Millisecond, Time64 only
             // with Microsecond and Nanosecond)
-            DataType::Time32(TimeUnit::Microsecond)
-            | DataType::Time32(TimeUnit::Nanosecond)
-            | DataType::Time64(TimeUnit::Second)
-            | DataType::Time64(TimeUnit::Millisecond) => {
+            DataType::Time32(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+            | DataType::Time64(TimeUnit::Second | TimeUnit::Millisecond) => {
                 return _not_impl_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
@@ -4258,9 +4256,10 @@ impl ScalarValue {
                 };
                 ScalarValue::FixedSizeBinary(
                     size,
-                    match array.is_null(index) {
-                        true => None,
-                        false => Some(array.value(index).into()),
+                    if array.is_null(index) {
+                        None
+                    } else {
+                        Some(array.value(index).into())
                     },
                 )
             }
@@ -5650,7 +5649,7 @@ impl fmt::Display for ScalarValue {
                     match epoch.checked_add_signed(Duration::try_days(v as i64).unwrap())
                     {
                         Some(date) => date.to_string(),
-                        None => "".to_string(),
+                        None => String::new(),
                     }
                 })
             )?,
@@ -5661,7 +5660,7 @@ impl fmt::Display for ScalarValue {
                     match epoch.checked_add_signed(Duration::try_milliseconds(v).unwrap())
                     {
                         Some(date) => date.to_string(),
-                        None => "".to_string(),
+                        None => String::new(),
                     }
                 })
             )?,
@@ -10640,11 +10639,11 @@ mod tests {
         // Test string types
         assert_eq!(
             ScalarValue::new_default(&DataType::Utf8).unwrap(),
-            ScalarValue::Utf8(Some("".to_string()))
+            ScalarValue::Utf8(Some(String::new()))
         );
         assert_eq!(
             ScalarValue::new_default(&DataType::LargeUtf8).unwrap(),
-            ScalarValue::LargeUtf8(Some("".to_string()))
+            ScalarValue::LargeUtf8(Some(String::new()))
         );
 
         // Test binary types

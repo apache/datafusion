@@ -296,7 +296,9 @@ impl Display for SchemaError {
                     )?;
                 }
 
-                if !valid_fields.is_empty() {
+                if valid_fields.is_empty() {
+                    Ok(())
+                } else {
                     write!(
                         f,
                         "\nValid fields are {}.",
@@ -306,8 +308,6 @@ impl Display for SchemaError {
                             .collect::<Vec<String>>()
                             .join(", ")
                     )
-                } else {
-                    Ok(())
                 }
             }
             Self::DuplicateQualifiedField { qualifier, name } => {
@@ -555,11 +555,11 @@ impl DataFusionError {
                 return format!("{}{}", Self::BACK_TRACE_SEP, back_trace);
             }
 
-            "".to_owned()
+            String::new()
         }
 
         #[cfg(not(feature = "backtrace"))]
-        "".to_owned()
+        String::new()
     }
 
     /// Return a [`DataFusionErrorBuilder`] to build a [`DataFusionError`]
@@ -606,7 +606,7 @@ impl DataFusionError {
     pub fn message(&self) -> Cow<'_, str> {
         match *self {
             DataFusionError::ArrowError(ref desc, ref backtrace) => {
-                let backtrace = backtrace.clone().unwrap_or_else(|| "".to_owned());
+                let backtrace = backtrace.clone().unwrap_or_else(String::new);
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             #[cfg(feature = "parquet")]
@@ -614,8 +614,7 @@ impl DataFusionError {
             DataFusionError::IoError(ref desc) => Cow::Owned(desc.to_string()),
             #[cfg(feature = "sql")]
             DataFusionError::SQL(ref desc, ref backtrace) => {
-                let backtrace: String =
-                    backtrace.clone().unwrap_or_else(|| "".to_owned());
+                let backtrace: String = backtrace.clone().unwrap_or_else(String::new);
                 Cow::Owned(format!("{desc:?}{backtrace}"))
             }
             DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
@@ -628,7 +627,7 @@ impl DataFusionError {
             DataFusionError::Plan(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::SchemaError(ref desc, ref backtrace) => {
                 let backtrace: &str =
-                    &backtrace.as_ref().clone().unwrap_or_else(|| "".to_owned());
+                    &backtrace.as_ref().clone().unwrap_or_else(String::new);
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),

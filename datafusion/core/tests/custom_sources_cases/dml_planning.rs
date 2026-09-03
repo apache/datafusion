@@ -84,7 +84,7 @@ impl std::fmt::Debug for CaptureDeleteProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CaptureDeleteProvider")
             .field("schema", &self.schema)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -180,7 +180,7 @@ impl std::fmt::Debug for CaptureUpdateProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CaptureUpdateProvider")
             .field("schema", &self.schema)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -254,7 +254,7 @@ impl std::fmt::Debug for CaptureTruncateProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CaptureTruncateProvider")
             .field("schema", &self.schema)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

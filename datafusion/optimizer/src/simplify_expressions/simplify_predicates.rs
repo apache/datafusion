@@ -116,14 +116,14 @@ fn simplify_column_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
         match &pred {
             Expr::BinaryExpr(BinaryExpr { left: _, op, right }) => {
                 match (op, right.as_literal().is_some()) {
-                    (Operator::Gt, true)
-                    | (Operator::Lt, false)
-                    | (Operator::GtEq, true)
-                    | (Operator::LtEq, false) => greater_predicates.push(pred),
-                    (Operator::Lt, true)
-                    | (Operator::Gt, false)
-                    | (Operator::LtEq, true)
-                    | (Operator::GtEq, false) => less_predicates.push(pred),
+                    (Operator::Gt | Operator::GtEq, true)
+                    | (Operator::Lt | Operator::LtEq, false) => {
+                        greater_predicates.push(pred)
+                    }
+                    (Operator::Lt | Operator::LtEq, true)
+                    | (Operator::Gt | Operator::GtEq, false) => {
+                        less_predicates.push(pred)
+                    }
                     (Operator::Eq, _) => eq_predicates.push(pred),
                     _ => unreachable!("Unexpected operator: {}", op),
                 }
@@ -275,20 +275,20 @@ mod tests {
 
         // Check that the cast predicate is preserved
         let has_cast_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Lt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Lt,
+                right
             }) if matches!(left.as_ref(), Expr::Cast(_)) && right == &Box::new(lit("abc")))
         });
         assert!(has_cast_predicate, "Cast predicate should be preserved");
 
         // Check that we have the more restrictive column predicate (a < 5)
         let has_column_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Lt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Lt,
+                right
             }) if left == &Box::new(col("a")) && right == &Box::new(lit(5i32)))
         });
         assert!(has_column_predicate, "Should have a < 5 predicate");
@@ -322,20 +322,20 @@ mod tests {
 
         // Check for a < 3
         let has_a_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Lt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Lt,
+                right
             }) if left == &Box::new(col("a")) && right == &Box::new(lit(3i32)))
         });
         assert!(has_a_predicate, "Should have a < 3 predicate");
 
         // Check for b > 20
         let has_b_predicate = result.iter().any(|p| {
-            matches!(p, Expr::BinaryExpr(BinaryExpr { 
-                left, 
-                op: Operator::Gt, 
-                right 
+            matches!(p, Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Gt,
+                right
             }) if left == &Box::new(col("b")) && right == &Box::new(lit(20i32)))
         });
         assert!(has_b_predicate, "Should have b > 20 predicate");

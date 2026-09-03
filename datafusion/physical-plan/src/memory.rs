@@ -270,7 +270,7 @@ impl fmt::Debug for LazyMemoryExec {
         f.debug_struct("LazyMemoryExec")
             .field("schema", &self.schema)
             .field("batch_generators", &self.batch_generators)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

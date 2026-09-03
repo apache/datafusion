@@ -999,7 +999,7 @@ impl GroupedHashAggregateStream {
         let oom = match self.update_memory_reservation() {
             Err(e @ DataFusionError::ResourcesExhausted(_)) => e,
             Err(e) => return Err(e),
-            Ok(_) => return Ok(None),
+            Ok(()) => return Ok(None),
         };
 
         match self.oom_mode {

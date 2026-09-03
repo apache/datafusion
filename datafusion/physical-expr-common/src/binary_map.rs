@@ -619,7 +619,7 @@ where
             .field("buffer", &self.buffer)
             .field("random_state", &self.random_state)
             .field("hashes_buffer", &self.hashes_buffer)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

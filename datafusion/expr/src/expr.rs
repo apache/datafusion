@@ -1929,14 +1929,15 @@ impl Expr {
                 // f_up: unalias on up so we can remove nested aliases like
                 // `(x as foo) as bar`
                 if let Expr::Alias(alias) = expr {
-                    match alias
+                    if alias
                         .metadata
                         .as_ref()
                         .map(|h| h.is_empty())
                         .unwrap_or(true)
                     {
-                        true => Ok(Transformed::yes(*alias.expr)),
-                        false => Ok(Transformed::no(Expr::Alias(alias))),
+                        Ok(Transformed::yes(*alias.expr))
+                    } else {
+                        Ok(Transformed::no(Expr::Alias(alias)))
                     }
                 } else {
                     Ok(Transformed::no(expr))
@@ -3571,9 +3572,10 @@ impl Display for Expr {
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v, metadata) => {
-                match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
-                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
-                    true => write!(f, "{v:?}"),
+                if metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+                    write!(f, "{v:?}")
+                } else {
+                    write!(f, "{v:?} {:?}", metadata.as_ref().unwrap())
                 }
             }
             Expr::Case(case) => {
@@ -3808,15 +3810,13 @@ fn fmt_function(
     args: &[Expr],
     display: bool,
 ) -> fmt::Result {
-    let args: Vec<String> = match display {
-        true => args.iter().map(|arg| format!("{arg}")).collect(),
-        false => args.iter().map(|arg| format!("{arg:?}")).collect(),
+    let args: Vec<String> = if display {
+        args.iter().map(|arg| format!("{arg}")).collect()
+    } else {
+        args.iter().map(|arg| format!("{arg:?}")).collect()
     };
 
-    let distinct_str = match distinct {
-        true => "DISTINCT ",
-        false => "",
-    };
+    let distinct_str = if distinct { "DISTINCT " } else { "" };
     write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
 }
 

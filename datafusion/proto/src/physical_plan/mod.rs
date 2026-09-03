@@ -1283,7 +1283,7 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         let mut buf: Vec<u8> = vec![];
         match codec.try_encode(Arc::clone(&plan_clone), &mut buf, proto_converter) {
-            Ok(_) => {
+            Ok(()) => {
                 let inputs: Vec<protobuf::PhysicalPlanNode> = plan_clone
                     .children()
                     .into_iter()
@@ -1990,7 +1990,7 @@ impl ComposedPhysicalExtensionCodec {
         // find the encoder
         for (position, codec) in self.codecs.iter().enumerate() {
             match encode(codec.as_ref(), &mut data) {
-                Ok(_) => {
+                Ok(()) => {
                     encoder_position = Some(position as u32);
                     break;
                 }

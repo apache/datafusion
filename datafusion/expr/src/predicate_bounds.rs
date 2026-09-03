@@ -83,23 +83,20 @@ impl PredicateBoundsEvaluator<'_> {
                 }
             }
             Expr::IsNull(e) => {
-                // If `e` is not nullable, then `e IS NULL` is provably false
-                if !e.nullable(self.input_schema)? {
-                    NullableInterval::FALSE
-                } else {
+                if e.nullable(self.input_schema)? {
                     match e.get_type(self.input_schema)? {
                         // If `e` is a boolean expression, check if `e` is provably 'unknown'.
                         DataType::Boolean => self.evaluate_bounds(e)?.is_unknown()?,
                         // If `e` is not a boolean expression, check if `e` is provably null
                         _ => self.is_null(e),
                     }
+                } else {
+                    // `e` is not nullable, so `e IS NULL` is provably false
+                    NullableInterval::FALSE
                 }
             }
             Expr::IsNotNull(e) => {
-                // If `e` is not nullable, then `e IS NOT NULL` is provably true
-                if !e.nullable(self.input_schema)? {
-                    NullableInterval::TRUE
-                } else {
+                if e.nullable(self.input_schema)? {
                     match e.get_type(self.input_schema)? {
                         // If `e` is a boolean expression, try to evaluate it and test for not unknown
                         DataType::Boolean => {
@@ -108,6 +105,9 @@ impl PredicateBoundsEvaluator<'_> {
                         // If `e` is not a boolean expression, check if `e` is provably null
                         _ => self.is_null(e).not()?,
                     }
+                } else {
+                    // `e` is not nullable, so `e IS NOT NULL` is provably true
+                    NullableInterval::TRUE
                 }
             }
             Expr::IsTrue(e) => self.evaluate_bounds(e)?.is_true()?,
@@ -158,11 +158,11 @@ impl PredicateBoundsEvaluator<'_> {
     fn is_null(&self, expr: &Expr) -> NullableInterval {
         // Fast path for literals
         if let Expr::Literal(scalar, _) = expr {
-            if scalar.is_null() {
-                return NullableInterval::TRUE;
+            return if scalar.is_null() {
+                NullableInterval::TRUE
             } else {
-                return NullableInterval::FALSE;
-            }
+                NullableInterval::FALSE
+            };
         }
 
         // If `expr` is not nullable, we can be certain `expr` is not null
@@ -220,13 +220,13 @@ impl PredicateBoundsEvaluator<'_> {
                 is_null = NullableInterval::TRUE_OR_FALSE;
             }
 
-            if !child_is_null.contains_value(ScalarValue::Boolean(Some(false)))? {
+            if child_is_null.contains_value(ScalarValue::Boolean(Some(false)))? {
+                Ok(TreeNodeRecursion::Continue)
+            } else {
                 // If the child is never not null, then the result can also never be not null
                 // and we can stop traversing the children
                 is_null = NullableInterval::TRUE;
                 Ok(TreeNodeRecursion::Stop)
-            } else {
-                Ok(TreeNodeRecursion::Continue)
             }
         });
 

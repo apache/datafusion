@@ -213,9 +213,7 @@ impl SpillPoolSink {
         let mut shared = self.shared.lock();
 
         // Create new file if there is none available to append to
-        let write_file = if !shared.open_write_files.is_empty() {
-            shared.open_write_files.pop_front().unwrap()
-        } else {
+        let write_file = if shared.open_write_files.is_empty() {
             let spill_manager = Arc::clone(&shared.spill_manager);
             // Release shared lock before disk I/O (fine-grained locking)
             drop(shared);
@@ -240,6 +238,8 @@ impl SpillPoolSink {
             shared.files.push_back(Arc::clone(&file_shared));
             shared.wake(); // Wake readers waiting for new files
             file_shared
+        } else {
+            shared.open_write_files.pop_front().unwrap()
         };
 
         // Release shared lock before file I/O (fine-grained locking)
@@ -730,11 +730,10 @@ impl Stream for SpillPoolReader {
                             // Clear current file and continue loop to get next file
                             self.current_file = None;
                             continue;
-                        } else {
-                            // Stream exhausted but writer not finished - unexpected
-                            // This shouldn't happen with proper coordination
-                            return Poll::Ready(None);
                         }
+                        // Stream exhausted but writer not finished - unexpected
+                        // This shouldn't happen with proper coordination
+                        return Poll::Ready(None);
                     }
                     Poll::Pending => {
                         // File not ready yet (waiting for writer)

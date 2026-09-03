@@ -526,18 +526,11 @@ fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataT
         (UInt64, _) | (_, UInt64) => Some(UInt64),
         (Int64, _)
         | (_, Int64)
-        | (UInt32, Int8)
-        | (Int8, UInt32)
-        | (UInt32, Int16)
-        | (Int16, UInt32)
-        | (UInt32, Int32)
-        | (Int32, UInt32) => Some(Int64),
-        (Int32, _)
-        | (_, Int32)
-        | (UInt16, Int16)
-        | (Int16, UInt16)
-        | (UInt16, Int8)
-        | (Int8, UInt16) => Some(Int32),
+        | (UInt32, Int8 | Int16 | Int32)
+        | (Int8 | Int16 | Int32, UInt32) => Some(Int64),
+        (Int32, _) | (_, Int32) | (UInt16, Int16 | Int8) | (Int16 | Int8, UInt16) => {
+            Some(Int32)
+        }
         (UInt32, _) | (_, UInt32) => Some(UInt32),
         (Int16, _) | (_, Int16) | (Int8, UInt8) | (UInt8, Int8) => Some(Int16),
         (UInt16, _) | (_, UInt16) => Some(UInt16),
@@ -1023,20 +1016,18 @@ fn string_temporal_coercion(
     fn match_rule(l: &DataType, r: &DataType) -> Option<DataType> {
         match (l, r) {
             // Coerce Utf8View/Utf8/LargeUtf8 to Date32/Date64/Time32/Time64/Timestamp
-            (Utf8, temporal) | (LargeUtf8, temporal) | (Utf8View, temporal) => {
-                match temporal {
-                    Date32 | Date64 => Some(temporal.clone()),
-                    Time32(_) | Time64(_) => {
-                        if is_time_with_valid_unit(temporal) {
-                            Some(temporal.to_owned())
-                        } else {
-                            None
-                        }
+            (Utf8 | LargeUtf8 | Utf8View, temporal) => match temporal {
+                Date32 | Date64 => Some(temporal.clone()),
+                Time32(_) | Time64(_) => {
+                    if is_time_with_valid_unit(temporal) {
+                        Some(temporal.to_owned())
+                    } else {
+                        None
                     }
-                    Timestamp(_, tz) => Some(Timestamp(Nanosecond, tz.clone())),
-                    _ => None,
                 }
-            }
+                Timestamp(_, tz) => Some(Timestamp(Nanosecond, tz.clone())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1134,20 +1125,14 @@ fn get_wider_decimal_type_cross_variant(
         {
             Some(Decimal64(required_precision, s))
         }
-        (Decimal32(_, _), Decimal128(_, _))
-        | (Decimal128(_, _), Decimal32(_, _))
-        | (Decimal64(_, _), Decimal128(_, _))
-        | (Decimal128(_, _), Decimal64(_, _))
+        (Decimal32(_, _) | Decimal64(_, _), Decimal128(_, _))
+        | (Decimal128(_, _), Decimal32(_, _) | Decimal64(_, _))
             if required_precision <= DECIMAL128_MAX_PRECISION =>
         {
             Some(Decimal128(required_precision, s))
         }
-        (Decimal32(_, _), Decimal256(_, _))
-        | (Decimal256(_, _), Decimal32(_, _))
-        | (Decimal64(_, _), Decimal256(_, _))
-        | (Decimal256(_, _), Decimal64(_, _))
-        | (Decimal128(_, _), Decimal256(_, _))
-        | (Decimal256(_, _), Decimal128(_, _))
+        (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _))
             if required_precision <= DECIMAL256_MAX_PRECISION =>
         {
             Some(Decimal256(required_precision, s))

@@ -309,10 +309,10 @@ impl DisplayAs for ProjectionExec {
                     .iter()
                     .map(|proj_expr| {
                         let e = proj_expr.expr.to_string();
-                        if e != proj_expr.alias {
-                            format!("{e} as {}", proj_expr.alias)
-                        } else {
+                        if e == proj_expr.alias {
                             e
+                        } else {
+                            format!("{e} as {}", proj_expr.alias)
                         }
                     })
                     .collect();

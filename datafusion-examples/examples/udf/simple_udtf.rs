@@ -110,10 +110,9 @@ impl TableProvider for LocalCsvTable {
                     let batch_lines = max_return_lines - lines;
                     batches.push(batch.slice(0, batch_lines));
                     break;
-                } else {
-                    batches.push(batch.clone());
-                    lines += batch_lines;
                 }
+                batches.push(batch.clone());
+                lines += batch_lines;
             }
             batches
         } else {

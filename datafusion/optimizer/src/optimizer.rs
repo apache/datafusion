@@ -423,13 +423,10 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             f(Arc::make_mut(input))?
         }
         LogicalPlan::Explain(Explain { plan, .. }) => f(Arc::make_mut(plan))?,
-        LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
-            input,
-            ..
-        }))
-        | LogicalPlan::Ddl(DdlStatement::CreateView(CreateView { input, .. })) => {
-            f(Arc::make_mut(input))?
-        }
+        LogicalPlan::Ddl(
+            DdlStatement::CreateMemoryTable(CreateMemoryTable { input, .. })
+            | DdlStatement::CreateView(CreateView { input, .. }),
+        ) => f(Arc::make_mut(input))?,
         LogicalPlan::RecursiveQuery(RecursiveQuery {
             static_term,
             recursive_term,
@@ -470,15 +467,17 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
         | LogicalPlan::DescribeTable(_)
-        | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
-        | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
-        | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
-        | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
-        | LogicalPlan::Ddl(DdlStatement::DropTable(_))
-        | LogicalPlan::Ddl(DdlStatement::DropView(_))
-        | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
-        | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
-        | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
+        | LogicalPlan::Ddl(
+            DdlStatement::CreateExternalTable(_)
+            | DdlStatement::CreateCatalogSchema(_)
+            | DdlStatement::CreateCatalog(_)
+            | DdlStatement::CreateIndex(_)
+            | DdlStatement::DropTable(_)
+            | DdlStatement::DropView(_)
+            | DdlStatement::DropCatalogSchema(_)
+            | DdlStatement::CreateFunction(_)
+            | DdlStatement::DropFunction(_),
+        )
         | LogicalPlan::Statement(_) => false,
     })
 }

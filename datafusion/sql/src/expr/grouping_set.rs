@@ -48,12 +48,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let args: Result<Vec<_>> = exprs
             .into_iter()
             .map(|v| {
-                if v.len() != 1 {
+                if v.len() == 1 {
+                    self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                } else {
                     plan_err!(
                         "Tuple expressions are not supported for Rollup expressions"
                     )
-                } else {
-                    self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
                 }
             })
             .collect();
@@ -69,10 +69,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let args: Result<Vec<_>> = exprs
             .into_iter()
             .map(|v| {
-                if v.len() != 1 {
-                    plan_err!("Tuple expressions not are supported for Cube expressions")
-                } else {
+                if v.len() == 1 {
                     self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                } else {
+                    plan_err!("Tuple expressions not are supported for Cube expressions")
                 }
             })
             .collect();

@@ -102,9 +102,8 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
             (Precision::Exact(a), Precision::Exact(b)) => {
                 Precision::Exact(if a >= b { a.clone() } else { b.clone() })
             }
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => {
                 Precision::Inexact(if a >= b { a.clone() } else { b.clone() })
             }
             (_, _) => Precision::Absent,
@@ -119,9 +118,8 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
             (Precision::Exact(a), Precision::Exact(b)) => {
                 Precision::Exact(if a >= b { b.clone() } else { a.clone() })
             }
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => {
                 Precision::Inexact(if a >= b { b.clone() } else { a.clone() })
             }
             (_, _) => Precision::Absent,
@@ -147,9 +145,8 @@ impl Precision<usize> {
                 || Precision::Inexact(a.saturating_add(*b)),
                 Precision::Exact,
             ),
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => {
                 Precision::Inexact(a.saturating_add(*b))
             }
             (_, _) => Precision::Absent,
@@ -165,9 +162,8 @@ impl Precision<usize> {
                 || Precision::Inexact(a.saturating_sub(*b)),
                 Precision::Exact,
             ),
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => {
                 Precision::Inexact(a.saturating_sub(*b))
             }
             (_, _) => Precision::Absent,
@@ -183,9 +179,8 @@ impl Precision<usize> {
                 || Precision::Inexact(a.saturating_mul(*b)),
                 Precision::Exact,
             ),
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => {
                 Precision::Inexact(a.saturating_mul(*b))
             }
             (_, _) => Precision::Absent,
@@ -240,9 +235,8 @@ impl Precision<ScalarValue> {
                 .add_checked(b)
                 .map(Precision::Exact)
                 .unwrap_or(Precision::Absent),
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => a
                 .add_checked(b)
                 .map(Precision::Inexact)
                 .unwrap_or(Precision::Absent),
@@ -283,9 +277,8 @@ impl Precision<ScalarValue> {
             (Precision::Exact(a), Precision::Exact(b)) => {
                 a.sub(b).map(Precision::Exact).unwrap_or(Precision::Absent)
             }
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => a
                 .sub(b)
                 .map(Precision::Inexact)
                 .unwrap_or(Precision::Absent),
@@ -302,9 +295,8 @@ impl Precision<ScalarValue> {
                 .mul_checked(b)
                 .map(Precision::Exact)
                 .unwrap_or(Precision::Absent),
-            (Precision::Inexact(a), Precision::Exact(b))
-            | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+            (Precision::Inexact(a), Precision::Exact(b) | Precision::Inexact(b))
+            | (Precision::Exact(a), Precision::Inexact(b)) => a
                 .mul_checked(b)
                 .map(Precision::Inexact)
                 .unwrap_or(Precision::Absent),
@@ -906,9 +898,11 @@ where
                 Precision::Exact(right.clone())
             }
         }
-        (Precision::Exact(left), Precision::Inexact(right))
-        | (Precision::Inexact(left), Precision::Exact(right))
-        | (Precision::Inexact(left), Precision::Inexact(right)) => {
+        (
+            Precision::Exact(left) | Precision::Inexact(left),
+            Precision::Inexact(right),
+        )
+        | (Precision::Inexact(left), Precision::Exact(right)) => {
             if left <= *right {
                 Precision::Inexact(left)
             } else {
@@ -934,9 +928,11 @@ where
                 Precision::Exact(right.clone())
             }
         }
-        (Precision::Exact(left), Precision::Inexact(right))
-        | (Precision::Inexact(left), Precision::Exact(right))
-        | (Precision::Inexact(left), Precision::Inexact(right)) => {
+        (
+            Precision::Exact(left) | Precision::Inexact(left),
+            Precision::Inexact(right),
+        )
+        | (Precision::Inexact(left), Precision::Exact(right)) => {
             if left >= *right {
                 Precision::Inexact(left)
             } else {
@@ -1026,35 +1022,35 @@ impl Display for Statistics {
             .enumerate()
             .map(|(i, cs)| {
                 let s = format!("(Col[{i}]:");
-                let s = if cs.min_value != Precision::Absent {
+                let s = if cs.min_value == Precision::Absent {
+                    s
+                } else {
                     format!("{} Min={}", s, cs.min_value)
-                } else {
-                    s
                 };
-                let s = if cs.max_value != Precision::Absent {
+                let s = if cs.max_value == Precision::Absent {
+                    s
+                } else {
                     format!("{} Max={}", s, cs.max_value)
-                } else {
-                    s
                 };
-                let s = if cs.sum_value != Precision::Absent {
+                let s = if cs.sum_value == Precision::Absent {
+                    s
+                } else {
                     format!("{} Sum={}", s, cs.sum_value)
-                } else {
-                    s
                 };
-                let s = if cs.null_count != Precision::Absent {
+                let s = if cs.null_count == Precision::Absent {
+                    s
+                } else {
                     format!("{} Null={}", s, cs.null_count)
-                } else {
-                    s
                 };
-                let s = if cs.distinct_count != Precision::Absent {
+                let s = if cs.distinct_count == Precision::Absent {
+                    s
+                } else {
                     format!("{} Distinct={}", s, cs.distinct_count)
-                } else {
-                    s
                 };
-                let s = if cs.byte_size != Precision::Absent {
-                    format!("{} ScanBytes={}", s, cs.byte_size)
-                } else {
+                let s = if cs.byte_size == Precision::Absent {
                     s
+                } else {
+                    format!("{} ScanBytes={}", s, cs.byte_size)
                 };
 
                 s + ")"

@@ -191,27 +191,27 @@ impl From<protobuf::NullEquality> for NullEquality {
 impl From<&CsvOptionsProto> for CsvOptions {
     fn from(proto: &CsvOptionsProto) -> Self {
         CsvOptions {
-            has_header: if !proto.has_header.is_empty() {
-                Some(proto.has_header[0] != 0)
-            } else {
+            has_header: if proto.has_header.is_empty() {
                 None
+            } else {
+                Some(proto.has_header[0] != 0)
             },
             delimiter: proto.delimiter.first().copied().unwrap_or(b','),
             quote: proto.quote.first().copied().unwrap_or(b'"'),
-            terminator: if !proto.terminator.is_empty() {
+            terminator: if proto.terminator.is_empty() {
+                None
+            } else {
                 Some(proto.terminator[0])
-            } else {
-                None
             },
-            escape: if !proto.escape.is_empty() {
+            escape: if proto.escape.is_empty() {
+                None
+            } else {
                 Some(proto.escape[0])
-            } else {
-                None
             },
-            double_quote: if !proto.double_quote.is_empty() {
-                Some(proto.double_quote[0] != 0)
-            } else {
+            double_quote: if proto.double_quote.is_empty() {
                 None
+            } else {
+                Some(proto.double_quote[0] != 0)
             },
             compression: match proto.compression {
                 0 => CompressionTypeVariant::GZIP,
@@ -256,10 +256,10 @@ impl From<&CsvOptionsProto> for CsvOptions {
             } else {
                 Some(proto.null_regex.clone())
             },
-            comment: if !proto.comment.is_empty() {
-                Some(proto.comment[0])
-            } else {
+            comment: if proto.comment.is_empty() {
                 None
+            } else {
+                Some(proto.comment[0])
             },
             newlines_in_values: if proto.newlines_in_values.is_empty() {
                 None

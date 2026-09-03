@@ -187,16 +187,16 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         let string = args.swap_remove(0);
 
         Ok(ExprSimplifyResult::Simplified(binary_expr(
-            if string_type != coerced_string_type {
-                cast(string, coerced_string_type)
-            } else {
+            if string_type == coerced_string_type {
                 string
+            } else {
+                cast(string, coerced_string_type)
             },
             op,
-            if regexp_type != coerced_regexp_type {
-                cast(regexp, coerced_regexp_type)
-            } else {
+            if regexp_type == coerced_regexp_type {
                 regexp
+            } else {
+                cast(regexp, coerced_regexp_type)
             },
         )))
     }

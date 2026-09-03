@@ -429,7 +429,7 @@ mod tests {
             ReplaceFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("abc")))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::new()))),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("x")))),
             ],
             Ok(Some("abc")),

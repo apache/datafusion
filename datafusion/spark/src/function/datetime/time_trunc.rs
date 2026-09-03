@@ -91,9 +91,11 @@ impl ScalarUDFImpl for SparkTimeTrunc {
         let fmt_expr = &args[0];
 
         let fmt = match fmt_expr.as_literal() {
-            Some(ScalarValue::Utf8(Some(v)))
-            | Some(ScalarValue::Utf8View(Some(v)))
-            | Some(ScalarValue::LargeUtf8(Some(v))) => v.to_lowercase(),
+            Some(
+                ScalarValue::Utf8(Some(v))
+                | ScalarValue::Utf8View(Some(v))
+                | ScalarValue::LargeUtf8(Some(v)),
+            ) => v.to_lowercase(),
             _ => {
                 return plan_err!(
                     "First argument of `TIME_TRUNC` must be non-null scalar Utf8"

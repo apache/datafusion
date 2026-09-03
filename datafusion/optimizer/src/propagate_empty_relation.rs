@@ -255,13 +255,13 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
     match plan.inputs()[..] {
         [child] => match child {
             LogicalPlan::EmptyRelation(empty) => {
-                if !empty.produce_one_row {
+                if empty.produce_one_row {
+                    Ok(None)
+                } else {
                     Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: Arc::clone(plan.schema()),
                     })))
-                } else {
-                    Ok(None)
                 }
             }
             _ => Ok(None),
@@ -339,8 +339,7 @@ fn has_empty_grouping_set(group_expr: &[Expr]) -> bool {
             groups.iter().any(|g| g.is_empty())
         }
         // Both ROLLUP and CUBE always include the empty grouping set ().
-        Some(Expr::GroupingSet(GroupingSet::Rollup(_)))
-        | Some(Expr::GroupingSet(GroupingSet::Cube(_))) => true,
+        Some(Expr::GroupingSet(GroupingSet::Rollup(_) | GroupingSet::Cube(_))) => true,
         _ => false,
     }
 }

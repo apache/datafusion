@@ -327,9 +327,7 @@ impl BoundedWindowAggExec {
     }
 
     pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        if !self.can_repartition {
-            vec![]
-        } else {
+        if self.can_repartition {
             let all_partition_keys = self
                 .window_expr()
                 .iter()
@@ -340,6 +338,8 @@ impl BoundedWindowAggExec {
                 .into_iter()
                 .min_by_key(|s| s.len())
                 .unwrap_or_else(Vec::new)
+        } else {
+            vec![]
         }
     }
 

@@ -317,7 +317,7 @@ impl ExprSchemable for Expr {
                     .transpose()?;
                 Ok(match has_nullable {
                     // If a nullable subexpression is found, the result may also be nullable.
-                    Some(_) => true,
+                    Some(()) => true,
                     // If the list is too long, we assume it is nullable.
                     None if list.len() + 1 > MAX_INSPECT_LIMIT => true,
                     // All the subexpressions are non-nullable, so the result must be non-nullable.
@@ -370,14 +370,14 @@ impl ExprSchemable for Expr {
                             Ok(b) => b,
                         };
 
-                    if !can_be_true {
+                    if can_be_true {
+                        // The branch might be taken
+                        Some(Ok(()))
+                    } else {
                         // If the derived 'when' expression can never evaluate to true, the
                         // 'then' expression is not reachable when it would evaluate to NULL.
                         // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
                         None
-                    } else {
-                        // The branch might be taken
-                        Some(Ok(()))
                     }
                 });
 
@@ -385,7 +385,7 @@ impl ExprSchemable for Expr {
                     // There is at least one reachable nullable 'then' expression, so the case
                     // expression itself is nullable.
                     // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-                    nullable_then.map(|_| true)
+                    nullable_then.map(|()| true)
                 } else if let Some(e) = &case.else_expr {
                     // There are no reachable nullable 'then' expressions, so all we still need to
                     // check is the 'else' expression's nullability.
@@ -1244,7 +1244,7 @@ mod tests {
         let placeholder_meta = FieldMetadata::from(placeholder_meta);
 
         let expr = Expr::Placeholder(Placeholder::new_with_field(
-            "".to_string(),
+            String::new(),
             Some(
                 Field::new("", DataType::Utf8, true)
                     .with_metadata(placeholder_meta.to_hashmap())
@@ -1269,7 +1269,7 @@ mod tests {
 
         // Non-nullable placeholder field should remain non-nullable
         let expr = Expr::Placeholder(Placeholder::new_with_field(
-            "".to_string(),
+            String::new(),
             Some(Field::new("", DataType::Utf8, false).into()),
         ));
         let expr_field = expr.to_field(&schema).unwrap().1;

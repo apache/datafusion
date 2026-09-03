@@ -379,15 +379,15 @@ impl Range {
                 return exec_err!("Cannot generate date range less than 1 day.");
             }
 
-            let stop = if !self.include_upper_bound {
+            let stop = if self.include_upper_bound {
+                stop
+            } else {
                 Date32Type::subtract_month_day_nano_opt(stop, step).ok_or_else(|| {
                     exec_datafusion_err!(
                         "Cannot generate date range where stop {} - {step:?}) overflows",
                         date32_to_string(stop)
                     )
                 })?
-            } else {
-                stop
             };
 
             let neg = months < 0 || days < 0;

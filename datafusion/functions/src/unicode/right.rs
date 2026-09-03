@@ -281,7 +281,7 @@ mod tests {
         test_function!(
             RightFunc::new(),
             vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::new()))),
                 ColumnarValue::Scalar(ScalarValue::from(200i64)),
             ],
             Ok(Some("")),

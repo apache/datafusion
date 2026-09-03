@@ -231,52 +231,49 @@ impl SqlBenchmark {
             let mut local_result = vec![];
 
             for query in run_queries {
-                match save_results {
-                    true => {
+                if save_results {
+                    debug!(
+                        "Running query (saving results) {}-{}: {query}",
+                        self.group, self.subgroup
+                    );
+
+                    let df = ctx.sql(query).await?;
+                    if !self.expect.is_empty() {
+                        let physical_plan = df.create_physical_plan().await?;
+                        self.validate_expected_plan(&physical_plan)?;
+                    }
+
+                    let result_schema = Arc::new(df.schema().as_arrow().clone());
+                    let mut batches = df.collect().await?;
+                    let trimmed = query.trim_start();
+
+                    // save the output for select/with queries
+                    if starts_with_ignore_ascii_case(trimmed, "select")
+                        || starts_with_ignore_ascii_case(trimmed, "with")
+                    {
+                        if batches.is_empty() {
+                            batches.push(RecordBatch::new_empty(result_schema));
+                        }
+                        let row_count_for_query =
+                            batches.iter().map(RecordBatch::num_rows).sum::<usize>();
                         debug!(
-                            "Running query (saving results) {}-{}: {query}",
-                            self.group, self.subgroup
+                            "Persisting {} batches ({} rows)...",
+                            batches.len(),
+                            row_count_for_query
                         );
 
-                        let df = ctx.sql(query).await?;
-                        if !self.expect.is_empty() {
-                            let physical_plan = df.create_physical_plan().await?;
-                            self.validate_expected_plan(&physical_plan)?;
-                        }
-
-                        let result_schema = Arc::new(df.schema().as_arrow().clone());
-                        let mut batches = df.collect().await?;
-                        let trimmed = query.trim_start();
-
-                        // save the output for select/with queries
-                        if starts_with_ignore_ascii_case(trimmed, "select")
-                            || starts_with_ignore_ascii_case(trimmed, "with")
-                        {
-                            if batches.is_empty() {
-                                batches.push(RecordBatch::new_empty(result_schema));
-                            }
-                            let row_count_for_query =
-                                batches.iter().map(RecordBatch::num_rows).sum::<usize>();
-                            debug!(
-                                "Persisting {} batches ({} rows)...",
-                                batches.len(),
-                                row_count_for_query
-                            );
-
-                            result_count = row_count_for_query;
-                            local_result = batches;
-                        }
+                        result_count = row_count_for_query;
+                        local_result = batches;
                     }
-                    false => {
-                        debug!(
-                            "Running query (ignoring results) {}-{}: {query}",
-                            self.group, self.subgroup
-                        );
+                } else {
+                    debug!(
+                        "Running query (ignoring results) {}-{}: {query}",
+                        self.group, self.subgroup
+                    );
 
-                        result_count = self
-                            .execute_sql_without_result_buffering(query, ctx)
-                            .await?;
-                    }
+                    result_count = self
+                        .execute_sql_without_result_buffering(query, ctx)
+                        .await?;
                 }
             }
 
@@ -377,15 +374,15 @@ impl SqlBenchmark {
 
         // Get the first result query (assuming only one for now)
         let query = &self.result_queries[0];
-        let formatted_actual_results = if !query.query.trim().is_empty() {
-            let results = ctx.sql(&query.query).await?.collect().await?;
-            format_record_batches(&results)
-        } else {
+        let formatted_actual_results = if query.query.trim().is_empty() {
             let actual_results = self
                 .last_results
                 .as_ref()
                 .expect("last_results should be present after successful run");
             format_record_batches(actual_results)
+        } else {
+            let results = ctx.sql(&query.query).await?.collect().await?;
+            format_record_batches(&results)
         }?;
 
         Self::compare_results(query, &formatted_actual_results, &query.expected_result)
@@ -509,7 +506,7 @@ impl SqlBenchmark {
 
         while let Some(result) = reader_result {
             match result {
-                Ok(_) => {
+                Ok(()) => {
                     if !is_blank_or_comment_line(&line) {
                         // boxing required because of recursion
                         Box::pin(self.process_line(ctx, &mut reader, &mut line)).await?;
@@ -824,7 +821,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if is_comment_line(line) {
                         // comment, ignore
                     } else if is_blank_line(line) {
@@ -956,7 +953,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if line.trim() == "----" {
                         found_break = true;
                         break;
@@ -1045,7 +1042,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if line.trim() == "----" {
                         found_break = true;
                         break;
@@ -1108,7 +1105,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if is_comment_line(line) {
                         // Clear the line buffer for the next iteration.
                         line.clear();
@@ -1449,7 +1446,7 @@ fn read_query_from_reader(
 
     loop {
         match reader_result {
-            Some(Ok(_)) => {
+            Some(Ok(())) => {
                 if is_comment_line(&line) {
                     // comment, ignore
                 } else if is_blank_line(&line) {

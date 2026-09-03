@@ -567,7 +567,7 @@ where
             .field("completed_buffers", &self.completed.len())
             .field("random_state", &self.random_state)
             .field("hashes_buffer", &self.hashes_buffer)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -804,7 +804,7 @@ mod tests {
         ]));
 
         let mut map = ArrowBytesViewMap::new(OutputType::Utf8View);
-        map.insert_if_new(&values, |_| (), |_| {});
+        map.insert_if_new(&values, |_| (), |()| {});
 
         // Make unused vector capacity explicit; the completed buffers were created
         // by the map's flush path.
@@ -849,7 +849,7 @@ mod tests {
         assert_eq!(map.size() - legacy_size, retained_capacity_delta);
 
         let size_after_insert = map.size();
-        map.insert_if_new(&values, |_| (), |_| {});
+        map.insert_if_new(&values, |_| (), |()| {});
         assert_eq!(map.size(), size_after_insert);
     }
 

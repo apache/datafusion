@@ -123,9 +123,8 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                     }
                 }
 
-                if !equijoin_predicates.is_empty() {
-                    on.extend(equijoin_predicates);
-                    Ok(Transformed::yes(LogicalPlan::Join(Join {
+                if equijoin_predicates.is_empty() {
+                    Ok(Transformed::no(LogicalPlan::Join(Join {
                         left,
                         right,
                         on,
@@ -137,7 +136,8 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         null_aware,
                     })))
                 } else {
-                    Ok(Transformed::no(LogicalPlan::Join(Join {
+                    on.extend(equijoin_predicates);
+                    Ok(Transformed::yes(LogicalPlan::Join(Join {
                         left,
                         right,
                         on,

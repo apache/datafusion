@@ -520,7 +520,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         // DISTRIBUTE BY
-        let plan = if !select.distribute_by.is_empty() {
+        let plan = if select.distribute_by.is_empty() {
+            plan
+        } else {
             let x = select
                 .distribute_by
                 .iter()
@@ -535,8 +537,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
                 .build()?
-        } else {
-            plan
         };
 
         let plan = self.order_by(plan, order_by_rex)?;
@@ -818,57 +818,56 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             if unnest_columns.is_empty() {
                 break;
-            } else {
-                let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-
-                #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
-                // Expr contains Arc with interior mutability but is intentionally used as hash key
-                let mut projection_exprs = match &aggr_expr_using_columns {
-                    Some(exprs) => (*exprs).clone(),
-                    None => {
-                        #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
-                        let mut columns = HashSet::new();
-                        for expr in &aggr_expr {
-                            expr.apply(|expr| {
-                                if let Expr::Column(c) = expr {
-                                    columns.insert(Expr::Column(c.clone()));
-                                }
-                                Ok(TreeNodeRecursion::Continue)
-                            })
-                            // As the closure always returns Ok, this "can't" error
-                            .expect("Unexpected error");
-                        }
-                        aggr_expr_using_columns = Some(columns.clone());
-                        columns
-                    }
-                };
-                projection_exprs.extend(inner_projection_exprs);
-
-                let mut unnest_col_vec = vec![];
-
-                for (col, maybe_list_unnest) in unnest_columns.into_iter() {
-                    if let Some(list_unnest) = maybe_list_unnest {
-                        unnest_options = list_unnest.into_iter().fold(
-                            unnest_options,
-                            |options, unnest_list| {
-                                options.with_recursions(RecursionUnnestOption {
-                                    input_column: col.clone(),
-                                    output_column: unnest_list.output_column,
-                                    depth: unnest_list.depth,
-                                })
-                            },
-                        );
-                    }
-                    unnest_col_vec.push(col);
-                }
-
-                intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
-                    .project(projection_exprs)?
-                    .unnest_columns_with_options(unnest_col_vec, unnest_options)?
-                    .build()?;
-
-                intermediate_select_exprs = outer_projection_exprs;
             }
+            let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+
+            #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+            // Expr contains Arc with interior mutability but is intentionally used as hash key
+            let mut projection_exprs = match &aggr_expr_using_columns {
+                Some(exprs) => (*exprs).clone(),
+                None => {
+                    #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+                    let mut columns = HashSet::new();
+                    for expr in &aggr_expr {
+                        expr.apply(|expr| {
+                            if let Expr::Column(c) = expr {
+                                columns.insert(Expr::Column(c.clone()));
+                            }
+                            Ok(TreeNodeRecursion::Continue)
+                        })
+                        // As the closure always returns Ok, this "can't" error
+                        .expect("Unexpected error");
+                    }
+                    aggr_expr_using_columns = Some(columns.clone());
+                    columns
+                }
+            };
+            projection_exprs.extend(inner_projection_exprs);
+
+            let mut unnest_col_vec = vec![];
+
+            for (col, maybe_list_unnest) in unnest_columns.into_iter() {
+                if let Some(list_unnest) = maybe_list_unnest {
+                    unnest_options = list_unnest.into_iter().fold(
+                        unnest_options,
+                        |options, unnest_list| {
+                            options.with_recursions(RecursionUnnestOption {
+                                input_column: col.clone(),
+                                output_column: unnest_list.output_column,
+                                depth: unnest_list.depth,
+                            })
+                        },
+                    );
+                }
+                unnest_col_vec.push(col);
+            }
+
+            intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
+                .project(projection_exprs)?
+                .unnest_columns_with_options(unnest_col_vec, unnest_options)?
+                .build()?;
+
+            intermediate_select_exprs = outer_projection_exprs;
         }
 
         Ok((intermediate_plan, intermediate_select_exprs))

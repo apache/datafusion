@@ -351,13 +351,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
 
                 let new_plan = if alias.input.schema().fields().len()
-                    != alias.schema.fields().len()
+                    == alias.schema.fields().len()
                 {
+                    plan.clone()
+                } else {
                     LogicalPlanBuilder::from((*alias.input).clone())
                         .alias(alias.alias.clone())?
                         .build()?
-                } else {
-                    plan.clone()
                 };
 
                 self.correlated_subquery_cols_map
@@ -368,10 +368,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .insert(new_plan.clone(), input_map.clone());
                 }
 
-                if new_plan != plan {
-                    Ok(Transformed::yes(new_plan))
-                } else {
+                if new_plan == plan {
                     Ok(Transformed::no(plan))
+                } else {
+                    Ok(Transformed::yes(new_plan))
                 }
             }
             LogicalPlan::Limit(limit) => {
@@ -618,8 +618,9 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
             // evaluate to false or null on empty batch, no need to pull up
-            Expr::Literal(ScalarValue::Null, _)
-            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
+            Expr::Literal(ScalarValue::Null | ScalarValue::Boolean(Some(false)), _) => {
+                None
+            }
             // evaluate to true on empty batch, need to pull up the expr
             Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {

@@ -1412,7 +1412,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|t| {
                             let name = match t.name.clone() {
                                 Some(name) => name.value,
-                                None => "".to_string(),
+                                None => String::new(),
                             };
                             Arc::new(Field::new(name, t.data_type.clone(), true))
                         })
@@ -2004,14 +2004,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return plan_err!("Unsupported Value {}", value);
             };
 
-            if !(&key.contains('.')) {
+            if key.contains('.') {
+                options_map.insert(key.to_lowercase(), value_string);
+            } else {
                 // If config does not belong to any namespace, assume it is
                 // a format option and apply the format prefix for backwards
                 // compatibility.
                 let renamed_key = format!("format.{key}");
                 options_map.insert(renamed_key.to_lowercase(), value_string);
-            } else {
-                options_map.insert(key.to_lowercase(), value_string);
             }
         }
 
@@ -2875,9 +2875,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
                             name: c,
                         });
-                    } else {
-                        value_indices[column_index] = Some(i);
                     }
+                    value_indices[column_index] = Some(i);
                     Ok(Arc::clone(table_schema.field(column_index)))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -3036,7 +3035,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 _ => return plan_err!("Unsupported SHOW FUNCTIONS filter"),
             }
         } else {
-            "".to_string()
+            String::new()
         };
 
         // Scalar / aggregate / window functions are resolved by joining
@@ -3180,7 +3179,7 @@ FROM (
             None => Ok(()),
             // BEGIN TRANSACTION
             Some(BeginTransactionKind::Transaction) => Ok(()),
-            Some(BeginTransactionKind::Work) | Some(BeginTransactionKind::Tran) => {
+            Some(BeginTransactionKind::Work | BeginTransactionKind::Tran) => {
                 not_impl_err!("Transaction kind not supported: {kind:?}")
             }
         }

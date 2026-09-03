@@ -758,8 +758,7 @@ impl GenerateSeriesFuncImpl {
         // Parse start date
         let start_date = match &exprs[0] {
             Expr::Literal(ScalarValue::Date32(Some(date)), _) => *date,
-            Expr::Literal(ScalarValue::Date32(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
+            Expr::Literal(ScalarValue::Date32(None) | ScalarValue::Null, _) => {
                 return Ok(Arc::new(GenerateSeriesTable {
                     schema,
                     args: GenSeriesArgs::ContainsNull { name: self.name },
@@ -776,8 +775,7 @@ impl GenerateSeriesFuncImpl {
         // Parse end date
         let end_date = match &exprs[1] {
             Expr::Literal(ScalarValue::Date32(Some(date)), _) => *date,
-            Expr::Literal(ScalarValue::Date32(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
+            Expr::Literal(ScalarValue::Date32(None) | ScalarValue::Null, _) => {
                 return Ok(Arc::new(GenerateSeriesTable {
                     schema,
                     args: GenSeriesArgs::ContainsNull { name: self.name },
@@ -796,8 +794,10 @@ impl GenerateSeriesFuncImpl {
             Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)), _) => {
                 *interval
             }
-            Expr::Literal(ScalarValue::IntervalMonthDayNano(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
+            Expr::Literal(
+                ScalarValue::IntervalMonthDayNano(None) | ScalarValue::Null,
+                _,
+            ) => {
                 return Ok(Arc::new(GenerateSeriesTable {
                     schema,
                     args: GenSeriesArgs::ContainsNull { name: self.name },

@@ -111,30 +111,28 @@ impl FileScanConfig {
         new_config.file_source = new_file_source;
 
         // Sort files within groups by statistics when not reversing
-        let all_non_overlapping = if !reverse_file_groups {
-            if let Some(sort_order) = LexOrdering::new(order.iter().cloned()) {
-                let projected_schema = new_config.projected_schema()?;
-                let projection_indices = new_config
-                    .file_source
-                    .projection()
-                    .as_ref()
-                    .and_then(|p| ordered_column_indices_from_projection(p));
-                let result = sort_files_within_groups_by_statistics(
-                    &new_config.file_groups,
-                    &sort_order,
-                    &projected_schema,
-                    projection_indices.as_deref(),
-                );
-                new_config.file_groups = result.file_groups;
-                result.all_non_overlapping
-            } else {
-                false
-            }
-        } else {
+        let all_non_overlapping = if reverse_file_groups {
             // When reversing, files are already reversed above. We skip
             // statistics-based sorting here because it would undo the reversal.
             // Note: reverse path is always Inexact, so all_non_overlapping
             // is not used (is_exact is false).
+            false
+        } else if let Some(sort_order) = LexOrdering::new(order.iter().cloned()) {
+            let projected_schema = new_config.projected_schema()?;
+            let projection_indices = new_config
+                .file_source
+                .projection()
+                .as_ref()
+                .and_then(|p| ordered_column_indices_from_projection(p));
+            let result = sort_files_within_groups_by_statistics(
+                &new_config.file_groups,
+                &sort_order,
+                &projected_schema,
+                projection_indices.as_deref(),
+            );
+            new_config.file_groups = result.file_groups;
+            result.all_non_overlapping
+        } else {
             false
         };
 

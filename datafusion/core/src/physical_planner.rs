@@ -1106,10 +1106,10 @@ impl DefaultPhysicalPlanner {
                         }
                     }
                 }
-                let input_exec = if !async_exprs.is_empty() {
-                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
-                } else {
+                let input_exec = if async_exprs.is_empty() {
                     input_exec
+                } else {
+                    Arc::new(AsyncFuncExec::try_new(async_exprs, input_exec)?)
                 };
 
                 let initial_aggr = Arc::new(AggregateExec::try_new(
@@ -2434,9 +2434,11 @@ fn is_identity_assignment(expr: &Expr, column_name: &str) -> bool {
 /// OVER (ORDER BY a RANGES BETWEEN INTERVAL '3 DAY' PRECEDING AND '5 DAY' PRECEDING)  are rejected
 pub fn is_window_frame_bound_valid(window_frame: &WindowFrame) -> bool {
     match (&window_frame.start_bound, &window_frame.end_bound) {
-        (WindowFrameBound::Following(_), WindowFrameBound::Preceding(_))
-        | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow)
-        | (WindowFrameBound::CurrentRow, WindowFrameBound::Preceding(_)) => false,
+        (
+            WindowFrameBound::Following(_) | WindowFrameBound::CurrentRow,
+            WindowFrameBound::Preceding(_),
+        )
+        | (WindowFrameBound::Following(_), WindowFrameBound::CurrentRow) => false,
         (WindowFrameBound::Preceding(lhs), WindowFrameBound::Preceding(rhs)) => {
             !rhs.is_null() && (lhs.is_null() || (lhs >= rhs))
         }

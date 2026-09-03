@@ -802,7 +802,7 @@ impl ExternalSorter {
         let size = get_reserved_bytes_for_record_batch(input)?;
 
         match self.reservation.try_grow(size) {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(e) => {
                 if self.in_mem_batches.is_empty() {
                     return Err(Self::err_with_oom_context(e));
@@ -1229,7 +1229,9 @@ impl DisplayAs for SortExec {
                         {
                             write!(f, ", filter=[{current}]")?;
                         }
-                        if !self.common_sort_prefix.is_empty() {
+                        if self.common_sort_prefix.is_empty() {
+                            Ok(())
+                        } else {
                             write!(f, ", sort_prefix=[")?;
                             let mut first = true;
                             for sort_expr in &self.common_sort_prefix {
@@ -1241,8 +1243,6 @@ impl DisplayAs for SortExec {
                                 write!(f, "{sort_expr}")?;
                             }
                             write!(f, "]")
-                        } else {
-                            Ok(())
                         }
                     }
                     None => write!(
@@ -1354,15 +1354,16 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match has_same_children_properties(self.as_ref(), &children)? {
-            true => self.replace_children(
+        if has_same_children_properties(self.as_ref(), &children)? {
+            self.replace_children(
                 children,
                 ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
-            ),
-            false => self.replace_children(
+            )
+        } else {
+            self.replace_children(
                 children,
                 ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-            ),
+            )
         }
     }
 

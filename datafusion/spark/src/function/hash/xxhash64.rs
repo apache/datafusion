@@ -108,10 +108,7 @@ fn create_xxhash64_hashes_dictionary<K: ArrowDictionaryKeyType>(
     first_col: bool,
 ) -> Result<()> {
     let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-    if !first_col {
-        let unpacked = take(dict_array.values().as_ref(), dict_array.keys(), None)?;
-        create_xxhash64_hashes(&[unpacked], hashes_buffer)?;
-    } else {
+    if first_col {
         // Hash each dictionary value once, then look up by key. This avoids
         // redundant hashing of large dictionary entries (e.g. long strings).
         let dict_values = Arc::clone(dict_array.values());
@@ -124,6 +121,9 @@ fn create_xxhash64_hashes_dictionary<K: ArrowDictionaryKeyType>(
             }
             // No update for Null keys, consistent with other types.
         }
+    } else {
+        let unpacked = take(dict_array.values().as_ref(), dict_array.keys(), None)?;
+        create_xxhash64_hashes(&[unpacked], hashes_buffer)?;
     }
     Ok(())
 }

@@ -162,9 +162,10 @@ extern "C" fn construct_table_provider(
     synchronous: bool,
     codec: FFI_LogicalExtensionCodec,
 ) -> FFI_TableProvider {
-    match synchronous {
-        true => create_sync_table_provider(codec),
-        false => create_async_table_provider(codec),
+    if synchronous {
+        create_sync_table_provider(codec)
+    } else {
+        create_async_table_provider(codec)
     }
 }
 

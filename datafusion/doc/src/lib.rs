@@ -92,10 +92,10 @@ impl Documentation {
         result.push_str(
             format!(
                 "\n    doc_section({}label = \"{}\"{}),",
-                if !self.doc_section.include {
-                    "include = \"false\", "
-                } else {
+                if self.doc_section.include {
                     ""
+                } else {
+                    "include = \"false\", "
                 },
                 self.doc_section.label,
                 self.doc_section

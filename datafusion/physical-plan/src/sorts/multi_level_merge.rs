@@ -443,18 +443,18 @@ impl MultiLevelMergeBuilder {
             .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
             .with_streams(streams);
 
-        if !all_in_memory {
-            // Don't track memory used by this stream as we reserve that memory by worst case sceneries
-            // (reserving memory for the biggest batch in each stream)
-            // TODO - avoid this hack as this can be broken easily when `SortPreservingMergeStream`
-            //        changes the implementation to use more/less memory
-            builder = builder.with_bypass_mempool();
-        } else {
+        if all_in_memory {
             // If we are only merging in-memory streams, we need to use the memory reservation
             // because we don't know the maximum size of the batches in the streams.
             // Use take() to transfer any pre-reserved bytes so the merge can use them
             // as its initial budget without additional pool allocation.
             builder = builder.with_reservation(self.reservation.take());
+        } else {
+            // Don't track memory used by this stream as we reserve that memory by worst case sceneries
+            // (reserving memory for the biggest batch in each stream)
+            // TODO - avoid this hack as this can be broken easily when `SortPreservingMergeStream`
+            //        changes the implementation to use more/less memory
+            builder = builder.with_bypass_mempool();
         }
 
         builder.build()
@@ -500,7 +500,7 @@ impl MultiLevelMergeBuilder {
             // this is not and there should be some upper limit to memory
             // reservation so we won't starve the system.
             match try_grow_reservation_to_at_least(reservation, total_needed) {
-                Ok(_) => {
+                Ok(()) => {
                     number_of_spills_to_read_for_current_phase += 1;
                 }
                 // If we can't grow the reservation, we need to stop

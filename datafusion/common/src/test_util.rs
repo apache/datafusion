@@ -285,16 +285,16 @@ pub fn get_data_dir(
         let trimmed = dir.trim().to_string();
         if !trimmed.is_empty() {
             let pb = PathBuf::from(trimmed);
-            if pb.is_dir() {
-                return Ok(pb);
+            return if pb.is_dir() {
+                Ok(pb)
             } else {
-                return Err(format!(
+                Err(format!(
                     "the data dir `{}` defined by env {} not found",
                     pb.display(),
                     udf_env
                 )
-                .into());
-            }
+                .into())
+            };
         }
     }
 

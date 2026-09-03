@@ -5532,7 +5532,7 @@ fn test_using_join_wildcard_schema_semi_anti() {
     let s_columns = &["s.x1", "s.x2", "s.x3"];
     let t_columns = &["t.x1", "t.x2", "t.x3"];
 
-    let sql = "WITH 
+    let sql = "WITH
         s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
         t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
         SELECT * FROM s LEFT SEMI JOIN t USING (x1)";
@@ -5774,7 +5774,7 @@ impl HigherOrderUDFImpl for MockArrayReduce {
                     None,
                 ])
             }
-            (1, Some(accumulator)) | (0, Some(accumulator)) => {
+            (0 | 1, Some(accumulator)) => {
                 // now we can use the merge output as it's accumulator and
                 // as the finish parameter
                 LambdaParametersProgress::Complete(vec![

@@ -390,13 +390,13 @@ async fn run_tests() -> Result<()> {
     terminate_postgres_container().await?;
 
     // report on any errors
-    if !errors.is_empty() {
+    if errors.is_empty() {
+        Ok(())
+    } else {
         for e in &errors {
             println!("{e}");
         }
         exec_err!("{} failures", errors.len())
-    } else {
-        Ok(())
     }
 }
 

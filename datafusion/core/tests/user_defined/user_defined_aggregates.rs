@@ -992,9 +992,10 @@ impl Accumulator for MetadataBasedAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let v = match self.double_output {
-            true => self.curr_sum * 2,
-            false => self.curr_sum,
+        let v = if self.double_output {
+            self.curr_sum * 2
+        } else {
+            self.curr_sum
         };
 
         Ok(ScalarValue::from(v))

@@ -1147,15 +1147,15 @@ impl ParquetSource {
         // The predicate was serialized against the scan's output schema, so it
         // must be decoded against the projected schema when a projection is
         // present.
-        let predicate_schema = if !base_conf.projection.is_empty() {
+        let predicate_schema = if base_conf.projection.is_empty() {
+            schema
+        } else {
             let projected_fields: Vec<_> = base_conf
                 .projection
                 .iter()
                 .map(|&i| schema.field(i as usize).clone())
                 .collect();
             Arc::new(Schema::new(projected_fields))
-        } else {
-            schema
         };
 
         let predicate = scan
@@ -1170,9 +1170,10 @@ impl ParquetSource {
         }
 
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
-        let object_store_url = match base_conf.object_store_url.is_empty() {
-            false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
-            true => ObjectStoreUrl::local_filesystem(),
+        let object_store_url = if base_conf.object_store_url.is_empty() {
+            ObjectStoreUrl::local_filesystem()
+        } else {
+            ObjectStoreUrl::parse(&base_conf.object_store_url)?
         };
         let store = ctx
             .task_ctx()

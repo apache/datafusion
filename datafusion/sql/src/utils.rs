@@ -711,7 +711,12 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
         tnr: _,
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
-    if !transformed {
+    if transformed {
+        if let Some(transformed_root_exprs) = rewriter.transformed_root_exprs {
+            return Ok(transformed_root_exprs);
+        }
+        Ok(vec![transformed_expr])
+    } else {
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         if matches!(&transformed_expr, Expr::Column(_))
@@ -726,11 +731,6 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
             push_projection_dedupl(inner_projection_exprs, transformed_expr);
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
-    } else {
-        if let Some(transformed_root_exprs) = rewriter.transformed_root_exprs {
-            return Ok(transformed_root_exprs);
-        }
-        Ok(vec![transformed_expr])
     }
 }
 
