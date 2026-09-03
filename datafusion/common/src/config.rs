@@ -1162,6 +1162,17 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// Sets the threshold for a scan to be considered small.
+        ///
+        /// If the statistics suggest that scanning a partition requires reading fewer bytes than
+        /// this threshold, DataFusion may eagerly evaluate the scan to cut down latency. This
+        /// approach is not applied to large scans (> `small_scan_partition_threshold`) as eagerly
+        /// evaluated scans do not have access to the final dynamic filters, which may significantly
+        /// reduce the number of rows scanned.
+        ///
+        /// Set this threshold to 0 to disable eager evaluation of scans.
+        pub data_source_small_scan_partition_threshold: usize, default = 1024 * 1024
     }
 }
 

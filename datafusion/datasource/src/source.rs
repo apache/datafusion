@@ -31,7 +31,7 @@ use datafusion_physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::stream::BatchSplitStream;
+use datafusion_physical_plan::stream::{BatchSplitStream, RecordBatchStreamAdapter};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     ReplaceChildrenOptions,
@@ -43,11 +43,13 @@ use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::StatisticsArgs;
+use datafusion_physical_plan::buffer::MemoryBufferedStream;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -468,6 +470,8 @@ impl ExecutionPlan for DataSourceExec {
         let args = OpenArgs::new(partition, Arc::clone(&context))
             .with_shared_state(shared_state);
         let stream = self.data_source.open_with_args(args)?;
+        let stream = self.try_buffer_stream(partition, &context, stream)?;
+
         let batch_size = context.session_config().batch_size();
 
         log::debug!(
@@ -693,6 +697,52 @@ impl DataSourceExec {
                     .downcast_ref::<T>()
                     .map(|source| (file_scan_conf, source))
             })
+    }
+
+    /// Tries to evaluate the stream in a separate task, depending on whether the statistics show
+    /// that this is a small scan.
+    ///
+    /// For some scenarios, this can significantly improve the latency, as object store requests
+    /// are triggered earlier. For example, while a join is building its build side, the eager poll
+    /// can already trigger network requests, cutting down on the latency of the overall join.
+    ///
+    /// Note that this can pessimize queries if the dynamic filters have not yet been computed by
+    /// other operators and can therefore not be used for pruning. To alleviate this problem,
+    /// the eager fetches are only executed if the scan is "small" and thus the savings from dynamic
+    /// filter pushdown are negligible. Nevertheless, inaccurate or wrong statistics could pessimize
+    /// queries.
+    fn try_buffer_stream(
+        &self,
+        partition: usize,
+        context: &Arc<TaskContext>,
+        stream: SendableRecordBatchStream,
+    ) -> Result<SendableRecordBatchStream> {
+        let small_scan_threshold = context
+            .session_config()
+            .options()
+            .execution
+            .data_source_small_scan_partition_threshold;
+        if small_scan_threshold == 0 {
+            return Ok(stream);
+        }
+
+        let partition_stats = self.data_source.partition_statistics(Some(partition))?;
+        let Some(actual_size) = partition_stats.total_byte_size.get_value() else {
+            return Ok(stream);
+        };
+
+        let stream = if *actual_size <= small_scan_threshold {
+            let mem_reservation =
+                MemoryConsumer::new(format!("DataSourceExecEagerExecution[{partition}]"))
+                    .register(context.memory_pool());
+            Box::pin(RecordBatchStreamAdapter::new(
+                stream.schema(),
+                MemoryBufferedStream::new(stream, *actual_size, mem_reservation),
+            ))
+        } else {
+            stream
+        };
+        Ok(stream)
     }
 }
 
