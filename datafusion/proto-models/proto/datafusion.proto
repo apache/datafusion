@@ -1280,6 +1280,10 @@ message ParquetScanExecNode {
   PhysicalExprNode predicate = 3;
 
   datafusion_common.TableParquetOptions parquet_options = 4;
+
+  PhysicalSortExprNodeCollection sort_order_for_reorder = 5;
+
+  bool reverse_row_groups = 6;
 }
 
 message CsvScanExecNode {

@@ -1970,6 +1970,10 @@ pub struct ParquetScanExecNode {
     pub parquet_options: ::core::option::Option<
         super::datafusion_common::TableParquetOptions,
     >,
+    #[prost(message, optional, tag = "5")]
+    pub sort_order_for_reorder: ::core::option::Option<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "6")]
+    pub reverse_row_groups: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
