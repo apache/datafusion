@@ -258,7 +258,7 @@ impl AggregateUDF {
         &self,
         arg_types: &[DataType],
         is_distinct: bool,
-    ) -> bool {
+    ) -> Option<bool> {
         self.inner
             .groups_accumulator_supported_for_types(arg_types, is_distinct)
     }
@@ -638,19 +638,25 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// changing its mind over: the adapter's per-group state can be orders of
     /// magnitude larger.
     ///
-    /// The default is `false`, matching the default of
-    /// [`Self::groups_accumulator_supported`]. An implementation that
-    /// overrides that one and whose answer is decided by the argument types
-    /// and `DISTINCT` alone should override this one too, and have the
-    /// physical method call it so the two cannot disagree. An implementation
-    /// whose answer needs more than the argument types should leave this at
-    /// `false`, which claims nothing.
+    /// The default is `None`, which means the implementation does not answer
+    /// this question. An implementation that overrides
+    /// [`Self::groups_accumulator_supported`], and whose answer is decided by
+    /// the argument types and `DISTINCT` alone, should override this one too,
+    /// and have the physical method call it so the two cannot disagree. An
+    /// implementation whose answer needs more than the argument types should
+    /// leave this at `None`.
+    ///
+    /// `None` is not a third answer to the question. A caller must not read it
+    /// as either `Some(true)` or `Some(false)`, because both readings are
+    /// wrong for some implementation that returns it. A caller that has to act
+    /// on an unanswered question must take the action that is safe when either
+    /// answer turns out to be the true one.
     fn groups_accumulator_supported_for_types(
         &self,
         _arg_types: &[DataType],
         _is_distinct: bool,
-    ) -> bool {
-        false
+    ) -> Option<bool> {
+        None
     }
 
     /// Return a specialized [`GroupsAccumulator`] that manages state
@@ -1592,7 +1598,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self,
         arg_types: &[DataType],
         is_distinct: bool,
-    ) -> bool {
+    ) -> Option<bool> {
         self.inner
             .groups_accumulator_supported_for_types(arg_types, is_distinct)
     }

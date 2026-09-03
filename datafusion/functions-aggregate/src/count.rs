@@ -354,21 +354,22 @@ impl AggregateUDFImpl for Count {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         self.groups_accumulator_supported_for_types(&arg_types, args.is_distinct)
+            .unwrap_or(false)
     }
 
     fn groups_accumulator_supported_for_types(
         &self,
         arg_types: &[DataType],
         is_distinct: bool,
-    ) -> bool {
+    ) -> Option<bool> {
         if arg_types.len() != 1 {
-            return false;
+            return Some(false);
         }
         if !is_distinct {
-            return true;
+            return Some(true);
         }
         // Keep in step with `create_distinct_count_groups_accumulator`.
-        matches!(
+        Some(matches!(
             arg_types[0],
             DataType::Int8
                 | DataType::Int16
@@ -378,7 +379,7 @@ impl AggregateUDFImpl for Count {
                 | DataType::UInt16
                 | DataType::UInt32
                 | DataType::UInt64
-        )
+        ))
     }
 
     fn create_groups_accumulator(
