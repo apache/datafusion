@@ -17,22 +17,23 @@
 
 //! Apache Avro [`FileFormat`] abstractions
 use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::{fmt, io};
 
 use crate::read_avro_schema_from_reader;
 use crate::source::AvroSource;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow_avro::errors::AvroError;
 use arrow_avro::writer::format::AvroOcfFormat;
 use arrow_avro::writer::{AvroWriter, WriterBuilder};
-use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_common::GetExt;
 use datafusion_common::internal_err;
 use datafusion_common::not_impl_err;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{DEFAULT_AVRO_EXTENSION, Diagnostic};
 use datafusion_common::{DataFusionError, Result, Statistics, internal_datafusion_err};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
@@ -258,9 +259,20 @@ impl FileSink for AvroFileSink {
                         buff_to_flush.clear();
                     }
                 }
-                avro_writer
-                    .finish()
-                    .map_err(|e| internal_datafusion_err!("{e}"))?;
+                if let Err(e) = avro_writer.finish() {
+                    return Err(match e {
+                        AvroError::NYI(e) => DataFusionError::NotImplemented(e),
+                        AvroError::EOF(e) => DataFusionError::IoError(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            e,
+                        )),
+                        AvroError::ArrowError(e) => DataFusionError::ArrowError(e, None),
+                        AvroError::External(e) => DataFusionError::External(e),
+                        AvroError::IoError(msg, e) => DataFusionError::IoError(e)
+                            .with_diagnostic(Diagnostic::new_error(msg, None)),
+                        _ => internal_datafusion_err!("{e}"),
+                    });
+                }
                 let final_buff = shared_buffer.buffer.try_lock().unwrap();
 
                 object_store_writer.write_all(final_buff.as_slice()).await?;
