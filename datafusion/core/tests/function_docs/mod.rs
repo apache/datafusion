@@ -15,13 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Checks the ASCII tables inside `sql_example` docs. They are copied verbatim onto
-//! the generated pages, so a table that does not line up here does not line up there.
+//! Checks generated function documentation.
+//!
+//! The ASCII tables inside `sql_example` docs are copied verbatim onto the generated
+//! pages, so a table that does not line up here does not line up there.
 
 use datafusion::execution::SessionStateDefaults;
 use datafusion::logical_expr::Documentation;
 use std::fmt::Write as _;
 use unicode_width::UnicodeWidthStr;
+
+fn visit_function_docs(mut visit: impl FnMut(&str, Option<&Documentation>)) {
+    for f in SessionStateDefaults::default_scalar_functions() {
+        visit(f.name(), f.documentation());
+    }
+    for f in SessionStateDefaults::default_higher_order_functions() {
+        visit(f.name(), f.documentation());
+    }
+    for f in SessionStateDefaults::default_aggregate_functions() {
+        visit(f.name(), f.documentation());
+    }
+    for f in SessionStateDefaults::default_window_functions() {
+        visit(f.name(), f.documentation());
+    }
+}
 
 fn is_border(line: &str) -> bool {
     line.len() > 2
@@ -85,24 +102,11 @@ fn misaligned_tables(name: &str, example: &str) -> Vec<String> {
 #[test]
 fn sql_examples_are_well_formed_tables() {
     let mut reports = vec![];
-    let mut check = |name: &str, doc: Option<&Documentation>| {
+    visit_function_docs(|name, doc| {
         if let Some(example) = doc.and_then(|d| d.sql_example.as_deref()) {
             reports.extend(misaligned_tables(name, example));
         }
-    };
-
-    for f in SessionStateDefaults::default_scalar_functions() {
-        check(f.name(), f.documentation());
-    }
-    for f in SessionStateDefaults::default_higher_order_functions() {
-        check(f.name(), f.documentation());
-    }
-    for f in SessionStateDefaults::default_aggregate_functions() {
-        check(f.name(), f.documentation());
-    }
-    for f in SessionStateDefaults::default_window_functions() {
-        check(f.name(), f.documentation());
-    }
+    });
 
     assert!(
         reports.is_empty(),
@@ -110,6 +114,27 @@ fn sql_examples_are_well_formed_tables() {
          has the same display width and every cell is padded as `| value |`.\n\n{}",
         reports.len(),
         reports.join("\n\n")
+    );
+}
+
+#[test]
+fn argument_names_do_not_contain_hyphens() {
+    let mut reports = vec![];
+    visit_function_docs(|function_name, doc| {
+        let Some(arguments) = doc.and_then(|d| d.arguments.as_ref()) else {
+            return;
+        };
+        for (argument_name, _) in arguments {
+            if argument_name.contains('-') {
+                reports.push(format!("{function_name}: {argument_name}"));
+            }
+        }
+    });
+
+    assert!(
+        reports.is_empty(),
+        "UDF argument names must use underscores instead of hyphens:\n{}",
+        reports.join("\n")
     );
 }
 
