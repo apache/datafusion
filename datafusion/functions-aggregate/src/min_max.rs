@@ -20,6 +20,7 @@
 
 mod min_max_bytes;
 mod min_max_struct;
+mod blocked_min_max_bytes;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{

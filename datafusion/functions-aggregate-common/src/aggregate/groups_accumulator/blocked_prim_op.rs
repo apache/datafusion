@@ -19,7 +19,7 @@ use std::option::IntoIter;
 use std::sync::Arc;
 
 use super::accumulate::{BlockedNullState, NullState};
-use datafusion_expr_common::blocked_helpers::BlockedVecBuilder;
+use datafusion_expr_common::blocked_helpers::CopyItemBlockedVecBuilder;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute;
@@ -44,7 +44,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync + 'static,
 {
     /// values per group, stored as the native type
-    values: BlockedVecBuilder<true, T::Native>,
+    values: CopyItemBlockedVecBuilder<true, T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -66,7 +66,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F, block_size: usize) -> Self {
         Self {
-            values: BlockedVecBuilder::new(block_size),
+            values: CopyItemBlockedVecBuilder::new(block_size),
             data_type: data_type.clone(),
             null_state: BlockedNullState::new(block_size),
             starting_value: T::default_value(),

@@ -6,33 +6,36 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::ArrowNativeType;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, Range};
+use crate::blocked_helpers::blocked_custom_heap_allocated_input_builder::{BlockedCustomHeapAllocatedInputBuilder, HeapAllocatedBlock, HeapAllocatedBlockProvider, HeapAllocatedBlockProviderFinish, HeapAllocatedBlockWithSlice};
+use crate::blocked_helpers::{GetHeapAllocatedSize, OnlyOnStackSize};
+use crate::blocked_helpers::take_n_helpers_heap_allocated::HeapAllocatedBlockBuilder;
 
 #[derive(Debug)]
-pub struct CopyItemBlockedVecBuilder<const FIXED_BLOCK_SIZING: bool, T: Copy>(
-    BlockedCustomInputBuilder<FIXED_BLOCK_SIZING, VecBlockProvider<T>>,
+pub struct BlockedVecBuilder<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T> = OnlyOnStackSize>(
+    BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, HeapVecBlockProvider<T>, HeapAllocatedSize>,
 );
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T> {
+impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>> BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize> {
     pub fn new(block_size: usize) -> Self {
-        CopyItemBlockedVecBuilder(BlockedCustomInputBuilder::new(
+        BlockedVecBuilder(BlockedCustomHeapAllocatedInputBuilder::new(
             block_size,
-            VecBlockProvider::<T>::default(),
+            HeapVecBlockProvider::<T>::default(),
         ))
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> Deref
-    for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
+impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>> Deref
+    for BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize>
 {
-    type Target = BlockedCustomInputBuilder<FIXED_BLOCK_SIZING, VecBlockProvider<T>>;
+    type Target = BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, HeapVecBlockProvider<T>, HeapAllocatedSize>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<const FIXED_BLOCK_SIZING: bool, T: Copy> DerefMut
-    for CopyItemBlockedVecBuilder<FIXED_BLOCK_SIZING, T>
+impl<const FIXED_BLOCK_SIZING: bool, T: Clone, HeapAllocatedSize: GetHeapAllocatedSize<T>> DerefMut
+    for BlockedVecBuilder<FIXED_BLOCK_SIZING, T, HeapAllocatedSize>
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
@@ -40,15 +43,15 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy> DerefMut
 }
 
 #[derive(Debug)]
-pub struct VecBlockProvider<T>(PhantomData<T>);
+pub struct HeapVecBlockProvider<T>(PhantomData<T>);
 
-impl<T> Default for VecBlockProvider<T> {
+impl<T> Default for HeapVecBlockProvider<T> {
     fn default() -> Self {
         Self(PhantomData)
     }
 }
 
-impl<T: Copy> BlockProvider for VecBlockProvider<T> {
+impl<T: Clone> HeapAllocatedBlockProvider for HeapVecBlockProvider<T> {
     type Block = Vec<T>;
 
     fn new_block(&self) -> Self::Block {
@@ -60,7 +63,7 @@ impl<T: Copy> BlockProvider for VecBlockProvider<T> {
     }
 }
 
-impl<T: ArrowNativeType> BlockProviderFinish for VecBlockProvider<T> {
+impl<T: ArrowNativeType> HeapAllocatedBlockProviderFinish for HeapVecBlockProvider<T> {
     type FinishedBlock = ScalarBuffer<T>;
 
     fn finish(&self, block: Self::Block) -> Self::FinishedBlock {
@@ -68,8 +71,9 @@ impl<T: ArrowNativeType> BlockProviderFinish for VecBlockProvider<T> {
     }
 }
 
-impl<T: Copy> Block for Vec<T> {
+impl<T: Clone> HeapAllocatedBlock for Vec<T> {
     type Item = T;
+    const ALLOCATED_SIZE_INCLUDE_ITEMS: bool = false;
 
     fn allocated_size(&self) -> usize {
         size_of::<T>() * self.capacity()
@@ -92,8 +96,8 @@ impl<T: Copy> Block for Vec<T> {
     }
 }
 
-impl<T: Copy> BlockWithSlice for Vec<T> {
-    fn copy_from_slice(&mut self, slice: &[Self::Item]) {
+impl<T: Clone> HeapAllocatedBlockWithSlice for Vec<T> {
+    fn extend_from_slice(&mut self, slice: &[Self::Item]) {
         Vec::extend_from_slice(self, slice)
     }
 
@@ -102,7 +106,7 @@ impl<T: Copy> BlockWithSlice for Vec<T> {
     }
 }
 
-impl<T: Copy> BlockBuilder for Vec<T> {
+impl<T: Clone> HeapAllocatedBlockBuilder for Vec<T> {
     type Output = Vec<T>;
 
     fn with_capacity(capacity: usize) -> Self {
@@ -121,9 +125,15 @@ impl<T: Copy> BlockBuilder for Vec<T> {
         self.extend_from_slice(&src[range])
     }
 
+    fn calculate_memory_of_range<HeapAllocatedSize: GetHeapAllocatedSize<<Self::Output as HeapAllocatedBlock>::Item>>(&self, range: Range<usize>) -> usize {
+        self[range].iter().map(|item| HeapAllocatedSize::get_heap_allocated_size(item)).sum()
+    }
+
     fn shift_down(&mut self, offset: usize, len: usize) {
         if offset > 0 {
-            self.copy_within(offset..offset + len, 0);
+            // truncate first so drain does not memmove elements we are about to drop
+            self.truncate(offset + len);
+            self.drain(..offset);
         }
 
         Vec::truncate(self, len)
@@ -143,8 +153,8 @@ mod tests {
     use super::*;
     use crate::groups_accumulator::BlocksIndex;
 
-    type Fixed = CopyItemBlockedVecBuilder<true, i32>;
-    type Manual = CopyItemBlockedVecBuilder<false, i32>;
+    type Fixed = BlockedVecBuilder<true, i32>;
+    type Manual = BlockedVecBuilder<false, i32>;
 
     fn to_vec(builder: &Fixed) -> Vec<i32> {
         (0..builder.len()).map(|i| builder[i]).collect()

@@ -27,7 +27,7 @@ use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSele
 use std::hash::Hash;
 use std::mem::size_of;
 use std::sync::Arc;
-use datafusion_expr_common::blocked_helpers::BlockedVecBuilder;
+use datafusion_expr_common::blocked_helpers::CopyItemBlockedVecBuilder;
 use crate::aggregate::groups_accumulator::accumulate::accumulate;
 
 fn convert_to_state<T: ArrowPrimitiveType>(
@@ -243,7 +243,7 @@ where
   T::Native: Eq + Hash,
 {
     seen: HashSet<(BlocksIndex, T::Native), RandomState>,
-    counts: BlockedVecBuilder<true, i64>,
+    counts: CopyItemBlockedVecBuilder<true, i64>,
 }
 
 impl<T: ArrowPrimitiveType + Send + std::fmt::Debug> PrimitiveDistinctCountBlockedGroupsAccumulator<T>
@@ -253,7 +253,7 @@ where
     pub fn new(block_size: usize) -> Self {
         Self {
             seen: HashSet::default(),
-            counts: BlockedVecBuilder::new(block_size),
+            counts: CopyItemBlockedVecBuilder::new(block_size),
         }
     }
 

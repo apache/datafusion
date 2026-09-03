@@ -45,7 +45,7 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
 };
-use datafusion_expr::blocked_helpers::BlockedVecBuilder;
+use datafusion_expr::blocked_helpers::CopyItemBlockedVecBuilder;
 use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{PrimitiveDistinctCountGroupsAccumulator, PrimitiveDistinctCountBlockedGroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::{
@@ -890,13 +890,13 @@ fn count_convert_to_state(
 #[derive(Debug)]
 struct BlockedCountGroupsAccumulator {
     /// Count per group, see [`CountGroupsAccumulator::counts`] for why `i64`
-    counts: BlockedVecBuilder<true, i64>,
+    counts: CopyItemBlockedVecBuilder<true, i64>,
 }
 
 impl BlockedCountGroupsAccumulator {
     pub fn new(block_size: usize) -> Self {
         Self {
-            counts: BlockedVecBuilder::new(block_size),
+            counts: CopyItemBlockedVecBuilder::new(block_size),
         }
     }
 
