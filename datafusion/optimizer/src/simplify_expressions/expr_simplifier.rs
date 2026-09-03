@@ -2515,6 +2515,77 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_swapped_operands_in_and_or_no_canonicalize() {
+        // Regression test for https://github.com/apache/datafusion/issues/14943
+        //
+        // `SimplifyExpressions` disables canonicalization for `LogicalPlan::Join`
+        // (see https://github.com/apache/datafusion/pull/8780), so commutative
+        // operands like `A = B` and `B = A` cannot be normalized to a single
+        // form before AND/OR dedup runs. The dedup itself must therefore
+        // recognize commutative equivalence directly.
+
+        // c3 = 5 AND 5 = c3 --> c3 = 5
+        let expr = col("c3_non_null")
+            .eq(lit(5_i64))
+            .and(lit(5_i64).eq(col("c3_non_null")));
+        let expected = col("c3_non_null").eq(lit(5_i64));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+
+        // 5 = c3 AND c3 = 5 --> 5 = c3
+        let expr = lit(5_i64)
+            .eq(col("c3_non_null"))
+            .and(col("c3_non_null").eq(lit(5_i64)));
+        let expected = lit(5_i64).eq(col("c3_non_null"));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+
+        // c3 = 5 OR 5 = c3 --> c3 = 5
+        let expr = col("c3_non_null")
+            .eq(lit(5_i64))
+            .or(lit(5_i64).eq(col("c3_non_null")));
+        let expected = col("c3_non_null").eq(lit(5_i64));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+
+        // (c3 = 5 AND c4 > 0) AND (5 = c3) --> c3 = 5 AND c4 > 0
+        let expr = col("c3_non_null")
+            .eq(lit(5_i64))
+            .and(col("c4_non_null").gt(lit(0_u32)))
+            .and(lit(5_i64).eq(col("c3_non_null")));
+        let expected = col("c3_non_null")
+            .eq(lit(5_i64))
+            .and(col("c4_non_null").gt(lit(0_u32)));
+        assert_eq!(simplify_no_canonicalize(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_swapped_operands_in_xor_no_canonicalize() {
+        // `expr_contains` guards the XOR rules, so `delete_xor_in_complex_expr` has to
+        // use the same equality relation. Comparing structurally there while the guard
+        // normalizes makes the rule rebuild its input and still report `Transformed::yes`,
+        // which spins the simplifier until it hits the cycle limit.
+        //
+        // Operands are non-nullable so the expected results do not depend on how the XOR
+        // rules treat a NULL operand, which is a separate question from the cycle.
+
+        // (c4_non_null + 1) ^ (1 + c4_non_null) --> 0
+        let expr = bitwise_xor(
+            col("c4_non_null") + lit(1_u32),
+            lit(1_u32) + col("c4_non_null"),
+        );
+        let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
+        assert_eq!(simplified, lit(0_u32));
+        assert_eq!(cycles, 2);
+
+        // (c4_non_null + 1) ^ ((1 + c4_non_null) ^ c4_non_null) --> c4_non_null
+        let expr = bitwise_xor(
+            col("c4_non_null") + lit(1_u32),
+            bitwise_xor(lit(1_u32) + col("c4_non_null"), col("c4_non_null")),
+        );
+        let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
+        assert_eq!(simplified, col("c4_non_null"));
+        assert_eq!(cycles, 2);
+    }
+
+    #[test]
     fn test_simplify_eq_not_self() {
         // `expr_a`: column `c2` is nullable, so `c2 = c2` simplifies to `c2 IS NOT NULL OR NULL`
         // This ensures the expression is only true when `c2` is not NULL, accounting for SQL's NULL semantics.
@@ -3665,6 +3736,20 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
+    }
+
+    fn simplify_no_canonicalize(expr: Expr) -> Expr {
+        simplify_no_canonicalize_with_cycle_count(expr).0
+    }
+
+    fn simplify_no_canonicalize_with_cycle_count(expr: Expr) -> (Expr, u32) {
+        let schema = expr_test_schema();
+        let (transformed, count) =
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
+                .with_canonicalize(false)
+                .simplify_with_cycle_count_transformed(expr)
+                .unwrap();
+        (transformed.data, count)
     }
 
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {

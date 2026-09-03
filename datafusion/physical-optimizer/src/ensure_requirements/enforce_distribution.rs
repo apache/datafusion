@@ -619,7 +619,7 @@ fn try_reorder(
 }
 
 /// Return the expected expressions positions.
-/// For example, the current expressions are ['c', 'a', 'a', b'], the expected expressions are ['b', 'c', 'a', 'a'],
+/// For example, the current expressions are `['c', 'a', 'a', 'b']`, the expected expressions are `['b', 'c', 'a', 'a']`,
 ///
 /// This method will return a Vec [3, 0, 1, 2]
 fn expected_expr_positions(
@@ -1382,7 +1382,7 @@ pub fn ensure_distribution(
         )?
     {
         plan = updated_window;
-    };
+    }
 
     // For joins in partitioned mode, we need exact hash matching between
     // both sides, so subset partitioning logic must be disabled.
@@ -1578,7 +1578,7 @@ pub fn ensure_distribution(
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
                 }
-            };
+            }
 
             Ok(DistributionChildState {
                 context: child,

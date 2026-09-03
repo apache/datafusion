@@ -167,6 +167,8 @@ pub struct SelectBuilder {
     /// Table aliases that correspond to LATERAL FLATTEN relations.
     /// Column references into these aliases must use `VALUE` as the column name.
     flatten_table_aliases: Vec<String>,
+    /// Depth of explicitly named subqueries currently being rendered.
+    subquery_alias_depth: usize,
 }
 
 /// Prefix used for auto-generated LATERAL FLATTEN table aliases.
@@ -193,6 +195,19 @@ impl SelectBuilder {
     /// Returns true if the given table alias refers to a FLATTEN relation.
     pub fn is_flatten_table_alias(&self, alias: &str) -> bool {
         self.flatten_table_aliases.iter().any(|a| a == alias)
+    }
+
+    pub(super) fn enter_subquery_alias(&mut self) {
+        self.subquery_alias_depth += 1;
+    }
+
+    pub(super) fn exit_subquery_alias(&mut self) {
+        debug_assert!(self.subquery_alias_depth > 0);
+        self.subquery_alias_depth -= 1;
+    }
+
+    pub(super) fn inside_subquery_alias(&self) -> bool {
+        self.subquery_alias_depth > 0
     }
 
     /// Returns the most recently generated flatten alias, or `None` if
@@ -419,6 +434,7 @@ impl SelectBuilder {
             flavor: Some(SelectFlavor::Standard),
             flatten_alias_counter: 0,
             flatten_table_aliases: Vec::new(),
+            subquery_alias_depth: 0,
         }
     }
 }

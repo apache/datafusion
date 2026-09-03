@@ -26,7 +26,8 @@ use arrow::error::ArrowError;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_execution::memory_pool::proxy::HashTableAllocExt;
-use hashbrown::hash_table::HashTable;
+use datafusion_expr::GroupSelection;
+use hashbrown::{HashMap, hash_table::HashTable};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -478,6 +479,34 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         Self::into_dict(values, &self.group_to_inner, null_inner_slot)
     }
 
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.group_to_inner.len())?;
+
+        let mut old_to_new = HashMap::with_capacity(selection.len());
+        let mut selected_inner = Vec::with_capacity(selection.len());
+        let mut selected_groups = Vec::with_capacity(selection.len());
+        for group_index in selection.iter() {
+            let old_slot = self.group_to_inner[group_index];
+            let new_slot = if let Some(&new_slot) = old_to_new.get(&old_slot) {
+                new_slot
+            } else {
+                let new_slot = selected_inner.len();
+                selected_inner.push(old_slot);
+                old_to_new.insert(old_slot, new_slot);
+                new_slot
+            };
+            selected_groups.push(new_slot);
+        }
+
+        let inner_selection =
+            GroupSelection::try_from_indices(&selected_inner, self.inner.len())?;
+        let values = self.inner.values_preserving(inner_selection)?;
+        let null_inner_slot = self
+            .null_inner_slot
+            .and_then(|slot| old_to_new.get(&slot).copied());
+        Ok(Self::into_dict(values, &selected_groups, null_inner_slot))
+    }
+
     fn take_n(&mut self, n: usize) -> ArrayRef {
         let old_inner_len = self.inner.len();
         let all_inner_values = self.inner.take_n(old_inner_len);
@@ -685,6 +714,37 @@ mod tests {
                 Some("a".into()),
                 Some("b".into()),
                 Some("a".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn values_preserving_reorders_and_reuses_dictionary_values() {
+        let mut col = utf8_col();
+        let input = i32_dict(&[Some(0), None, Some(1), Some(0)], &[Some("a"), Some("b")]);
+        col.vectorized_append(&input, &[0, 1, 2, 3]).unwrap();
+
+        let selection = GroupSelection::try_from_indices(&[2, 1, 0, 2], 4).unwrap();
+        for _ in 0..2 {
+            let selected = col.values_preserving(selection).unwrap();
+            assert_eq!(
+                str_values(&selected),
+                vec![Some("b".into()), None, Some("a".into()), Some("b".into())]
+            );
+            assert_eq!(selected.as_dictionary::<Int32Type>().values().len(), 2);
+        }
+
+        col.append_val(&i32_dict(&[Some(0)], &[Some("c")]), 0)
+            .unwrap();
+        let out = Box::new(col).build();
+        assert_eq!(
+            str_values(&out),
+            vec![
+                Some("a".into()),
+                None,
+                Some("b".into()),
+                Some("a".into()),
+                Some("c".into()),
             ]
         );
     }
