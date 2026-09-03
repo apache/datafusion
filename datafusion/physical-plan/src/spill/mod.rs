@@ -21,7 +21,7 @@ pub(crate) mod in_progress_spill_file;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
-use datafusion_execution::spill_file::SpillWriter;
+use datafusion_execution::spill_file::{AsyncSpillWriter, SpillWriter};
 // Moved for refactor, re-export to keep the public API stable
 pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 // Re-export SpillManager for doctests only (hidden from public docs)
@@ -30,8 +30,9 @@ pub use spill_manager::SpillManager;
 
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
@@ -43,14 +44,16 @@ use arrow::datatypes::{ByteViewType, Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
     reader::StreamDecoder,
-    writer::{IpcWriteOptions, StreamWriter},
+    writer::{IpcWriteOptions, StreamEncoder},
 };
 use arrow::record_batch::RecordBatch;
 use arrow_data::ArrayDataBuilder;
+#[cfg(test)]
+use arrow_ipc::writer::StreamWriter;
 use arrow_ipc::{CompressionType, root_as_message};
 
-use datafusion_common::Result;
 use datafusion_common::config::SpillCompression;
+use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_execution::spill_file::SpillFile;
 use futures::Stream;
@@ -464,59 +467,210 @@ impl RecordBatchStream for SpillReaderStream {
     }
 }
 
-/// A  wrapper that counts the exact compressed IPC bytes written by Arrow.
-///
-/// Arrow's `StreamWriter` does not return the number of bytes written during its
-/// `write()` calls. To accurately track the `spilled_bytes` metrics (especially
-/// when LZ4/ZSTD compression is applied), we must intercept the `std::io::Write`
-/// trait boundary to count the final serialized payload size.
-pub(crate) struct TrackingSpillWriter {
-    inner: Box<dyn SpillWriter>,
-    pub(crate) total_bytes_written: usize,
-}
-
-impl TrackingSpillWriter {
-    pub fn new(inner: Box<dyn SpillWriter>) -> Self {
-        Self {
-            inner,
-            total_bytes_written: 0,
-        }
-    }
-
-    pub fn finish(mut self) -> Result<()> {
-        self.inner.finish()
-    }
-}
-
-impl std::io::Write for TrackingSpillWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = self.inner.write(buf)?;
-
-        self.total_bytes_written += n;
-
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-}
-
 /// Write in Arrow IPC Stream format to an underlying `SpillWriter` backend.
 /// Stream format also supports dictionary replacement.
 struct IPCStreamWriter {
-    /// Inner writer
-    writer: Option<StreamWriter<TrackingSpillWriter>>,
-    /// Batches written
-    num_batches: usize,
-    /// Rows written
-    num_rows: usize,
-    /// Bytes written
-    num_bytes: usize,
+    writer: Box<dyn SpillWriter>,
+    encoder: IPCStreamEncoder,
 }
 
 impl IPCStreamWriter {
-    /// Create new writer
+    pub fn new(
+        spill_writer: Box<dyn SpillWriter>,
+        schema: &Schema,
+        spill_compression: SpillCompression,
+    ) -> Result<Self> {
+        Ok(Self {
+            writer: spill_writer,
+            encoder: IPCStreamEncoder::new(schema, spill_compression)?,
+        })
+    }
+
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<(usize, usize)> {
+        use std::io::Write;
+        let (rows, bytes, buffers) = self.encoder.encode(batch)?;
+        for buffer in buffers {
+            self.writer.write_all(buffer.as_slice())?;
+        }
+        Ok((rows, bytes))
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        use std::io::Write;
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    pub fn finish(&mut self) -> Result<usize> {
+        use std::io::Write;
+        let (bytes, buffers) = self.encoder.finish()?;
+        for buffer in buffers {
+            self.writer.write_all(buffer.as_slice())?;
+        }
+        self.writer.flush()?;
+        self.writer.finish()?;
+        Ok(bytes)
+    }
+}
+
+/// Writes Arrow IPC Stream data through an [`AsyncSpillWriter`] interface.
+struct AsyncIPCStreamWriter {
+    writer: Option<Box<dyn AsyncSpillWriter>>,
+    encoder: IPCStreamEncoder,
+    abort_handle: Option<tokio::runtime::Handle>,
+}
+
+/// Bounds detached cleanup work after query cancellation. If all permits are
+/// occupied, the writer is dropped and the backend lifecycle policy is the
+/// remaining cleanup mechanism.
+const MAX_CONCURRENT_SPILL_ABORTS: usize = 8;
+const SPILL_ABORT_TIMEOUT: Duration = Duration::from_secs(30);
+static SPILL_ABORT_PERMITS: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SPILL_ABORTS)));
+
+impl AsyncIPCStreamWriter {
+    pub fn new(
+        spill_writer: Box<dyn AsyncSpillWriter>,
+        encoder: IPCStreamEncoder,
+    ) -> Self {
+        Self {
+            writer: Some(spill_writer),
+            encoder,
+            abort_handle: tokio::runtime::Handle::try_current().ok(),
+        }
+    }
+
+    pub async fn write(&mut self, batch: &RecordBatch) -> Result<(usize, usize)> {
+        let (rows, bytes, buffers) = match self.encoder.encode(batch) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                self.abort_after_error().await;
+                return Err(error);
+            }
+        };
+        for buffer in buffers {
+            let result = self
+                .writer
+                .as_mut()
+                .ok_or_else(|| {
+                    internal_datafusion_err!("Spill writer is no longer active")
+                })?
+                .write_all(buffer_to_bytes(buffer))
+                .await;
+            if let Err(error) = result {
+                self.abort_after_error().await;
+                return Err(error);
+            }
+        }
+        Ok((rows, bytes))
+    }
+
+    pub async fn finish(&mut self) -> Result<usize> {
+        let (bytes, buffers) = match self.encoder.finish() {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                self.abort_after_error().await;
+                return Err(error);
+            }
+        };
+        for buffer in buffers {
+            let result = self
+                .writer
+                .as_mut()
+                .ok_or_else(|| {
+                    internal_datafusion_err!("Spill writer is no longer active")
+                })?
+                .write_all(buffer_to_bytes(buffer))
+                .await;
+            if let Err(error) = result {
+                self.abort_after_error().await;
+                return Err(error);
+            }
+        }
+        let result = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| internal_datafusion_err!("Spill writer is no longer active"))?
+            .flush()
+            .await;
+        if let Err(error) = result {
+            self.abort_after_error().await;
+            return Err(error);
+        }
+        let result = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| internal_datafusion_err!("Spill writer is no longer active"))?
+            .finish()
+            .await;
+        if let Err(error) = result {
+            self.abort_after_error().await;
+            return Err(error);
+        }
+        self.writer.take();
+        Ok(bytes)
+    }
+
+    pub async fn abort(&mut self) -> Result<()> {
+        let Some(writer) = self.writer.as_mut() else {
+            return Ok(());
+        };
+        writer.abort().await?;
+        self.writer = None;
+        Ok(())
+    }
+
+    async fn abort_after_error(&mut self) {
+        if let Err(error) = self.abort().await {
+            debug!("Failed to abort spill writer: {error}");
+        }
+    }
+}
+
+impl Drop for AsyncIPCStreamWriter {
+    fn drop(&mut self) {
+        let Some(mut writer) = self.writer.take() else {
+            return;
+        };
+
+        let Some(handle) = tokio::runtime::Handle::try_current()
+            .ok()
+            .or_else(|| self.abort_handle.take())
+        else {
+            debug!("Unable to abort dropped spill writer without a Tokio runtime");
+            return;
+        };
+
+        let Ok(permit) = Arc::clone(&SPILL_ABORT_PERMITS).try_acquire_owned() else {
+            debug!(
+                "Skipping spill writer abort because the cleanup concurrency limit was reached"
+            );
+            return;
+        };
+
+        let _abort_task = handle.spawn(async move {
+            match tokio::time::timeout(SPILL_ABORT_TIMEOUT, writer.abort()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    debug!("Failed to abort dropped spill writer: {error}");
+                }
+                Err(_) => {
+                    debug!("Timed out aborting dropped spill writer");
+                }
+            }
+            // `permit` is released when this bounded cleanup task exits.
+            drop(permit);
+        });
+    }
+}
+
+/// Encodes Arrow IPC streams without performing I/O.
+struct IPCStreamEncoder {
+    encoder: Option<StreamEncoder>,
+}
+
+impl IPCStreamEncoder {
+    /// Create a new encoder.
     ///
     /// # Codec contract
     ///
@@ -528,11 +682,7 @@ impl IPCStreamWriter {
     /// contract local and build-visible during Cargo feature resolution,
     /// rather than relying solely on workspace-level feature unification;
     /// see #21917.
-    pub fn new(
-        spill_writer: Box<dyn SpillWriter>,
-        schema: &Schema,
-        spill_compression: SpillCompression,
-    ) -> Result<Self> {
+    fn new(schema: &Schema, spill_compression: SpillCompression) -> Result<Self> {
         let metadata_version = MetadataVersion::V5;
         // Depending on the schema, some array types such as StringViewArray require larger (16 byte in this case) alignment.
         // If the actual buffer layout after IPC read does not satisfy the alignment requirement,
@@ -546,66 +696,35 @@ impl IPCStreamWriter {
         let compression_type = Option::<CompressionType>::from(spill_compression);
         write_options = write_options.try_with_compression(compression_type)?;
 
-        let adapter = TrackingSpillWriter::new(spill_writer);
-        let writer = StreamWriter::try_new_with_options(adapter, schema, write_options)?;
-
+        let encoder = StreamEncoder::try_new_with_options(schema, write_options)?;
         Ok(Self {
-            num_batches: 0,
-            num_rows: 0,
-            num_bytes: 0,
-            writer: Some(writer),
+            encoder: Some(encoder),
         })
     }
 
-    /// Writes a single batch to the IPC stream and updates the internal counters.
-    ///
-    /// Returns a tuple containing the change in the number of rows and bytes written.
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<(usize, usize)> {
-        let writer = self.writer.as_mut().unwrap();
-
-        let bytes_before = writer.get_ref().total_bytes_written;
-        writer.write(batch)?;
-        let bytes_after = writer.get_ref().total_bytes_written;
-        self.num_batches += 1;
-        let delta_num_rows = batch.num_rows();
-        self.num_rows += delta_num_rows;
-        let delta_num_bytes = bytes_after - bytes_before;
-        self.num_bytes += delta_num_bytes;
-        Ok((delta_num_rows, delta_num_bytes))
+    fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
+        let buffers = self.encoder.as_mut().unwrap().encode(batch)?;
+        let bytes = buffers.iter().map(Buffer::len).sum();
+        Ok((batch.num_rows(), bytes, buffers))
     }
 
-    pub fn flush(&mut self) -> Result<()> {
-        use std::io::Write;
-        if let Some(writer) = &mut self.writer {
-            writer.get_mut().flush()?;
-        }
-        Ok(())
+    fn finish(&mut self) -> Result<(usize, Vec<Buffer>)> {
+        let buffers = self.encoder.take().unwrap().finish()?;
+        let bytes = buffers.iter().map(Buffer::len).sum();
+        Ok((bytes, buffers))
     }
+}
 
-    /// Finish the writer.
-    ///
-    /// Returns the number of trailing bytes written during the finish operation
-    /// (e.g., IPC metadata and footers).
-    pub fn finish(&mut self) -> Result<usize> {
-        let mut writer = self.writer.take().unwrap();
+struct ArrowBufferOwner(Buffer);
 
-        let bytes_before = writer.get_ref().total_bytes_written;
-        writer.finish()?; // Writes IPC tail
-
-        // Extract the adapter and flush the final bytes
-        let adapter = writer.into_inner()?;
-        let bytes_after = adapter.total_bytes_written;
-        adapter.finish()?;
-
-        Ok(bytes_after - bytes_before)
+impl AsRef<[u8]> for ArrowBufferOwner {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
     }
-    /// Returns the total number of bytes written so far
-    pub fn bytes_written(&self) -> usize {
-        self.writer
-            .as_ref()
-            .map(|w| w.get_ref().total_bytes_written)
-            .unwrap_or(0)
-    }
+}
+
+fn buffer_to_bytes(buffer: Buffer) -> bytes::Bytes {
+    bytes::Bytes::from_owner(ArrowBufferOwner(buffer))
 }
 
 // Returns the maximum byte alignment required by any field in the schema (>= 8), derived from Arrow buffer layouts.
@@ -811,8 +930,308 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field};
+    use arrow::ipc::reader::StreamReader;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt as _;
+    use std::io::Cursor;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    struct YieldingAsyncWriter {
+        data: Arc<Mutex<Vec<u8>>>,
+        writes: Arc<AtomicUsize>,
+        finished: Arc<AtomicBool>,
+        aborted: Arc<AtomicBool>,
+    }
+
+    struct FailingAsyncWriter {
+        aborted: Arc<AtomicBool>,
+    }
+
+    struct PendingFinishAsyncWriter {
+        finish_started: Arc<Notify>,
+        aborted: Arc<Notify>,
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    struct FailOnceAbortWriter {
+        abort_count: Arc<AtomicUsize>,
+        cleanup_done: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl AsyncSpillWriter for FailingAsyncWriter {
+        async fn write_all(&mut self, _data: bytes::Bytes) -> Result<()> {
+            datafusion_common::exec_err!("injected spill write failure")
+        }
+
+        async fn finish(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            self.aborted.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AsyncSpillWriter for YieldingAsyncWriter {
+        async fn write_all(&mut self, data: bytes::Bytes) -> Result<()> {
+            tokio::task::yield_now().await;
+            self.writes.fetch_add(1, Ordering::Relaxed);
+            self.data.lock().unwrap().extend_from_slice(&data);
+            Ok(())
+        }
+
+        async fn finish(&mut self) -> Result<()> {
+            self.finished.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            self.aborted.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AsyncSpillWriter for PendingFinishAsyncWriter {
+        async fn write_all(&mut self, _data: bytes::Bytes) -> Result<()> {
+            Ok(())
+        }
+
+        async fn finish(&mut self) -> Result<()> {
+            self.finish_started.notify_one();
+            std::future::pending().await
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            self.abort_count.fetch_add(1, Ordering::Relaxed);
+            self.aborted.notify_one();
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AsyncSpillWriter for FailOnceAbortWriter {
+        async fn write_all(&mut self, _data: bytes::Bytes) -> Result<()> {
+            Ok(())
+        }
+
+        async fn finish(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            if self.abort_count.fetch_add(1, Ordering::Relaxed) == 0 {
+                return datafusion_common::exec_err!("injected spill abort failure");
+            }
+            self.cleanup_done.notify_one();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_ipc_stream_writer() -> Result<()> {
+        let batch1 = build_table_i32(
+            ("a", &vec![0, 1, 2]),
+            ("b", &vec![3, 4, 5]),
+            ("c", &vec![6, 7, 8]),
+        );
+        let batch2 = build_table_i32(
+            ("a", &vec![9, 10, 11]),
+            ("b", &vec![12, 13, 14]),
+            ("c", &vec![15, 16, 17]),
+        );
+        let schema = batch1.schema();
+        let data = Arc::new(Mutex::new(Vec::new()));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicBool::new(false));
+        let aborted = Arc::new(AtomicBool::new(false));
+
+        let spill_writer = YieldingAsyncWriter {
+            data: Arc::clone(&data),
+            writes: Arc::clone(&writes),
+            finished: Arc::clone(&finished),
+            aborted: Arc::clone(&aborted),
+        };
+        let encoder =
+            IPCStreamEncoder::new(schema.as_ref(), SpillCompression::Uncompressed)?;
+        let mut writer = AsyncIPCStreamWriter::new(Box::new(spill_writer), encoder);
+
+        let (_, first_bytes) = writer.write(&batch1).await?;
+        let (_, second_bytes) = writer.write(&batch2).await?;
+        let trailing_bytes = writer.finish().await?;
+
+        assert!(finished.load(Ordering::Relaxed));
+        assert!(writes.load(Ordering::Relaxed) > 2);
+        drop(writer);
+        assert!(!aborted.load(Ordering::Relaxed));
+
+        let encoded = data.lock().unwrap().clone();
+        assert_eq!(encoded.len(), first_bytes + second_bytes + trailing_bytes);
+        let decoded = StreamReader::try_new(Cursor::new(encoded), None)?
+            .collect::<arrow::error::Result<Vec<_>>>()?;
+        assert_eq!(decoded, vec![batch1, batch2]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_buffer_to_bytes_is_zero_copy() {
+        let buffer = Buffer::from(vec![0_u8, 1, 2, 3]).slice_with_length(1, 2);
+        let expected_ptr = buffer.as_ptr();
+        let bytes = buffer_to_bytes(buffer);
+
+        assert_eq!(bytes.as_ptr(), expected_ptr);
+        assert_eq!(bytes.as_ref(), &[1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_async_ipc_stream_writer_aborts_after_write_error() -> Result<()> {
+        let batch = build_table_i32(
+            ("a", &vec![0, 1, 2]),
+            ("b", &vec![3, 4, 5]),
+            ("c", &vec![6, 7, 8]),
+        );
+        let aborted = Arc::new(AtomicBool::new(false));
+        let encoder = IPCStreamEncoder::new(
+            batch.schema().as_ref(),
+            SpillCompression::Uncompressed,
+        )?;
+        let mut writer = AsyncIPCStreamWriter::new(
+            Box::new(FailingAsyncWriter {
+                aborted: Arc::clone(&aborted),
+            }),
+            encoder,
+        );
+
+        let error = writer.write(&batch).await.unwrap_err();
+        assert!(error.to_string().contains("injected spill write failure"));
+        assert!(aborted.load(Ordering::Relaxed));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_async_ipc_stream_writer_aborts_cancelled_finish() -> Result<()> {
+        let batch = build_table_i32(
+            ("a", &vec![0, 1, 2]),
+            ("b", &vec![3, 4, 5]),
+            ("c", &vec![6, 7, 8]),
+        );
+        let finish_started = Arc::new(Notify::new());
+        let aborted = Arc::new(Notify::new());
+        let abort_count = Arc::new(AtomicUsize::new(0));
+
+        #[expect(clippy::disallowed_methods)] // spawn allowed only in tests
+        let task = tokio::spawn({
+            let finish_started = Arc::clone(&finish_started);
+            let aborted = Arc::clone(&aborted);
+            let abort_count = Arc::clone(&abort_count);
+            async move {
+                let encoder = IPCStreamEncoder::new(
+                    batch.schema().as_ref(),
+                    SpillCompression::Uncompressed,
+                )?;
+                let mut writer = AsyncIPCStreamWriter::new(
+                    Box::new(PendingFinishAsyncWriter {
+                        finish_started,
+                        aborted,
+                        abort_count,
+                    }),
+                    encoder,
+                );
+                writer.write(&batch).await?;
+                writer.finish().await?;
+                Result::<()>::Ok(())
+            }
+        });
+
+        if tokio::time::timeout(Duration::from_secs(5), finish_started.notified())
+            .await
+            .is_err()
+        {
+            task.abort();
+            let _ = task.await;
+            panic!("spill finish did not start before the timeout");
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), aborted.notified())
+            .await
+            .expect("dropping a cancelled writer should abort its upload");
+        assert_eq!(abort_count.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_async_ipc_stream_writer_retries_failed_abort_on_drop() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let abort_count = Arc::new(AtomicUsize::new(0));
+        let cleanup_done = Arc::new(Notify::new());
+        let encoder = IPCStreamEncoder::new(&schema, SpillCompression::Uncompressed)?;
+        let mut writer = AsyncIPCStreamWriter::new(
+            Box::new(FailOnceAbortWriter {
+                abort_count: Arc::clone(&abort_count),
+                cleanup_done: Arc::clone(&cleanup_done),
+            }),
+            encoder,
+        );
+
+        assert!(writer.abort().await.is_err());
+        assert_eq!(abort_count.load(Ordering::Relaxed), 1);
+        drop(writer);
+
+        tokio::time::timeout(Duration::from_secs(1), cleanup_done.notified())
+            .await
+            .expect("dropping a writer should retry an abort that returned an error");
+        assert_eq!(abort_count.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_async_ipc_stream_writer_aborts_on_current_runtime() -> Result<()> {
+        let batch = build_table_i32(
+            ("a", &vec![0, 1, 2]),
+            ("b", &vec![3, 4, 5]),
+            ("c", &vec![6, 7, 8]),
+        );
+        let aborted = Arc::new(AtomicBool::new(false));
+        let first_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let writer = {
+            let _runtime_guard = first_runtime.enter();
+            let spill_writer = YieldingAsyncWriter {
+                data: Arc::new(Mutex::new(Vec::new())),
+                writes: Arc::new(AtomicUsize::new(0)),
+                finished: Arc::new(AtomicBool::new(false)),
+                aborted: Arc::clone(&aborted),
+            };
+            let encoder = IPCStreamEncoder::new(
+                batch.schema().as_ref(),
+                SpillCompression::Uncompressed,
+            )?;
+            AsyncIPCStreamWriter::new(Box::new(spill_writer), encoder)
+        };
+        drop(first_runtime);
+
+        let second_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        second_runtime.block_on(async {
+            drop(writer);
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !aborted.load(Ordering::Relaxed) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("drop should abort on the current live runtime");
+        });
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_batch_spill_and_read() -> Result<()> {
@@ -1444,14 +1863,14 @@ mod tests {
         expected_spilled_rows: usize,
     ) -> Result<()> {
         let actual_spill_file_count = in_progress_file
-            .spill_writer
+            .spill_manager
             .metrics
             .spill_file_count
             .value();
         let actual_spilled_bytes =
-            in_progress_file.spill_writer.metrics.spilled_bytes.value();
+            in_progress_file.spill_manager.metrics.spilled_bytes.value();
         let actual_spilled_rows =
-            in_progress_file.spill_writer.metrics.spilled_rows.value();
+            in_progress_file.spill_manager.metrics.spilled_rows.value();
 
         assert_eq!(
             actual_spill_file_count, expected_spill_file_count,
