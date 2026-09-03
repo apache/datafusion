@@ -1553,6 +1553,29 @@ mod tests {
     }
 
     #[test]
+    fn avg_decimal_negative_scale() -> Result<()> {
+        // A negative input scale used to make `DecimalAverager` compute
+        // `10^scale` with a wrapped exponent, giving a multiplier of 0 and a
+        // division by zero. 100 and 200 at scale -2 are 10_000 and 20_000;
+        // their average at the output scale of 2 is 15_000.00.
+        let input = DataType::Decimal128(10, -2);
+        let output = Avg::new().return_type(std::slice::from_ref(&input))?;
+        assert_eq!(output, DataType::Decimal128(14, 2));
+
+        let values: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![100, 200]).with_precision_and_scale(10, -2)?,
+        );
+        let mut acc = avg_accumulator(&input, &output)?;
+        acc.update_batch(&[values])?;
+        assert_eq!(
+            acc.evaluate()?,
+            ScalarValue::Decimal128(Some(1_500_000), 14, 2)
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn avg_accumulator_evaluate_and_state_types() -> Result<()> {
         for case in avg_cases()? {
             let input_type = case.values.data_type();
