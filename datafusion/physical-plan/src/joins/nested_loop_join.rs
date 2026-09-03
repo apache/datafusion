@@ -54,9 +54,7 @@ use arrow::array::{
     UInt64Array, new_null_array,
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{
-    BatchCoalescer, concat_batches, filter, filter_record_batch, not, take,
-};
+use arrow::compute::{BatchCoalescer, filter, filter_record_batch, not, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
@@ -697,6 +695,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 need_produce_result_in_final(self.join_type),
                 right_partition_count,
                 left_spill_manager,
+                batch_size,
             ))
         })?;
 
@@ -1014,8 +1013,16 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 
 /// Left (build-side) data
 pub(crate) struct JoinLeftData {
-    /// Build-side data collected to single batch
-    batch: RecordBatch,
+    /// Build-side data as bounded chunks, in input order. Kept as chunks rather than one
+    /// `concat_batches` result so buffering never needs input and output to coexist, and a
+    /// chunk that already arrived at target size is retained without being copied at all.
+    chunks: Vec<RecordBatch>,
+    /// Row index of the first row of each chunk, i.e. prefix sums over the chunk lengths.
+    /// The visited-left bitmap is indexed by these global row numbers.
+    row_offsets: Vec<usize>,
+    total_rows: usize,
+    /// Build-side schema, kept so an empty chunk list still knows its shape
+    schema: SchemaRef,
     /// Shared bitmap builder for visited left indices
     bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially able to update `bitmap`
@@ -1029,21 +1036,57 @@ pub(crate) struct JoinLeftData {
 
 impl JoinLeftData {
     pub(crate) fn new(
-        batch: RecordBatch,
+        chunks: Vec<RecordBatch>,
+        schema: SchemaRef,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
     ) -> Self {
+        // A zero-row chunk would stall the probe and emit cursors (its range is empty, so the
+        // global row index never advances past it), so drop them here.
+        let chunks: Vec<RecordBatch> =
+            chunks.into_iter().filter(|c| c.num_rows() > 0).collect();
+        let mut row_offsets = Vec::with_capacity(chunks.len());
+        let mut total_rows = 0;
+        for chunk in &chunks {
+            row_offsets.push(total_rows);
+            total_rows += chunk.num_rows();
+        }
         Self {
-            batch,
+            chunks,
+            row_offsets,
+            total_rows,
+            schema,
             bitmap,
             probe_threads_counter,
             reservation,
         }
     }
 
-    pub(crate) fn batch(&self) -> &RecordBatch {
-        &self.batch
+    pub(crate) fn chunk(&self, idx: usize) -> &RecordBatch {
+        &self.chunks[idx]
+    }
+
+    pub(crate) fn row_offset(&self, idx: usize) -> usize {
+        self.row_offsets[idx]
+    }
+
+    pub(crate) fn total_rows(&self) -> usize {
+        self.total_rows
+    }
+
+    pub(crate) fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    /// Index of the chunk holding the given global row, and that row's offset inside it.
+    pub(crate) fn locate(&self, row: usize) -> Option<(usize, usize)> {
+        let idx = match self.row_offsets.binary_search(&row) {
+            Ok(idx) => idx,
+            Err(0) => return None,
+            Err(next) => next - 1,
+        };
+        (row < self.total_rows).then(|| (idx, row - self.row_offsets[idx]))
     }
 
     pub(crate) fn bitmap(&self) -> &SharedBitmapBuilder {
@@ -1071,10 +1114,14 @@ async fn collect_left_input(
     with_visited_left_side: bool,
     probe_threads_count: usize,
     spill_manager: Option<SpillManager>,
+    target_batch_size: usize,
 ) -> Result<LeftLoad> {
     let schema = stream.schema();
     let metrics = join_metrics;
-    let mut batches: Vec<RecordBatch> = Vec::new();
+    let mut chunks: Vec<RecordBatch> = Vec::new();
+    // Batches at or above half the target size pass through without being copied.
+    let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), target_batch_size)
+        .with_biggest_coalesce_batch_size(Some(target_batch_size / 2));
 
     while let Some(batch) = stream.next().await {
         let batch = batch?;
@@ -1084,15 +1131,23 @@ async fn collect_left_input(
                 metrics.build_mem_used.add(batch_size);
                 metrics.build_input_batches.add(1);
                 metrics.build_input_rows.add(batch.num_rows());
-                batches.push(batch);
+                coalescer.push_batch(batch)?;
+                while let Some(chunk) = coalescer.next_completed_batch() {
+                    chunks.push(chunk);
+                }
             }
             Err(e) if is_spillable_oom(&e, spill_manager.as_ref()) => {
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
+                // The batch that hit the limit is already in memory, so it joins the
+                // coalescer unreserved; the spill drains it from there.
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
+                coalescer.push_batch(batch)?;
                 let spilled = spill_left_input(
                     spill_manager,
                     Arc::clone(&schema),
-                    batches,
-                    Some(batch),
+                    chunks,
+                    coalescer,
                     stream,
                     metrics,
                     &reservation,
@@ -1108,23 +1163,24 @@ async fn collect_left_input(
             Err(e) => return Err(e),
         }
     }
-
-    let merged_batch = concat_batches(&schema, &batches)?;
+    coalescer.finish_buffered_batch()?;
+    while let Some(chunk) = coalescer.next_completed_batch() {
+        chunks.push(chunk);
+    }
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
-        let n_rows = merged_batch.num_rows();
+        let n_rows: usize = chunks.iter().map(|c| c.num_rows()).sum();
         let buffer_size = n_rows.div_ceil(8);
         match reservation.try_grow(buffer_size) {
             Ok(()) => {}
             Err(e) if is_spillable_oom(&e, spill_manager.as_ref()) => {
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
-                drop(batches);
                 let spilled = spill_left_input(
                     spill_manager,
                     Arc::clone(&schema),
-                    vec![merged_batch],
-                    None,
+                    chunks,
+                    coalescer,
                     stream,
                     metrics,
                     &reservation,
@@ -1149,7 +1205,8 @@ async fn collect_left_input(
     };
 
     Ok(LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-        merged_batch,
+        chunks,
+        schema,
         Mutex::new(visited_left_side),
         AtomicUsize::new(probe_threads_count),
         reservation,
@@ -1165,9 +1222,10 @@ fn left_load_from_spill(
 ) -> LeftLoad {
     match spilled {
         Some(data) => LeftLoad::Spilled(Arc::new(data)),
-        // No rows means no bitmap either, whatever the join type.
+        // No rows means no chunks and no bitmap, whatever the join type.
         None => LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-            RecordBatch::new_empty(schema),
+            Vec::new(),
+            schema,
             Mutex::new(BooleanBufferBuilder::new(0)),
             AtomicUsize::new(probe_threads_count),
             reservation,
@@ -1187,13 +1245,15 @@ fn is_spillable_oom(
         )
 }
 
-/// Write the already-buffered left batches plus the remainder of the same stream to one spill file.
+/// Write the already-completed chunks plus the remainder of the same stream to one spill file.
+/// The remainder keeps flowing through the same coalescer, so the file holds uniformly sized
+/// chunks and the memory-limited replay reads them back at that granularity.
 /// Returns `None` when the left side carried no rows at all, which needs no spill file.
 async fn spill_left_input(
     spill_manager: SpillManager,
     schema: SchemaRef,
-    buffered: Vec<RecordBatch>,
-    pending: Option<RecordBatch>,
+    chunks: Vec<RecordBatch>,
+    mut coalescer: BatchCoalescer,
     mut stream: SendableRecordBatchStream,
     metrics: BuildProbeJoinMetrics,
     reservation: &MemoryReservation,
@@ -1201,21 +1261,17 @@ async fn spill_left_input(
     let mut spill_file =
         spill_manager.create_in_progress_file("NestedLoopJoin left spill")?;
 
-    for batch in buffered {
+    for batch in chunks {
         if batch.num_rows() > 0 {
             spill_file.append_batch(&batch)?;
         }
     }
-    // The in-memory batches are spilled and dropped, so their reservation goes back to the pool
-    // before the rest of the stream is drained.
+    // The in-memory chunks are spilled and dropped, so their reservation goes back to the pool
+    // before the rest of the stream is drained; only the coalescer's one in-progress chunk
+    // stays resident past this point.
     reservation.free();
-
-    for batch in pending.into_iter() {
-        if batch.num_rows() > 0 {
-            metrics.build_input_batches.add(1);
-            metrics.build_input_rows.add(batch.num_rows());
-            spill_file.append_batch(&batch)?;
-        }
+    while let Some(chunk) = coalescer.next_completed_batch() {
+        spill_file.append_batch(&chunk)?;
     }
 
     while let Some(batch) = stream.next().await {
@@ -1223,8 +1279,15 @@ async fn spill_left_input(
         if batch.num_rows() > 0 {
             metrics.build_input_batches.add(1);
             metrics.build_input_rows.add(batch.num_rows());
-            spill_file.append_batch(&batch)?;
+            coalescer.push_batch(batch)?;
+            while let Some(chunk) = coalescer.next_completed_batch() {
+                spill_file.append_batch(&chunk)?;
+            }
         }
+    }
+    coalescer.finish_buffered_batch()?;
+    while let Some(chunk) = coalescer.next_completed_batch() {
+        spill_file.append_batch(&chunk)?;
     }
 
     Ok(spill_file.finish()?.map(|file| LeftSpillData {
@@ -1981,23 +2044,19 @@ impl NestedLoopJoinStream {
             return ControlFlow::Continue(());
         }
 
-        let merged_batch = match concat_batches(
+        // The spill file was written as coalesced chunks, so the batches read back are already
+        // at target granularity and become the chunk list as-is, with no concatenation.
+        let chunks = std::mem::take(&mut active.pending_batches);
+        let left_schema = Arc::clone(
             active
                 .left_schema
                 .as_ref()
                 .expect("left_schema must be set"),
-            &active.pending_batches,
-        ) {
-            Ok(batch) => batch,
-            Err(e) => {
-                return ControlFlow::Break(Poll::Ready(Some(Err(e.into()))));
-            }
-        };
-        active.pending_batches.clear();
+        );
 
         // Build visited bitmap if needed for this join type
         let with_visited = need_produce_result_in_final(self.join_type);
-        let n_rows = merged_batch.num_rows();
+        let n_rows: usize = chunks.iter().map(|c| c.num_rows()).sum();
         let visited_left_side = if with_visited {
             let buffer_size = n_rows.div_ceil(8);
             // Use infallible grow for bitmap — it's small
@@ -2015,7 +2074,8 @@ impl NestedLoopJoinStream {
         let dummy_reservation = active.reservation.new_empty();
 
         let left_data = JoinLeftData::new(
-            merged_batch,
+            chunks,
+            left_schema,
             Mutex::new(visited_left_side),
             // In memory-limited mode, only 1 probe thread per chunk
             AtomicUsize::new(1),
@@ -2115,7 +2175,7 @@ impl NestedLoopJoinStream {
                 if let (Ok(left_data), Some(right_batch)) =
                     (self.get_left_data(), self.current_right_batch.as_ref())
                 {
-                    let left_rows = left_data.batch().num_rows();
+                    let left_rows = left_data.total_rows();
                     let right_rows = right_batch.num_rows();
                     self.metrics.selectivity.add_total(left_rows * right_rows);
                 }
@@ -2424,9 +2484,15 @@ impl NestedLoopJoinStream {
             .clone();
 
         // stop probing, the caller will go to the next state
-        if self.left_probe_idx >= left_data.batch().num_rows() {
+        if self.left_probe_idx >= left_data.total_rows() {
             return Ok(false);
         }
+
+        // Probe ranges never cross a chunk boundary, so locate the chunk once here.
+        let (chunk_idx, local_idx) =
+            left_data.locate(self.left_probe_idx).ok_or_else(|| {
+                internal_datafusion_err!("left_probe_idx must be within the left data")
+            })?;
 
         // ========
         // Join (l_row x right_batch)
@@ -2453,7 +2519,7 @@ impl NestedLoopJoinStream {
             // batch.
             let l_row_count = std::cmp::min(
                 l_row_cnt_ratio,
-                left_data.batch().num_rows() - self.left_probe_idx,
+                left_data.chunk(chunk_idx).num_rows() - local_idx,
             );
 
             debug_assert!(
@@ -2463,7 +2529,8 @@ impl NestedLoopJoinStream {
             let joined_batch = self.process_left_range_join(
                 &left_data,
                 &right_batch,
-                self.left_probe_idx,
+                chunk_idx,
+                local_idx,
                 l_row_count,
             )?;
 
@@ -2476,9 +2543,12 @@ impl NestedLoopJoinStream {
             return Ok(true);
         }
 
-        let l_idx = self.left_probe_idx;
-        let joined_batch =
-            self.process_single_left_row_join(&left_data, &right_batch, l_idx)?;
+        let joined_batch = self.process_single_left_row_join(
+            &left_data,
+            &right_batch,
+            chunk_idx,
+            local_idx,
+        )?;
 
         if let Some(batch) = joined_batch {
             self.output_buffer.push_batch(batch)?;
@@ -2493,7 +2563,8 @@ impl NestedLoopJoinStream {
         Ok(true)
     }
 
-    /// Process [l_start_index, l_start_index + l_count) JOIN right_batch
+    /// Process the left rows starting at `l_local_start` (local to the given chunk, never
+    /// crossing its end) JOIN right_batch.
     /// Returns a RecordBatch containing the join results (None if empty)
     ///
     /// Side Effect: If the join type requires, left or right side matched bitmap
@@ -2502,7 +2573,8 @@ impl NestedLoopJoinStream {
         &mut self,
         left_data: &JoinLeftData,
         right_batch: &RecordBatch,
-        l_start_index: usize,
+        chunk_idx: usize,
+        l_local_start: usize,
         l_row_count: usize,
     ) -> Result<Option<RecordBatch>> {
         // Construct the Cartesian product between the specified range of left rows
@@ -2510,13 +2582,17 @@ impl NestedLoopJoinStream {
         // materializes the intermediate batch, and finally applies the join filter
         // to it.
         // -----------------------------------------------------------
+        let left_chunk = left_data.chunk(chunk_idx);
+        // The visited-left bitmap is indexed by global row numbers.
+        let l_global_start = left_data.row_offset(chunk_idx) + l_local_start;
         let right_rows = right_batch.num_rows();
         let total_rows = l_row_count * right_rows;
 
-        // Build index arrays for cartesian product: left_range X right_batch
+        // Build index arrays for cartesian product: left_range X right_batch.
+        // The indices are local to the chunk, since they address its columns.
         let left_indices: UInt32Array =
             UInt32Array::from_iter_values((0..l_row_count).flat_map(|i| {
-                std::iter::repeat_n((l_start_index + i) as u32, right_rows)
+                std::iter::repeat_n((l_local_start + i) as u32, right_rows)
             }));
         let right_indices: UInt32Array = UInt32Array::from_iter_values(
             (0..l_row_count).flat_map(|_| 0..right_rows as u32),
@@ -2543,7 +2619,7 @@ impl NestedLoopJoinStream {
                     Vec::with_capacity(filter.column_indices().len());
                 for column_index in filter.column_indices() {
                     let array = if column_index.side == JoinSide::Left {
-                        let col = left_data.batch().column(column_index.index);
+                        let col = left_chunk.column(column_index.index);
                         take(col.as_ref(), &left_indices, None)?
                     } else {
                         let col = right_batch.column(column_index.index);
@@ -2596,7 +2672,7 @@ impl NestedLoopJoinStream {
                 internal_datafusion_err!("Must be Some after the previous combining step")
             })?;
 
-            let l_index = l_start_index + i / right_rows;
+            let l_index = l_global_start + i / right_rows;
             let r_index = i % right_rows;
 
             if let Some(bitmap) = left_bitmap.as_mut()
@@ -2664,7 +2740,7 @@ impl NestedLoopJoinStream {
             Vec::with_capacity(self.output_schema.fields().len());
         for column_index in &self.column_indices {
             let array = if column_index.side == JoinSide::Left {
-                let col = left_data.batch().column(column_index.index);
+                let col = left_chunk.column(column_index.index);
                 take(col.as_ref(), &left_indices, None)?
             } else {
                 let col = right_batch.column(column_index.index);
@@ -2687,17 +2763,22 @@ impl NestedLoopJoinStream {
         &mut self,
         left_data: &JoinLeftData,
         right_batch: &RecordBatch,
-        l_index: usize,
+        chunk_idx: usize,
+        l_local_index: usize,
     ) -> Result<Option<RecordBatch>> {
         let right_row_count = right_batch.num_rows();
         if right_row_count == 0 {
             return Ok(None);
         }
 
+        let left_chunk = left_data.chunk(chunk_idx);
+        // The visited-left bitmap is indexed by global row numbers.
+        let l_global_index = left_data.row_offset(chunk_idx) + l_local_index;
+
         let cur_right_bitmap = if let Some(filter) = &self.join_filter {
             apply_filter_to_row_join_batch(
-                left_data.batch(),
-                l_index,
+                left_chunk,
+                l_local_index,
                 right_batch,
                 filter,
             )?
@@ -2705,7 +2786,7 @@ impl NestedLoopJoinStream {
             BooleanArray::from(vec![true; right_row_count])
         };
 
-        self.update_matched_bitmap(l_index, &cur_right_bitmap)?;
+        self.update_matched_bitmap(l_global_index, &cur_right_bitmap)?;
 
         // For the following join types: here we only have to set the left/right
         // bitmap, and no need to output result
@@ -2728,8 +2809,8 @@ impl NestedLoopJoinStream {
             // Use the optimized approach similar to build_intermediate_batch_for_single_left_row
             let join_batch = build_row_join_batch(
                 &self.output_schema,
-                left_data.batch(),
-                l_index,
+                left_chunk,
+                l_local_index,
                 right_batch,
                 Some(cur_right_bitmap),
                 &self.column_indices,
@@ -2744,7 +2825,6 @@ impl NestedLoopJoinStream {
     /// false -> next state (Done)
     fn process_left_unmatched(&mut self) -> Result<bool> {
         let left_data = self.get_left_data()?;
-        let left_batch = left_data.batch();
 
         // ========
         // Check early return conditions
@@ -2753,7 +2833,7 @@ impl NestedLoopJoinStream {
         // Early return if join type can't have unmatched rows
         let join_type_no_produce_left = !need_produce_result_in_final(self.join_type);
         // Stop processing unmatched rows, the caller will go to the next state
-        let finished = self.left_emit_idx >= left_batch.num_rows();
+        let finished = self.left_emit_idx >= left_data.total_rows();
 
         // `ProbeEnd` already recorded whether this stream emits unmatched-left
         // rows. Every probe partition passes through this state, but only the
@@ -2768,7 +2848,14 @@ impl NestedLoopJoinStream {
         // Each time, the number to process is up to batch size
         // ========
         let start_idx = self.left_emit_idx;
-        let end_idx = std::cmp::min(start_idx + self.batch_size, left_batch.num_rows());
+        // Emission ranges never cross a chunk boundary; the output buffer re-coalesces the
+        // possibly smaller batch emitted at a chunk's tail.
+        let (chunk_idx, _) = left_data.locate(start_idx).ok_or_else(|| {
+            internal_datafusion_err!("left_emit_idx must be within the left data")
+        })?;
+        let chunk_end =
+            left_data.row_offset(chunk_idx) + left_data.chunk(chunk_idx).num_rows();
+        let end_idx = std::cmp::min(start_idx + self.batch_size, chunk_end);
 
         if let Some(batch) =
             self.process_left_unmatched_range(left_data, start_idx, end_idx)?
@@ -2805,10 +2892,17 @@ impl NestedLoopJoinStream {
             return Ok(None);
         }
 
-        // Slice both left batch, and bitmap to range [start_idx, end_idx)
-        // The range is bit index (not byte)
-        let left_batch = left_data.batch();
-        let left_batch_sliced = left_batch.slice(start_idx, end_idx - start_idx);
+        // Slice both left chunk, and bitmap to range [start_idx, end_idx)
+        // The range is bit index (not byte). The caller never lets a range cross a
+        // chunk boundary, so the whole range lives in one chunk.
+        let (chunk_idx, local_start) = left_data.locate(start_idx).ok_or_else(|| {
+            internal_datafusion_err!(
+                "unmatched-left range must start within the left data"
+            )
+        })?;
+        let left_batch_sliced = left_data
+            .chunk(chunk_idx)
+            .slice(local_start, end_idx - start_idx);
 
         // Can this be more efficient?
         let mut bitmap_sliced = BooleanBufferBuilder::new(end_idx - start_idx);
@@ -2852,7 +2946,7 @@ impl NestedLoopJoinStream {
         let cur_right_batch = unwrap_or_internal_err!(right_batch);
 
         let left_data = self.get_left_data()?;
-        let left_schema = left_data.batch().schema();
+        let left_schema = left_data.schema();
 
         let res = build_unmatched_batch(
             &self.output_schema,
@@ -3438,6 +3532,102 @@ pub(crate) mod tests {
 
         let source = Arc::new(source);
         Arc::new(TestMemoryExec::update_cache(&source))
+    }
+
+    /// A build side that already arrives in target-sized batches is retained as-is: the chunks
+    /// share their buffers with the input, so nothing is copied. Concatenating the build side
+    /// into one batch, as this operator used to, copies every byte and holds both copies.
+    #[tokio::test]
+    async fn build_side_chunks_reuse_the_input_buffers() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batches: Vec<RecordBatch> = (0..4)
+            .map(|b| {
+                let values: Vec<i32> = (0..1024).map(|i| b * 1024 + i).collect();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(arrow::array::Int32Array::from(values))],
+                )
+                .unwrap()
+            })
+            .collect();
+        let input_ptrs: Vec<*const u8> = batches
+            .iter()
+            .map(|b| b.column(0).to_data().buffers()[0].as_ptr())
+            .collect();
+
+        let stream: SendableRecordBatchStream =
+            Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::iter(batches.into_iter().map(Ok)),
+            ));
+        let task_ctx = Arc::new(TaskContext::default());
+        let reservation = MemoryConsumer::new("test").register(task_ctx.memory_pool());
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let load = collect_left_input(
+            stream,
+            BuildProbeJoinMetrics::new(0, &metrics),
+            reservation,
+            false,
+            1,
+            None,
+            // Target below the input batch size, so every batch takes the large-batch bypass.
+            512,
+        )
+        .await?;
+
+        let LeftLoad::InMemory(data) = load else {
+            panic!("the build side fit in memory");
+        };
+        assert_eq!(data.chunks.len(), 4, "each input batch is its own chunk");
+        assert_eq!(data.total_rows(), 4096);
+        let chunk_ptrs: Vec<*const u8> = data
+            .chunks
+            .iter()
+            .map(|c| c.column(0).to_data().buffers()[0].as_ptr())
+            .collect();
+        assert_eq!(
+            input_ptrs, chunk_ptrs,
+            "chunks must reuse the input buffers instead of copying them"
+        );
+        Ok(())
+    }
+
+    /// Zero-row chunks are dropped at construction: an empty chunk creates duplicate row
+    /// offsets, and the probe and emit cursors clamped to such a chunk's end would never
+    /// advance. Both chunk producers already normalize empties away (the load coalescer emits
+    /// none; the spill read loop skips them), so this guards future producers.
+    #[test]
+    fn join_left_data_drops_zero_row_chunks() {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let empty = RecordBatch::new_empty(Arc::clone(&schema));
+        let data = |from: i32, n: i32| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(arrow::array::Int32Array::from(
+                    (from..from + n).collect::<Vec<_>>(),
+                ))],
+            )
+            .unwrap()
+        };
+        let task_ctx = Arc::new(TaskContext::default());
+        let reservation = MemoryConsumer::new("test").register(task_ctx.memory_pool());
+        let left_data = JoinLeftData::new(
+            vec![empty.clone(), data(0, 5), empty.clone(), data(5, 7), empty],
+            Arc::clone(&schema),
+            Mutex::new(BooleanBufferBuilder::new(0)),
+            AtomicUsize::new(1),
+            reservation,
+        );
+        assert_eq!(left_data.chunks.len(), 2);
+        assert_eq!(left_data.total_rows(), 12);
+        // Offsets are strictly increasing, so locate() is unambiguous at every row.
+        assert_eq!(left_data.locate(0), Some((0, 0)));
+        assert_eq!(left_data.locate(4), Some((0, 4)));
+        assert_eq!(left_data.locate(5), Some((1, 0)));
+        assert_eq!(left_data.locate(11), Some((1, 6)));
+        assert_eq!(left_data.locate(12), None);
     }
 
     /// An input that can be executed only once: later executions yield no batches, the way a
