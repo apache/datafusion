@@ -116,9 +116,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
 async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
     let ctx = all_types_context().await?;
     let plan = ctx
-        .sql(
-            "SELECT id FROM alltypes_plain ORDER BY id DESC NULLS LAST LIMIT 5",
-        )
+        .sql("SELECT id FROM alltypes_plain ORDER BY id DESC NULLS LAST LIMIT 5")
         .await?
         .create_physical_plan()
         .await?;
