@@ -1122,12 +1122,27 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     } else if let DataType::RunEndEncoded(_, value_type) = col_type {
         extract_window_frame_target_type(value_type.data_type())
     } else {
-        // Only reached for frames with a finite offset (free range frames
-        // return early in `coerce_window_frame`), which need arithmetic on
-        // the ORDER BY type.
-        plan_err!(
-            "RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type {col_type}"
-        )
+        plan_err!("RANGE window frames are not supported for ORDER BY type {col_type}")
+    }
+}
+
+/// Whether a free RANGE frame (all bounds `UNBOUNDED` or `CURRENT ROW`) can
+/// run over an ORDER BY column of `col_type` even though the type has no
+/// arithmetic for finite offsets.
+///
+/// Such a frame only compares rows to find peers, so the type must compare
+/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
+/// the sort that produced the input order. That holds for durations and
+/// intervals; it does not for structs and maps, whose `ScalarValue`
+/// comparison differs from the sorter's, so they stay unsupported.
+fn supports_free_range_frame(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::Duration(_) | DataType::Interval(_) => true,
+        DataType::Dictionary(_, value_type) => supports_free_range_frame(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            supports_free_range_frame(value_type.data_type())
+        }
+        _ => false,
     }
 }
 
@@ -1148,13 +1163,15 @@ fn coerce_window_frame(
             if let Some(col_type) = current_types {
                 let target_type = match extract_window_frame_target_type(&col_type) {
                     Ok(target_type) => target_type,
-                    // A free range frame (`UNBOUNDED PRECEDING` / `CURRENT ROW`
-                    // on both sides, which is what `OVER (ORDER BY ...)`
-                    // defaults to) has no offsets to coerce and only needs the
-                    // ORDER BY values to be comparable, so an ORDER BY type
-                    // without arithmetic (Duration, Interval, Struct, Map, ...)
-                    // is fine there.
-                    Err(_) if window_frame.free_range() => return Ok(window_frame),
+                    // A free range frame has no offsets to coerce, so an ORDER
+                    // BY type without arithmetic is fine as long as its peer
+                    // comparison is sound (see `supports_free_range_frame`).
+                    Err(_)
+                        if window_frame.free_range()
+                            && supports_free_range_frame(&col_type) =>
+                    {
+                        return Ok(window_frame);
+                    }
                     Err(e) => return Err(e),
                 };
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
