@@ -21,9 +21,7 @@ use arrow::datatypes::DataType;
 
 use arrow::datatypes::FieldRef;
 
-use crate::percentile_cont::{
-    PercentileCont, create_percentile_accumulator, create_percentile_groups_accumulator,
-};
+use crate::percentile_cont::{create_percentile_accumulator, create_percentile_blocked_groups_accumulator, create_percentile_groups_accumulator, PercentileCont};
 use datafusion_common::Result;
 use datafusion_common::types::logical_float64;
 use datafusion_expr::GroupsAccumulator;
@@ -32,6 +30,8 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
     TypeSignatureClass, Volatility, function::AccumulatorArgs,
 };
+use datafusion_expr::groups_accumulator::BlockedGroupsAccumulator;
+use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
@@ -140,6 +140,22 @@ impl AggregateUDFImpl for Median {
             self.name(),
             0.5,
             args.expr_fields[0].data_type(),
+        )
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+        self.percentile_cont.blocked_groups_accumulator_supported(args)
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        create_percentile_blocked_groups_accumulator(
+            self.name(),
+            0.5,
+            args.expr_fields[0].data_type(),
+            args.batch_size,
         )
     }
 
