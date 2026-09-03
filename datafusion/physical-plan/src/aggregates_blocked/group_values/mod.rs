@@ -56,6 +56,7 @@ pub(crate) use metrics::{
     GroupByMetrics,
 };
 use single_group_by::boolean::GroupValuesBoolean;
+use single_group_by::primitive::GroupValuesPrimitive;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -283,8 +284,46 @@ pub fn new_group_values(
     group_ordering: &GroupOrdering,
     block_size: usize,
 ) -> Result<Box<dyn BlockedGroupValues>> {
-    if schema.fields().len() == 1 {
-        match schema.fields()[0].data_type() {
+    if schema.fields.len() == 1 {
+        let d = schema.fields[0].data_type();
+
+        macro_rules! downcast_helper {
+            ($t:ty, $d:ident) => {
+                return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone(), block_size)))
+            };
+        }
+
+        downcast_primitive! {
+            d => (downcast_helper, d),
+            _ => {}
+        }
+
+        match d {
+            DataType::Date32 => {
+                downcast_helper!(Date32Type, d);
+            }
+            DataType::Date64 => {
+                downcast_helper!(Date64Type, d);
+            }
+            DataType::Time32(t) => match t {
+                TimeUnit::Second => downcast_helper!(Time32SecondType, d),
+                TimeUnit::Millisecond => downcast_helper!(Time32MillisecondType, d),
+                _ => {}
+            },
+            DataType::Time64(t) => match t {
+                TimeUnit::Microsecond => downcast_helper!(Time64MicrosecondType, d),
+                TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
+                _ => {}
+            },
+            DataType::Timestamp(t, _tz) => match t {
+                TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
+                TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
+                TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),
+                TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
+            },
+            DataType::Decimal128(_, _) => {
+                downcast_helper!(Decimal128Type, d);
+            }
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new(block_size)));
             }

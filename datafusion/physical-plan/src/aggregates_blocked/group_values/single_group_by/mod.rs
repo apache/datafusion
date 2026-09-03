@@ -18,3 +18,4 @@
 //! `GroupValues` implementations for single group by cases
 
 pub(crate) mod boolean;
+pub(crate) mod primitive;
