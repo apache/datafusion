@@ -36,7 +36,7 @@ use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
-use datafusion::sql::parser::{DFParser, DFParserBuilder, Statement};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
@@ -525,6 +525,7 @@ mod tests {
     use super::*;
 
     use datafusion::common::plan_err;
+    use datafusion::sql::parser::DFParser;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_contains;
