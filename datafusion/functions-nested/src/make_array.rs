@@ -28,7 +28,6 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType::Null, Field};
-use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
@@ -137,15 +136,34 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 
     let data_type = data_type.unwrap_or(&Null);
     if data_type.is_null() {
-        // Either an empty array or all nulls:
-        let length = arrays.iter().map(|a| a.len()).sum();
-        let array = new_null_array(&Null, length);
-        Ok(Arc::new(
-            SingleRowListArrayBuilder::new(array).build_list_array(),
-        ))
+        Ok(Arc::new(null_list_array(
+            arrays,
+            Field::LIST_FIELD_DEFAULT_NAME,
+        )))
     } else {
         array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
     }
+}
+
+/// Builds the result of `make_array` when there are no arguments or every
+/// argument is `NULL`-typed: a `List(Null)` array with one row per input row,
+/// each holding one null per argument. With no arguments there is a single
+/// row holding an empty list.
+///
+/// The arguments have already been expanded to a common length, so the row
+/// count is taken from the first one. Summing the argument lengths instead
+/// produced a single row for column inputs, see
+/// <https://github.com/apache/datafusion/issues/21841>.
+pub fn null_list_array(arrays: &[ArrayRef], field_name: &str) -> GenericListArray<i32> {
+    let num_rows = arrays.first().map_or(1, |array| array.len());
+    let values = new_null_array(&Null, num_rows * arrays.len());
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(arrays.len(), num_rows));
+    GenericListArray::new(
+        Arc::new(Field::new(field_name, Null, true)),
+        offsets,
+        values,
+        None,
+    )
 }
 
 /// Convert one or more [`ArrayRef`] of the same type into a
