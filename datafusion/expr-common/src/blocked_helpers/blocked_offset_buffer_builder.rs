@@ -532,7 +532,7 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
         if let Some(adjusted_block_size_iter) = adjusted_block_size_iter {
             self.take_n_dynamic(n, adjusted_block_size_iter)
         } else {
-            self.take_n_fixed(n)
+            self.inner_take_n_fixed(n)
         }
     }
 
@@ -753,7 +753,7 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
         }
     }
 
-    fn take_n_fixed(&mut self, n: usize) -> Vec<O> {
+    fn inner_take_n_fixed(&mut self, n: usize) -> Vec<O> {
         assert!(n <= self.len, "n ({n}) must be <= len ({}) than", self.len);
         assert!(
             n < self.block_size,
@@ -856,6 +856,14 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
 
     pub fn blocks_iter(&self) -> Iter<'_, Vec<O>> {
         self.blocks.iter()
+    }
+}
+
+
+impl<O: OffsetSizeTrait>
+BlockedOffsetBufferBuilder<true, O> {
+    pub fn take_n_fixed(&mut self, n: usize) -> Vec<O> {
+        self.inner_take_n_fixed(n)
     }
 }
 

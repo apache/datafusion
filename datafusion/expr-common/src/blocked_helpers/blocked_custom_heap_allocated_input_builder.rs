@@ -174,9 +174,15 @@ BlockedCustomHeapAllocatedInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider, 
             let before = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
             update_fn(&mut self[index]);
             let after = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
-            let mut mem = &mut self.blocks_heap_allocated_sizes[index.block_index()];
-            *mem -= before;
-            *mem += after;
+            let mem = &mut self.blocks_heap_allocated_sizes[index.block_index()];
+            *mem = *mem - before + after;
+
+            // Finished blocks are already counted in the total, keep it in sync
+            // so that taking the block later subtracts what was added
+            if index.block_index() != self.current_block_index {
+                self.finished_blocks_allocated_memory =
+                    self.finished_blocks_allocated_memory - before + after;
+            }
         } else {
             update_fn(&mut self[index]);
         }

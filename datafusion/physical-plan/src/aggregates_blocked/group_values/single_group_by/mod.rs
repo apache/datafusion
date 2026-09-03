@@ -19,3 +19,4 @@
 
 pub(crate) mod boolean;
 pub(crate) mod primitive;
+pub(crate) mod bytes;

@@ -57,6 +57,7 @@ pub(crate) use metrics::{
 };
 use single_group_by::boolean::GroupValuesBoolean;
 use single_group_by::primitive::GroupValuesPrimitive;
+use single_group_by::bytes::GroupValuesBytes;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -323,6 +324,18 @@ pub fn new_group_values(
             },
             DataType::Decimal128(_, _) => {
                 downcast_helper!(Decimal128Type, d);
+            }
+            DataType::Utf8 => {
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8, block_size)));
+            }
+            DataType::LargeUtf8 => {
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Utf8, block_size)));
+            }
+            DataType::Binary => {
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Binary, block_size)));
+            }
+            DataType::LargeBinary => {
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Binary, block_size)));
             }
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new(block_size)));

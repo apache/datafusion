@@ -564,6 +564,33 @@ mod tests {
     }
 
     #[test]
+    fn growing_an_item_in_a_finished_block_keeps_memory_in_sync() {
+        use crate::blocked_helpers::get_heap_allocated_size::CommonHeapAllocatorSize;
+
+        let mut builder = BlockedVecBuilder::<true, Vec<i32>, CommonHeapAllocatorSize>::new(2);
+        builder.push_default_n(5);
+        let before = builder.allocated_size();
+
+        // group 1 is in the first block, which is already finished
+        builder.index_mut_with_size(BlocksIndex::new(0, 1), |item| Extend::extend(item, 0..1000));
+        assert!(builder.allocated_size() >= before + 1000 * size_of::<i32>());
+
+        // and shrink one in the current block
+        builder.index_mut_with_size(BlocksIndex::new(2, 0), |item| {
+            Extend::extend(item, 0..10);
+            *item = vec![];
+        });
+
+        let first = builder.take_block().unwrap();
+        assert_eq!(first[1].len(), 1000);
+        assert!(builder.take_block().is_some());
+        assert!(builder.take_block().is_some());
+        assert!(builder.take_block().is_none());
+        // only the deque capacities remain
+        assert!(builder.allocated_size() < before);
+    }
+
+    #[test]
     fn allocated_size_follows_blocks() {
         let mut builder = Fixed::new(4);
         let empty = builder.allocated_size();
