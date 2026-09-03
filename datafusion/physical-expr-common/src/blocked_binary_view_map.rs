@@ -423,7 +423,12 @@ where
         if self.num_buffer_blocks_per_block.is_empty() {
             self.num_buffer_blocks_per_block.push_back(1);
         }
-        self.current_start_block_index = self.buffer.num_blocks() - 1;
+        // The views block being written to may already span several buffer blocks
+        self.current_start_block_index = self.buffer.num_blocks()
+            - self
+                .num_buffer_blocks_per_block
+                .back()
+                .expect("always has the current block");
 
         if self.views.is_empty() {
             self.map.clear();
