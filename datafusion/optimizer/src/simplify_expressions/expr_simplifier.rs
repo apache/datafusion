@@ -797,8 +797,9 @@ fn case_pushdown_eligible(case: &Case) -> bool {
             .is_none_or(&mut literal_of_common_type)
 }
 
-/// Type and metadata must match; nullability may only tighten, as it does
-/// whenever `f(literal)` constant-folds to a non-null literal.
+/// CASE carries no metadata, so the original must carry none either;
+/// nullability may only tighten, as it does whenever `f(literal)`
+/// constant-folds to a non-null literal.
 fn case_pushdown_preserves_field(original: &Field, rewritten: &Field) -> bool {
     original.data_type() == rewritten.data_type()
         && original.metadata() == rewritten.metadata()
@@ -812,14 +813,16 @@ fn swap_case_outputs(case: &mut Case, outputs: &mut [Expr]) {
 }
 
 /// Constant-folds `f(...)` with `branch` substituted at `case_position`;
-/// `None` means the fold failed. Untyped NULLs fold as typed NULLs of
-/// `output_type`, matching the physical CASE behavior.
+/// `None` means the fold failed or produced something the plan schema cannot
+/// carry (a metadata tag, a type other than `return_type`). Untyped NULLs
+/// fold as typed NULLs of `output_type`, matching the physical CASE behavior.
 fn fold_case_branch(
     const_evaluator: &mut ConstEvaluator,
     func: &Arc<datafusion_expr::ScalarUDF>,
     args: &[Expr],
     case_position: usize,
     output_type: &DataType,
+    return_type: &DataType,
     branch: &Expr,
 ) -> Result<Option<Expr>> {
     let branch = match branch {
@@ -833,15 +836,13 @@ fn fold_case_branch(
     let call =
         Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(func), branch_args));
     match const_evaluator.evaluate_to_scalar(call) {
-        // A metadata-carrying result (an extension-type tag from
-        // return_field_from_args, say) cannot be preserved: CASE never
-        // surfaces branch-literal metadata in its schema field, so folding
-        // would silently drop it from the plan schema. Decline instead.
-        ConstSimplifyResult::Simplified(_, Some(_))
-        | ConstSimplifyResult::NotSimplified(_, Some(_)) => Ok(None),
         ConstSimplifyResult::Simplified(s, None)
-        | ConstSimplifyResult::NotSimplified(s, None) => Ok(Some(Expr::Literal(s, None))),
-        ConstSimplifyResult::SimplifyRuntimeError(_, _) => Ok(None),
+        | ConstSimplifyResult::NotSimplified(s, None)
+            if s.data_type() == *return_type =>
+        {
+            Ok(Some(Expr::Literal(s, None)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -1636,6 +1637,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         &args,
                         case_position,
                         &output_type,
+                        original_field.data_type(),
                         branch,
                     )? {
                         Some(lit) => folded.push(lit),
@@ -1653,10 +1655,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     })));
                 }
 
-                // Swap the folded literals in; the originals are kept so the
-                // swap can be undone if the field check fails.
+                // Swap the folded literals in (an implicit ELSE stays implicit
+                // when it folds to NULL); the originals are kept so the swap can
+                // be undone if the field check fails.
+                let folded_else = folded
+                    .pop()
+                    .filter(|e| case.else_expr.is_some() || !is_null(e));
                 let original_else =
-                    std::mem::replace(&mut case.else_expr, folded.pop().map(Box::new));
+                    std::mem::replace(&mut case.else_expr, folded_else.map(Box::new));
                 swap_case_outputs(&mut case, &mut folded);
                 let rewritten = Expr::Case(case);
                 let (_, rewritten_field) = rewritten.to_field(info.schema().as_ref())?;
@@ -4306,6 +4312,8 @@ mod tests {
         TaggedForArrays,
         /// Non-nullable, though `f(NULL)` returns NULL.
         NonNullable,
+        /// Declares Int64 but produces Int32 for anything but `'1'`.
+        Mistyped,
     }
 
     /// `ParseIntUdf` whose return field follows `policy`.
@@ -4333,7 +4341,7 @@ mod tests {
             let tagged = match self.policy {
                 FieldPolicy::Tagged => true,
                 FieldPolicy::TaggedForArrays => args.scalar_arguments[0].is_none(),
-                FieldPolicy::NonNullable => false,
+                FieldPolicy::NonNullable | FieldPolicy::Mistyped => false,
             };
             let nullable = self.policy != FieldPolicy::NonNullable;
             let field = Field::new(self.name(), DataType::Int64, nullable);
@@ -4352,6 +4360,11 @@ mod tests {
                     if self.policy == FieldPolicy::NonNullable =>
                 {
                     Ok(ColumnarValue::Scalar(ScalarValue::Int64(None)))
+                }
+                Some(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))))
+                    if self.policy == FieldPolicy::Mistyped && s != "1" =>
+                {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(0))))
                 }
                 _ => ParseIntUdf::new(Volatility::Immutable).invoke_with_args(args),
             }
@@ -4404,6 +4417,17 @@ mod tests {
                 Some(Box::new(lit(2i64))),
             ))
         );
+    }
+
+    #[test]
+    fn simplify_case_pushdown_declines_mistyped_results() {
+        // Only the second branch folds to the wrong type: every branch must
+        // match the declared return type, not just the one that types the CASE.
+        let expr = field_policy_parse_int(
+            FieldPolicy::Mistyped,
+            vec![case_on_c2("1", Some("2"))],
+        );
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     /// Breaches `ExprSimplifyResult::Original`'s keep-args-unmodified
