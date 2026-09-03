@@ -393,12 +393,93 @@ fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn roundtrip_rebases_derived_projection_references() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta)",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection`",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) ORDER BY j1_id ASC NULLS LAST",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` ORDER BY `derived_projection`.`j1_id` ASC",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) where j1_id > 1;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta WHERE (ta.j1_id > 1))",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) where j1_id > 1;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta` WHERE (`ta`.`j1_id` > 1)) AS `derived_projection`",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select distinct ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT DISTINCT ta.j1_id FROM j1 AS ta)",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select distinct ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_distinct`.`j1_id` FROM (SELECT DISTINCT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_distinct`",
+    );
+
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql("select j1_id from (select ta.j1_id as j1_id from j1 ta)")?
+        .parse_statement()?;
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let plan = SqlToRel::new(&context).sql_statement_to_plan(statement)?;
+    let plan = LogicalPlanBuilder::from(plan)
+        .filter(col("ta.j1_id").gt(lit(1)))?
+        .build()?;
+    let unparser = Unparser::new(&UnparserMySqlDialect {});
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 1)"
+    );
+
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .alias("ta")?
+        .project(vec![col("ta.j1_id")])?
+        .filter(col("ta.j1_id").gt(lit(0)))?
+        .project(vec![lit(1)])?
+        .build()?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT 1 FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 0)"
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_statement_with_dialect_5() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select j1_id from (select j1_id from j1 limit 10);",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        expected: @"SELECT `j1`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
+        expected: @"SELECT `derived_limit`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
     );
     Ok(())
 }
@@ -1614,7 +1695,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_two_projections)?;
     assert_snapshot!(
         query_from_table_scan_with_two_projections,
-        @"SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"
+        @"SELECT id, age FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
     let table_scan_with_filter = table_scan_with_filters(
@@ -1791,7 +1872,7 @@ fn test_sort_with_scalar_fn_and_push_down_fetch() -> Result<()> {
     let sql = plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @"SELECT t1.search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
+        @"SELECT search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
     );
     Ok(())
 }
