@@ -514,7 +514,7 @@ terminal provider instead (the walk falls back on its own).</p></li>
 </section>
 <section id="api-change-for-floor-and-ceil-udf">
 <h3>API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF<a class="headerlink" href="#api-change-for-floor-and-ceil-udf" title="Link to this heading">#</a></h3>
-<p>The output type of the <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDFs has been changed from the exact input type to a rescaled type with the same bit width. For example, for input <code class="docutils literal notranslate"><span class="pre">Decimal32(7,2)</span></code> <code class="docutils literal notranslate"><span class="pre">floor</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Decimal32(6,0)</span></code>, where the new precision is <code class="docutils literal notranslate"><span class="pre">p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">1</span></code>, matching Spark’s behaviour. See <a class="reference external" href="https://github.com/apache/datafusion/pull/24703">#24703</a> for more details.</p>
+<p>The output type of the <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDFs has been changed from the exact input type to a rescaled type with the same bit width. For example, for input <code class="docutils literal notranslate"><span class="pre">Decimal32(7,2)</span></code> <code class="docutils literal notranslate"><span class="pre">floor</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Decimal32(6,0)</span></code>, where the new precision is <code class="docutils literal notranslate"><span class="pre">p</span> <span class="pre">-</span> <span class="pre">s</span> <span class="pre">+</span> <span class="pre">1</span></code>, matching Spark’s behaviour. See [#24703] for more details.</p>
 <p><strong>Who is affected:</strong></p>
 <ul class="simple">
 <li><p>Users storing query result with these UDFs in a fixed schema</p></li>
@@ -522,6 +522,27 @@ terminal provider instead (the walk falls back on its own).</p></li>
 </ul>
 <p><strong>Migration guide:</strong></p>
 <p>Change the expected type or wrap the expression in <code class="docutils literal notranslate"><span class="pre">CAST</span></code>. It’s recommended to avoid relying on decimal’s exact precision and scale.</p>
+</section>
+<section id="dataframe-from-columns-accepts-intoiterator">
+<h3><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code><a class="headerlink" href="#dataframe-from-columns-accepts-intoiterator" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> now accepts any <code class="docutils literal notranslate"><span class="pre">IntoIterator&lt;Item</span> <span class="pre">=</span> <span class="pre">(&amp;str,</span> <span class="pre">ArrayRef)&gt;</span></code>
+instead of specifically accepting a <code class="docutils literal notranslate"><span class="pre">Vec&lt;(&amp;str,</span> <span class="pre">ArrayRef)&gt;</span></code>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Existing Vec usage continues to work</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataFrame</span><span class="p">::</span><span class="n">from_columns</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">),</span>
+<span class="w">    </span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">),</span>
+<span class="p">])</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// Arrays can now be used directly</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataFrame</span><span class="p">::</span><span class="n">from_columns</span><span class="p">([</span>
+<span class="w">    </span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="p">),</span>
+<span class="w">    </span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">),</span>
+<span class="p">])</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Most existing call sites using <code class="docutils literal notranslate"><span class="pre">Vec</span></code> require no changes. Code that relies on
+the exact non-generic function signature of <code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> may need
+to be updated to account for the new generic API.</p>
 </section>
 </section>
 </section>
@@ -579,6 +600,7 @@ terminal provider instead (the walk falls back on its own).</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-floor-and-ceil-udf">API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
 </ul>
 </li>
 </ul>
