@@ -2480,6 +2480,24 @@ select row_number() over (rows between null preceding and current row) from (sel
 statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (rows between current row and -1 following) from (select 1 a) x
 
+# invalid window frame. negative interval offsets in RANGE frames. Unlike
+# ROWS / GROUPS offsets, RANGE offsets are typed after the ORDER BY column is
+# known, and an interval literal carries its sign inside the string.
+statement error Error during planning: Invalid window frame: frame offsets for RANGE must not be negative
+select count(*) over (order by a range between interval '-1 day' preceding and current row) from (select date '2020-01-01' a) x
+
+statement error Error during planning: Invalid window frame: frame offsets for RANGE must not be negative
+select count(*) over (order by a range between current row and interval '-1 month' following) from (select timestamp '2020-01-01' a) x
+
+statement error Error during planning: Invalid window frame: frame offsets for RANGE must not be negative
+select count(*) over (order by a range between interval '-1 day' preceding and interval '-1 day' following) from (select now() a) x
+
+# a non-negative interval offset is still accepted
+query I
+select count(*) over (order by a range between interval '1 day' preceding and current row) from (select date '2020-01-01' a) x
+----
+1
+
 # invalid window frame. null as preceding
 statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (order by a groups between null preceding and current row) from (select 1 a) x
