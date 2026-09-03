@@ -1096,7 +1096,7 @@ impl FileSource for ParquetSource {
         let sort_order_for_reorder = self
             .sort_order_for_reorder
             .as_ref()
-            .map(|ordering| {
+            .map(|ordering| -> datafusion_common::Result<_> {
                 Ok(protobuf::PhysicalSortExprNodeCollection {
                     physical_sort_expr_nodes: sort_exprs_try_to_proto(
                         ordering.iter(),
