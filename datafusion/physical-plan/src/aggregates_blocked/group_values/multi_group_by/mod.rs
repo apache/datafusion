@@ -22,7 +22,7 @@ mod boolean;
 // pub mod bytes_view;
 // mod dictionary;
 // mod fixed_size_binary;
-// pub mod primitive;
+pub mod primitive;
 // pub mod row_backed;
 
 use std::mem::{self, size_of};
@@ -33,7 +33,8 @@ use {
     // bytes::ByteGroupValueBuilder,
     // bytes_view::ByteViewGroupValueBuilder,
     // fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
-    // primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
+    primitive::PrimitiveGroupValueBuilder,
+    // row_backed::RowsGroupColumn,
 };
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, new_empty_array};
 use arrow::datatypes::{
@@ -56,6 +57,7 @@ use datafusion_physical_expr::binary_map::OutputType;
 
 use hashbrown::hash_table::HashTable;
 use datafusion_expr_common::groups_accumulator::{BlockedGroupSelection, BlocksIndex};
+use crate::aggregates::group_values::multi_group_by::row_backed::RowsGroupColumn;
 use crate::aggregates_blocked::group_values::BlockedGroupValues;
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
@@ -921,24 +923,6 @@ impl<const STREAMING: bool> BlockedGroupValuesColumn<STREAMING> {
     }
 }
 
-/// instantiates a [`PrimitiveGroupValueBuilder`] and pushes it into $v
-///
-/// Arguments:
-/// `$v`: the vector to push the new builder into
-/// `$nullable`: whether the input can contains nulls
-/// `$t`: the primitive type of the builder
-macro_rules! instantiate_primitive {
-    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
-        if $nullable {
-            let b = PrimitiveGroupValueBuilder::<$t, true>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
-        } else {
-            let b = PrimitiveGroupValueBuilder::<$t, false>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
-        }
-    };
-}
-
 /// Returns true if the specified data type has a specialized
 /// [`BlockedGroupColumn`] builder in [`make_group_column`].
 ///
@@ -948,7 +932,59 @@ macro_rules! instantiate_primitive {
 /// builder for. The `group_column_supported_type_matches_make_group_column`
 /// test below pins this biconditional.
 fn group_column_supported_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Boolean)
+    // Nested types (Struct / List / LargeList / FixedSizeList, recursively) have
+    // no type-specialized `GroupColumn`; they are handled by the generic
+    // row-backed fallback in `make_group_column` whenever arrow's row format can
+    // encode them. Gate the fallback to nested types so intentionally-excluded
+    // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
+    // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
+    if data_type.is_nested() {
+        // return RowsGroupColumn::supports_type(data_type) ;
+        return false;
+    }
+    matches!(
+        *data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+            // | DataType::Utf8
+            // | DataType::LargeUtf8
+            // | DataType::Binary
+            // | DataType::LargeBinary
+            // Only non-negative widths: a negative width is not a valid
+            // Arrow type (no array can be constructed for it), and the
+            // dispatcher in `make_group_column` rejects it. Keep the two
+            // in lockstep.
+            // | DataType::FixedSizeBinary(0..)
+            | DataType::Date32
+            | DataType::Date64
+            // Only the semantically valid Time variants per the Arrow spec.
+            // The dispatcher in `make_group_column` returns NotImpl for the
+            // other unit combinations, so accepting them here would cause a
+            // schema to be routed into GroupValuesColumn and then fail at
+            // intern. Keep these two arms in lockstep with the dispatcher.
+            | DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+            | DataType::Timestamp(_, _)
+            | DataType::Duration(_)
+            | DataType::Interval(_)
+            // | DataType::Utf8View
+            // | DataType::BinaryView
+            | DataType::Boolean
+    )
+      // || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
 }
 
 /// Build a [`BlockedGroupColumn`] for a single schema field.
@@ -969,8 +1005,116 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 fn make_group_column<const IS_FIXED_BLOCK: bool>(field: &Field, block_size: usize) -> Result<Box<dyn BlockedGroupColumn<IS_FIXED_BLOCK>>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
+
     let mut v: Vec<Box<dyn BlockedGroupColumn<IS_FIXED_BLOCK>>> = Vec::with_capacity(1);
+
+    /// instantiates a [`PrimitiveGroupValueBuilder`] and pushes it into $v
+    ///
+    /// Arguments:
+    /// `$v`: the vector to push the new builder into
+    /// `$nullable`: whether the input can contains nulls
+    /// `$t`: the primitive type of the builder
+    macro_rules! instantiate_primitive {
+    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
+        if $nullable {
+            let b = PrimitiveGroupValueBuilder::<IS_FIXED_BLOCK, $t, true>::new($data_type.to_owned(), block_size);
+            $v.push(Box::new(b) as _)
+        } else {
+            let b = PrimitiveGroupValueBuilder::<IS_FIXED_BLOCK, $t, false>::new($data_type.to_owned(), block_size);
+            $v.push(Box::new(b) as _)
+        }
+    };
+}
     match *data_type {
+        DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
+        DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
+        DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
+        DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type, data_type),
+        DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type, data_type),
+        DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
+        DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
+        DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
+        DataType::Float16 => {
+            instantiate_primitive!(v, nullable, Float16Type, data_type)
+        }
+        DataType::Float32 => {
+            instantiate_primitive!(v, nullable, Float32Type, data_type)
+        }
+        DataType::Float64 => {
+            instantiate_primitive!(v, nullable, Float64Type, data_type)
+        }
+        DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type, data_type),
+        DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type, data_type),
+        DataType::Time32(t) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, Time32SecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, Time32MillisecondType, data_type)
+            }
+            // Time32 with Microsecond / Nanosecond is not a valid Arrow type
+            // combination; reject explicitly so group_column_supported_type
+            // and this dispatcher stay in lockstep (see consistency fuzz below).
+            _ => return not_impl_err!("{data_type} not supported in BlockedGroupColumn"),
+        },
+        DataType::Time64(t) => match t {
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, Time64MicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, Time64NanosecondType, data_type)
+            }
+            // Time64 with Second / Millisecond is not a valid Arrow type
+            // combination; reject explicitly.
+            _ => return not_impl_err!("{data_type} not supported in BlockedGroupColumn"),
+        },
+        DataType::Timestamp(t, _) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, TimestampSecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, TimestampMillisecondType, data_type)
+            }
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, TimestampMicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+            }
+        },
+        DataType::Duration(t) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, DurationSecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, DurationMillisecondType, data_type)
+            }
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, DurationMicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
+            }
+        },
+        // `IntervalUnit` has exactly three variants, so this match is exhaustive
+        // with no fallback arm (unlike Time32 / Time64).
+        DataType::Interval(u) => match u {
+            IntervalUnit::YearMonth => {
+                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+            }
+            IntervalUnit::DayTime => {
+                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+            }
+            IntervalUnit::MonthDayNano => {
+                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
+            }
+        },
+        DataType::Decimal128(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+        }
+        DataType::Decimal256(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
+        }
         DataType::Boolean => {
             if nullable {
                 v.push(Box::new(BooleanGroupValueBuilder::<IS_FIXED_BLOCK, true>::new(block_size)));
@@ -978,7 +1122,7 @@ fn make_group_column<const IS_FIXED_BLOCK: bool>(field: &Field, block_size: usiz
                 v.push(Box::new(BooleanGroupValueBuilder::<IS_FIXED_BLOCK, false>::new(block_size)));
             }
         }
-        _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+        _ => return not_impl_err!("{data_type} not supported in BlockedGroupColumn"),
     }
     debug_assert_eq!(
         v.len(),
