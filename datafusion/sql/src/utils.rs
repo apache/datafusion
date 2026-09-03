@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
-    assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
+    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue, exec_datafusion_err,
+    exec_err, internal_err, plan_err,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -489,10 +489,14 @@ impl RecursiveUnnestRewriter<'_> {
 
         match data_type {
             DataType::Struct(inner_fields) => {
-                assert_or_internal_err!(
-                    struct_allowed,
-                    "unnest on struct can only be applied at the root level of select expression"
-                );
+                // Reachable from user input, e.g. `unnest(unnest(struct_col))`
+                // or `unnest(struct_col)['field']`, so this is a planning
+                // error rather than an internal invariant.
+                if !struct_allowed {
+                    return plan_err!(
+                        "unnest on struct can only be applied at the root level of select expression"
+                    );
+                }
                 push_projection_dedupl(
                     self.inner_projection_exprs,
                     expr_in_unnest.clone().alias(placeholder_name.clone()),
