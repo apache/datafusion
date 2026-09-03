@@ -20,3 +20,4 @@
 pub(crate) mod boolean;
 pub(crate) mod primitive;
 pub(crate) mod bytes;
+pub(crate) mod bytes_view;
