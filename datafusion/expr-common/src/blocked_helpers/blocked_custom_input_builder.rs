@@ -422,6 +422,18 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
     }
 }
 
+
+impl<CustomBlockProvider: BlockProvider>
+BlockedCustomInputBuilder<true, CustomBlockProvider>
+{
+    pub fn take_n_fixed(&mut self, n: usize) -> <CustomBlockProvider::Block as BlockBuilder>::Output
+    where
+      CustomBlockProvider::Block: BlockBuilder,
+    {
+        self.take_n(n, None::<std::iter::Empty<_>>)
+    }
+}
+
 impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
     Extend<<CustomBlockProvider::Block as Block>::Item>
     for BlockedCustomInputBuilder<FIXED_BLOCK_SIZING, CustomBlockProvider>

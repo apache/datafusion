@@ -630,6 +630,15 @@ impl BlockedNullState {
     ///
     /// resets the internal state appropriately
     pub fn build(&mut self) -> Option<NullBuffer> {
+        self.take_block()
+    }
+
+    /// Creates the a [`NullBuffer`] representing which group_indices
+    /// should have null values (because they never saw any values)
+    /// for the next block
+    ///
+    /// resets the internal state appropriately
+    pub fn take_block(&mut self) -> Option<NullBuffer> {
         match &mut self.seen_values {
             BlockedSeenValues::All {
                 num_values,
