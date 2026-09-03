@@ -1,7 +1,7 @@
 use crate::blocked_helpers::take_n_helpers::{
     BlockBuilder, create_adjusted_block_size_iter_for_fixed_blocks, take_n_from_blocks,
 };
-use crate::groups_accumulator::BlocksIndex;
+use crate::groups_accumulator::{BlockedGroupSelection, BlocksIndex, GroupSelection};
 use arrow::array::NullBufferBuilder;
 use arrow::buffer::NullBuffer;
 use arrow::util::bit_util::apply_bitwise_binary_op;
@@ -359,6 +359,23 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
         }
 
         added_items
+    }
+
+
+    pub fn build_preserving(
+        &self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> datafusion_common::Result<Option<NullBuffer>> {
+        selection.validate_num_groups(self.len())?;
+        if !self.might_have_nulls {
+            return Ok(None);
+        }
+
+        let mut selected = NullBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            selected.append(!self.is_null(index));
+        }
+        Ok(selected.finish())
     }
 
     /// Take the first block, `None` once there are no more items

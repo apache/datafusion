@@ -24,10 +24,10 @@ use arrow::array::types::{
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::{assert_ne_or_internal_err, Result, assert_or_internal_err, unwrap_or_internal_err, assert_eq_or_internal_err};
+use datafusion_common::{assert_ne_or_internal_err, Result, assert_or_internal_err, unwrap_or_internal_err, assert_eq_or_internal_err, not_impl_err};
 
 use datafusion_expr::EmitTo;
-use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlocksIndex};
+use datafusion_expr_common::groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlocksIndex, GroupSelection};
 // pub mod multi_group_by;
 
 // mod row;
@@ -50,6 +50,7 @@ use crate::aggregates_blocked::{
 mod metrics;
 mod null_builder;
 mod single_group_by;
+mod multi_group_by;
 
 pub(crate) use metrics::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
@@ -59,6 +60,7 @@ use single_group_by::boolean::GroupValuesBoolean;
 use single_group_by::primitive::GroupValuesPrimitive;
 use single_group_by::bytes::GroupValuesBytes;
 use single_group_by::bytes_view::GroupValuesBytesView;
+use crate::aggregates_blocked::group_values::multi_group_by::BlockedGroupValuesColumn;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -120,6 +122,26 @@ pub trait BlockedGroupValues: Send {
 
     /// The number of values (distinct group values) stored in this [`BlockedGroupValues`]
     fn len(&self) -> usize;
+
+    /// Materializes selected group values without changing the stored values or
+    /// their group indices.
+    ///
+    /// Rows are returned in the order specified by `selection`. An empty
+    /// selection returns one correctly typed empty array per group-value column.
+    ///
+    /// This method requires exclusive access because implementations may mutate
+    /// internal caches or builders, even though stored values are unchanged.
+    fn values_preserving(
+        &mut self,
+        _selection: BlockedGroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        not_impl_err!("Preserving group values are not implemented")
+    }
+
+    /// Returns `true` if [`Self::values_preserving`] is implemented.
+    fn supports_values_preserving(&self) -> bool {
+        false
+    }
 
     /// Emits the group values
     fn emit(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
@@ -351,7 +373,15 @@ pub fn new_group_values(
         }
     }
 
-    let mapped_group_ordering: crate::aggregates::order::GroupOrdering = group_ordering.clone().into();
-    let mapped = crate::aggregates::group_values::new_group_values(schema, &mapped_group_ordering)?;
-    Ok(Box::new(BlockedGroupValuesAdapter::new(block_size, mapped)))
+    if multi_group_by::supported_schema(schema.as_ref()) {
+        if matches!(group_ordering, GroupOrdering::None) {
+            Ok(Box::new(BlockedGroupValuesColumn::<false>::try_new(schema, block_size)?))
+        } else {
+            Ok(Box::new(BlockedGroupValuesColumn::<true>::try_new(schema, block_size)?))
+        }
+    } else {
+        let mapped_group_ordering: crate::aggregates::order::GroupOrdering = group_ordering.clone().into();
+        let mapped = crate::aggregates::group_values::new_group_values(schema, &mapped_group_ordering)?;
+        Ok(Box::new(BlockedGroupValuesAdapter::new(block_size, mapped)))
+    }
 }
