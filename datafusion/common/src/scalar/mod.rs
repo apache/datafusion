@@ -856,9 +856,9 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     .ok()?;
 
     for j in 0..min_length {
-        match cmp(j, j) {
-            Ordering::Equal => continue,
-            ordering => return Some(ordering),
+        let ordering = cmp(j, j);
+        if ordering != Ordering::Equal {
+            return Some(ordering);
         }
     }
 
