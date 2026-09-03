@@ -18,7 +18,7 @@
 //! `GroupValues` implementations for multi group by cases
 
 mod boolean;
-// mod bytes;
+mod bytes;
 // pub mod bytes_view;
 // mod dictionary;
 // mod fixed_size_binary;
@@ -30,7 +30,7 @@ use std::mem::{self, size_of};
 use crate::aggregates::group_values::GroupValues;
 use {
     boolean::BooleanGroupValueBuilder,
-    // bytes::ByteGroupValueBuilder,
+    bytes::ByteGroupValueBuilder,
     // bytes_view::ByteViewGroupValueBuilder,
     // fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder,
@@ -957,10 +957,6 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Float64
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
-            // | DataType::Utf8
-            // | DataType::LargeUtf8
-            // | DataType::Binary
-            // | DataType::LargeBinary
             // Only non-negative widths: a negative width is not a valid
             // Arrow type (no array can be constructed for it), and the
             // dispatcher in `make_group_column` rejects it. Keep the two
@@ -980,8 +976,10 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(_, _)
             | DataType::Duration(_)
             | DataType::Interval(_)
-            // | DataType::Utf8View
-            // | DataType::BinaryView
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary
             | DataType::Boolean
     )
       // || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
@@ -1114,6 +1112,30 @@ fn make_group_column<const IS_FIXED_BLOCK: bool>(field: &Field, block_size: usiz
         }
         DataType::Decimal256(_, _) => {
             instantiate_primitive!(v, nullable, Decimal256Type, data_type)
+        }
+        DataType::Utf8 => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i32>::new(
+                OutputType::Utf8,
+                block_size,
+            )));
+        }
+        DataType::LargeUtf8 => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i64>::new(
+                OutputType::Utf8,
+                block_size,
+            )));
+        }
+        DataType::Binary => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i32>::new(
+                OutputType::Binary,
+                block_size,
+            )));
+        }
+        DataType::LargeBinary => {
+            v.push(Box::new(ByteGroupValueBuilder::<IS_FIXED_BLOCK, i64>::new(
+                OutputType::Binary,
+                block_size,
+            )));
         }
         DataType::Boolean => {
             if nullable {

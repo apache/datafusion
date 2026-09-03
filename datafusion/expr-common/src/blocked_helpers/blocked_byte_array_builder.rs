@@ -26,6 +26,10 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
         }
     }
 
+    pub fn block_size(&self) -> usize {
+        self.blocked_offsets.block_size()
+    }
+
     pub fn len(&self) -> usize {
         self.blocked_offsets.len()
     }

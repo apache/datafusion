@@ -60,6 +60,11 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
         self.len == 0
     }
 
+    /// Number of items per block, the internal block size has one more slot for the initial offset
+    pub fn block_size(&self) -> usize {
+        self.block_size - 1
+    }
+
     pub fn allocated_size(&self) -> usize {
         self.finished_memory
             + self.blocks.allocated_size()
@@ -1153,6 +1158,7 @@ mod tests {
     fn new_is_empty() {
         let mut builder = Fixed::new(4);
         assert_eq!(builder.len(), 0);
+        assert_eq!(builder.block_size(), 4, "block size is in items, not offsets");
         assert_eq!(builder.last_offset(), 0);
         check_fixed_layout(&builder, 4);
         assert_eq!(builder.take_block(), None);
