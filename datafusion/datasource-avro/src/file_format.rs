@@ -315,7 +315,7 @@ impl DisplayAs for AvroFileSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "AvroFileSink(file_groups=",)?;
+                write!(f, "AvroFileSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
