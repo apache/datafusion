@@ -1027,71 +1027,108 @@ mod tests {
     /// `WriterProperties` must surface as configuration errors instead.
     #[test]
     fn test_invalid_writer_options_are_rejected() {
-        fn err(options: &ParquetOptions) -> String {
+        fn err(options: ParquetOptions) -> String {
             options
                 .into_writer_properties_builder()
-                .err()
-                .expect("expected a configuration error")
+                .expect_err("expected a configuration error")
                 .to_string()
         }
 
-        let mut options = ParquetOptions::default();
-        options.write_batch_size = 0;
-        assert!(err(&options).contains("write_batch_size"));
-
-        let mut options = ParquetOptions::default();
-        options.max_row_group_size = 0;
-        assert!(err(&options).contains("max_row_group_size"));
-
-        let mut options = ParquetOptions::default();
-        options.column_index_truncate_length = Some(0);
-        assert!(err(&options).contains("column_index_truncate_length"));
-
-        let mut options = ParquetOptions::default();
-        options.statistics_truncate_length = Some(0);
-        assert!(err(&options).contains("statistics_truncate_length"));
-
+        assert!(
+            err(ParquetOptions {
+                write_batch_size: 0,
+                ..Default::default()
+            })
+            .contains("write_batch_size")
+        );
+        assert!(
+            err(ParquetOptions {
+                max_row_group_size: 0,
+                ..Default::default()
+            })
+            .contains("max_row_group_size")
+        );
+        assert!(
+            err(ParquetOptions {
+                column_index_truncate_length: Some(0),
+                ..Default::default()
+            })
+            .contains("column_index_truncate_length")
+        );
+        assert!(
+            err(ParquetOptions {
+                statistics_truncate_length: Some(0),
+                ..Default::default()
+            })
+            .contains("statistics_truncate_length")
+        );
         for fpp in [0.0, 1.0, 1.5, -1.0, f64::NAN] {
-            let mut options = ParquetOptions::default();
-            options.bloom_filter_fpp = Some(fpp);
-            assert!(err(&options).contains("bloom_filter_fpp"), "fpp {fpp}");
+            assert!(
+                err(ParquetOptions {
+                    bloom_filter_fpp: Some(fpp),
+                    ..Default::default()
+                })
+                .contains("bloom_filter_fpp"),
+                "fpp {fpp}"
+            );
         }
-
-        let mut options = ParquetOptions::default();
-        options.content_defined_chunking.enabled = true;
-        options.content_defined_chunking.min_chunk_size = 0;
-        assert!(err(&options).contains("min_chunk_size"));
-
-        let mut options = ParquetOptions::default();
-        options.content_defined_chunking.enabled = true;
-        options.content_defined_chunking.min_chunk_size = 10;
-        options.content_defined_chunking.max_chunk_size = 10;
-        assert!(err(&options).contains("max_chunk_size"));
+        assert!(
+            err(ParquetOptions {
+                content_defined_chunking: ParquetCdcOptions {
+                    enabled: true,
+                    min_chunk_size: 0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .contains("min_chunk_size")
+        );
+        assert!(
+            err(ParquetOptions {
+                content_defined_chunking: ParquetCdcOptions {
+                    enabled: true,
+                    min_chunk_size: 10,
+                    max_chunk_size: 10,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .contains("max_chunk_size")
+        );
 
         // A per-column bloom filter fpp goes through the same check.
-        let mut table_options = TableParquetOptions::default();
-        table_options.global.skip_arrow_metadata = true;
-        table_options.column_specific_options.insert(
-            COL_NAME.into(),
-            ParquetColumnOptions {
-                bloom_filter_fpp: Some(2.0),
+        let table_options = TableParquetOptions {
+            global: ParquetOptions {
+                skip_arrow_metadata: true,
                 ..Default::default()
             },
-        );
+            column_specific_options: HashMap::from([(
+                COL_NAME.to_string(),
+                ParquetColumnOptions {
+                    bloom_filter_fpp: Some(2.0),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
         let err = WriterPropertiesBuilder::try_from(&table_options)
-            .err()
-            .expect("expected a configuration error")
+            .expect_err("expected a configuration error")
             .to_string();
         assert!(err.contains("bloom_filter_fpp"), "{err}");
 
-        // The defaults, and the boundaries just inside the valid range, build.
+        // The defaults, and a value just inside the valid range, still build.
         assert!(
             ParquetOptions::default()
                 .into_writer_properties_builder()
                 .is_ok()
         );
-        let mut options = ParquetOptions::default();
-        options.bloom_filter_fpp = Some(f64::EPSILON);
-        assert!(options.into_writer_properties_builder().is_ok());
+        assert!(
+            ParquetOptions {
+                bloom_filter_fpp: Some(f64::EPSILON),
+                ..Default::default()
+            }
+            .into_writer_properties_builder()
+            .is_ok()
+        );
     }
 }
