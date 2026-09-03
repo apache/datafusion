@@ -1125,6 +1125,28 @@ mod tests {
     }
 
     #[test]
+    fn invalid_cast_with_empty_field_name_uses_expression() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("", Utf8, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(StringArray::from(vec!["9.1"]))],
+        )?;
+        let expression = cast_with_options(col("", &schema)?, &schema, Int32, None)?;
+
+        let error = expression
+            .evaluate(&batch)
+            .expect_err("expected error")
+            .strip_backtrace();
+        assert_eq!(
+            error,
+            "Failed to cast expression '@0' from Utf8 to Int32\n\
+             caused by\n\
+             Arrow error: Cast error: Cannot cast string '9.1' to value of Int32 type"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn field_aware_cast_preserves_target_field_semantics() -> Result<()> {
         // Target field metadata should be preserved exactly (no merging with source).
         let metadata = HashMap::from([("target_meta".to_string(), "1".to_string())]);
