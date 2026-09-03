@@ -330,7 +330,22 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        value.cast_to(self.cast_type(), Some(&self.cast_options))
+        value
+            .cast_to(self.cast_type(), Some(&self.cast_options))
+            .map_err(|error| {
+                let source = self
+                    .expr
+                    .return_field(batch.schema().as_ref())
+                    .ok()
+                    .filter(|field| !field.name().is_empty())
+                    .map(|field| format!("field '{}'", field.name()))
+                    .unwrap_or_else(|| format!("expression '{}'", self.expr));
+                error.context(format!(
+                    "Failed to cast {source} from {} to {}",
+                    value.data_type(),
+                    self.cast_type()
+                ))
+            })
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
@@ -1088,22 +1103,20 @@ mod tests {
 
     #[test]
     fn invalid_cast_with_options_error() -> Result<()> {
-        // Ensure a useful error happens at plan time if invalid casts are used
+        // Ensure a useful error happens at runtime if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", Utf8, false)]);
         let a = StringArray::from(vec!["9.1"]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let expression = cast_with_options(col("a", &schema)?, &schema, Int32, None)?;
         let result = expression.evaluate(&batch);
 
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(e) => {
-                assert!(
-                    e.to_string()
-                        .contains("Cannot cast string '9.1' to value of Int32 type")
-                )
-            }
-        }
+        let error = result.expect_err("expected error").strip_backtrace();
+        assert_eq!(
+            error,
+            "Failed to cast field 'a' from Utf8 to Int32\n\
+             caused by\n\
+             Arrow error: Cast error: Cannot cast string '9.1' to value of Int32 type"
+        );
         Ok(())
     }
 
