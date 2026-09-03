@@ -39,7 +39,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
+        ConfigNonZeroUsize, CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -1119,7 +1119,15 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 })
                 .unwrap_or(None),
             allow_single_file_parallelism: value.allow_single_file_parallelism,
-            maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
+            maximum_parallel_row_group_writers: match value
+                .maximum_parallel_row_group_writers
+            {
+                // Proto3 decodes an omitted scalar field as zero. Preserve the
+                // documented logical default for payloads written before this
+                // field was populated.
+                0 => ParquetOptions::default().maximum_parallel_row_group_writers,
+                value => ConfigNonZeroUsize::try_new(value as usize)?,
+            },
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
@@ -1335,7 +1343,8 @@ pub(crate) fn csv_writer_options_from_proto(
 #[cfg(test)]
 mod tests {
     use datafusion_common::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+        ConfigNonZeroUsize, MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions,
+        TableParquetOptions,
     };
 
     fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {
@@ -1393,6 +1402,16 @@ mod tests {
             recovered.max_row_group_bytes.map(|v| v.get()),
             Some(64 * 1024 * 1024)
         );
+    }
+
+    #[test]
+    fn test_parquet_options_max_parallel_row_group_writers_round_trip() {
+        let opts = ParquetOptions {
+            maximum_parallel_row_group_writers: ConfigNonZeroUsize::try_new(4).unwrap(),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(recovered.maximum_parallel_row_group_writers.get(), 4);
     }
 
     #[test]

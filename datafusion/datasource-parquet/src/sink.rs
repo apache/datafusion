@@ -288,7 +288,8 @@ impl FileSink for ParquetSink {
         let parallel_options = ParallelParquetWriterOptions {
             max_parallel_row_groups: parquet_opts
                 .global
-                .maximum_parallel_row_group_writers,
+                .maximum_parallel_row_group_writers
+                .get(),
             max_buffered_record_batches_per_stream: parquet_opts
                 .global
                 .maximum_buffered_record_batches_per_stream,
