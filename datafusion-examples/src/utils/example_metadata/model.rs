@@ -142,7 +142,7 @@ impl Category {
     /// Determines the category for a group by name.
     pub fn for_group(name: &str) -> Self {
         match name {
-            "flight" => Category::Distributed,
+            "flight" | "scheduler" => Category::Distributed,
             _ => Category::SingleProcess,
         }
     }
@@ -183,6 +183,10 @@ mod tests {
     fn category_for_group_works() {
         assert!(matches!(
             Category::for_group("flight"),
+            Category::Distributed
+        ));
+        assert!(matches!(
+            Category::for_group("scheduler"),
             Category::Distributed
         ));
         assert!(matches!(
