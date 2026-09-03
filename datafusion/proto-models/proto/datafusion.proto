@@ -1053,6 +1053,7 @@ message PhysicalExprNode {
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
+    PhysicalNormalizeFloatZeroNode normalize_float_zero = 29;
   }
 }
 
@@ -1195,6 +1196,10 @@ message PhysicalCastNode {
 }
 
 message PhysicalNegativeNode {
+  PhysicalExprNode expr = 1;
+}
+
+message PhysicalNormalizeFloatZeroNode {
   PhysicalExprNode expr = 1;
 }
 
