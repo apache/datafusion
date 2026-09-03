@@ -23,10 +23,9 @@
 //! trees of (in)equalities, which produce the same per-value statistics checks
 //! without making the baseline depend on a deeply nested expression.
 //!
-//! Half of the statistics intervals are pinned to a domain member and half span
-//! a sparse gap, so `IN` keeps the first half and `NOT IN` keeps the second.
-//! Both directions therefore prune real containers rather than measuring an
-//! always-true fallback. Bloom filters are not involved.
+//! The main cases alternate intervals pinned to a domain member with intervals
+//! that span a sparse gap. Supplemental `NOT IN` cases measure uniform singleton
+//! containers and bounds with long common prefixes. Bloom filters are not involved.
 //!
 //! Run with `cargo bench -p datafusion-pruning --bench string_in_list_pruning`.
 //! The construction benchmarks reuse their input physical expressions; the
@@ -113,6 +112,39 @@ impl IntervalStatistics {
         Self {
             min: Arc::new(min),
             max: Arc::new(max),
+            null_counts: Arc::new(UInt64Array::from(vec![0; CONTAINERS])),
+            row_counts: Arc::new(UInt64Array::from(vec![128; CONTAINERS])),
+        }
+    }
+
+    fn uniform_singleton() -> Self {
+        let value = value(0);
+        let min = StringViewArray::from_iter_values(std::iter::repeat_n(
+            value.as_str(),
+            CONTAINERS,
+        ));
+        let max = min.clone();
+        Self {
+            min: Arc::new(min),
+            max: Arc::new(max),
+            null_counts: Arc::new(UInt64Array::from(vec![0; CONTAINERS])),
+            row_counts: Arc::new(UInt64Array::from(vec![128; CONTAINERS])),
+        }
+    }
+
+    fn long_common_prefix() -> Self {
+        let prefix = "z".repeat(16 * 1024);
+        let min = format!("{prefix}a");
+        let max = format!("{prefix}z");
+        Self {
+            min: Arc::new(StringViewArray::from_iter_values(std::iter::repeat_n(
+                min.as_str(),
+                CONTAINERS,
+            ))),
+            max: Arc::new(StringViewArray::from_iter_values(std::iter::repeat_n(
+                max.as_str(),
+                CONTAINERS,
+            ))),
             null_counts: Arc::new(UInt64Array::from(vec![0; CONTAINERS])),
             row_counts: Arc::new(UInt64Array::from(vec![128; CONTAINERS])),
         }
@@ -279,6 +311,69 @@ fn criterion_benchmark(criterion: &mut Criterion) {
         }
     }
     evaluation.finish();
+
+    let mut distributions =
+        criterion.benchmark_group("string_in_list_pruning/not_in_distributions");
+    distributions.throughput(Throughput::Elements(CONTAINERS as u64));
+    let singleton = IntervalStatistics::uniform_singleton();
+    for case in cases.iter().filter(|case| case.size > 20) {
+        let compact = case.not_in_list_predicate.prune(&singleton).unwrap();
+        assert!(compact.iter().all(|keep| !keep));
+        assert_eq!(
+            compact,
+            case.expanded_and_predicate.prune(&singleton).unwrap()
+        );
+        for (name, predicate) in [
+            ("uniform_singleton/not_in_list", &case.not_in_list_predicate),
+            (
+                "uniform_singleton/expanded_and",
+                &case.expanded_and_predicate,
+            ),
+        ] {
+            distributions.bench_with_input(
+                BenchmarkId::new(name, case.size),
+                predicate,
+                |bencher, predicate| {
+                    bencher.iter(|| {
+                        black_box(predicate.prune(black_box(&singleton)).unwrap())
+                    });
+                },
+            );
+        }
+    }
+
+    let long_bounds = IntervalStatistics::long_common_prefix();
+    let case = cases
+        .iter()
+        .find(|case| case.size == 21)
+        .expect("DOMAIN_SIZES contains 21");
+    let compact = case.not_in_list_predicate.prune(&long_bounds).unwrap();
+    assert!(compact.iter().all(|keep| *keep));
+    assert_eq!(
+        compact,
+        case.expanded_and_predicate.prune(&long_bounds).unwrap()
+    );
+    for (name, predicate) in [
+        (
+            "long_common_prefix/not_in_list",
+            &case.not_in_list_predicate,
+        ),
+        (
+            "long_common_prefix/expanded_and",
+            &case.expanded_and_predicate,
+        ),
+    ] {
+        distributions.bench_with_input(
+            BenchmarkId::new(name, case.size),
+            predicate,
+            |bencher, predicate| {
+                bencher.iter(|| {
+                    black_box(predicate.prune(black_box(&long_bounds)).unwrap())
+                });
+            },
+        );
+    }
+    distributions.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

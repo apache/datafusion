@@ -4068,13 +4068,25 @@ mod tests {
 
             // Overlap never excludes a NOT IN container: only an interval pinned
             // to one value the domain holds, or a container that is entirely NULL.
+            let stats = not_in_container_stats();
             assert_eq!(
-                predicate.prune(&not_in_container_stats())?,
+                predicate.prune(&stats)?,
                 [
                     false, false, true, true, true, false, true, true, true, true
                 ],
                 "type={data_type:?}"
             );
+
+            // A one-sided bound in the domain cannot prove whether another
+            // value satisfies NOT IN, so containers 8 and 9 remain unknown.
+            let batch =
+                build_statistics_record_batch(&stats, predicate.required_columns())?;
+            let result = predicate
+                .predicate_expr()
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())?;
+            assert!(result.is_null(8), "type={data_type:?}");
+            assert!(result.is_null(9), "type={data_type:?}");
 
             // The expression and statistics schema do not grow with the domain.
             assert_eq!(predicate.required_columns.columns.len(), 4);
@@ -4085,6 +4097,46 @@ mod tests {
             })?;
             assert_eq!(nodes, 7, "type={data_type:?}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn large_string_not_in_list_preserves_or_short_circuit() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+        let not_in =
+            col("c1").in_list((0..21).map(|i| lit(format!("a{i:03}"))).collect(), true);
+        let other = col("c2").in_list((0..21).map(|i| lit(i * 10)).collect(), false);
+        let predicate = large_string_pruning_predicate(
+            logical2physical(&not_in.or(other), &schema),
+            Arc::clone(&schema),
+        )?;
+        let stats = TestStatistics::new()
+            .with(
+                "c1",
+                ContainerStats::new_utf8([Some("zzz"), None], [None, Some("zzz")])
+                    .with_null_counts([Some(0); 2])
+                    .with_row_counts([Some(128); 2]),
+            )
+            .with(
+                "c2",
+                ContainerStats::new_i32([Some(999); 2], [Some(999); 2])
+                    .with_null_counts([Some(0); 2]),
+            );
+
+        // Both c1 results are true, so the enclosing OR skips its large
+        // per-value right-hand side for the whole statistics batch.
+        let batch = build_statistics_record_batch(&stats, predicate.required_columns())?;
+        let result = predicate
+            .predicate_expr()
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())?;
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(true)]
+        );
         Ok(())
     }
 

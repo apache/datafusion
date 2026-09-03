@@ -70,6 +70,14 @@ fn make_mixed_not_in_file(page_pruning: bool) -> NamedTempFile {
 }
 
 fn write_file(page_pruning: bool, values: Vec<&str>) -> NamedTempFile {
+    write_file_with_truncation(page_pruning, values, None)
+}
+
+fn write_file_with_truncation(
+    page_pruning: bool,
+    values: Vec<&str>,
+    truncation_length: Option<usize>,
+) -> NamedTempFile {
     let mut file = tempfile::Builder::new()
         .prefix("string_in_list_pruning")
         .suffix(".parquet")
@@ -92,14 +100,19 @@ fn write_file(page_pruning: bool, values: Vec<&str>) -> NamedTempFile {
     } else {
         ROWS_PER_UNIT
     };
-    let properties = WriterProperties::builder()
+    let mut properties = WriterProperties::builder()
         .set_max_row_group_row_count(Some(rows_per_group))
         .set_data_page_row_count_limit(ROWS_PER_UNIT)
         .set_write_batch_size(ROWS_PER_UNIT)
         .set_dictionary_enabled(false)
         .set_bloom_filter_enabled(false)
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .build();
+        .set_statistics_enabled(EnabledStatistics::Page);
+    if let Some(truncation_length) = truncation_length {
+        properties = properties
+            .set_statistics_truncate_length(Some(truncation_length))
+            .set_column_index_truncate_length(Some(truncation_length));
+    }
+    let properties = properties.build();
     let mut writer = ArrowWriter::try_new(&mut file, schema, Some(properties)).unwrap();
     writer.write(&batch).unwrap();
     let metadata = writer.close().unwrap();
@@ -385,6 +398,21 @@ async fn check_string_not_in_list_pruning(page_pruning: bool) {
     assert_eq!(output.counter("output_rows"), ROWS_PER_UNIT);
 }
 
+async fn check_string_not_in_list_with_truncated_bounds(page_pruning: bool) {
+    // Exact bounds for this singleton are equal and can exclude the unit. With
+    // four-byte truncation, Parquet lowers the min and raises the max instead.
+    let values = std::iter::repeat_n("v000000", ROWS_PER_UNIT).collect();
+    let file = write_file_with_truncation(page_pruning, values, Some(4));
+    let output = scan(&file, 21, Some(21), page_pruning, true).await;
+
+    assert!(output.batches.iter().all(|batch| batch.num_rows() == 0));
+    output.assert_no_filter_interference();
+    assert!(output.plan.contains("NOT_IN_SET_MAY_MATCH"));
+    assert_eq!(output.pruned("row_groups_pruned_statistics"), 0);
+    assert_eq!(output.pruned("page_index_rows_pruned"), 0);
+    assert_eq!(output.counter("output_rows"), ROWS_PER_UNIT);
+}
+
 #[tokio::test]
 async fn string_in_list_row_group_pruning() {
     check_string_in_list_pruning(false).await;
@@ -403,6 +431,12 @@ async fn string_not_in_list_row_group_pruning() {
 #[tokio::test]
 async fn string_not_in_list_page_pruning() {
     check_string_not_in_list_pruning(true).await;
+}
+
+#[tokio::test]
+async fn string_not_in_list_with_truncated_bounds() {
+    check_string_not_in_list_with_truncated_bounds(false).await;
+    check_string_not_in_list_with_truncated_bounds(true).await;
 }
 
 #[tokio::test]

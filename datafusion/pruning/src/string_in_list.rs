@@ -47,10 +47,11 @@ pub(crate) enum SetMembership {
 /// * `NULL`: incomplete, invalid, or unusable bounds prevent a safe decision.
 ///
 /// [`SetMembership`] selects the test. For [`SetMembership::In`] a single known
-/// bound can still prove disjointness. [`SetMembership::NotIn`] needs both
-/// bounds and excludes only a single-valued interval, which is the same reach as
-/// the per-value `min != v OR v != max` chain it replaces. Otherwise, unknown
-/// results keep the container eligible for reading.
+/// bound can still prove disjointness. For [`SetMembership::NotIn`], one known
+/// bound outside the domain proves the container may match, while two equal
+/// bounds in the domain prove it cannot. This is the same reach as the per-value
+/// `min != v OR v != max` chain it replaces. Otherwise, unknown results keep the
+/// container eligible for reading.
 ///
 /// This expression is used only for pruning; the original IN remains the row filter.
 #[derive(Debug, Eq)]
@@ -172,6 +173,30 @@ impl PhysicalExpr for StringInListPruningExpr {
                 let max = (max.is_valid(i)
                     && max_nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i)))
                 .then(|| max.value(i).as_bytes());
+                if self.membership == SetMembership::NotIn {
+                    return match (min, max) {
+                        // Check membership before comparing the bounds so a short
+                        // domain value can reject a long bound without scanning its
+                        // full common prefix with the other bound.
+                        (Some(min), Some(max)) if self.contains(min) => {
+                            // A wider interval can hold a value outside the domain,
+                            // which satisfies NOT IN. Only an interval pinned to one
+                            // domain value rules out every row. Truncated Parquet
+                            // bounds cannot fake that: min truncates downward and max
+                            // upward, so equal bounds mean the true values were equal.
+                            Some(min != max)
+                        }
+                        (Some(_), Some(_)) => Some(true),
+                        // One known bound outside the domain is enough to preserve
+                        // the true result that lets an enclosing OR short-circuit.
+                        (Some(bound), None) | (None, Some(bound))
+                            if !self.contains(bound) =>
+                        {
+                            Some(true)
+                        }
+                        _ => None,
+                    };
+                }
                 match (min, max) {
                     (Some(min), Some(max)) => {
                         if min > max {
@@ -184,46 +209,19 @@ impl PhysicalExpr for StringInListPruningExpr {
                         // uses actual Arrow partition values. PrunableStatistics
                         // trusts file providers' bounds: there is no ordering gate
                         // for arbitrary statistics providers here.
-                        match self.membership {
-                            SetMembership::In => {
-                                let index =
-                                    self.values.partition_point(|v| v.as_bytes() < min);
-                                Some(
-                                    self.values
-                                        .get(index)
-                                        .is_some_and(|v| v.as_bytes() <= max),
-                                )
-                            }
-                            // A wider interval can always hold a value outside the
-                            // domain, which satisfies NOT IN. Only an interval
-                            // pinned to one domain value rules out every row.
-                            // Truncated Parquet bounds cannot fake that: min
-                            // truncates downward and max upward, so equal bounds
-                            // mean the true values were equal too. This arm also
-                            // compares for equality rather than order, so it does
-                            // not rely on the bound ordering the IN arm needs.
-                            SetMembership::NotIn => {
-                                Some(min != max || !self.contains(min))
-                            }
-                        }
+                        let index = self.values.partition_point(|v| v.as_bytes() < min);
+                        Some(self.values.get(index).is_some_and(|v| v.as_bytes() <= max))
                     }
                     // A missing bound makes that end of the interval unbounded.
                     // Exclude only when the whole domain lies beyond the known bound;
                     // gaps within the domain and equality cannot prove disjointness.
-                    // An unbounded interval is never single-valued, so NOT IN takes
-                    // neither arm.
                     (Some(min), None)
-                        if self.membership == SetMembership::In
-                            && self.values.last().is_some_and(|v| v.as_bytes() < min) =>
+                        if self.values.last().is_some_and(|v| v.as_bytes() < min) =>
                     {
                         Some(false)
                     }
                     (None, Some(max))
-                        if self.membership == SetMembership::In
-                            && self
-                                .values
-                                .first()
-                                .is_some_and(|v| v.as_bytes() > max) =>
+                        if self.values.first().is_some_and(|v| v.as_bytes() > max) =>
                     {
                         Some(false)
                     }
