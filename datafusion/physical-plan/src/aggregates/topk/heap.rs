@@ -23,12 +23,10 @@
 //! Supported value types include Arrow primitives (integers, floats, decimals, intervals)
 //! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.
 
-use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
-use arrow::array::{LargeStringBuilder, StringBuilder, StringViewBuilder};
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    StringArray,
-    cast::AsArray,
-    types::{IntervalDayTime, IntervalMonthDayNano},
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, AsArray, LargeStringArray,
+    PrimitiveArray, StringArray, StringArrayType, StringViewArray, downcast_primitive,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, i256};
@@ -42,8 +40,20 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 /// A custom version of `Ord` that only exists to we can implement it for the Values in our heap
-pub trait Comparable {
-    fn comp(&self, other: &Self) -> Ordering;
+pub trait Comparable<Rhs: ?Sized = Self> {
+    fn comp(&self, other: &Rhs) -> Ordering;
+}
+
+impl Comparable<String> for str {
+    fn comp(&self, other: &String) -> Ordering {
+        self.cmp(other.as_str())
+    }
+}
+
+impl Comparable for String {
+    fn comp(&self, other: &Self) -> Ordering {
+        self.cmp(other)
+    }
 }
 
 impl Comparable for Option<String> {
@@ -53,14 +63,51 @@ impl Comparable for Option<String> {
 }
 
 /// A "type alias" for Values which are stored in our heap
-pub trait ValueType: Comparable + Clone + Debug {}
+pub trait ValueType: Comparable + Clone + Debug + Default {}
 
-impl<T> ValueType for T where T: Comparable + Clone + Debug {}
+impl<T> ValueType for T where T: Comparable + Clone + Debug + Default {}
+
+const VACANT_MAP_IDX: usize = usize::MAX;
 
 /// An entry in our heap, which contains both the value and a index into an external HashTable
 struct HeapItem<VAL: ValueType> {
     val: VAL,
     map_idx: usize,
+}
+impl<VAL: ValueType> HeapItem<VAL> {
+    fn is_vacant(&self) -> bool {
+        self.map_idx == VACANT_MAP_IDX
+    }
+
+    fn is_occupied(&self) -> bool {
+        self.map_idx != VACANT_MAP_IDX
+    }
+
+    fn map_idx(&self) -> Option<usize> {
+        self.is_occupied().then_some(self.map_idx)
+    }
+
+    fn take(&mut self) -> Option<Self> {
+        self.is_occupied().then(|| std::mem::take(self))
+    }
+
+    fn as_ref(&self) -> &Self {
+        debug_assert!(self.is_occupied());
+        self
+    }
+
+    fn as_mut(&mut self) -> &mut Self {
+        debug_assert!(self.is_occupied());
+        self
+    }
+}
+impl<VAL: ValueType> Default for HeapItem<VAL> {
+    fn default() -> Self {
+        Self {
+            val: VAL::default(),
+            map_idx: VACANT_MAP_IDX,
+        }
+    }
 }
 
 /// A custom heap implementation that allows several things that couldn't be achieved with
@@ -73,11 +120,12 @@ struct TopKHeap<VAL: ValueType> {
     desc: bool,
     len: usize,
     capacity: usize,
-    heap: Vec<Option<HeapItem<VAL>>>,
+    heap: Vec<HeapItem<VAL>>,
 }
 
 /// An interface to hide the generic type signature of TopKHeap behind arrow arrays
 pub trait ArrowHeap {
+    fn value_type(&self) -> &DataType;
     fn set_batch(&mut self, vals: ArrayRef);
     fn is_worse(&self, idx: usize) -> bool;
     fn worst_map_idx(&self) -> usize;
@@ -99,20 +147,19 @@ where
     batch: PrimitiveArray<VAL>,
     heap: TopKHeap<VAL::Native>,
     desc: bool,
-    data_type: DataType,
+    value_type: DataType,
 }
 
 impl<VAL: ArrowPrimitiveType> PrimitiveHeap<VAL>
 where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
-    pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
-        let batch = PrimitiveArray::<VAL>::builder(0).finish();
+    pub fn new(limit: usize, desc: bool, value_type: DataType) -> Self {
         Self {
-            batch,
+            batch: PrimitiveArray::<VAL>::new_null(0).with_data_type(value_type.clone()),
             heap: TopKHeap::new(limit, desc),
             desc,
-            data_type,
+            value_type,
         }
     }
 }
@@ -121,8 +168,12 @@ impl<VAL: ArrowPrimitiveType> ArrowHeap for PrimitiveHeap<VAL>
 where
     <VAL as ArrowPrimitiveType>::Native: Comparable,
 {
+    fn value_type(&self) -> &DataType {
+        &self.value_type
+    }
+
     fn set_batch(&mut self, vals: ArrayRef) {
-        self.batch = PrimitiveArray::from(vals.to_data());
+        self.batch = vals.as_primitive().clone();
     }
 
     fn is_worse(&self, row_idx: usize) -> bool {
@@ -140,7 +191,7 @@ where
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
         let new_val = self.batch.value(row_idx);
-        self.heap.append_or_replace(new_val, map_idx, map);
+        self.heap.append_or_replace(&new_val, map_idx, map);
     }
 
     fn replace_if_better(
@@ -150,14 +201,14 @@ where
         map: &mut Vec<(usize, usize)>,
     ) {
         let new_val = self.batch.value(row_idx);
-        self.heap.replace_if_better(heap_idx, new_val, map);
+        self.heap.replace_if_better(&new_val, heap_idx, map);
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
         let nulls = None;
         let (vals, map_idxs) = self.heap.drain();
         let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
-            .with_data_type(self.data_type.clone());
+            .with_data_type(self.value_type.clone());
         (Arc::new(arr), map_idxs)
     }
 }
@@ -169,58 +220,46 @@ where
 /// borrowed strings are compared before allocation, and only allocated when the
 /// heap confirms they improve the top-K set.
 ///
-pub struct StringHeap {
-    batch: ArrayRef,
-    heap: TopKHeap<Option<String>>,
+pub struct StringHeap<S: Array>
+where
+    for<'a> &'a S: StringArrayType<'a>,
+{
+    batch: S,
+    heap: TopKHeap<String>,
     desc: bool,
-    data_type: DataType,
 }
 
-impl StringHeap {
-    pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
-        let batch: ArrayRef = Arc::new(StringArray::from(Vec::<&str>::new()));
+impl<S> StringHeap<S>
+where
+    S: Array + From<Vec<Option<String>>>,
+    for<'a> &'a S: StringArrayType<'a>,
+{
+    pub fn new(limit: usize, desc: bool) -> Self {
+        let batch = S::from(Vec::new());
         Self {
             batch,
             heap: TopKHeap::new(limit, desc),
             desc,
-            data_type,
         }
     }
-
-    /// Extracts a string value from the current batch at the given row index.
-    ///
-    /// Panics if the row index is out of bounds or if the data type is not one of
-    /// the supported UTF-8 string types.
-    ///
-    /// Note: Null values should not appear in the input; the aggregation layer
-    /// ensures nulls are filtered before reaching this code.
-    fn value(&self, row_idx: usize) -> &str {
-        extract_string_value(&self.batch, &self.data_type, row_idx)
-    }
 }
 
-/// Helper to extract a string value from an ArrayRef at a given index.
-///
-/// Supports `Utf8`, `LargeUtf8`, and `Utf8View` data types.
-///
-/// # Panics
-/// Panics if the index is out of bounds or if the data type is unsupported.
-fn extract_string_value<'a>(
-    batch: &'a ArrayRef,
-    data_type: &DataType,
-    idx: usize,
-) -> &'a str {
-    match data_type {
-        DataType::Utf8 => batch.as_string::<i32>().value(idx),
-        DataType::LargeUtf8 => batch.as_string::<i64>().value(idx),
-        DataType::Utf8View => batch.as_string_view().value(idx),
-        _ => unreachable!("Unsupported string type: {data_type}"),
+impl<S> ArrowHeap for StringHeap<S>
+where
+    S: Array + Clone + From<Vec<String>> + 'static,
+    for<'a> &'a S: StringArrayType<'a>,
+{
+    fn value_type(&self) -> &DataType {
+        // Strings don't store any metadata.
+        self.batch.data_type()
     }
-}
 
-impl ArrowHeap for StringHeap {
     fn set_batch(&mut self, vals: ArrayRef) {
-        self.batch = vals;
+        self.batch = vals
+            .as_any()
+            .downcast_ref::<S>()
+            .expect("Unsupported data type")
+            .clone();
     }
 
     fn is_worse(&self, row_idx: usize) -> bool {
@@ -230,15 +269,9 @@ impl ArrowHeap for StringHeap {
         // Compare borrowed `&str` against the worst heap value first to avoid
         // allocating a `String` unless this row would actually replace an
         // existing heap entry.
-        let new_val = self.value(row_idx);
-        let worst_val = self.heap.worst_val().expect("Missing root");
-        match worst_val {
-            None => false,
-            Some(worst_str) => {
-                (!self.desc && new_val > worst_str.as_str())
-                    || (self.desc && new_val < worst_str.as_str())
-            }
-        }
+        let new_val = (&self.batch).value(row_idx);
+        let worst_val = self.heap.worst_val().expect("Missing root").as_str();
+        (!self.desc && new_val > worst_val) || (self.desc && new_val < worst_val)
     }
 
     fn worst_map_idx(&self) -> usize {
@@ -246,12 +279,7 @@ impl ArrowHeap for StringHeap {
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        // When appending (heap not full) we must allocate to own the string
-        // because it will be stored in the heap. For replacements we avoid
-        // allocation until `replace_if_better` confirms a replacement is
-        // necessary.
-        let new_str = self.value(row_idx).to_string();
-        let new_val = Some(new_str);
+        let new_val = (&self.batch).value(row_idx);
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -261,62 +289,14 @@ impl ArrowHeap for StringHeap {
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     ) {
-        let new_str = self.value(row_idx);
-        let existing = self.heap.heap[heap_idx]
-            .as_ref()
-            .expect("Missing heap item");
-
-        // Compare borrowed reference first—no allocation yet.
-        // We compare the borrowed `&str` with the stored `Option<String>` and
-        // only allocate (`to_string()`) when a replacement is required.
-        match &existing.val {
-            None => {
-                // Existing is null; new value always wins
-                let new_val = Some(new_str.to_string());
-                self.heap.replace_if_better(heap_idx, new_val, map);
-            }
-            Some(existing_str) => {
-                // Compare borrowed strings first
-                if (!self.desc && new_str < existing_str.as_str())
-                    || (self.desc && new_str > existing_str.as_str())
-                {
-                    let new_val = Some(new_str.to_string());
-                    self.heap.replace_if_better(heap_idx, new_val, map);
-                }
-                // Else: no improvement, no allocation
-            }
-        }
+        let new_val = (&self.batch).value(row_idx);
+        self.heap.replace_if_better(new_val, heap_idx, map);
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
         let (vals, map_idxs) = self.heap.drain();
-        // Use Arrow builders to safely construct arrays from the owned
-        // `Option<String>` values. Builders avoid needing to maintain
-        // references to temporary storage.
-
-        // Macro to eliminate duplication across string builder types.
-        // All three builders share the same interface for append_value,
-        // append_null, and finish, differing only in their concrete types.
-        macro_rules! build_string_array {
-            ($builder_type:ty) => {{
-                let mut builder = <$builder_type>::new();
-                for val in vals {
-                    match val {
-                        Some(s) => builder.append_value(&s),
-                        None => builder.append_null(),
-                    }
-                }
-                Arc::new(builder.finish())
-            }};
-        }
-
-        let arr: ArrayRef = match self.data_type {
-            DataType::Utf8 => build_string_array!(StringBuilder),
-            DataType::LargeUtf8 => build_string_array!(LargeStringBuilder),
-            DataType::Utf8View => build_string_array!(StringViewBuilder),
-            _ => unreachable!("Unsupported string type: {}", self.data_type),
-        };
-        (arr, map_idxs)
+        let vals = Arc::new(S::from(vals));
+        (vals, map_idxs)
     }
 }
 
@@ -326,18 +306,17 @@ impl<VAL: ValueType> TopKHeap<VAL> {
             desc,
             capacity: limit,
             len: 0,
-            heap: (0..=limit).map(|_| None).collect::<Vec<_>>(),
+            heap: (0..=limit).map(|_| HeapItem::default()).collect::<Vec<_>>(),
         }
     }
 
     pub fn worst_val(&self) -> Option<&VAL> {
         let root = self.heap.first()?;
-        let hi = root.as_ref()?;
-        Some(&hi.val)
+        root.is_occupied().then_some(&root.val)
     }
 
     pub fn worst_map_idx(&self) -> usize {
-        self.heap[0].as_ref().map(|hi| hi.map_idx).unwrap_or(0)
+        self.heap[0].map_idx().unwrap_or(0)
     }
 
     pub fn is_full(&self) -> bool {
@@ -348,12 +327,14 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         self.len
     }
 
-    pub fn append_or_replace(
+    pub fn append_or_replace<Q>(
         &mut self,
-        new_val: VAL,
+        new_val: &Q,
         map_idx: usize,
         map: &mut Vec<(usize, usize)>,
-    ) {
+    ) where
+        Q: ToOwned<Owned = VAL> + ?Sized,
+    {
         if self.is_full() {
             self.replace_root(new_val, map_idx, map);
         } else {
@@ -361,9 +342,14 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         }
     }
 
-    fn append(&mut self, new_val: VAL, map_idx: usize, mapper: &mut Vec<(usize, usize)>) {
-        let hi = HeapItem::new(new_val, map_idx);
-        self.heap[self.len] = Some(hi);
+    fn append<Q>(&mut self, new_val: &Q, map_idx: usize, mapper: &mut Vec<(usize, usize)>)
+    where
+        Q: ToOwned<Owned = VAL> + ?Sized,
+    {
+        let hi = &mut self.heap[self.len];
+        debug_assert!(hi.is_vacant());
+        hi.map_idx = map_idx;
+        new_val.clone_into(&mut hi.val);
         self.heapify_up(self.len, mapper);
         self.len += 1;
     }
@@ -384,43 +370,48 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     }
 
     pub fn drain(&mut self) -> (Vec<VAL>, Vec<usize>) {
-        let mut map = Vec::with_capacity(self.len);
+        let mut map = Vec::new();
         let mut vals = Vec::with_capacity(self.len);
         let mut map_idxs = Vec::with_capacity(self.len);
         while let Some(worst_hi) = self.pop(&mut map) {
             vals.push(worst_hi.val);
             map_idxs.push(worst_hi.map_idx);
+            map.clear();
         }
         vals.reverse();
         map_idxs.reverse();
         (vals, map_idxs)
     }
 
-    fn replace_root(
+    fn replace_root<Q>(
         &mut self,
-        new_val: VAL,
+        new_val: &Q,
         map_idx: usize,
         mapper: &mut Vec<(usize, usize)>,
-    ) {
-        let hi = self.heap[0].as_mut().expect("No root");
-        hi.val = new_val;
+    ) where
+        Q: ToOwned<Owned = VAL> + ?Sized,
+    {
+        let hi = self.heap[0].as_mut();
+        new_val.clone_into(&mut hi.val);
         hi.map_idx = map_idx;
         self.heapify_down(0, mapper);
     }
 
-    pub fn replace_if_better(
+    pub fn replace_if_better<Q>(
         &mut self,
+        new_val: &Q,
         heap_idx: usize,
-        new_val: VAL,
         mapper: &mut Vec<(usize, usize)>,
-    ) {
-        let existing = self.heap[heap_idx].as_mut().expect("Missing heap item");
+    ) where
+        Q: ToOwned<Owned = VAL> + Comparable<VAL> + ?Sized,
+    {
+        let existing = self.heap[heap_idx].as_mut();
         if (!self.desc && new_val.comp(&existing.val) != Ordering::Less)
             || (self.desc && new_val.comp(&existing.val) != Ordering::Greater)
         {
             return;
         }
-        existing.val = new_val;
+        new_val.clone_into(&mut existing.val);
         self.heapify_down(heap_idx, mapper);
     }
 
@@ -428,8 +419,8 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         let desc = self.desc;
         while idx != 0 {
             let parent_idx = (idx - 1) / 2;
-            let node = self.heap[idx].as_ref().expect("No heap item");
-            let parent = self.heap[parent_idx].as_ref().expect("No heap item");
+            let node = self.heap[idx].as_ref();
+            let parent = self.heap[parent_idx].as_ref();
             if (!desc && node.val.comp(&parent.val) != Ordering::Greater)
                 || (desc && node.val.comp(&parent.val) != Ordering::Less)
             {
@@ -440,40 +431,45 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         }
     }
 
+    #[inline]
     fn swap(&mut self, a_idx: usize, b_idx: usize, mapper: &mut Vec<(usize, usize)>) {
         self.heap.swap(a_idx, b_idx);
 
-        let b_hi = self.heap[b_idx].as_ref().expect("Missing heap entry");
-        let a_hi = self.heap[a_idx].as_ref().expect("Missing heap entry");
+        let b_hi = self.heap[b_idx].as_ref();
+        let a_hi = self.heap[a_idx].as_ref();
 
-        mapper.push((b_hi.map_idx, b_idx));
-        mapper.push((a_hi.map_idx, a_idx));
+        mapper.extend([(b_hi.map_idx, b_idx), (a_hi.map_idx, a_idx)]);
     }
 
-    fn heapify_down(&mut self, node_idx: usize, mapper: &mut Vec<(usize, usize)>) {
-        let left_child = node_idx * 2 + 1;
+    fn heapify_down(&mut self, mut node_idx: usize, mapper: &mut Vec<(usize, usize)>) {
         let desc = self.desc;
-        let entry = self.heap.get(node_idx).expect("Missing node!");
-        let entry = entry.as_ref().expect("Missing node!");
-        let mut best_idx = node_idx;
-        let mut best_val = &entry.val;
-        for child_idx in left_child..=left_child + 1 {
-            if let Some(Some(child)) = self.heap.get(child_idx)
-                && ((!desc && child.val.comp(best_val) == Ordering::Greater)
-                    || (desc && child.val.comp(best_val) == Ordering::Less))
-            {
-                best_val = &child.val;
-                best_idx = child_idx;
+        loop {
+            let left_child = node_idx * 2 + 1;
+            let entry = self.heap[node_idx].as_ref();
+            let mut best_idx = node_idx;
+            let mut best_val = &entry.val;
+            for child_idx in left_child..=left_child + 1 {
+                if let Some(child) = self.heap.get(child_idx)
+                    && child.is_occupied()
+                    && ((!desc && child.val.comp(best_val) == Ordering::Greater)
+                        || (desc && child.val.comp(best_val) == Ordering::Less))
+                {
+                    best_val = &child.val;
+                    best_idx = child_idx;
+                }
             }
-        }
-        if best_val.comp(&entry.val) != Ordering::Equal {
+            if best_val.comp(&entry.val) == Ordering::Equal {
+                break;
+            }
             self.swap(best_idx, node_idx, mapper);
-            self.heapify_down(best_idx, mapper);
+            node_idx = best_idx;
         }
     }
 
     fn _tree_print(&self, idx: usize, prefix: &str, is_tail: bool, output: &mut String) {
-        if let Some(Some(hi)) = self.heap.get(idx) {
+        if let Some(hi) = self.heap.get(idx)
+            && hi.is_occupied()
+        {
             let connector = if idx != 0 {
                 if is_tail { "└── " } else { "├── " }
             } else {
@@ -511,15 +507,6 @@ impl<VAL: ValueType> Display for TopKHeap<VAL> {
             self._tree_print(0, "", true, &mut output);
         }
         write!(f, "{output}")
-    }
-}
-
-impl<VAL: ValueType> HeapItem<VAL> {
-    pub fn new(val: VAL, buk_idx: usize) -> Self {
-        Self {
-            val,
-            map_idx: buk_idx,
-        }
     }
 }
 
@@ -618,13 +605,6 @@ pub fn new_heap(
     desc: bool,
     vt: DataType,
 ) -> Result<Box<dyn ArrowHeap + Send>> {
-    if matches!(
-        vt,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-    ) {
-        return Ok(Box::new(StringHeap::new(limit, desc, vt)));
-    }
-
     macro_rules! downcast_helper {
         ($vt:ty, $d:ident) => {
             return Ok(Box::new(PrimitiveHeap::<$vt>::new(limit, desc, vt)))
@@ -633,6 +613,9 @@ pub fn new_heap(
 
     downcast_primitive! {
         vt => (downcast_helper, vt),
+        DataType::Utf8 => return Ok(Box::new(StringHeap::<StringArray>::new(limit, desc))),
+        DataType::LargeUtf8 => return Ok(Box::new(StringHeap::<LargeStringArray>::new(limit, desc))),
+        DataType::Utf8View => return Ok(Box::new(StringHeap::<StringViewArray>::new(limit, desc))),
         _ => {}
     }
 
@@ -651,7 +634,7 @@ mod tests {
     fn should_append() -> Result<()> {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
-        heap.append_or_replace(1, 1, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
 
         let actual = heap.to_string();
         assert_snapshot!(actual, @"val=1 idx=0, bucket=1");
@@ -664,10 +647,10 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
 
-        heap.append_or_replace(1, 1, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
         assert_eq!(map, vec![]);
 
-        heap.append_or_replace(2, 2, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
         assert_eq!(map, vec![(2, 0), (1, 1)]);
 
         let actual = heap.to_string();
@@ -684,9 +667,9 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(3, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
-        heap.append_or_replace(3, 3, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
+        heap.append_or_replace(&3, 3, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=3 idx=0, bucket=3
@@ -695,7 +678,7 @@ mod tests {
         ");
 
         let mut map = vec![];
-        heap.append_or_replace(0, 0, &mut map);
+        heap.append_or_replace(&0, 0, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=2 idx=0, bucket=2
@@ -712,10 +695,10 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(4, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
-        heap.append_or_replace(3, 3, &mut map);
-        heap.append_or_replace(4, 4, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
+        heap.append_or_replace(&3, 3, &mut map);
+        heap.append_or_replace(&4, 4, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=4 idx=0, bucket=4
@@ -725,7 +708,7 @@ mod tests {
         ");
 
         let mut map = vec![];
-        heap.replace_if_better(1, 0, &mut map);
+        heap.replace_if_better(&0, 1, &mut map);
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
         val=4 idx=0, bucket=4
@@ -743,8 +726,8 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
 
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
@@ -763,8 +746,8 @@ mod tests {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
 
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
+        heap.append_or_replace(&1, 1, &mut map);
+        heap.append_or_replace(&2, 2, &mut map);
 
         let actual = heap.to_string();
         assert_snapshot!(actual, @r"
@@ -779,4 +762,6 @@ mod tests {
 
         Ok(())
     }
+
+    // TODO: test TopKHeap of String?
 }

@@ -30,7 +30,6 @@ pub struct PriorityMap {
     heap: Box<dyn ArrowHeap + Send>,
     capacity: usize,
     mapper: Vec<(usize, usize)>,
-    val_type: DataType,
     /// Mirror of the map's all-NULL group count, kept as a plain field so the
     /// per-row `insert` path can check it without a `dyn` call (measured to
     /// regress the topk_aggregate benchmarks when read through the trait)
@@ -46,10 +45,9 @@ impl PriorityMap {
     ) -> Result<Self> {
         Ok(Self {
             map: new_hash_table(capacity, key_type)?,
-            heap: new_heap(capacity, descending, val_type.clone())?,
+            heap: new_heap(capacity, descending, val_type)?,
             capacity,
             mapper: Vec::with_capacity(capacity),
-            val_type,
             null_count: 0,
         })
     }
@@ -60,13 +58,14 @@ impl PriorityMap {
     }
 
     pub fn insert(&mut self, row_idx: usize) -> Result<()> {
-        assert!(self.map.len() <= self.capacity, "Overflow");
         debug_assert_eq!(self.null_count, 0);
 
         // if we're full, and the new val is worse than all our values, just bail
         if self.heap.is_worse(row_idx) {
             return Ok(());
         }
+        assert!(self.map.len() <= self.capacity, "Overflow");
+
         self.insert_eligible(row_idx)
     }
 
@@ -74,10 +73,6 @@ impl PriorityMap {
     /// separate from [`Self::insert`] so the common no-NULL path does not pay
     /// for NULL bookkeeping on every row.
     pub fn insert_with_null_groups(&mut self, row_idx: usize) -> Result<()> {
-        // valued groups are capped at `capacity`; up to `capacity` additional
-        // all-NULL groups may be tracked alongside them
-        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
-
         if self.heap.is_worse(row_idx) {
             // A group that was registered as all-NULL now has a value that
             // loses to the current top-k: it can no longer reach the top-k,
@@ -87,7 +82,17 @@ impl PriorityMap {
             }
             return Ok(());
         }
+        self.null_capacity_assert();
+
         self.insert_eligible(row_idx)
+    }
+
+    #[inline]
+    fn null_capacity_assert(&self) {
+        // TODO: do debug_assert instead?
+        // valued groups are capped at `capacity`; up to `capacity` additional
+        // all-NULL groups may be tracked alongside them
+        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
     }
 
     fn insert_eligible(&mut self, row_idx: usize) -> Result<()> {
@@ -125,8 +130,8 @@ impl PriorityMap {
     /// must still appear in the aggregation output; such groups all tie on the
     /// sort key, so tracking up to `capacity` of them preserves top-k semantics.
     pub fn insert_null(&mut self, row_idx: usize) {
-        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
         if self.map.insert_null(row_idx) {
+            self.null_capacity_assert();
             self.null_count += 1;
         }
     }
@@ -140,7 +145,7 @@ impl PriorityMap {
             vals
         } else {
             map_idxs.extend(null_idxs.iter().copied());
-            let nulls = new_null_array(&self.val_type, null_idxs.len());
+            let nulls = new_null_array(self.heap.value_type(), null_idxs.len());
             concat(&[vals.as_ref(), nulls.as_ref()])?
         };
         let ids = self.map.take_all(map_idxs);
