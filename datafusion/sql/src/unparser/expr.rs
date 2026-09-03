@@ -2932,10 +2932,16 @@ mod tests {
                 "EXTRACT(MONTH FROM x)",
             ),
             (
+                DateFieldExtractStyle::Extract,
+                "MONS",
+                "EXTRACT(MONTH FROM x)",
+            ),
+            (
                 DateFieldExtractStyle::Strftime,
                 "MONTH",
                 "strftime('%m', x)",
             ),
+            (DateFieldExtractStyle::Strftime, "YRS", "strftime('%Y', x)"),
             (
                 DateFieldExtractStyle::DatePart,
                 "DAY",
