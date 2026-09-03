@@ -23,7 +23,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{DFSchemaRef, Result, TableReference, internal_err};
+use datafusion_common::{
+    DFSchema, DFSchemaRef, Result, TableReference, internal_err, plan_err,
+};
 
 use crate::{Expr, LogicalPlan, TableSource};
 
@@ -206,6 +208,16 @@ impl DmlStatement {
     pub fn name(&self) -> &str {
         self.op.name()
     }
+
+    /// Build the target-plus-source schema used by MERGE expressions.
+    pub fn merge_schema(&self) -> Result<DFSchema> {
+        let WriteOp::MergeInto(merge_op) = &self.op else {
+            return internal_err!(
+                "DmlStatement::merge_schema requires a MERGE operation"
+            );
+        };
+        merge_op.expression_schema(&self.target.schema(), self.input.schema())
+    }
 }
 
 // Manual implementation needed because of `table_schema` and `output_schema` fields.
@@ -299,8 +311,15 @@ impl Display for InsertOp {
 }
 
 /// Describes a MERGE INTO operation's parameters.
+///
+/// [`Self::target_qualifier`] is the SQL-visible relation name used by
+/// expressions. The target's catalog/provider identity remains in
+/// [`DmlStatement::table_name`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[non_exhaustive]
 pub struct MergeIntoOp {
+    /// The target relation name visible to expressions in the MERGE scope.
+    target_qualifier: TableReference,
     /// The join condition from `ON <expr>`.
     pub on: Expr,
     /// The WHEN clauses, in the order they appeared in the SQL.
@@ -308,6 +327,55 @@ pub struct MergeIntoOp {
 }
 
 impl MergeIntoOp {
+    /// Create a MERGE operation.
+    pub fn new(
+        target_qualifier: impl Into<TableReference>,
+        on: Expr,
+        clauses: Vec<MergeIntoClause>,
+    ) -> Self {
+        Self {
+            target_qualifier: target_qualifier.into(),
+            on,
+            clauses,
+        }
+    }
+
+    /// Return the target relation name visible to MERGE expressions.
+    pub fn target_qualifier(&self) -> &TableReference {
+        &self.target_qualifier
+    }
+
+    /// Build the schema used to resolve expressions owned by this operation.
+    ///
+    /// Target fields precede source fields. The visible target qualifier must
+    /// not also identify a source relation in the outer MERGE scope.
+    pub fn expression_schema(
+        &self,
+        target_schema: &Schema,
+        source_schema: &DFSchema,
+    ) -> Result<DFSchema> {
+        Self::expression_schema_for(&self.target_qualifier, target_schema, source_schema)
+    }
+
+    /// Build a MERGE expression schema before constructing the operation.
+    pub fn expression_schema_for(
+        target_qualifier: &TableReference,
+        target_schema: &Schema,
+        source_schema: &DFSchema,
+    ) -> Result<DFSchema> {
+        if source_schema.iter().any(|(qualifier, _)| {
+            qualifier.is_some_and(|qualifier| qualifier.resolved_eq(target_qualifier))
+        }) {
+            return plan_err!(
+                "MERGE target qualifier '{}' conflicts with a source qualifier",
+                target_qualifier
+            );
+        }
+
+        DFSchema::try_from_qualified_schema(target_qualifier.clone(), target_schema)?
+            .join(source_schema)
+    }
+
     /// Count of top-level [`Expr`]s owned by this operation (no allocation).
     ///
     /// Matches the length of [`Self::exprs`] and the `exprs` vec consumed by
@@ -403,7 +471,28 @@ impl MergeIntoOp {
                 }
             })
             .collect();
-        Ok(Self { on, clauses })
+        Ok(Self {
+            target_qualifier: self.target_qualifier.clone(),
+            on,
+            clauses,
+        })
+    }
+}
+
+impl Display for MergeIntoOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "on=[{}]", self.on)?;
+        if !self.clauses.is_empty() {
+            write!(f, " clauses=[")?;
+            for (i, clause) in self.clauses.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{clause}")?;
+            }
+            write!(f, "]")?;
+        }
+        Ok(())
     }
 }
 
@@ -416,6 +505,16 @@ pub struct MergeIntoClause {
     pub predicate: Option<Expr>,
     /// The action to take.
     pub action: MergeIntoAction,
+}
+
+impl Display for MergeIntoClause {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "WHEN {}", self.kind)?;
+        if let Some(predicate) = &self.predicate {
+            write!(f, " AND {predicate}")?;
+        }
+        write!(f, " THEN {}", self.action)
+    }
 }
 
 /// Which rows a MERGE WHEN clause applies to.
@@ -442,6 +541,17 @@ pub enum MergeIntoClauseKind {
     NotMatchedByTarget,
     /// `WHEN NOT MATCHED BY SOURCE`
     NotMatchedBySource,
+}
+
+impl Display for MergeIntoClauseKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Matched => write!(f, "MATCHED"),
+            Self::NotMatched => write!(f, "NOT MATCHED"),
+            Self::NotMatchedByTarget => write!(f, "NOT MATCHED BY TARGET"),
+            Self::NotMatchedBySource => write!(f, "NOT MATCHED BY SOURCE"),
+        }
+    }
 }
 
 impl MergeIntoClauseKind {
@@ -488,6 +598,38 @@ pub enum MergeIntoAction {
     Delete,
 }
 
+impl Display for MergeIntoAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Update(assignments) => {
+                write!(f, "UPDATE SET ")?;
+                for (i, (column, value)) in assignments.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{column} = {value}")?;
+                }
+                Ok(())
+            }
+            Self::Insert { columns, values } => {
+                write!(f, "INSERT")?;
+                if !columns.is_empty() {
+                    write!(f, " ({})", columns.join(", "))?;
+                }
+                write!(f, " VALUES (")?;
+                for (i, value) in values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{value}")?;
+                }
+                write!(f, ")")
+            }
+            Self::Delete => write!(f, "DELETE"),
+        }
+    }
+}
+
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
         Schema::new(vec![Field::new("count", DataType::UInt64, false)])
@@ -503,9 +645,10 @@ mod tests {
 
     #[test]
     fn write_op_merge_into_name_and_display() {
-        let op = WriteOp::MergeInto(Box::new(MergeIntoOp {
-            on: col("id").eq(col("source_id")),
-            clauses: vec![MergeIntoClause {
+        let op = WriteOp::MergeInto(Box::new(MergeIntoOp::new(
+            "target",
+            col("id").eq(col("source_id")),
+            vec![MergeIntoClause {
                 kind: MergeIntoClauseKind::Matched,
                 predicate: Some(col("qty").gt(lit(0_i64))),
                 action: MergeIntoAction::Update(vec![(
@@ -513,9 +656,16 @@ mod tests {
                     col("source_qty"),
                 )]),
             }],
-        }));
+        )));
         assert_eq!(op.name(), "MergeInto");
         assert_eq!(format!("{op}"), "MergeInto");
+        let WriteOp::MergeInto(merge_op) = &op else {
+            unreachable!("constructed as MergeInto")
+        };
+        assert_eq!(
+            merge_op.to_string(),
+            "on=[id = source_id] clauses=[WHEN MATCHED AND qty > Int64(0) THEN UPDATE SET qty = source_qty]"
+        );
     }
 
     #[test]
@@ -548,9 +698,10 @@ mod tests {
 
     #[test]
     fn merge_into_op_exprs_round_trip() {
-        let op = MergeIntoOp {
-            on: col("id").eq(col("source_id")),
-            clauses: vec![
+        let op = MergeIntoOp::new(
+            "target",
+            col("id").eq(col("source_id")),
+            vec![
                 MergeIntoClause {
                     kind: MergeIntoClauseKind::Matched,
                     predicate: Some(col("qty").gt(lit(0_i64))),
@@ -573,7 +724,7 @@ mod tests {
                     action: MergeIntoAction::Delete,
                 },
             ],
-        };
+        );
         let exprs = op.exprs();
         assert_eq!(exprs.len(), 7);
 
@@ -584,14 +735,37 @@ mod tests {
 
     #[test]
     fn merge_into_op_with_new_exprs_length_mismatch() {
-        let op = MergeIntoOp {
-            on: col("id").eq(col("source_id")),
-            clauses: vec![],
-        };
+        let op = MergeIntoOp::new("target", col("id").eq(col("source_id")), vec![]);
         let err = op.with_new_exprs(vec![]).unwrap_err();
         assert!(
             err.to_string().contains("expected 1 expressions, got 0"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn merge_into_schema_uses_visible_qualifier_as_outer_scope_binding() -> Result<()> {
+        let target_schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+        let source_schema =
+            Schema::new(vec![Field::new("source_id", DataType::Int32, false)]);
+        let op = MergeIntoOp::new("t", col("t.id").eq(col("target.source_id")), vec![]);
+
+        let source = DFSchema::try_from_qualified_schema("target", &source_schema)?;
+        let schema = op.expression_schema(&target_schema, &source)?;
+        assert!(schema.has_column(&datafusion_common::Column::new(Some("t"), "id")));
+        assert!(
+            schema
+                .has_column(&datafusion_common::Column::new(Some("target"), "source_id"))
+        );
+
+        let colliding_source = DFSchema::try_from_qualified_schema("t", &source_schema)?;
+        let err = op
+            .expression_schema(&target_schema, &colliding_source)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("target qualifier 't' conflicts with a source qualifier")
+        );
+        Ok(())
     }
 }

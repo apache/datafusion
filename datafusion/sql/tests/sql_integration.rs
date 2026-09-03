@@ -3708,7 +3708,7 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
 }
 
 #[test]
-fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     let plan = logical_plan(
         "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
          WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
@@ -3722,7 +3722,11 @@ fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
         panic!("expected MergeInto, got {:?}", dml.op);
     };
 
-    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+    assert_eq!(
+        merge_op.target_qualifier(),
+        &datafusion_common::TableReference::bare("t")
+    );
+    assert_eq!(merge_op.on.to_string(), "t.id = s.j2_id");
 
     let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
         &merge_op.clauses[0].action
@@ -3739,6 +3743,20 @@ fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
     };
     assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
     assert_eq!(values[0].to_string(), "s.j2_id");
+
+    let display = plan.display_indent().to_string();
+    assert_contains!(
+        &display,
+        "Dml: op=[MergeInto] table=[person_quoted_cols] on=[t.id = s.j2_id] clauses=[WHEN MATCHED THEN UPDATE SET First Name = s.j2_string, WHEN NOT MATCHED THEN INSERT (id, Age) VALUES (s.j2_id, Int64(42))]"
+    );
+
+    let json = plan.display_pg_json().to_string();
+    assert_contains!(&json, r#""Node Type": "Dml""#);
+    assert_contains!(&json, r#""On": "t.id = s.j2_id""#);
+    assert_contains!(
+        &json,
+        r#""WHEN MATCHED THEN UPDATE SET First Name = s.j2_string""#
+    );
 }
 
 #[rstest]
