@@ -104,6 +104,10 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         self.blocks.len()
     }
 
+    pub fn block(&self, block_index: usize) -> &CustomBlockProvider::Block {
+        &self.blocks[block_index]
+    }
+
     pub fn block_size(&self) -> usize {
         self.block_size
     }
@@ -256,7 +260,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         }
     }
 
-    pub(super) fn current_block_remaining_len(&self) -> usize {
+    pub fn current_block_remaining_len(&self) -> usize {
         assert!(
             FIXED_BLOCK_SIZING,
             "current block remaining length is only relevant for manual block size"
@@ -264,7 +268,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         self.block_size - self.blocks[self.current_block_index].len()
     }
 
-    pub(crate) fn push_value_n_within_block(
+    pub fn push_value_n_within_block(
         &mut self,
         value: <CustomBlockProvider::Block as Block>::Item,
         n: usize,

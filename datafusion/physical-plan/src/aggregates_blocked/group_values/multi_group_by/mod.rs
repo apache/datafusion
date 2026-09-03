@@ -19,7 +19,7 @@
 
 mod boolean;
 mod bytes;
-// pub mod bytes_view;
+pub mod bytes_view;
 // mod dictionary;
 // mod fixed_size_binary;
 pub mod primitive;
@@ -31,7 +31,7 @@ use crate::aggregates::group_values::GroupValues;
 use {
     boolean::BooleanGroupValueBuilder,
     bytes::ByteGroupValueBuilder,
-    // bytes_view::ByteViewGroupValueBuilder,
+    bytes_view::ByteViewGroupValueBuilder,
     // fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder,
     // row_backed::RowsGroupColumn,
@@ -980,6 +980,8 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::LargeUtf8
             | DataType::Binary
             | DataType::LargeBinary
+            | DataType::Utf8View
+            | DataType::BinaryView
             | DataType::Boolean
     )
       // || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
@@ -1136,6 +1138,18 @@ fn make_group_column<const IS_FIXED_BLOCK: bool>(field: &Field, block_size: usiz
                 OutputType::Binary,
                 block_size,
             )));
+        }
+        DataType::Utf8View => {
+            v.push(Box::new(ByteViewGroupValueBuilder::<
+                IS_FIXED_BLOCK,
+                StringViewType,
+            >::new(block_size)));
+        }
+        DataType::BinaryView => {
+            v.push(Box::new(ByteViewGroupValueBuilder::<
+                IS_FIXED_BLOCK,
+                BinaryViewType,
+            >::new(block_size)));
         }
         DataType::Boolean => {
             if nullable {
