@@ -1689,6 +1689,41 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_children_recomputes_metadata_override() -> Result<()> {
+        let field_metadata =
+            HashMap::from([("event_field".to_string(), "true".to_string())]);
+        let projection = identity_projection_with_metadata(
+            test::scan_partitioned(1),
+            field_metadata.clone(),
+            HashMap::new(),
+        )?;
+        assert!(
+            projection
+                .downcast_ref::<ProjectionExec>()
+                .expect("test plan should be a ProjectionExec")
+                .overrides_metadata()
+        );
+
+        let replacement_schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true).with_metadata(field_metadata),
+        ]));
+        let replacement: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(replacement_schema));
+        let replaced = projection.replace_children(
+            vec![replacement],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        assert!(
+            !replaced
+                .downcast_ref::<ProjectionExec>()
+                .expect("replaced plan should be a ProjectionExec")
+                .overrides_metadata()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_make_with_child_preserves_output_metadata() -> Result<()> {
         let projection = identity_projection_with_metadata(
             test::scan_partitioned(1),
