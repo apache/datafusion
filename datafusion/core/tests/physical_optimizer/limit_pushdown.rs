@@ -112,83 +112,6 @@ fn format_plan(plan: &Arc<dyn ExecutionPlan>) -> String {
     get_plan_string(plan).join("\n")
 }
 
-#[derive(Debug)]
-struct TestCombinerExec {
-    input: Arc<dyn ExecutionPlan>,
-    properties: Arc<PlanProperties>,
-}
-
-impl TestCombinerExec {
-    fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let properties = PlanProperties::new(
-            EquivalenceProperties::new(input.schema()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        );
-        Self {
-            input,
-            properties: Arc::new(properties),
-        }
-    }
-}
-
-impl DisplayAs for TestCombinerExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "TestCombinerExec")
-    }
-}
-
-impl ExecutionPlan for TestCombinerExec {
-    fn name(&self) -> &str {
-        "TestCombinerExec"
-    }
-
-    fn properties(&self) -> &Arc<PlanProperties> {
-        &self.properties
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&PhysicalExprRef) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // `TestCombinerExec` owns no `PhysicalExpr`s.
-        Ok(TreeNodeRecursion::Continue)
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq!(children.len(), 1);
-        Ok(Arc::new(Self::new(children[0].clone())))
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        unreachable!("TestCombinerExec is only used by optimizer tests")
-    }
-
-    fn statistics_from_inputs(
-        &self,
-        _input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
-        Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
-    }
-
-    fn supports_limit_pushdown(&self) -> bool {
-        true
-    }
-}
-
 /// Test plan that reports a fixed `fetch` but cannot change it through
 /// `with_fetch`. It can optionally allow limits to be pushed to its child.
 #[derive(Debug)]
@@ -572,6 +495,38 @@ fn materializes_global_boundary_before_pushing_into_union_children() -> Result<(
 }
 
 #[test]
+fn materializes_ordered_global_limit_with_sort_preserving_merge() -> Result<()> {
+    let schema = create_schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let scan = Arc::new(
+        TestScan::with_ordering(Arc::clone(&schema), ordering.clone())
+            .with_supports_fetch(true)
+            .with_partition_count(2),
+    );
+    let mut global_limit =
+        datafusion_physical_plan::limit::GlobalLimitExec::new(scan, 2, Some(5));
+    global_limit.set_required_ordering(Some(ordering));
+    let global_limit = Arc::new(global_limit);
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      SortPreservingMergeExec: [c1@0 ASC], fetch=7
+        TestScan: output_ordering=[c1@0 ASC], fetch=7
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
 fn materializes_global_boundary_for_offset_only_multi_partition_scan() -> Result<()> {
     let schema = create_schema();
     let scan = Arc::new(TestScan::new(schema, vec![]).with_partition_count(2));
@@ -594,16 +549,17 @@ fn materializes_global_boundary_for_offset_only_multi_partition_scan() -> Result
 #[test]
 fn removes_noop_global_limit_without_materializing_boundary() -> Result<()> {
     let schema = create_schema();
-    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let scan = Arc::new(TestScan::new(schema, vec![]).with_partition_count(2));
     let noop_global_limit = global_limit_exec(scan, 0, None);
 
     let optimized =
         LimitPushdown::new().optimize(noop_global_limit, &ConfigOptions::new())?;
 
-    insta::assert_snapshot!(
-        format_plan(&optimized),
-        @"TestScan"
-    );
+    let plan = format_plan(&optimized);
+    assert!(!plan.contains("CoalescePartitionsExec"));
+    assert!(!plan.contains("SortPreservingMergeExec"));
+    assert!(!plan.contains("GlobalLimitExec"));
+    insta::assert_snapshot!(plan, @"TestScan");
 
     Ok(())
 }
@@ -663,7 +619,7 @@ fn materializes_pending_global_limit_below_extension_combiner() -> Result<()> {
         Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
     let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
     let union = UnionExec::try_new(vec![left, right])?;
-    let combiner = Arc::new(TestCombinerExec::new(union));
+    let combiner = Arc::new(TestMultiChildExec::new(vec![union]));
     let global_limit = global_limit_exec(combiner, 0, Some(5));
 
     let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
@@ -671,7 +627,7 @@ fn materializes_pending_global_limit_below_extension_combiner() -> Result<()> {
     insta::assert_snapshot!(
         format_plan(&optimized),
         @r"
-    TestCombinerExec
+    TestMultiChildExec
       CoalescePartitionsExec: fetch=5
         UnionExec
           TestScan: fetch=5
@@ -795,7 +751,7 @@ fn upgrades_pending_local_limit_before_extension_combiner() -> Result<()> {
     let inner_right =
         Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
     let inner_union = UnionExec::try_new(vec![inner_left, inner_right])?;
-    let combiner = Arc::new(TestCombinerExec::new(inner_union));
+    let combiner = Arc::new(TestMultiChildExec::new(vec![inner_union]));
     let outer_child = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
     let outer_union = UnionExec::try_new(vec![combiner, outer_child])?;
     let local_limit = local_limit_exec(outer_union, 5);
@@ -806,7 +762,7 @@ fn upgrades_pending_local_limit_before_extension_combiner() -> Result<()> {
         format_plan(&optimized),
         @r"
     UnionExec
-      TestCombinerExec
+      TestMultiChildExec
         CoalescePartitionsExec: fetch=5
           UnionExec
             TestScan: fetch=5
@@ -955,9 +911,8 @@ fn absorbs_limit_into_hash_join_inner() -> Result<()> {
 fn absorbs_limit_into_hash_join_right() -> Result<()> {
     // HashJoinExec with Right join should absorb limit via with_fetch
     let schema = create_schema();
-    let left =
-        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
-    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let left = empty_exec(Arc::clone(&schema));
+    let right = empty_exec(Arc::clone(&schema));
     let on = join_on_columns("c1", "c1");
     let hash_join = hash_join_exec(left, right, on, None, &JoinType::Right)?;
     let global_limit = global_limit_exec(hash_join, 0, Some(10));
@@ -968,8 +923,8 @@ fn absorbs_limit_into_hash_join_right() -> Result<()> {
         @r"
     GlobalLimitExec: skip=0, fetch=10
       HashJoinExec: mode=Partitioned, join_type=Right, on=[(c1@0, c1@0)]
-        TestScan
-        TestScan
+        EmptyExec
+        EmptyExec
     "
     );
 
@@ -981,8 +936,8 @@ fn absorbs_limit_into_hash_join_right() -> Result<()> {
         optimized,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Right, on=[(c1@0, c1@0)], fetch=10
-      TestScan
-      TestScan
+      EmptyExec
+      EmptyExec
     "
     );
 
@@ -993,9 +948,8 @@ fn absorbs_limit_into_hash_join_right() -> Result<()> {
 fn absorbs_limit_into_hash_join_left() -> Result<()> {
     // during probing, then unmatched rows at the end, stopping when limit is reached
     let schema = create_schema();
-    let left =
-        Arc::new(TestScan::new(Arc::clone(&schema), vec![]).with_supports_fetch(true));
-    let right = Arc::new(TestScan::new(schema, vec![]).with_supports_fetch(true));
+    let left = empty_exec(Arc::clone(&schema));
+    let right = empty_exec(Arc::clone(&schema));
     let on = join_on_columns("c1", "c1");
     let hash_join = hash_join_exec(left, right, on, None, &JoinType::Left)?;
     let global_limit = global_limit_exec(hash_join, 0, Some(5));
@@ -1006,8 +960,8 @@ fn absorbs_limit_into_hash_join_left() -> Result<()> {
         @r"
     GlobalLimitExec: skip=0, fetch=5
       HashJoinExec: mode=Partitioned, join_type=Left, on=[(c1@0, c1@0)]
-        TestScan
-        TestScan
+        EmptyExec
+        EmptyExec
     "
     );
 
@@ -1019,8 +973,8 @@ fn absorbs_limit_into_hash_join_left() -> Result<()> {
         optimized,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Left, on=[(c1@0, c1@0)], fetch=5
-      TestScan
-      TestScan
+      EmptyExec
+      EmptyExec
     "
     );
 
