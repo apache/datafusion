@@ -235,6 +235,17 @@ fn scale_date_literal(
     }
 }
 
+fn has_negative_scale(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Decimal32(_, scale)
+            | DataType::Decimal64(_, scale)
+            | DataType::Decimal128(_, scale)
+            | DataType::Decimal256(_, scale)
+            if *scale < 0
+    )
+}
+
 /// Convert a numeric value from one numeric data type to another
 fn try_cast_numeric_literal(
     lit_value: &ScalarValue,
@@ -248,6 +259,14 @@ fn try_cast_numeric_literal(
     }
 
     if is_lossy_temporal_cast(&lit_data_type, target_type) {
+        return None;
+    }
+
+    // A negative scale means the decimal holds multiples of `10^-scale`, so
+    // `10^scale` is not an integer and the value cannot be rescaled by the
+    // integer multiplications below (`scale as u32` would wrap to a huge
+    // exponent and overflow `pow`). Leave such casts in place.
+    if has_negative_scale(&lit_data_type) || has_negative_scale(target_type) {
         return None;
     }
 
@@ -712,6 +731,36 @@ mod tests {
         expect_cast(
             ScalarValue::Decimal128(Some(-9999999999999999999999999999999999), 37, 1),
             DataType::Int64,
+            ExpectedCast::NoValue,
+        );
+    }
+
+    #[test]
+    fn test_try_cast_to_type_negative_scale_decimal() {
+        // A negative scale means `10^scale` is not an integer, so the literal
+        // cannot be rescaled by this path. It used to compute
+        // `10_i128.pow(scale as u32)` and panic with a multiply overflow.
+        for target_type in [
+            DataType::Decimal32(9, -2),
+            DataType::Decimal64(18, -2),
+            DataType::Decimal128(10, -2),
+        ] {
+            expect_cast(
+                ScalarValue::Int64(Some(100)),
+                target_type,
+                ExpectedCast::NoValue,
+            );
+        }
+
+        // The same applies to a literal that already has a negative scale.
+        expect_cast(
+            ScalarValue::Decimal128(Some(1), 10, -2),
+            DataType::Int64,
+            ExpectedCast::NoValue,
+        );
+        expect_cast(
+            ScalarValue::Decimal64(Some(1), 18, -2),
+            DataType::Decimal128(10, 0),
             ExpectedCast::NoValue,
         );
     }
