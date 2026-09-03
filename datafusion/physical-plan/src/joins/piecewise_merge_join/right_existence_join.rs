@@ -68,10 +68,20 @@
 //! makes its comparison NULL rather than false, which is "no match" — dropped by `RightSemi`,
 //! kept by `RightAnti`.
 //!
-//! Picking the extreme and comparing against it must agree on ordering, and they do: arrow's
-//! `cmp` kernels and its `min`/`max` accumulators both order floats by `total_cmp`
+//! Picking the extreme and comparing against it must agree on ordering. `min_batch`/`max_batch`
+//! and arrow's `lt`/`lt_eq`/`gt`/`gt_eq` kernels both order floats by `total_cmp`
 //! (`arrow-arith`'s `MinAccumulator` compares with `ArrowNativeTypeOp::is_lt`, seeded from
-//! `MAX_TOTAL_ORDER`), so `-0.0` and NaN are treated identically on both sides.
+//! `MAX_TOTAL_ORDER`), which puts `-0.0` strictly below `+0.0` -- but SQL comparisons treat
+//! them as equal, and that is what a real `k < r` predicate actually evaluates to: any
+//! `BinaryExpr` comparison, including the one the `NestedLoopJoinExec` oracle in the
+//! differential fuzz test builds its filter from, normalizes `-0.0` to `+0.0` first (see
+//! `apply_cmp` in `datafusion-physical-expr-common`). Both the extreme and the streamed key
+//! array are normalized with [`normalize_float_zero`] before comparing,
+//! after the reduction: normalizing first would not change which value the reduction picks
+//! (`-0.0` and `+0.0` are numerically equal either way), and normalizing only where the
+//! comparison happens keeps the reduction itself agreeing with the unnormalized `min`/`max`
+//! semantics its docs above describe. `NaN` needs no such fix-up: every kernel involved orders
+//! it as the maximum, so it is treated identically on both sides already.
 //!
 //! # Cost
 //!
@@ -94,6 +104,7 @@ use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::boolean::not;
 use arrow::compute::kernels::cmp::{gt, gt_eq, lt, lt_eq};
 use arrow_schema::SchemaRef;
+use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
@@ -189,9 +200,16 @@ impl RightExistencePWMJStream {
 
         // Null exactly when no buffered key is non-null, and NULLs match nothing. Cloned out by
         // value -- it is one row -- so the shared state is not kept alive by this stream.
-        let extreme = buffered_extreme.extreme();
-        self.buffered_extreme =
-            (extreme.null_count() == 0).then(|| Scalar::new(Arc::clone(extreme)));
+        //
+        // Normalized because the `lt`/`lt_eq`/`gt`/`gt_eq` kernels called in
+        // `filter_streamed_batch` order `-0.0` strictly below `+0.0`, but SQL comparisons --
+        // including `apply_cmp`, which every other `k < r` predicate in the plan goes through
+        // -- treat them as equal. The streamed key array is normalized the same way, right
+        // before that comparison. `min`/`max_batch`, which reduced this extreme, order `-0.0`
+        // below `+0.0` too, so normalizing after the reduction rather than before leaves the
+        // reduction itself agreeing with the unnormalized ordering its own docs describe.
+        let extreme = normalize_float_zero(buffered_extreme.extreme());
+        self.buffered_extreme = (extreme.null_count() == 0).then(|| Scalar::new(extreme));
 
         // With no non-null buffered key nothing matches, so `RightSemi` outputs nothing
         // and does not need to read a single streamed batch. `RightAnti` still has to,
@@ -240,10 +258,12 @@ impl RightExistencePWMJStream {
             // the streamed side.
             None => batch.columns().to_vec(),
             Some(extreme) => {
-                let stream_values = self
-                    .on_streamed
-                    .evaluate(batch)?
-                    .into_array(batch.num_rows())?;
+                let stream_values = normalize_float_zero(
+                    &self
+                        .on_streamed
+                        .evaluate(batch)?
+                        .into_array(batch.num_rows())?,
+                );
 
                 // `extreme` is the buffered key, so it goes on the left of the operator,
                 // matching the `buffered OP streamed` orientation of the predicate.
@@ -322,7 +342,7 @@ mod tests {
 
     // Coverage for right existence joins also lives in `pwmj.slt` (both correlation
     // orientations, all four operators, NULLs, key types) and in the differential fuzz test
-    // `fuzz_pwmj_existence_matches_nested_loop`, which checks them against
+    // `fuzz_pwmj_matches_nested_loop`, which checks them against
     // `NestedLoopJoinExec` over randomized inputs. The tests here pin the parts SQL cannot
     // observe: which streamed batches were read, and which partition emitted them.
 

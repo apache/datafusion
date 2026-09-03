@@ -472,7 +472,10 @@ impl PiecewiseMergeJoinExec {
             // `RightMark` is excluded: it adds a `mark` column, so its orderings would not
             // map across unchanged.
             JoinType::RightSemi | JoinType::RightAnti => vec![false, true],
-            // The existence side is expected to come in sorted
+            // Unlike the right existence joins above, output here is gated on a watermark
+            // shared across every streamed partition (see `ExistencePWMJStream`) and emitted
+            // only from whichever partition finishes last, so no streamed partition's output
+            // order tracks its input order.
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                 vec![false, false]
             }
