@@ -1037,7 +1037,7 @@ config_namespace! {
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
         /// parallel writer. Each writer is closed and a new file opened once
-        /// soft_max_rows_per_output_file is reached.
+        /// soft_max_rows_per_output_file or soft_max_bytes_per_output_file is reached.
         pub minimum_parallel_output_files: ConfigNonZeroUsize, default = non_zero_usize_default(4)
 
         /// Target number of rows in output files when writing multiple.
@@ -1045,6 +1045,12 @@ config_namespace! {
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
         pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
+
+        /// Target number of bytes in output files when writing multiple.
+        /// This is a soft max, so it can be exceeded slightly. There also
+        /// will be one file smaller than the limit if the total
+        /// number of rows written is not roughly divisible by the soft max
+        pub soft_max_bytes_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(4294967295)
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
