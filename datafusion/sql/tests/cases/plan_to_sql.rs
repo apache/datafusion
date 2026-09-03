@@ -170,6 +170,10 @@ fn roundtrip_statement() -> Result<()> {
             SELECT j2_string as string FROM j2
             ORDER BY string DESC
             LIMIT 10"#,
+            r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1)"#,
+            r#"SELECT j1_string FROM j1 UNION SELECT j2_string FROM j2 UNION ALL SELECT j1_string FROM j1"#,
+            r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 LIMIT 5)"#,
+            r#"SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 ORDER BY 1)"#,
             r#"SELECT col1, id FROM (
                 SELECT j1_string AS col1, j1_id AS id FROM j1
                 UNION ALL
@@ -355,6 +359,34 @@ fn roundtrip_statement_with_dialect_2() -> Result<(), DataFusionError> {
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
         expected: @"SELECT min(ta.j1_id) AS j1_min FROM j1 AS ta ORDER BY j1_min ASC NULLS LAST LIMIT 10",
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_statement_union_all_with_nested_distinct_union()
+-> Result<(), DataFusionError> {
+    // Outer `UNION ALL` whose operand is a distinct `UNION`: the outer ALL must
+    // survive, and the nested distinct UNION must be parenthesized.
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1.j1_string FROM j1 UNION ALL (SELECT j2.j2_string FROM j2 UNION SELECT j1.j1_string FROM j1)",
+    );
+    // The same shape written flat: `a UNION b UNION ALL a`.
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string FROM j1 UNION SELECT j2_string FROM j2 UNION ALL SELECT j1_string FROM j1",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"(SELECT j1.j1_string FROM j1 UNION SELECT j2.j2_string FROM j2) UNION ALL SELECT j1.j1_string FROM j1",
+    );
+    // A branch's own LIMIT must remain bound to that branch, inside the parens.
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT j1_string FROM j1 UNION ALL (SELECT j2_string FROM j2 UNION SELECT j1_string FROM j1 LIMIT 5)",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1.j1_string FROM j1 UNION ALL (SELECT j2.j2_string FROM j2 UNION SELECT j1.j1_string FROM j1 LIMIT 5)",
     );
     Ok(())
 }
