@@ -7018,10 +7018,13 @@ query error DataFusion error: type_coercion\ncaused by\nError during planning: R
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '1' HOUR FOLLOWING)
 FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
 
-# Unsupported RANGE ORDER BY types still propagate the type-coercion error.
-query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)
-SELECT COUNT(*) OVER (ORDER BY x)
+# A free range frame only needs the order key to be comparable, so types
+# without arithmetic such as a struct are accepted here as well.
+query ?I
+SELECT x, COUNT(*) OVER (ORDER BY x)
 FROM (VALUES (struct(1))) t(x)
+----
+{c0: 1} 1
 
 # An order key only needs to be comparable for a free range frame, whose bounds
 # are all UNBOUNDED or CURRENT ROW. A finite offset such as `1 PRECEDING` instead
@@ -7093,3 +7096,35 @@ SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
 
 statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
 SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+# The default frame of `OVER (ORDER BY ...)` is a free RANGE frame, which
+# needs no offset arithmetic on the ORDER BY type. It used to fail with
+# "Internal error: Cannot run range queries on datatype" for these types.
+query ?I
+select x, row_number() over (order by x) from (values (arrow_cast(2, 'Duration(Second)')), (arrow_cast(1, 'Duration(Second)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 1 secs 1
+0 days 0 hours 0 mins 2 secs 2
+
+query ?I
+select x, rank() over (order by x) from (values (interval '2 months'), (interval '1 month')) t(x) order by 2
+----
+1 mons 1
+2 mons 2
+
+query ?I
+select x, count(*) over (order by x) from (values (struct(2, 'b')), (struct(1, 'a'))) t(x) order by 2
+----
+{c0: 1, c1: a} 1
+{c0: 2, c1: b} 2
+
+query ?I
+select x, row_number() over (order by x range between unbounded preceding and current row) from (values (arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Millisecond)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 0.002 secs 2
+
+# offset frames still need an arithmetic ORDER BY type
+statement error RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type
+select count(*) over (order by x range between 1 preceding and current row) from (values (struct(1))) t(x)
+

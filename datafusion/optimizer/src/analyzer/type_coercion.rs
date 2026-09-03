@@ -1122,7 +1122,12 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     } else if let DataType::RunEndEncoded(_, value_type) = col_type {
         extract_window_frame_target_type(value_type.data_type())
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type}")
+        // Only reached for frames with a finite offset (free range frames
+        // return early in `coerce_window_frame`), which need arithmetic on
+        // the ORDER BY type.
+        plan_err!(
+            "RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type {col_type}"
+        )
     }
 }
 
@@ -1141,7 +1146,17 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                let target_type = extract_window_frame_target_type(&col_type)?;
+                let target_type = match extract_window_frame_target_type(&col_type) {
+                    Ok(target_type) => target_type,
+                    // A free range frame (`UNBOUNDED PRECEDING` / `CURRENT ROW`
+                    // on both sides, which is what `OVER (ORDER BY ...)`
+                    // defaults to) has no offsets to coerce and only needs the
+                    // ORDER BY values to be comparable, so an ORDER BY type
+                    // without arithmetic (Duration, Interval, Struct, Map, ...)
+                    // is fine there.
+                    Err(_) if window_frame.free_range() => return Ok(window_frame),
+                    Err(e) => return Err(e),
+                };
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
                 // `current_value ± offset`, so it is only meaningful for target
                 // types that support arithmetic. Other orderable target types can
