@@ -884,7 +884,10 @@ impl Accumulator for DurationAvgAccumulator {
 
         if let Some(x) = sum_value {
             let v = self.sum.get_or_insert(0);
-            *v += x;
+            // Wraps on overflow, matching the `sum` aggregate and the other
+            // `avg` accumulators; the checked arithmetic would panic in debug
+            // builds and silently wrap in release builds otherwise.
+            *v = v.wrapping_add(x);
         }
         Ok(())
     }
@@ -940,7 +943,10 @@ impl Accumulator for DurationAvgAccumulator {
 
         if let Some(x) = sum_value {
             let v = self.sum.get_or_insert(0);
-            *v += x;
+            // Wraps on overflow, matching the `sum` aggregate and the other
+            // `avg` accumulators; the checked arithmetic would panic in debug
+            // builds and silently wrap in release builds otherwise.
+            *v = v.wrapping_add(x);
         }
         Ok(())
     }
@@ -957,7 +963,7 @@ impl Accumulator for DurationAvgAccumulator {
         };
 
         if let Some(x) = sum_value {
-            self.sum = Some(self.sum.unwrap() - x);
+            self.sum = Some(self.sum.unwrap_or(0).wrapping_sub(x));
         }
         Ok(())
     }
@@ -1548,6 +1554,38 @@ mod tests {
             acc.update_batch(&[values])?;
             assert_eq!(acc.evaluate()?, expected);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_duration_wraps_on_overflow() -> Result<()> {
+        // The sum of these values does not fit in `i64`. Like `sum` and the
+        // other `avg` accumulators the running total wraps; this used to
+        // panic with "attempt to add with overflow" in debug builds.
+        let duration = DataType::Duration(TimeUnit::Second);
+        let values: ArrayRef =
+            Arc::new(DurationSecondArray::from(vec![i64::MAX, i64::MAX]));
+
+        let mut acc = avg_accumulator(&duration, &duration)?;
+        acc.update_batch(std::slice::from_ref(&values))?;
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(-1)));
+
+        // Merging two such states wraps as well.
+        let mut merged = avg_accumulator(&duration, &duration)?;
+        let state = acc.state()?;
+        let state_arrays: Vec<ArrayRef> = state
+            .iter()
+            .map(|v| v.to_array_of_size(1))
+            .collect::<Result<_>>()?;
+        merged.merge_batch(&state_arrays)?;
+        merged.merge_batch(&state_arrays)?;
+        assert_eq!(merged.evaluate()?, ScalarValue::DurationSecond(Some(-1)));
+
+        // Retracting the batch in sliding-window mode brings the sum back to
+        // where it started instead of underflowing.
+        acc.retract_batch(&[values])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(None));
 
         Ok(())
     }
