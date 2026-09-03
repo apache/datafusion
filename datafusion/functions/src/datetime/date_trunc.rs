@@ -187,17 +187,17 @@ impl fmt::Display for DateTruncGranularity {
     ),
     sql_example = r#"```sql
 > SELECT date_trunc('month', '2024-05-15T10:30:00');
-+-----------------------------------------------+
++-------------------------------------------------------+
 | date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
-+-----------------------------------------------+
-| 2024-05-01T00:00:00                           |
-+-----------------------------------------------+
++-------------------------------------------------------+
+| 2024-05-01T00:00:00                                   |
++-------------------------------------------------------+
 > SELECT date_trunc('hour', '2024-05-15T10:30:00');
-+----------------------------------------------+
++------------------------------------------------------+
 | date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
-+----------------------------------------------+
-| 2024-05-15T10:00:00                          |
-+----------------------------------------------+
++------------------------------------------------------+
+| 2024-05-15T10:00:00                                  |
++------------------------------------------------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -300,7 +300,7 @@ impl ScalarUDFImpl for DateTruncFunc {
         fn process_array<T: ArrowTimestampType>(
             array: &dyn Array,
             granularity: DateTruncGranularity,
-            tz_opt: &Option<Arc<str>>,
+            tz_opt: Option<&Arc<str>>,
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
             let array = as_primitive_array::<T>(array)?;
@@ -317,21 +317,21 @@ impl ScalarUDFImpl for DateTruncFunc {
                     T::UNIT,
                     array,
                     granularity,
-                    tz_opt.clone(),
+                    tz_opt.cloned(),
                 )?;
                 return Ok(ColumnarValue::Array(result));
             }
 
             let array: PrimitiveArray<T> = array
                 .try_unary(|x| general_date_trunc(T::UNIT, x, parsed_tz, granularity))?
-                .with_timezone_opt(tz_opt.clone());
+                .with_timezone_opt(tz_opt.cloned());
             Ok(ColumnarValue::Array(Arc::new(array)))
         }
 
         fn process_scalar<T: ArrowTimestampType>(
-            v: &Option<i64>,
+            v: Option<&i64>,
             granularity: DateTruncGranularity,
-            tz_opt: &Option<Arc<str>>,
+            tz_opt: Option<&Arc<str>>,
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
             let value = if let Some(v) = v {
@@ -339,7 +339,7 @@ impl ScalarUDFImpl for DateTruncFunc {
             } else {
                 None
             };
-            let value = ScalarValue::new_timestamp::<T>(value, tz_opt.clone());
+            let value = ScalarValue::new_timestamp::<T>(value, tz_opt.cloned());
             Ok(ColumnarValue::Scalar(value))
         }
 
@@ -349,16 +349,32 @@ impl ScalarUDFImpl for DateTruncFunc {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, None))
             }
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-                process_scalar::<TimestampNanosecondType>(v, granularity, tz_opt)?
+                process_scalar::<TimestampNanosecondType>(
+                    v.as_ref(),
+                    granularity,
+                    tz_opt.as_ref(),
+                )?
             }
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-                process_scalar::<TimestampMicrosecondType>(v, granularity, tz_opt)?
+                process_scalar::<TimestampMicrosecondType>(
+                    v.as_ref(),
+                    granularity,
+                    tz_opt.as_ref(),
+                )?
             }
             ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-                process_scalar::<TimestampMillisecondType>(v, granularity, tz_opt)?
+                process_scalar::<TimestampMillisecondType>(
+                    v.as_ref(),
+                    granularity,
+                    tz_opt.as_ref(),
+                )?
             }
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-                process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
+                process_scalar::<TimestampSecondType>(
+                    v.as_ref(),
+                    granularity,
+                    tz_opt.as_ref(),
+                )?
             }
             ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v)) => {
                 let truncated = v.map(|val| truncate_time_nanos(val, granularity));
@@ -379,24 +395,32 @@ impl ScalarUDFImpl for DateTruncFunc {
             ColumnarValue::Array(array) => {
                 let array_type = array.data_type();
                 match array_type {
-                    Timestamp(Second, tz_opt) => {
-                        process_array::<TimestampSecondType>(array, granularity, tz_opt)?
+                    Timestamp(Second, tz_opt) => process_array::<TimestampSecondType>(
+                        array,
+                        granularity,
+                        tz_opt.as_ref(),
+                    )?,
+                    Timestamp(Millisecond, tz_opt) => {
+                        process_array::<TimestampMillisecondType>(
+                            array,
+                            granularity,
+                            tz_opt.as_ref(),
+                        )?
                     }
-                    Timestamp(Millisecond, tz_opt) => process_array::<
-                        TimestampMillisecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Microsecond, tz_opt) => process_array::<
-                        TimestampMicrosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Nanosecond, tz_opt) => process_array::<
-                        TimestampNanosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
+                    Timestamp(Microsecond, tz_opt) => {
+                        process_array::<TimestampMicrosecondType>(
+                            array,
+                            granularity,
+                            tz_opt.as_ref(),
+                        )?
+                    }
+                    Timestamp(Nanosecond, tz_opt) => {
+                        process_array::<TimestampNanosecondType>(
+                            array,
+                            granularity,
+                            tz_opt.as_ref(),
+                        )?
+                    }
                     Time64(Nanosecond) => {
                         let arr = as_primitive_array::<Time64NanosecondType>(array)?;
                         let result: PrimitiveArray<Time64NanosecondType> =
@@ -866,13 +890,12 @@ fn general_date_trunc(
     Ok(result)
 }
 
-fn parse_tz(tz: &Option<Arc<str>>) -> Result<Option<Tz>> {
-    tz.as_ref()
-        .map(|tz| {
-            Tz::from_str(tz)
-                .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {op:?}"))
-        })
-        .transpose()
+fn parse_tz(tz: Option<&Arc<str>>) -> Result<Option<Tz>> {
+    tz.map(|tz| {
+        Tz::from_str(tz)
+            .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {op:?}"))
+    })
+    .transpose()
 }
 
 #[cfg(test)]
@@ -979,13 +1002,13 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(original, granularity, expected)| {
+        for (original, granularity, expected) in &cases {
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
             let granularity_enum = DateTruncGranularity::from_str(granularity).unwrap();
             let result = date_trunc_coarse(granularity_enum, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
-        });
+        }
     }
 
     #[test]
@@ -1129,7 +1152,7 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(original, tz_opt, expected)| {
+        for (original, tz_opt, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -1171,7 +1194,7 @@ mod tests {
             } else {
                 panic!("unexpected column type");
             }
-        });
+        }
     }
 
     #[test]
@@ -1317,7 +1340,7 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(original, tz_opt, expected)| {
+        for (original, tz_opt, expected) in &cases {
             let input = original
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -1359,7 +1382,7 @@ mod tests {
             } else {
                 panic!("unexpected column type");
             }
-        });
+        }
     }
 
     #[test]
@@ -1483,54 +1506,52 @@ mod tests {
             ),
         ];
 
-        cases
-            .iter()
-            .for_each(|(original, tz_opt, granularity, expected)| {
-                let input = original
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let right = expected
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let batch_len = input.len();
-                let arg_fields = vec![
-                    Field::new("a", DataType::Utf8, false).into(),
-                    Field::new("b", input.data_type().clone(), false).into(),
-                ];
-                let args = ScalarFunctionArgs {
-                    args: vec![
-                        ColumnarValue::Scalar(ScalarValue::from(*granularity)),
-                        ColumnarValue::Array(Arc::new(input)),
-                    ],
-                    arg_fields,
-                    number_rows: batch_len,
-                    return_field: Field::new(
-                        "f",
-                        DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                        true,
-                    )
-                    .into(),
-                    config_options: Arc::new(ConfigOptions::default()),
-                };
-                let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
-                if let ColumnarValue::Array(result) = result {
-                    assert_eq!(
-                        result.data_type(),
-                        &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
-                    );
-                    let left = as_primitive_array::<TimestampNanosecondType>(&result);
-                    assert_eq!(
-                        left, &right,
-                        "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
-                    );
-                } else {
-                    panic!("unexpected column type");
-                }
-            });
+        for (original, tz_opt, granularity, expected) in &cases {
+            let input = original
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let right = expected
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let batch_len = input.len();
+            let arg_fields = vec![
+                Field::new("a", DataType::Utf8, false).into(),
+                Field::new("b", input.data_type().clone(), false).into(),
+            ];
+            let args = ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(ScalarValue::from(*granularity)),
+                    ColumnarValue::Array(Arc::new(input)),
+                ],
+                arg_fields,
+                number_rows: batch_len,
+                return_field: Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                )
+                .into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(
+                    result.data_type(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
+                );
+                let left = as_primitive_array::<TimestampNanosecondType>(&result);
+                assert_eq!(
+                    left, &right,
+                    "Failed for granularity: {granularity}, timezone: {tz_opt:?}"
+                );
+            } else {
+                panic!("unexpected column type");
+            }
+        }
     }
 }

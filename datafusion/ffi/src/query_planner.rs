@@ -179,7 +179,7 @@ unsafe extern "C" fn release_fn_wrapper(planner: &mut FFI_QueryPlanner) {
     unsafe {
         debug_assert!(!planner.private_data.is_null());
         let private_data =
-            Box::from_raw(planner.private_data as *mut QueryPlannerPrivateData);
+            Box::from_raw(planner.private_data.cast::<QueryPlannerPrivateData>());
         drop(private_data);
         planner.private_data = std::ptr::null_mut();
     }
@@ -190,7 +190,8 @@ unsafe extern "C" fn clone_fn_wrapper(planner: &FFI_QueryPlanner) -> FFI_QueryPl
 
     let private_data = Box::into_raw(Box::new(QueryPlannerPrivateData {
         planner: old_planner,
-    })) as *mut c_void;
+    }))
+    .cast::<c_void>();
 
     FFI_QueryPlanner {
         create_physical_plan: create_physical_plan_fn_wrapper,
@@ -271,7 +272,7 @@ impl FFI_QueryPlanner {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -441,5 +442,41 @@ mod tests {
         assert!(physical_plan.is::<EmptyExec>());
 
         Ok(())
+    }
+
+    // Control for https://github.com/apache/datafusion/issues/24722: this
+    // constructor adopts the supplied codecs on the already-foreign path.
+    #[test]
+    fn test_rebind_foreign_query_planner_adopts_codecs() {
+        use datafusion_execution::TaskContext;
+
+        let ctx_a = Arc::new(SessionContext::new());
+        let ctx_b = Arc::new(SessionContext::new());
+        let provider_b = Arc::clone(&ctx_b) as Arc<dyn TaskContextProvider>;
+
+        let mut ffi_a = create_ffi_query_planner(Arc::clone(&ctx_a));
+        ffi_a.library_marker_id = crate::mock_foreign_marker_id;
+        let imported: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_a).into();
+        let any_ref: &dyn std::any::Any = imported.as_ref();
+        assert!(any_ref.downcast_ref::<ForeignQueryPlanner>().is_some());
+
+        let rebound = FFI_QueryPlanner::new_with_ffi_codecs(
+            imported,
+            FFI_LogicalExtensionCodec::new(
+                Arc::new(DefaultLogicalExtensionCodec {}),
+                None,
+                &provider_b,
+            ),
+            FFI_PhysicalExtensionCodec::new(
+                Arc::new(DefaultPhysicalExtensionCodec {}),
+                None,
+                &provider_b,
+            ),
+        );
+
+        let bound_to: Arc<TaskContext> = (&rebound.logical_codec.task_ctx_provider)
+            .try_into()
+            .unwrap();
+        assert_eq!(bound_to.session_id(), ctx_b.task_ctx().session_id());
     }
 }

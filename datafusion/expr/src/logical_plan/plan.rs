@@ -65,7 +65,7 @@ use datafusion_common::{
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_err, validate_range_split_points,
+    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
 use indexmap::IndexSet;
 use itertools::Itertools as _;
@@ -428,11 +428,11 @@ impl LogicalPlan {
     pub fn all_out_ref_exprs(self: &LogicalPlan) -> Vec<Expr> {
         let mut exprs = vec![];
         self.apply_expressions(|e| {
-            find_out_reference_exprs(e).into_iter().for_each(|e| {
+            for e in find_out_reference_exprs(e) {
                 if !exprs.contains(&e) {
                     exprs.push(e)
                 }
-            });
+            }
             Ok(TreeNodeRecursion::Continue)
         })
         // closure always returns OK
@@ -1427,7 +1427,9 @@ impl LogicalPlan {
                 })
             }
             LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
-            LogicalPlan::EmptyRelation(_) => Some(0),
+            LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row, ..
+            }) => Some(usize::from(*produce_one_row)),
             LogicalPlan::RecursiveQuery(_) => None,
             LogicalPlan::Subquery(_) => None,
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
@@ -1448,6 +1450,82 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
+        }
+    }
+
+    /// Returns a lower bound on the number of rows that this plan can output.
+    ///
+    /// A return value of `0` means that the plan may produce no rows. A positive
+    /// value guarantees that the plan produces at least that many rows.
+    ///
+    /// See [`Self::max_rows`] for the corresponding upper bound.
+    pub fn min_rows(&self) -> usize {
+        match self {
+            LogicalPlan::Projection(Projection { input, .. })
+            | LogicalPlan::Window(Window { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.min_rows(),
+            LogicalPlan::Filter(_) => 0,
+            LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
+                // An ungrouped aggregate always produces one row, even for an
+                // empty input.
+                usize::from(group_expr.is_empty())
+            }
+            LogicalPlan::Sort(Sort { input, fetch, .. }) => fetch
+                .map(|fetch| input.min_rows().min(fetch))
+                .unwrap_or_else(|| input.min_rows()),
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                on,
+                filter,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner if on.is_empty() && filter.is_none() => {
+                    left.min_rows().saturating_mul(right.min_rows())
+                }
+                JoinType::Left | JoinType::LeftMark => left.min_rows(),
+                JoinType::Right | JoinType::RightMark => right.min_rows(),
+                JoinType::Full => left.min_rows().max(right.min_rows()),
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti => 0,
+            },
+            LogicalPlan::Union(Union { inputs, .. }) => inputs
+                .iter()
+                .fold(0, |rows, input| rows.saturating_add(input.min_rows())),
+            LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row, ..
+            }) => usize::from(*produce_one_row),
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.min_rows(),
+            LogicalPlan::Limit(limit) => {
+                match (limit.get_skip_type(), limit.get_fetch_type()) {
+                    (Ok(SkipType::Literal(skip)), Ok(FetchType::Literal(fetch))) => fetch
+                        .map(|fetch| {
+                            limit.input.min_rows().saturating_sub(skip).min(fetch)
+                        })
+                        .unwrap_or_else(|| limit.input.min_rows().saturating_sub(skip)),
+                    _ => 0,
+                }
+            }
+            LogicalPlan::Distinct(
+                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+            ) => usize::from(input.min_rows() > 0),
+            LogicalPlan::Values(values) => values.values.len(),
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Extension(_) => 0,
         }
     }
 
@@ -1914,7 +1992,7 @@ impl LogicalPlan {
                         produce_one_row,
                         schema: _,
                     }) => {
-                        let rows = if *produce_one_row { 1 } else { 0 };
+                        let rows = i32::from(*produce_one_row);
                         write!(f, "EmptyRelation: rows={rows}")
                     }
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
@@ -1993,7 +2071,7 @@ impl LogicalPlan {
                                     ", full_filters=[{}]",
                                     expr_vec_fmt!(full_filter)
                                 )?;
-                            };
+                            }
                             if !partial_filter.is_empty() {
                                 write!(
                                     f,
@@ -2111,7 +2189,7 @@ impl LogicalPlan {
                         };
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "{join_type} Join:",)?;
+                                write!(f, "{join_type} Join:")?;
                                 if !join_expr.is_empty() || !filter_expr.is_empty() {
                                     write!(
                                         f,
@@ -2182,7 +2260,7 @@ impl LogicalPlan {
                                 .as_ref()
                                 .map_or_else(|| "None".to_string(), |x| x.to_string()),
                         };
-                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}",)
+                        write!(f, "Limit: skip={skip_str}, fetch={fetch_str}")
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
                         write!(f, "Subquery:")
@@ -3704,7 +3782,12 @@ impl Limit {
                     // `skip = NULL` is equivalent to `skip = 0`
                     let s = s.unwrap_or(0);
                     if s >= 0 {
-                        Ok(SkipType::Literal(s as usize))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "OFFSET value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(SkipType::Literal(s))
                     } else {
                         plan_err!("OFFSET must be >=0, '{}' was provided", s)
                     }
@@ -3722,7 +3805,12 @@ impl Limit {
             Some(expr) => match *expr {
                 Expr::Literal(ScalarValue::Int64(Some(s)), _) => {
                     if s >= 0 {
-                        Ok(FetchType::Literal(Some(s as usize)))
+                        let s = usize::try_from(s).map_err(|_| {
+                            plan_datafusion_err!(
+                                "LIMIT value {s} cannot be represented as usize"
+                            )
+                        })?;
+                        Ok(FetchType::Literal(Some(s)))
                     } else {
                         plan_err!("LIMIT must be >= 0, '{}' was provided", s)
                     }
@@ -4002,7 +4090,7 @@ impl Aggregate {
             exprs.push(&INTERNAL_ID_EXPR);
         }
         exprs.extend(self.aggr_expr.iter());
-        debug_assert!(exprs.len() == self.schema.fields().len());
+        debug_assert_eq!(exprs.len(), self.schema.fields().len());
         Ok(exprs)
     }
 
@@ -4245,13 +4333,13 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
-    /// Whether this is a null-aware anti join (for NOT IN semantics).
+    /// Whether this join needs null-aware NOT IN semantics.
     ///
-    /// Only applies to LeftAnti joins. When true, implements SQL NOT IN semantics where:
-    /// - If the right side (subquery) contains any NULL in join keys, no rows are output
-    /// - Left side rows with NULL in join keys are not output
+    /// For `LeftAnti`, if the right side contains any NULL in join keys, no rows are output and
+    /// left rows with NULL join keys are also excluded.
     ///
-    /// This is required for correct NOT IN subquery behavior with three-valued logic.
+    /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
+    /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
 }
 
@@ -4270,7 +4358,7 @@ impl Join {
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
     /// * `null_equality` - How to handle nulls in join comparisons
-    /// * `null_aware` - Whether this is a null-aware anti join (for NOT IN semantics)
+    /// * `null_aware` - Whether this join needs null-aware NOT IN semantics
     ///
     /// # Returns
     ///
@@ -4309,9 +4397,8 @@ impl Join {
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
     ) -> Result<(Self, bool)> {
-        let original_join = match original {
-            LogicalPlan::Join(join) => join,
-            _ => return plan_err!("Could not create join with project input"),
+        let LogicalPlan::Join(original_join) = original else {
+            return plan_err!("Could not create join with project input");
         };
 
         let mut left_sch = LogicalPlanBuilder::from(Arc::clone(&left));
@@ -4778,7 +4865,7 @@ impl Unnest {
                                     ));
                                 }
                                 _ => {}
-                            };
+                            }
                         }
 
                         // new columns dependent on the same original index
@@ -4869,7 +4956,7 @@ fn get_unnested_columns(
         _ => {
             return internal_err!("trying to unnest on invalid data type {data_type}");
         }
-    };
+    }
     Ok(qualified_columns)
 }
 
@@ -4891,7 +4978,7 @@ fn get_unnested_list_datatype_recursive(
             return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
         }
         _ => {}
-    };
+    }
 
     internal_err!("trying to unnest on invalid data type {data_type}")
 }
@@ -4952,6 +5039,33 @@ mod tests {
             8,
             "CreateFunction should be Box'd inside DdlStatement"
         );
+    }
+
+    #[test]
+    fn limit_literals_use_checked_usize_conversion() -> Result<()> {
+        let value = i64::from(u32::MAX) + 1;
+        let input = Arc::new(LogicalPlanBuilder::empty(false).build()?);
+        let limit = Limit {
+            skip: Some(Box::new(lit(value))),
+            fetch: Some(Box::new(lit(value))),
+            input,
+        };
+
+        if usize::BITS < 64 {
+            assert!(limit.get_skip_type().is_err());
+            assert!(limit.get_fetch_type().is_err());
+        } else {
+            let expected = usize::try_from(value).unwrap();
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                panic!("expected literal skip")
+            };
+            let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
+                panic!("expected literal fetch")
+            };
+            assert_eq!(skip, expected);
+            assert_eq!(fetch, expected);
+        }
+        Ok(())
     }
 
     fn employee_schema() -> Schema {
@@ -5717,6 +5831,113 @@ mod tests {
     }
 
     #[test]
+    fn min_rows_is_a_conservative_lower_bound() -> Result<()> {
+        let no_rows = LogicalPlanBuilder::empty(false).build()?;
+        let one_row = LogicalPlanBuilder::empty(true).build()?;
+        assert_eq!(no_rows.min_rows(), 0);
+        assert_eq!(no_rows.max_rows(), Some(0));
+        assert_eq!(one_row.min_rows(), 1);
+        assert_eq!(one_row.max_rows(), Some(1));
+
+        let projection = LogicalPlanBuilder::from(one_row.clone())
+            .project(vec![lit(1)])?
+            .build()?;
+        assert_eq!(projection.min_rows(), 1);
+
+        let filter = LogicalPlanBuilder::from(projection.clone())
+            .filter(lit(true))?
+            .build()?;
+        assert_eq!(filter.min_rows(), 0);
+
+        let aggregate = LogicalPlanBuilder::from(no_rows)
+            .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
+            .build()?;
+        assert_eq!(aggregate.min_rows(), 1);
+
+        let offset = LogicalPlanBuilder::from(projection.clone())
+            .limit(1, None)?
+            .build()?;
+        assert_eq!(offset.min_rows(), 0);
+
+        let union = LogicalPlanBuilder::from(projection.clone())
+            .union(projection)?
+            .build()?;
+        assert_eq!(union.min_rows(), 2);
+        assert_eq!(
+            LogicalPlanBuilder::from(union)
+                .distinct()?
+                .build()?
+                .min_rows(),
+            1
+        );
+
+        let values =
+            LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
+        assert_eq!(values.min_rows(), 2);
+
+        let sort_key = col("column1").sort(true, false);
+        let sort = LogicalPlanBuilder::from(values.clone())
+            .sort(vec![sort_key.clone()])?
+            .build()?;
+        assert_eq!(sort.min_rows(), 2);
+        let sort_with_fetch = LogicalPlanBuilder::from(values.clone())
+            .sort_with_limit(vec![sort_key], Some(1))?
+            .build()?;
+        assert_eq!(sort_with_fetch.min_rows(), 1);
+
+        let limit = LogicalPlanBuilder::from(values.clone())
+            .limit(1, Some(5))?
+            .build()?;
+        assert_eq!(limit.min_rows(), 1);
+
+        let grouped = LogicalPlanBuilder::from(values)
+            .aggregate(vec![col("column1")], vec![count(lit(1))])?
+            .build()?;
+        assert_eq!(grouped.min_rows(), 0);
+
+        let scan = table_scan(Some("employee"), &employee_schema(), None)?.build()?;
+        assert_eq!(scan.min_rows(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn min_rows_of_joins() -> Result<()> {
+        let two_rows = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
+            .alias("l")?
+            .build()?;
+        let one_row = LogicalPlanBuilder::values(vec![vec![lit(1)]])?
+            .alias("r")?
+            .build()?;
+
+        let cross_join = LogicalPlanBuilder::from(two_rows.clone())
+            .cross_join(one_row.clone())?
+            .build()?;
+        assert_eq!(cross_join.min_rows(), 2);
+
+        for (join_type, expected_min_rows) in [
+            // An inner join with a join condition may filter out every row,
+            // while outer joins preserve the rows of the outer side(s).
+            (JoinType::Inner, 0),
+            (JoinType::Left, 2),
+            (JoinType::Right, 1),
+            (JoinType::Full, 2),
+            (JoinType::LeftSemi, 0),
+        ] {
+            let join = LogicalPlanBuilder::from(two_rows.clone())
+                .join_on(
+                    one_row.clone(),
+                    join_type,
+                    [col("l.column1").eq(col("r.column1"))],
+                )?
+                .build()?;
+            assert_eq!(join.min_rows(), expected_min_rows, "{join_type} join");
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_replace_invalid_placeholder() {
         // test empty placeholder
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
@@ -6416,7 +6637,9 @@ mod tests {
 
                     assert!(!fields[0].is_nullable());
                     assert!(!fields[1].is_nullable());
-                    assert!(!fields[2].is_nullable());
+                    // The mark column is always nullable: null-aware `LeftMark`
+                    // joins use NULL to represent SQL UNKNOWN for `NOT IN`.
+                    assert!(fields[2].is_nullable());
                 }
                 _ => {
                     assert_eq!(join.schema.fields().len(), 4);

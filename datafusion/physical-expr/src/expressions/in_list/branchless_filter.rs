@@ -42,7 +42,7 @@
 //! different NaN values. [`BranchlessFilterType`] defines these safe,
 //! same-sized mappings and checks their sizes at compile time.
 //!
-//! The fast path is intentionally limited to short lists:
+//! The fast path is limited to short lists:
 //!
 //! - 16 values for 1-byte types
 //! - 8 values for 2-byte types
@@ -77,7 +77,7 @@ use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err};
 
 use super::result::build_result_from_contains;
-use super::static_filter::{StaticFilter, handle_dictionary};
+use super::static_filter::StaticFilter;
 
 pub(super) type BranchlessNative<T> =
     <<T as BranchlessFilterType>::CompareType as ArrowPrimitiveType>::Native;
@@ -256,8 +256,6 @@ where
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-        handle_dictionary!(self, v, negated);
-
         // Arrow compatibility ignores timestamp timezone and decimal precision/scale
         // while still requiring the same primitive representation.
         if !PrimitiveArray::<T>::is_compatible(v.data_type()) {
@@ -315,6 +313,10 @@ where
 }
 
 #[inline]
+#[expect(
+    clippy::needless_bitwise_bool,
+    reason = "the non-short-circuiting `|` is the point of this branchless kernel"
+)]
 fn check_values<C, const N: usize>(
     in_list_values: &[C],
     input_values: &[C],

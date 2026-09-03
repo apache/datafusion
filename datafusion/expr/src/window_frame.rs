@@ -135,7 +135,7 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             && val.is_null()
         {
             plan_err!("Invalid window frame: end bound cannot be UNBOUNDED PRECEDING")?
-        };
+        }
 
         let units = value.units.into();
         Ok(Self::new_bounds(units, start_bound, end_bound))
@@ -282,7 +282,13 @@ impl WindowFrame {
 
     /// Returns whether the window frame is "free range"; i.e. its start/end
     /// bounds are UNBOUNDED or CURRENT ROW.
-    fn free_range(&self) -> bool {
+    ///
+    /// This inspects only the bounds, not the frame units, so it returns `true`
+    /// for ROWS and GROUPS frames with such bounds as well. For RANGE frames,
+    /// such bounds are located by comparing order key values, whereas a finite
+    /// offset bound (e.g. `5 PRECEDING`) has to be computed arithmetically from
+    /// the current row's order key value.
+    pub fn free_range(&self) -> bool {
         (self.start_bound.is_unbounded()
             || self.start_bound == WindowFrameBound::CurrentRow)
             && (self.end_bound.is_unbounded()

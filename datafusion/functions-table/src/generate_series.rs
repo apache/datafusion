@@ -291,6 +291,9 @@ impl GenerateSeriesTable {
         &self,
         batch_size: usize,
     ) -> Result<Arc<RwLock<dyn LazyBatchGenerator>>> {
+        if batch_size == 0 {
+            return plan_err!("GenerateSeriesTable: batch_size must be greater than 0");
+        }
         let generator: Arc<RwLock<dyn LazyBatchGenerator>> = match &self.args {
             GenSeriesArgs::ContainsNull { name } => Arc::new(RwLock::new(Empty { name })),
             GenSeriesArgs::Int64Args {
@@ -620,7 +623,7 @@ impl GenerateSeriesFuncImpl {
                         other
                     );
                 }
-            };
+            }
         }
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -877,7 +880,26 @@ mod generate_series_tests {
     use datafusion_common::Result;
     use datafusion_physical_plan::memory::LazyBatchGenerator;
 
-    use crate::generate_series::GenericSeriesState;
+    use crate::generate_series::{
+        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState,
+    };
+
+    #[test]
+    fn generate_series_rejects_zero_batch_size() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let table = GenerateSeriesTable::new(
+            schema,
+            GenSeriesArgs::Int64Args {
+                start: 1,
+                end: 2,
+                step: 1,
+                include_end: true,
+                name: "generate_series",
+            },
+        );
+
+        assert!(table.as_generator(0).is_err());
+    }
 
     #[test]
     fn test_generic_series_state_reset() -> Result<()> {

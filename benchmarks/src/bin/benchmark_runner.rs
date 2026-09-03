@@ -40,6 +40,7 @@ use datafusion_common_runtime::SpawnedTask;
 use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::Path;
 
@@ -333,12 +334,14 @@ fn format_suite_list(suites: &[SuiteMetadata]) -> String {
         } else {
             "queries "
         };
-        output.push_str(&format!(
-            "  {:<24} {} {query_word}{}\n",
+        writeln!(
+            output,
+            "  {:<24} {} {query_word}{}",
             suite.name(),
             suite.benchmark_count(),
             suite.description()
-        ));
+        )
+        .ok();
     }
     output.trim_end().to_string()
 }
@@ -1970,6 +1973,10 @@ description = "Run query one against CSV data."
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     async fn cli_subgroup_filter_is_used_for_benchmark_replacements() {
         let temp = tempfile::tempdir().unwrap();
 
@@ -1992,6 +1999,10 @@ description = "Run query one against CSV data."
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     async fn benchmark_replacements_use_explicit_data_dir() {
         let temp = tempfile::tempdir().unwrap();
 

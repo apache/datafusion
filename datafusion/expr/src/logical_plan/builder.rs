@@ -1666,7 +1666,9 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 
     (
         table_reference,
-        Arc::new(Field::new("mark", DataType::Boolean, false)),
+        // Nullable: null-aware `LeftMark` joins use NULL to represent SQL
+        // UNKNOWN for `NOT IN`. Other mark joins simply never produce a NULL.
+        Arc::new(Field::new("mark", DataType::Boolean, true)),
     )
 }
 
@@ -2972,9 +2974,7 @@ mod tests {
     #[test]
     fn test_values_metadata() -> Result<()> {
         let metadata: HashMap<String, String> =
-            [("ARROW:extension:metadata".to_string(), "test".to_string())]
-                .into_iter()
-                .collect();
+            once(("ARROW:extension:metadata".to_string(), "test".to_string())).collect();
         let metadata = FieldMetadata::from(metadata);
         let values = LogicalPlanBuilder::values(vec![
             vec![lit_with_metadata(1, Some(metadata.clone()))],
@@ -2985,9 +2985,7 @@ mod tests {
 
         // Do not allow VALUES with different metadata mixed together
         let metadata2: HashMap<String, String> =
-            [("ARROW:extension:metadata".to_string(), "test2".to_string())]
-                .into_iter()
-                .collect();
+            once(("ARROW:extension:metadata".to_string(), "test2".to_string())).collect();
         let metadata2 = FieldMetadata::from(metadata2);
         assert!(
             LogicalPlanBuilder::values(vec![

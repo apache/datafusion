@@ -40,7 +40,9 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{Result, exec_err, utils::take_function_args};
+use datafusion_common::{
+    Result, exec_datafusion_err, exec_err, utils::take_function_args,
+};
 use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
@@ -65,11 +67,11 @@ make_udf_expr_and_func!(
 | 2                                            |
 +----------------------------------------------+
 > select array_position([1, 2, 2, 3, 1, 4], 2, 3);
-+----------------------------------------------------+
++--------------------------------------------------------+
 | array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
-+----------------------------------------------------+
-| 3                                                  |
-+----------------------------------------------------+
++--------------------------------------------------------+
+| 3                                                      |
++--------------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -198,6 +200,16 @@ fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+fn resolve_zero_based_start_from(start_from: i64) -> Result<i64> {
+    start_from.checked_sub(1).ok_or_else(|| {
+        exec_datafusion_err!(
+            "start_from out of bounds: {start_from}, expected {} to {}",
+            i64::MIN + 1,
+            i64::MAX
+        )
+    })
+}
+
 /// Resolves the optional `start_from` argument into a `Vec<i64>` of
 /// 0-indexed starting positions.
 fn resolve_start_from(
@@ -207,14 +219,16 @@ fn resolve_start_from(
     match third_arg {
         None => Ok(vec![0i64; num_rows]),
         Some(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))) => {
-            Ok(vec![v - 1; num_rows])
+            Ok(vec![resolve_zero_based_start_from(*v)?; num_rows])
         }
         Some(ColumnarValue::Scalar(s)) => {
             exec_err!("array_position expected Int64 for start_from, got {s}")
         }
-        Some(ColumnarValue::Array(a)) => {
-            Ok(as_int64_array(a)?.values().iter().map(|&x| x - 1).collect())
-        }
+        Some(ColumnarValue::Array(a)) => as_int64_array(a)?
+            .values()
+            .iter()
+            .map(|&x| resolve_zero_based_start_from(x))
+            .collect(),
     }
 }
 
@@ -309,8 +323,8 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         as_int64_array(&args[2])?
             .values()
             .iter()
-            .map(|&x| x - 1)
-            .collect::<Vec<_>>()
+            .map(|&x| resolve_zero_based_start_from(x))
+            .collect::<Result<Vec<_>>>()?
     } else {
         vec![0; haystack.len()]
     };

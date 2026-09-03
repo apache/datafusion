@@ -271,7 +271,7 @@ The time zone can be a value like +00:00, 'Europe/London' etc.
 | to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +--------------------------------------------------------------------------------------------------------------+
 | 2023-05-17T03:59:00.123456789                                                                                |
-+---------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------+
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
@@ -501,9 +501,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 decimal128_to_timestamp_nanos(&arg, tz)
             }
             Decimal128(_, _) => decimal128_to_timestamp_nanos(&args[0], tz),
-            Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp", &tz)
-            }
+            Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
+                &args,
+                "to_timestamp",
+                tz.as_ref(),
+            ),
             other => {
                 exec_err!("Unsupported data type {other} for function to_timestamp")
             }
@@ -568,7 +570,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampSecondType>(
                 &args,
                 "to_timestamp_seconds",
-                &self.timezone,
+                self.timezone.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -637,7 +639,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
                 &args,
                 "to_timestamp_millis",
-                &self.timezone,
+                self.timezone.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -706,7 +708,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
                 &args,
                 "to_timestamp_micros",
-                &self.timezone,
+                self.timezone.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -775,7 +777,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
                 &args,
                 "to_timestamp_nanos",
-                &self.timezone,
+                self.timezone.as_ref(),
             ),
             other => {
                 exec_err!(
@@ -794,7 +796,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
 fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     args: &[ColumnarValue],
     name: &str,
-    timezone: &Option<Arc<str>>,
+    timezone: Option<&Arc<str>>,
 ) -> Result<ColumnarValue> {
     let factor = match T::UNIT {
         Second => 1_000_000_000,
@@ -803,7 +805,7 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
         Nanosecond => 1,
     };
 
-    let tz = match timezone.clone() {
+    let tz = match timezone {
         Some(tz) => Some(tz.parse::<Tz>()?),
         None => None,
     };
@@ -811,18 +813,21 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     match args.len() {
         1 => handle::<T, _>(
             args,
-            move |s| string_to_timestamp_nanos_with_timezone(&tz, s).map(|n| n / factor),
+            move |s| {
+                string_to_timestamp_nanos_with_timezone(tz.as_ref(), s)
+                    .map(|n| n / factor)
+            },
             name,
-            &Timestamp(T::UNIT, timezone.clone()),
+            &Timestamp(T::UNIT, timezone.cloned()),
         ),
         n if n >= 2 => handle_multiple::<T, _, _>(
             args,
             move |s, format| {
-                string_to_timestamp_nanos_formatted_with_timezone(&tz, s, format)
+                string_to_timestamp_nanos_formatted_with_timezone(tz.as_ref(), s, format)
             },
             |n| n / factor,
             name,
-            &Timestamp(T::UNIT, timezone.clone()),
+            &Timestamp(T::UNIT, timezone.cloned()),
         ),
         _ => exec_err!("Unsupported 0 argument count for function {name}"),
     }
@@ -836,7 +841,10 @@ mod tests {
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
     };
-    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
+    use arrow::array::{
+        ArrayRef, Int64Array, LargeStringArray, StringArray, StringBuilder,
+        StringViewArray,
+    };
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::{DateTime, FixedOffset, Utc};
     use datafusion_common::{DataFusionError, assert_contains};
@@ -846,7 +854,11 @@ mod tests {
 
     fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp", &timezone)
+        to_timestamp_impl::<TimestampNanosecondType>(
+            args,
+            "to_timestamp",
+            timezone.as_ref(),
+        )
     }
 
     /// to_timestamp_millis SQL function
@@ -855,7 +867,7 @@ mod tests {
         to_timestamp_impl::<TimestampMillisecondType>(
             args,
             "to_timestamp_millis",
-            &timezone,
+            timezone.as_ref(),
         )
     }
 
@@ -865,7 +877,7 @@ mod tests {
         to_timestamp_impl::<TimestampMicrosecondType>(
             args,
             "to_timestamp_micros",
-            &timezone,
+            timezone.as_ref(),
         )
     }
 
@@ -875,14 +887,18 @@ mod tests {
         to_timestamp_impl::<TimestampNanosecondType>(
             args,
             "to_timestamp_nanos",
-            &timezone,
+            timezone.as_ref(),
         )
     }
 
     /// to_timestamp_seconds SQL function
     fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let timezone: Option<Arc<str>> = Some("UTC".into());
-        to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds", &timezone)
+        to_timestamp_impl::<TimestampSecondType>(
+            args,
+            "to_timestamp_seconds",
+            timezone.as_ref(),
+        )
     }
 
     fn udfs_and_timeunit() -> Vec<(Box<dyn ScalarUDFImpl>, TimeUnit)> {
@@ -955,7 +971,9 @@ mod tests {
 
         string_builder.append_null();
         ts_builder.append_null();
-        let expected_timestamps = &ts_builder.finish() as &dyn Array;
+        // the test helpers above configure "UTC" as the execution timezone
+        let expected = ts_builder.finish().with_timezone("UTC");
+        let expected_timestamps = &expected as &dyn Array;
 
         let string_array =
             ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
@@ -1023,7 +1041,9 @@ mod tests {
         format3_builder.append_value("%+");
         ts_builder.append_value(1599572549190850000);
 
-        let expected_timestamps = &ts_builder.finish() as &dyn Array;
+        // the test helpers above configure "UTC" as the execution timezone
+        let expected = ts_builder.finish().with_timezone("UTC");
+        let expected_timestamps = &expected as &dyn Array;
 
         let string_array = [
             ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef),
@@ -1147,6 +1167,62 @@ mod tests {
             );
 
             assert_eq!(result, Some("2020-09-08 13:42:29 -05:00".to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// An array result must be annotated with the same timezone that
+    /// `return_type` advertises, otherwise execution fails when the column is
+    /// materialized. See <https://github.com/apache/datafusion/issues/24632>.
+    #[test]
+    fn to_timestamp_array_respects_execution_timezone() -> Result<()> {
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("-05:00".to_string());
+
+        // every string array flavor `handle`/`handle_multiple` dispatch on
+        let string_arrays: [fn(Vec<&str>) -> ArrayRef; 3] = [
+            |values| Arc::new(StringArray::from(values)) as ArrayRef,
+            |values| Arc::new(LargeStringArray::from(values)) as ArrayRef,
+            |values| Arc::new(StringViewArray::from(values)) as ArrayRef,
+        ];
+
+        for (udf, time_unit) in udfs_and_timeunit() {
+            let udf = udf.with_updated_config(&options).unwrap();
+            let expected = udf.return_type(&[Utf8])?;
+            assert_eq!(expected, Timestamp(time_unit, Some("-05:00".into())));
+
+            for string_array in string_arrays {
+                // both the single argument and the explicit format overloads
+                for args in [
+                    vec![ColumnarValue::Array(string_array(vec![
+                        "2020-09-08T13:42:29",
+                    ]))],
+                    vec![
+                        ColumnarValue::Array(string_array(vec!["2020-09-08 13:42:29"])),
+                        ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                            "%Y-%m-%d %H:%M:%S".to_string(),
+                        ))),
+                    ],
+                ] {
+                    let arg_fields = args
+                        .iter()
+                        .map(|arg| Field::new("arg", arg.data_type(), true).into())
+                        .collect();
+                    let result = udf.invoke_with_args(ScalarFunctionArgs {
+                        args,
+                        arg_fields,
+                        number_rows: 1,
+                        return_field: Field::new("f", expected.clone(), true).into(),
+                        config_options: Arc::new(options.clone()),
+                    })?;
+
+                    let ColumnarValue::Array(array) = result else {
+                        panic!("expected an array result");
+                    };
+                    assert_eq!(array.data_type(), &expected);
+                }
+            }
         }
 
         Ok(())
@@ -1573,11 +1649,9 @@ mod tests {
     }
 
     fn parse_timestamp_formatted(s: &str, format: &str) -> Result<i64, DataFusionError> {
-        let result = string_to_timestamp_nanos_formatted_with_timezone(
-            &Some("UTC".parse()?),
-            s,
-            format,
-        );
+        let tz: Tz = "UTC".parse()?;
+        let result =
+            string_to_timestamp_nanos_formatted_with_timezone(Some(&tz), s, format);
         if let Err(e) = &result {
             eprintln!("Error parsing timestamp '{s}' using format '{format}': {e:?}");
         }
@@ -1703,9 +1777,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
@@ -1753,9 +1826,8 @@ mod tests {
                 let res = udf
                     .invoke_with_args(args)
                     .expect("that to_timestamp parsed values without error");
-                let array = match res {
-                    ColumnarValue::Array(res) => res,
-                    _ => panic!("Expected a columnar array"),
+                let ColumnarValue::Array(array) = res else {
+                    panic!("Expected a columnar array")
                 };
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
@@ -1788,10 +1860,16 @@ mod tests {
         micros_builder.append_value(1599572549190850);
         sec_builder.append_value(1599572549);
 
-        let nanos_expected_timestamps = &nanos_builder.finish() as &dyn Array;
-        let millis_expected_timestamps = &millis_builder.finish() as &dyn Array;
-        let micros_expected_timestamps = &micros_builder.finish() as &dyn Array;
-        let sec_expected_timestamps = &sec_builder.finish() as &dyn Array;
+        // the test helpers above configure "UTC" as the execution timezone
+        let nanos_expected = nanos_builder.finish().with_timezone("UTC");
+        let millis_expected = millis_builder.finish().with_timezone("UTC");
+        let micros_expected = micros_builder.finish().with_timezone("UTC");
+        let sec_expected = sec_builder.finish().with_timezone("UTC");
+
+        let nanos_expected_timestamps = &nanos_expected as &dyn Array;
+        let millis_expected_timestamps = &millis_expected as &dyn Array;
+        let micros_expected_timestamps = &micros_expected as &dyn Array;
+        let sec_expected_timestamps = &sec_expected as &dyn Array;
 
         for (func, time_unit) in funcs {
             // test UTF8
@@ -1818,7 +1896,7 @@ mod tests {
                     Second => {
                         assert_eq!(sec_expected_timestamps, parsed_array.as_ref())
                     }
-                };
+                }
             } else {
                 panic!("Expected a columnar array")
             }
@@ -1834,7 +1912,10 @@ mod tests {
                 .expect("that to_timestamp with format args parsed values without error");
             if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
                 assert_eq!(parsed_array.len(), 1);
-                assert!(matches!(parsed_array.data_type(), Timestamp(_, None)));
+                assert!(matches!(
+                    parsed_array.data_type(),
+                    Timestamp(_, Some(tz)) if tz.as_ref() == "UTC"
+                ));
 
                 match time_unit {
                     Nanosecond => {
@@ -1849,7 +1930,7 @@ mod tests {
                     Second => {
                         assert_eq!(sec_expected_timestamps, parsed_array.as_ref())
                     }
-                };
+                }
             } else {
                 panic!("Expected a columnar array")
             }

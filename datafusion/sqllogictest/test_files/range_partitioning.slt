@@ -446,8 +446,9 @@ physical_plan
 
 ##########
 # TEST 11: Left-Side Range Hash Joins With Incompatible Range Layouts
-# Different split points or partition counts do not satisfy the
-# co-partitioned layout requirement.
+# Differing split points on equal-size inputs fall back to hash repartitioning,
+# while mismatched partition counts adapt the smaller input to match the larger
+# input's range partitioning.
 ##########
 
 # Different split points do not satisfy the co-partitioned layout requirement.
@@ -478,8 +479,8 @@ ORDER BY l.range_key;
 30 300 300
 35 350 350
 
-# Different partition counts do not satisfy the co-partitioned layout
-# requirement.
+# Different partition counts adapt the smaller input to match the larger
+# input's range partitioning.
 query TT
 EXPLAIN SELECT l.range_key, l.value, r.value
 FROM range_partitioned l
@@ -487,10 +488,9 @@ LEFT JOIN range_partitioned_narrow r ON l.range_key = r.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Left, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
-02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=3
-05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+03)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), input_partitions=3
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
 
 ##########
 # TEST 12: LeftMark Subqueries Over Range Hash Joins
@@ -907,9 +907,8 @@ reset datafusion.optimizer.subset_repartition_threshold;
 ##########
 # TEST 23: Right Join with Mismatched Range Partition Counts Repartitions
 # Both inputs are range partitioned on range_key, but declare a different number
-# of partitions (four vs three). The per-child key requirements can be satisfied
-# by Range, but the co-partitioned layout requirement cannot, so Hash
-# repartitioning repairs both sides of the right join.
+# of partitions (four vs three). The larger input's range partitioning is
+# preserved, and the smaller input is repartitioned to match.
 ##########
 
 query TT
@@ -919,10 +918,9 @@ RIGHT JOIN range_partitioned_narrow r ON l.range_key = r.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Right, on=[(range_key@0, range_key@0)], projection=[value@1, range_key@2, value@3]
-02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-04)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=3
-05)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+03)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), input_partitions=3
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20)], 3), file_type=parquet
 
 query III
 SELECT l.value, r.range_key, r.value
@@ -1041,12 +1039,11 @@ FROM range_partitioned l
 JOIN range_partitioned r ON l.range_key = r.range_key;
 ----
 physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
-02)--SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)]
-03)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
-05)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-06)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
+01)SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+03)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
+04)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+05)----DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet, sort_order_for_reorder=[range_key@0 ASC]
 
 query III
 SELECT l.range_key, l.value, r.value
@@ -1075,14 +1072,13 @@ FROM range_partitioned l
 JOIN range_partitioned_shifted r ON l.range_key = r.range_key;
 ----
 physical_plan
-01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
-02)--SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)]
-03)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-04)------RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
-06)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
-07)------RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-08)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=parquet
+01)SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+03)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+05)--SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+06)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+07)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch_range_partitioning/range_partitioned_shifted/part-3.parquet]]}, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=parquet
 
 query III
 SELECT l.range_key, l.value, r.value
@@ -1840,8 +1836,8 @@ SELECT range_key, SUM(value) FROM (
 # TEST 48: Hash Join Dynamic Filter Pushdown on Compatible Range Inputs
 # The Parquet-backed probe accepts the partition-routed dynamic filter. Matching
 # Range split points keep build filter i aligned with probe partition i. The
-# build has rows only in partitions 0 and 2, so the runtime filter must route
-# with a four-way CASE rather than collapse to a single filter.
+# build has rows only in partitions 0 and 2, so the sparse runtime CASE includes
+# only those branches and lets empty partitions fall through to false.
 ##########
 
 statement ok
@@ -1882,7 +1878,7 @@ JOIN range_partitioned p ON b.range_key = p.range_key;
 Plan with Metrics
 01)HashJoinExec: mode=Partitioned<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
 02)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=range_key@0 = 5 OR range_key@0 = 20<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
-03)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN range_key@0 >= 5 AND range_key@0 <= 5 AND range_key@0 IN (SET) ([5]) WHEN 1 THEN false WHEN 2 THEN range_key@0 >= 20 AND range_key@0 <= 20 AND range_key@0 IN (SET) ([20]) ELSE false END ]<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
+03)--DataSourceExec: <slt:ignore>file_type=parquet, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN range_key@0 >= 5 AND range_key@0 <= 5 AND range_key@0 IN (SET) ([5]) WHEN 2 THEN range_key@0 >= 20 AND range_key@0 <= 20 AND range_key@0 IN (SET) ([20]) ELSE false END ]<slt:ignore>metrics=[output_rows=2,<slt:ignore>]
 
 query III
 SELECT b.range_key, b.value, p.value

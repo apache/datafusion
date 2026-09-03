@@ -68,7 +68,7 @@ name = "datafusion_functions"
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 base64 = { version = "0.23", optional = true }
-blake2 = { version = "^0.10.2", optional = true }
+blake2 = { version = "^0.11.0", optional = true }
 blake3 = { version = "1.8", optional = true }
 chrono = { workspace = true }
 chrono-tz = { version = "0.10.4", optional = true }
@@ -100,269 +100,33 @@ tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
-name = "replace_scalar"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "round_dense"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "ascii"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "concat"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "concat_ws"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "to_timestamp"
+name = "datetime_expressions"
 required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
-name = "encoding"
-required-features = ["encoding_expressions"]
-
-[[bench]]
-harness = false
-name = "chr"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "gcd"
+name = "math_expressions"
 required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
-name = "lcm"
-required-features = ["math_expressions"]
+name = "misc"
+required-features = []
 
 [[bench]]
 harness = false
-name = "nanvl"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "uuid"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "to_hex"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "regexp_match"
+name = "regex_expressions"
 required-features = ["regex_expressions"]
 
 [[bench]]
 harness = false
-name = "regx"
-required-features = ["regex_expressions"]
-
-[[bench]]
-harness = false
-name = "make_date"
-required-features = ["datetime_expressions"]
-
-[[bench]]
-harness = false
-name = "iszero"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "nullif"
-
-[[bench]]
-harness = false
-name = "date_bin"
-required-features = ["datetime_expressions"]
-
-[[bench]]
-harness = false
-name = "date_trunc"
-required-features = ["datetime_expressions"]
-
-[[bench]]
-harness = false
-name = "date_part"
-required-features = ["datetime_expressions"]
-
-[[bench]]
-harness = false
-name = "to_char"
-required-features = ["datetime_expressions"]
-
-[[bench]]
-harness = false
-name = "to_local_time"
-required-features = ["datetime_expressions"]
-
-[[bench]]
-harness = false
-name = "to_time"
-required-features = ["datetime_expressions"]
-
-[[bench]]
-harness = false
-name = "isnan"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "signum"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "atan2"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "power"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "substr_index"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "trim"
+name = "string_expressions"
 required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
-name = "lower"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "upper"
-
-[[bench]]
-harness = false
-name = "upper_unicode"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "pad"
+name = "unicode_expressions"
 required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "repeat"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "replace"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "overlay"
-
-[[bench]]
-harness = false
-name = "random"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "substr"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "character_length"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "cot"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "strpos"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "reverse"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "trunc"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "trunc_precision"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "initcap"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "find_in_set"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "find_in_set_literal"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "contains"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "starts_with"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "ends_with"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "regexp_count"
-required-features = ["regex_expressions"]
-
-[[bench]]
-harness = false
-name = "regexp_instr"
-required-features = ["regex_expressions"]
-
-[[bench]]
-harness = false
-name = "get_field"
 
 [[bench]]
 harness = false
@@ -371,40 +135,10 @@ required-features = ["crypto_expressions"]
 
 [[bench]]
 harness = false
-name = "translate"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "levenshtein"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "split_part"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
-name = "left_right"
-required-features = ["unicode_expressions"]
-
-[[bench]]
-harness = false
-name = "factorial"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "floor_ceil"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
-name = "round"
-required-features = ["math_expressions"]
-
-[[bench]]
-harness = false
 name = "dictionary_encoding"
 required-features = ["string_expressions", "unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "encoding"
+required-features = ["encoding_expressions"]

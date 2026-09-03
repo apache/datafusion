@@ -1122,7 +1122,12 @@ where
 ///
 /// This traverses both the execution plan and the children of each expression root
 /// reported by [`ExecutionPlan::apply_expressions`].
-pub(crate) fn plan_contains_expression_id(
+///
+/// Producers of dynamic filters use this to find out whether anything downstream
+/// holds the filter they pushed, since a node that replies
+/// [`PushedDown::No`](crate::filter_pushdown::PushedDown::No) may still retain it
+/// for statistics pruning.
+pub fn plan_contains_expression_id(
     plan: &Arc<dyn ExecutionPlan>,
     expression_id: u64,
 ) -> Result<bool> {
@@ -1467,7 +1472,7 @@ pub(crate) fn emission_type_from_children<'a>(
         match child.pipeline_behavior() {
             EmissionType::Final => return EmissionType::Final,
             EmissionType::Both => inc_and_final = true,
-            EmissionType::Incremental => continue,
+            EmissionType::Incremental => {}
         }
     }
 

@@ -41,10 +41,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
-async fn read_parquet_test_data<'a, T: Into<String>>(
+async fn read_parquet_test_data<T: Into<String>>(
     path: T,
     ctx: &SessionContext,
-    options: ParquetReadOptions<'a>,
+    options: ParquetReadOptions<'_>,
 ) -> Vec<RecordBatch> {
     ctx.read_parquet(path.into(), options)
         .await
@@ -293,7 +293,7 @@ async fn verify_file_encrypted(
         // Windows backslashes are eventually converted to slashes when writing the Parquet files,
         // through `ListingTableUrl::parse`, making `encryption_factory.encryption_keys` store them
         // it that format. So we also replace backslashes here to ensure they match.
-        file_path.to_str().unwrap().replace("\\", "/")
+        file_path.to_str().unwrap().replace('\\', "/")
     } else {
         file_path.to_str().unwrap().to_owned()
     };

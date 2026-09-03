@@ -22,8 +22,10 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
+mod view_spill_compaction;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
@@ -121,6 +123,101 @@ async fn group_by_hash() {
         .with_memory_limit(1_000)
         .run()
         .await
+}
+
+/// With `force_hash_collisions` every key hashes alike, so the hash
+/// repartitioning sends all groups to a single final stage, whose table then
+/// does not fit the limit however well memory is released. The limit is sized
+/// for the real distribution across four final stages, so this test is skipped
+/// under that feature.
+#[cfg(not(feature = "force_hash_collisions"))]
+mod count_distinct_spill {
+    use super::*;
+    use arrow::array::Int64Array;
+    use datafusion::assert_batches_sorted_eq;
+
+    /// `count(distinct)` over integers under a memory limit.
+    ///
+    /// The integer distinct-count groups accumulator reports the capacity of its
+    /// buffers in `size()`. After an aggregate stream emits all groups, either to
+    /// emit partial state early or to spill, it resizes its reservation to the
+    /// table's reported size and expects it to have shrunk. If the accumulator
+    /// keeps its capacity, that resize is a grow against an exhausted pool and the
+    /// query fails although everything was already written out.
+    const COUNT_DISTINCT_ROWS: usize = 200_000;
+    const COUNT_DISTINCT_GROUPS: i64 = 64;
+    const COUNT_DISTINCT_BATCH_ROWS: usize = 8_192;
+
+    /// Far below the distinct sets (200k values, several megabytes across the
+    /// partial and final tables), far above the fixed cost of the stages. With the
+    /// accumulator releasing its buffers the query passes from 2 MB upwards;
+    /// without, it fails up to 4 MB with "Decreasing allocation after spilling
+    /// should succeed" in the final stage or a failed emit in the partial stage.
+    const COUNT_DISTINCT_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
+
+    /// `g` has 64 groups, `v` is unique, so every group holds 3125 distinct values.
+    fn count_distinct_table() -> MemTable {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batches = (0..COUNT_DISTINCT_ROWS)
+            .step_by(COUNT_DISTINCT_BATCH_ROWS)
+            .map(|start| {
+                let rows =
+                    start..(start + COUNT_DISTINCT_BATCH_ROWS).min(COUNT_DISTINCT_ROWS);
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int64Array::from_iter_values(
+                            rows.clone().map(|row| row as i64 % COUNT_DISTINCT_GROUPS),
+                        )),
+                        Arc::new(Int64Array::from_iter_values(
+                            rows.map(|row| row as i64),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+        MemTable::try_new(schema, vec![batches]).unwrap()
+    }
+
+    /// Four partial stages emit their state early and four hash-partitioned final
+    /// stages spill; every one of them must see the accumulator memory drop after
+    /// emitting all groups.
+    #[tokio::test]
+    async fn count_distinct_releases_memory_after_emitting_all() {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(COUNT_DISTINCT_MEMORY_LIMIT, 1.0)
+            .with_disk_manager_builder(DiskManagerBuilder::default())
+            .build_arc()
+            .unwrap();
+        let config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::new_with_config_rt(config, runtime);
+        ctx.register_table("t", Arc::new(count_distinct_table()))
+            .unwrap();
+
+        let batches = ctx
+            .sql("select count(distinct v) as d, count(*) as n from t group by g")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap_or_else(|error| {
+                panic!("query failed under the memory limit: {error}")
+            });
+
+        let per_group = (COUNT_DISTINCT_ROWS as i64 / COUNT_DISTINCT_GROUPS).to_string();
+        let row = format!("| {per_group} | {per_group} |");
+        let mut expected = vec!["+------+------+", "| d    | n    |", "+------+------+"];
+        expected.extend(std::iter::repeat_n(
+            row.as_str(),
+            COUNT_DISTINCT_GROUPS as usize,
+        ));
+        expected.push("+------+------+");
+        assert_batches_sorted_eq!(expected, &batches);
+    }
 }
 
 #[tokio::test]
@@ -907,7 +1004,7 @@ impl TestCase {
 
         if let Some(pool) = memory_pool {
             builder = builder.with_memory_pool(pool);
-        };
+        }
         let runtime = builder.build_arc().unwrap();
 
         // Configure execution
@@ -941,11 +1038,10 @@ impl TestCase {
 
         match df.collect().await {
             Ok(_batches) => {
-                if !expected_success {
-                    panic!(
-                        "Unexpected success when running, expected memory limit failure"
-                    )
-                }
+                assert!(
+                    expected_success,
+                    "Unexpected success when running, expected memory limit failure"
+                );
             }
             Err(e) => {
                 if expected_success {

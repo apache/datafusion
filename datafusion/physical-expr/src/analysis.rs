@@ -218,9 +218,9 @@ pub fn analyze(
             }
             PropagationResult::Infeasible => {
                 // If the propagation result is infeasible, set intervals to None
-                target_boundaries
-                    .iter_mut()
-                    .for_each(|bound| bound.interval = None);
+                for bound in &mut target_boundaries {
+                    bound.interval = None;
+                }
                 Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
             }
             PropagationResult::CannotPropagate => {
@@ -240,15 +240,15 @@ fn shrink_boundaries(
     target_expr_and_indices: &[(Arc<dyn PhysicalExpr>, usize)],
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
-    target_expr_and_indices.iter().for_each(|(expr, i)| {
+    for (expr, i) in target_expr_and_indices {
         if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(bound) = target_boundaries
                 .iter_mut()
                 .find(|bound| bound.column.eq(column))
         {
             bound.interval = Some(graph.get_interval(*i));
-        };
-    });
+        }
+    }
 
     let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
 
@@ -344,6 +344,7 @@ fn calculate_selectivity(
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -588,5 +589,258 @@ mod tests {
         );
 
         let _ = selectivity; // silence unused warning
+    }
+
+    // Regression tests for #19264.
+    //
+    // `analyze` propagates constraints through `NotExpr::propagate_constraints`,
+    // which hands the underlying `Eq` node a `FALSE` parent interval. When the
+    // input domain contains `0.0` but is not equal to it, `NOT (a = 0.0)` is
+    // satisfiable, so `analyze` reports the input domain. `None` is reserved
+    // for an empty set, as documented on `ExprBoundaries::interval`.
+    fn analyze_not_eq_helper(
+        lower: f32,
+        upper: f32,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float32)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+
+        // Input column bounds: [lower, upper]
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float32(Some(lower)),
+                ScalarValue::Float32(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+        let ctx = AnalysisContext::new(boundaries);
+
+        // Predicate: NOT (a = 0.0)
+        let pred_not_eq = col("a").eq(lit(0.0f32)).not();
+        let phys_not = create_physical_expr(
+            &pred_not_eq,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let out = analyze(&phys_not, ctx, df_schema.as_ref())?;
+        Ok(out.boundaries[0].interval.clone())
+    }
+
+    #[test]
+    fn test_analyze_not_eq_around_zero() -> datafusion_common::Result<()> {
+        // Input domain [-1, 1] contains 0.0.
+        // `NOT (a = 0.0)` can be true everywhere except at 0.0, so the output
+        // interval should be the full input domain [-1, 1], NOT None.
+        let out = analyze_not_eq_helper(-1.0, 1.0)?;
+        let expected = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        assert_eq!(
+            out, expected,
+            "NOT (a = 0.0) over [-1, 1] should yield [-1, 1], got {out:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_analyze_not_eq_clamped_at_zero() -> datafusion_common::Result<()> {
+        // Input domain [0, 0] is exactly the point where a = 0.0 is true.
+        // `NOT (a = 0.0)` is always false here, so the output interval should be None.
+        let out = analyze_not_eq_helper(0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over [0, 0] should yield None (infeasible), got {out:?}"
+        );
+        Ok(())
+    }
+
+    fn analyze_not_eq_f64_helper(
+        lower: f64,
+        upper: f64,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float64)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float64(Some(lower)),
+                ScalarValue::Float64(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+        let ctx = AnalysisContext::new(boundaries);
+
+        let pred_not_eq = col("a").eq(lit(0.0f64)).not();
+        let phys_not = create_physical_expr(
+            &pred_not_eq,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let out = analyze(&phys_not, ctx, df_schema.as_ref())?;
+        Ok(out.boundaries[0].interval.clone())
+    }
+
+    // Regression test for the signed-zero singleton case.
+    //
+    // `Interval::try_new` orders endpoints with `total_cmp`, so
+    // `[-0.0, +0.0]` is a valid input domain. Its endpoints differ bit-wise
+    // but denote a single value under `Eq` comparison semantics, so
+    // `a = 0.0` is certainly true over it and `NOT (a = 0.0)` is infeasible.
+    // A bit-wise singleton check in `propagate_comparison` would instead
+    // report the input domain, i.e. a false-feasibility result on the public
+    // `analyze` path.
+    #[test]
+    fn test_analyze_not_eq_signed_zero_span_infeasible() -> datafusion_common::Result<()>
+    {
+        let out = analyze_not_eq_helper(-0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over Float32 [-0.0, +0.0] should yield None (infeasible), got {out:?}"
+        );
+
+        let out = analyze_not_eq_f64_helper(-0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over Float64 [-0.0, +0.0] should yield None (infeasible), got {out:?}"
+        );
+        Ok(())
+    }
+
+    fn analyze_between_helper(
+        lower: f32,
+        upper: f32,
+        negated: bool,
+        explicit_not: bool,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float32)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float32(Some(lower)),
+                ScalarValue::Float32(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+
+        let between = col("a").between(lit(-1.0f32), lit(1.0f32));
+        let predicate = if explicit_not {
+            between.not()
+        } else if negated {
+            col("a").not_between(lit(-1.0f32), lit(1.0f32))
+        } else {
+            between
+        };
+        let physical_expr = create_physical_expr(
+            &predicate,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let output = analyze(
+            &physical_expr,
+            AnalysisContext::new(boundaries),
+            df_schema.as_ref(),
+        )?;
+        Ok(output.boundaries[0].interval.clone())
+    }
+
+    #[test]
+    fn test_analyze_not_between_clamped() -> datafusion_common::Result<()> {
+        let expected = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, false, false)?, expected);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, true, false)?, None);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, false, true)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_analyze_not_between_containing() -> datafusion_common::Result<()> {
+        let between = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        let containing = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-2.0)),
+            ScalarValue::Float32(Some(2.0)),
+        )?);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, false, false)?, between);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, true, false)?, containing);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, false, true)?, containing);
+        Ok(())
+    }
+
+    // Regression test for the nested signed-zero case.
+    //
+    // `NOT(a = +0.0) AND b` with `a ∈ [-0.0,-0.0]`, `b ∈ [false,true]`:
+    // `a = +0.0` is TRUE (IEEE 754), so the whole predicate is infeasible.
+    //
+    // This defeats the case-(1) short-circuit in `update_ranges`: bottom-up
+    // evaluates `a = +0.0` over `[-0.0,-0.0]` as FALSE (structural equality),
+    // so `NOT` becomes TRUE, the root becomes `TRUE_OR_FALSE`, and top-down
+    // propagation forces `a = +0.0` to FALSE, reaching
+    // `propagate_comparison(Eq, FALSE, [-0.0,-0.0], [+0.0,+0.0])`. The guard
+    // must normalize signed zero to report infeasible here.
+    #[test]
+    fn test_analyze_not_eq_nested_signed_zero_infeasible() -> datafusion_common::Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![
+            make_field("a", DataType::Float32),
+            make_field("b", DataType::Boolean),
+        ]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+
+        let boundaries = vec![
+            ExprBoundaries {
+                column: Column::new("a", 0),
+                interval: Some(Interval::try_new(
+                    ScalarValue::Float32(Some(-0.0f32)),
+                    ScalarValue::Float32(Some(-0.0f32)),
+                )?),
+                distinct_count: Precision::Inexact(1),
+            },
+            ExprBoundaries {
+                column: Column::new("b", 1),
+                interval: Some(Interval::try_new(
+                    ScalarValue::Boolean(Some(false)),
+                    ScalarValue::Boolean(Some(true)),
+                )?),
+                distinct_count: Precision::Inexact(2),
+            },
+        ];
+        let ctx = AnalysisContext::new(boundaries);
+
+        // NOT(a = +0.0) AND b
+        let pred = col("a").eq(lit(0.0f32)).not().and(col("b"));
+        let phys = create_physical_expr(
+            &pred,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let out = analyze(&phys, ctx, df_schema.as_ref())?;
+
+        // Infeasible: a = +0.0 is TRUE (signed zero), NOT is FALSE,
+        // FALSE AND b = FALSE. All column intervals must be None.
+        assert!(
+            out.boundaries.iter().all(|b| b.interval.is_none()),
+            "NOT(a = +0.0) AND b over a=[-0.0,-0.0] should be infeasible (all boundaries None), got {:?}",
+            out.boundaries
+        );
+        assert_eq!(
+            out.selectivity,
+            Some(0.0),
+            "selectivity should be 0.0 for an infeasible predicate, got {:?}",
+            out.selectivity
+        );
+        Ok(())
     }
 }

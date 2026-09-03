@@ -70,6 +70,7 @@ datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
@@ -132,6 +133,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "aggregate_filter"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "compute_statistics"
 
 [[bench]]
@@ -151,3 +157,7 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "bounded_window"
+
+[[bench]]
+harness = false
+name = "window_filter"

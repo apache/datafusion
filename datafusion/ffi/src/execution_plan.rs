@@ -260,7 +260,7 @@ unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
     unsafe {
         debug_assert!(!plan.private_data.is_null());
         let private_data =
-            Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
+            Box::from_raw(plan.private_data.cast::<ExecutionPlanPrivateData>());
         drop(private_data);
         plan.private_data = std::ptr::null_mut();
     }
@@ -359,7 +359,7 @@ impl FFI_ExecutionPlan {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: crate::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

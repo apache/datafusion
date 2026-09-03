@@ -214,14 +214,14 @@ fn hash_null<S: HashState>(
     multi_col: bool,
 ) {
     if multi_col {
-        hashes_buffer.iter_mut().for_each(|hash| {
+        for hash in hashes_buffer {
             // stable hash for null value
             *hash = combine_hashes(random_state.hash_one(1), *hash);
-        })
+        }
     } else {
-        hashes_buffer.iter_mut().for_each(|hash| {
+        for hash in hashes_buffer {
             *hash = random_state.hash_one(1);
-        })
+        }
     }
 }
 
@@ -740,8 +740,8 @@ where
     OffsetSize: OffsetSizeTrait,
 {
     // In case values is sliced, hash only the bytes used by the offsets of this ListArray
-    let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
-    let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
+    let first_offset = array.value_offsets().first().copied().unwrap_or_default();
+    let last_offset = array.value_offsets().last().copied().unwrap_or_default();
     let value_bytes_len = (last_offset - first_offset).as_usize();
     let mut values_hashes = vec![0u64; value_bytes_len];
     child_hashing.create_hashes(
@@ -1579,11 +1579,11 @@ mod tests {
     fn test_create_hashes_dictionary_with_custom_hasher() {
         let strings = [Some("foo"), None, Some("bar"), Some("foo"), None];
         let string_array: ArrayRef =
-            Arc::new(strings.iter().cloned().collect::<StringArray>());
+            Arc::new(strings.iter().copied().collect::<StringArray>());
         let dict_array: ArrayRef = Arc::new(
             strings
                 .iter()
-                .cloned()
+                .copied()
                 .collect::<DictionaryArray<Int8Type>>(),
         );
         let hash_builder = BuildHasherDefault::<TestHasher>::default();
@@ -1751,11 +1751,11 @@ mod tests {
         let strings = [Some("foo"), None, Some("bar"), Some("foo"), None];
 
         let string_array: ArrayRef =
-            Arc::new(strings.iter().cloned().collect::<StringArray>());
+            Arc::new(strings.iter().copied().collect::<StringArray>());
         let dict_array: ArrayRef = Arc::new(
             strings
                 .iter()
-                .cloned()
+                .copied()
                 .collect::<DictionaryArray<Int8Type>>(),
         );
 
@@ -2112,11 +2112,11 @@ mod tests {
         let strings2 = [Some("blarg"), Some("blah"), None];
 
         let string_array: ArrayRef =
-            Arc::new(strings1.iter().cloned().collect::<StringArray>());
+            Arc::new(strings1.iter().copied().collect::<StringArray>());
         let dict_array: ArrayRef = Arc::new(
             strings2
                 .iter()
-                .cloned()
+                .copied()
                 .collect::<DictionaryArray<Int32Type>>(),
         );
 

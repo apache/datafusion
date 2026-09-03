@@ -23,7 +23,9 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{ArrowPrimitiveType, Field};
 use datafusion_common::HashSet;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupSelection, GroupsAccumulator,
+};
 use std::hash::Hash;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -87,7 +89,10 @@ where
 
         match emit_to {
             EmitTo::All => {
-                self.seen.clear();
+                // Release the capacity, not just the entries: `size()` reports
+                // capacity, and the aggregate streams rely on it dropping after
+                // emitting everything.
+                self.seen = HashSet::default();
             }
             EmitTo::First(n) => {
                 let mut remaining = HashSet::default();
@@ -101,6 +106,22 @@ where
         }
 
         Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn evaluate_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> datafusion_common::Result<ArrayRef> {
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection
+            .iter()
+            .map(|index| self.counts[index])
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
     }
 
     fn state(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
@@ -127,7 +148,9 @@ where
                 all_values[pos] = value;
                 cursors[group_idx] += 1;
             }
-            self.counts.clear();
+            // Release the capacity, see `evaluate`.
+            self.seen = HashSet::default();
+            self.counts = Vec::new();
         } else {
             let mut remaining = HashSet::default();
             for (group_idx, value) in self.seen.drain() {
@@ -220,6 +243,47 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::Int32Type;
     use datafusion_common::Result;
+
+    #[test]
+    fn preserving_reads_keep_distinct_state() -> Result<()> {
+        let mut accumulator = PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+        let values = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(1),
+            None,
+            Some(3),
+        ]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 2, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected = Int64Array::from(vec![1, 2, 0, 1]);
+        for _ in 0..2 {
+            assert_eq!(
+                accumulator
+                    .evaluate_preserving(selection)?
+                    .as_primitive::<arrow::datatypes::Int64Type>(),
+                &expected
+            );
+        }
+        assert!(
+            accumulator
+                .evaluate_preserving(GroupSelection::try_from_indices(&[], 4)?)?
+                .is_empty()
+        );
+
+        let values = Arc::new(Int32Array::from(vec![2, 4, 1]));
+        accumulator.update_batch(&[values], &[0, 0, 1], None, 4)?;
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(4))?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![3, 1, 1, 0])
+        );
+        assert!(accumulator.supports_evaluate_preserving());
+        assert!(!accumulator.supports_state_preserving());
+        Ok(())
+    }
 
     #[test]
     fn convert_to_state_roundtrips_through_merge() -> Result<()> {

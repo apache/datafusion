@@ -704,7 +704,7 @@ async fn test_delete_target_table_scoping() -> Result<()> {
         "Filter should be for id column"
     );
     assert!(
-        filters[0].to_string().contains("5"),
+        filters[0].to_string().contains('5'),
         "Filter should contain the value 5"
     );
     Ok(())
@@ -784,7 +784,7 @@ async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
         "Filter should not contain qualified column reference, got: {filter_str}"
     );
     assert!(
-        filter_str.contains("id") || filter_str.contains("1"),
+        filter_str.contains("id") || filter_str.contains('1'),
         "Filter should reference id column or the value 1, got: {filter_str}"
     );
     Ok(())

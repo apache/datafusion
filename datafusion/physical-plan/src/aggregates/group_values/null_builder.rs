@@ -17,84 +17,75 @@
 
 use arrow::array::NullBufferBuilder;
 use arrow::buffer::NullBuffer;
+use datafusion_common::Result;
+use datafusion_expr::GroupSelection;
 
-/// Builder for an (optional) null mask
-///
-/// Optimized for avoid creating the bitmask when all values are non-null
-#[derive(Debug)]
-pub(crate) struct MaybeNullBufferBuilder {
-    /// Note this is an Arrow *VALIDITY* buffer (so it is false for nulls, true
-    /// for non-nulls)
-    nulls: NullBufferBuilder,
-}
-
-impl MaybeNullBufferBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self {
-            nulls: NullBufferBuilder::new(0),
-        }
-    }
+/// Helper methods for NullBufferBuilder that are used in Group By columns
+pub(crate) trait NullBufferBuilderExt {
+    fn empty() -> Self;
 
     /// Return true if the row at index `row` is null
-    pub fn is_null(&self, row: usize) -> bool {
-        match self.nulls.as_slice() {
-            // validity mask means a unset bit is NULL
-            Some(_) => !self.nulls.is_valid(row),
-            None => false,
-        }
-    }
+    fn is_null(&self, row: usize) -> bool;
 
-    /// Set the nullness of the next row to `is_null`
-    ///
-    /// If `value` is true, the row is null.
-    /// If `value` is false, the row is non null
-    pub fn append(&mut self, is_null: bool) {
-        self.nulls.append(!is_null)
-    }
-
-    pub fn append_n(&mut self, n: usize, is_null: bool) {
-        if is_null {
-            self.nulls.append_n_nulls(n);
-        } else {
-            self.nulls.append_n_non_nulls(n);
-        }
-    }
-
-    /// return the number of heap allocated bytes used by this structure to store boolean values
-    pub fn allocated_size(&self) -> usize {
-        // NullBufferBuilder builder::allocated_size returns capacity in bits
-        self.nulls.allocated_size() / 8
-    }
-
-    /// Return a NullBuffer representing the accumulated nulls so far
-    pub fn build(mut self) -> Option<NullBuffer> {
-        self.nulls.finish()
-    }
+    /// Returns a null buffer for `selection` without changing this builder.
+    fn build_preserving(
+        &self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Option<NullBuffer>>;
 
     /// Returns a NullBuffer representing the first `n` rows accumulated so far
     /// shifting any remaining down by `n`
-    pub fn take_n(&mut self, n: usize) -> Option<NullBuffer> {
+    fn take_n(&mut self, n: usize) -> Option<NullBuffer>;
+
+    /// Returns true if this builder might have any nulls
+    ///
+    /// This is guaranteed to be true if there are nulls
+    /// but may be true even if there are no nulls
+    fn might_have_nulls(&self) -> bool;
+}
+
+impl NullBufferBuilderExt for NullBufferBuilder {
+    fn empty() -> Self {
+        Self::new(0)
+    }
+
+    fn is_null(&self, row: usize) -> bool {
+        !self.is_valid(row)
+    }
+
+    fn build_preserving(
+        &self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Option<NullBuffer>> {
+        selection.validate_num_groups(self.len())?;
+        if self.as_slice().is_none() {
+            return Ok(None);
+        }
+
+        let mut selected = NullBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            selected.append(self.is_valid(index));
+        }
+        Ok(selected.finish())
+    }
+
+    fn take_n(&mut self, n: usize) -> Option<NullBuffer> {
         // Copy over the values at  n..len-1 values to the start of a
         // new builder and leave it in self
         //
         // TODO: it would be great to use something like `set_bits` from arrow here.
-        let mut new_builder = NullBufferBuilder::new(self.nulls.len());
-        for i in n..self.nulls.len() {
-            new_builder.append(self.nulls.is_valid(i));
+        let mut new_builder = NullBufferBuilder::new(self.len());
+        for i in n..self.len() {
+            new_builder.append(self.is_valid(i));
         }
-        std::mem::swap(&mut new_builder, &mut self.nulls);
+        std::mem::swap(&mut new_builder, self);
 
         // take only first n values from the original builder
         new_builder.truncate(n);
         new_builder.finish()
     }
 
-    /// Returns true if this builder might have any nulls
-    ///
-    /// This is guaranteed to be true if there are nulls
-    /// but may be true even if there are no nulls
-    pub(crate) fn might_have_nulls(&self) -> bool {
-        self.nulls.as_slice().is_some()
+    fn might_have_nulls(&self) -> bool {
+        self.as_slice().is_some()
     }
 }

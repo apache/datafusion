@@ -19,8 +19,8 @@
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
 use arrow::array::{
-    Array, ArrayRef, GenericBinaryArray, GenericStringArray, NullBufferBuilder,
-    OffsetSizeTrait,
+    Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
+    NullBufferBuilder, OffsetSizeTrait,
     cast::AsArray,
     types::{ByteArrayType, GenericBinaryType, GenericStringType},
 };
@@ -29,6 +29,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_common::{Result, exec_err};
 use std::any::type_name;
 use std::fmt::Debug;
 use std::mem::{size_of, swap};
@@ -324,7 +325,7 @@ where
                 )
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
+        }
     }
 
     /// Generic version of [`Self::insert_if_new`] that handles `ByteArrayType`
@@ -467,13 +468,12 @@ where
             observe_payload_fn(payload);
         }
         // Check for overflow in offsets (if more data was sent than can be represented)
-        if O::from_usize(self.buffer.len()).is_none() {
-            panic!(
-                "Put {} bytes in buffer, more than can be represented by a {}",
-                self.buffer.len(),
-                type_name::<O>()
-            );
-        }
+        assert!(
+            O::from_usize(self.buffer.len()).is_some(),
+            "Put {} bytes in buffer, more than can be represented by a {}",
+            self.buffer.len(),
+            type_name::<O>()
+        )
     }
 
     /// Converts this set into a `StringArray`, `LargeStringArray`,
@@ -524,6 +524,53 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
+    }
+
+    /// Copies keys at `indices` into an array without changing this map.
+    ///
+    /// Keys are returned in index order, and duplicate indices are supported.
+    pub fn keys<I>(&self, indices: I) -> Result<ArrayRef>
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        let indices = indices.into_iter();
+        let mut output_offsets = Vec::with_capacity(indices.size_hint().0 + 1);
+        let mut output_values = BufferBuilder::<u8>::new(0);
+        let mut output_nulls = NullBufferBuilder::new(indices.size_hint().0);
+        output_offsets.push(O::default());
+        let null_index = self.null.map(|(_, index)| index);
+        let num_keys = self.offsets.len() - 1;
+
+        for index in indices {
+            if index >= num_keys {
+                return exec_err!(
+                    "Key index {index} is out of bounds for {num_keys} keys"
+                );
+            }
+            let start = self.offsets[index].as_usize();
+            let end = self.offsets[index + 1].as_usize();
+            output_values.append_slice(&self.buffer.as_slice()[start..end]);
+            if O::from_usize(output_values.len()).is_none() {
+                return exec_err!("Offset overflow while copying byte map keys");
+            }
+            output_offsets.push(O::usize_as(output_values.len()));
+            output_nulls.append(index != null_index.unwrap_or(usize::MAX));
+        }
+
+        // SAFETY: offsets are constructed from the length of `output_values`.
+        let offsets =
+            unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(output_offsets)) };
+        let values = output_values.finish();
+        let nulls = output_nulls.finish();
+        Ok(match self.output_type {
+            OutputType::Binary => Arc::new(unsafe {
+                GenericBinaryArray::new_unchecked(offsets, values, nulls)
+            }),
+            OutputType::Utf8 => Arc::new(unsafe {
+                GenericStringArray::new_unchecked(offsets, values, nulls)
+            }),
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        })
     }
 
     /// Total number of entries (including null, if present)
@@ -799,7 +846,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "byte array")]
     fn test_mismatched_sizes() {
         // inserting large strings into a set that expects small should panic
         let values: ArrayRef = Arc::new(LargeBinaryArray::from_opt_vec(vec![Some(b"a")]));
@@ -943,7 +990,7 @@ mod tests {
             // update self with new values, keeping track of newly added values
             for str in strings {
                 let str = str.map(|s| s.to_string());
-                let index = self.indexes.get(&str).cloned().unwrap_or_else(|| {
+                let index = self.indexes.get(&str).copied().unwrap_or_else(|| {
                     actual_new_strings.push(str.clone());
                     let index = self.strings.len();
                     self.strings.push(str.clone());
