@@ -1115,6 +1115,39 @@ impl OptimizerRule for PushDownFilter {
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(filter.predicate)),
+            LogicalPlan::AsOfJoin(mut join) => {
+                // ASOF emits exactly one output row per left row without
+                // changing left values, so deterministic left-only predicates
+                // can run before matching. Right or mixed predicates must stay
+                // above the join because unmatched right fields are NULL-padded.
+                let (push, keep): (Vec<_>, Vec<_>) =
+                    split_conjunction_owned(filter.predicate)
+                        .into_iter()
+                        .partition(|predicate| {
+                            !predicate.is_volatile()
+                                && predicate.column_refs().iter().all(|column| {
+                                    join.left.schema().is_column_from_schema(column)
+                                })
+                        });
+                if push.is_empty() {
+                    let Some(predicate) = conjunction(keep) else {
+                        return internal_err!("ASOF join filter predicates are empty");
+                    };
+                    filter.predicate = predicate;
+                    filter.input = Arc::new(LogicalPlan::AsOfJoin(join));
+                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                } else {
+                    let Some(predicate) = conjunction(push) else {
+                        return internal_err!("ASOF join push-down predicates are empty");
+                    };
+                    join.left =
+                        Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.left)));
+                    Ok(Transformed::yes(with_filters(
+                        keep,
+                        LogicalPlan::AsOfJoin(join),
+                    )))
+                }
+            }
             LogicalPlan::TableScan(mut scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 // Filters containing scalar subqueries cannot be pushed to
@@ -1444,10 +1477,10 @@ mod tests {
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan, TableSource,
-        TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col,
-        in_list, in_subquery, lit,
+        AsOfMatch, ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
+        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan,
+        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition, col, in_list, in_subquery, lit,
     };
 
     use crate::OptimizerContext;
@@ -2486,6 +2519,67 @@ mod tests {
             @r"
         TestUserDefined
           TableScan: test, full_filters=[test.a <= Int64(1)]
+        "
+        )
+    }
+
+    #[test]
+    fn asof_join_pushes_only_deterministic_left_filters() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right = test_table_scan_with_name("test2")?;
+        let plan = LogicalPlanBuilder::from(left)
+            .asof_join(
+                right,
+                vec![(col("test1.a"), col("test2.a"))],
+                AsOfMatch::new(col("test1.b"), Operator::GtEq, col("test2.b")),
+            )?
+            .filter(
+                col("test1.a")
+                    .gt(lit(1u32))
+                    .and(col("test2.c").gt(lit(2u32)))
+                    .and(col("test1.c").lt(col("test2.c"))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test2.c > UInt32(2) AND test1.c < test2.c
+          AsOf Join: match=[test1.b >= test2.b], constraint=On, on=[test1.a = test2.a]
+            TableScan: test1, full_filters=[test1.a > UInt32(1)]
+            TableScan: test2
+        "
+        )
+    }
+
+    #[test]
+    fn asof_join_keeps_volatile_left_filter_above_join() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right = test_table_scan_with_name("test2")?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![DataType::UInt32], Volatility::Volatile),
+        });
+        let predicate = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(fun),
+            vec![col("test1.c")],
+        ))
+        .gt(lit(0));
+        let plan = LogicalPlanBuilder::from(left)
+            .asof_join(
+                right,
+                vec![(col("test1.a"), col("test2.a"))],
+                AsOfMatch::new(col("test1.b"), Operator::GtEq, col("test2.b")),
+            )?
+            .filter(predicate)?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: TestScalarUDF(test1.c) > Int32(0)
+          AsOf Join: match=[test1.b >= test2.b], constraint=On, on=[test1.a = test2.a]
+            TableScan: test1
+            TableScan: test2
         "
         )
     }
