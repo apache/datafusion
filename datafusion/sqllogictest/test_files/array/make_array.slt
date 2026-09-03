@@ -100,8 +100,8 @@ select make_array(n) from (values (NULL), (NULL), (NULL)) as t(n);
 query ?T
 select [n, n], arrow_typeof([n, n]) from (values (NULL), (NULL)) as t(n);
 ----
-[NULL, NULL] List(Field { name: "item", data_type: Null, nullable: true })
-[NULL, NULL] List(Field { name: "item", data_type: Null, nullable: true })
+[NULL, NULL] List(Null)
+[NULL, NULL] List(Null)
 
 query I
 select count(*) from (select unnest([n, n]) from (values (NULL), (NULL), (NULL)) as t(n));
