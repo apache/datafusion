@@ -2614,7 +2614,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns(vec![("id", id), ("name", name)])?;
+    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
     /// let expected = vec![
     ///     "+----+------+",
     ///     "| id | name |",
@@ -2628,17 +2628,16 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_columns(columns: Vec<(&str, ArrayRef)>) -> Result<Self> {
-        let fields = columns
-            .iter()
-            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
-            .collect::<Vec<_>>();
-
-        let arrays = columns
+    pub fn from_columns<'a, I>(columns: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = (&'a str, ArrayRef)>,
+    {
+        let (fields, arrays): (Vec<_>, Vec<_>) = columns
             .into_iter()
-            .map(|(_, array)| array)
-            .collect::<Vec<_>>();
-
+            .map(|(name, array)| {
+                (Field::new(name, array.data_type().clone(), true), array)
+            })
+            .unzip();
         let schema = Arc::new(Schema::new(fields));
         let batch = RecordBatch::try_new(schema, arrays)?;
         let ctx = SessionContext::new();
@@ -2695,7 +2694,7 @@ macro_rules! dataframe {
         use datafusion::prelude::DataFrame;
         use datafusion::common::test_util::IntoArrayRef;
 
-        let columns = vec![
+        let columns = [
             $(
                 ($name, $data.into_array_ref()),
             )+
