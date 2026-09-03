@@ -197,7 +197,7 @@ regex = "1.12"
 rstest = "0.26.1"
 serde_json = "1"
 sha2 = "^0.11.0"
-sqlparser = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
+sqlparser = { git = "https://github.com/apache/datafusion-sqlparser-rs", rev = "0821cbdd5cbdc27f9c7205466d357deef632c936", default-features = false, features = ["std", "visitor"] }
 stacker = "0.1.24"
 strum = "0.28.0"
 strum_macros = "0.28.0"

@@ -22,7 +22,7 @@ use datafusion_common::{
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{
-    Expr as SQLExpr, OrderByExpr, OrderByOptions, Value, ValueWithSpan,
+    Expr as SQLExpr, OrderByExpr, OrderByOptions, OrderBySort, Value, ValueWithSpan,
 };
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -75,13 +75,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         for order_by_expr in order_by_exprs {
             let OrderByExpr {
                 expr,
-                options: OrderByOptions { asc, nulls_first },
+                options: OrderByOptions { sort, nulls_first },
                 with_fill,
             } = order_by_expr;
 
             if let Some(with_fill) = with_fill {
                 return not_impl_err!("ORDER BY WITH FILL is not supported: {with_fill}");
             }
+
+            let asc = match sort {
+                Some(OrderBySort::Asc) => Some(true),
+                Some(OrderBySort::Desc) => Some(false),
+                Some(OrderBySort::Using(op)) => {
+                    return not_impl_err!("ORDER BY USING is not supported: {op}");
+                }
+                None => None,
+            };
 
             let expr = match expr {
                 SQLExpr::Value(ValueWithSpan {

@@ -166,6 +166,11 @@ impl FunctionArgs {
                         "Calling {name}: LIMIT not supported in function arguments: {limit}"
                     );
                 }
+                FunctionArgumentClause::Where(predicate) => {
+                    return not_impl_err!(
+                        "Calling {name}: WHERE not supported in function arguments: {predicate}"
+                    );
+                }
                 FunctionArgumentClause::OnOverflow(overflow) => {
                     return not_impl_err!(
                         "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"

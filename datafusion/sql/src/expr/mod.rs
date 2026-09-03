@@ -353,16 +353,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context,
             ),
 
-            SQLExpr::Cast { array: true, .. } => {
-                not_impl_err!("`CAST(... AS type ARRAY`) not supported")
-            }
-
             SQLExpr::Cast {
                 kind: CastKind::Cast | CastKind::DoubleColon,
                 expr,
                 data_type,
                 format,
-                array: false,
             } => {
                 self.sql_cast_to_expr(*expr, &data_type, format, schema, planner_context)
             }
@@ -372,7 +367,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr,
                 data_type,
                 format,
-                array: false,
             } => {
                 if let Some(format) = format {
                     return not_impl_err!("CAST with format is not supported: {format}");
