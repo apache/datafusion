@@ -235,7 +235,13 @@ impl TDigest {
             result.max = maybe_max;
         }
 
-        let mut compressed: Vec<Centroid> = Vec::with_capacity(self.max_size);
+        // The compressed digest never has more centroids than the inputs it
+        // merges, so bound the allocation by that as well: `max_size` is user
+        // supplied and can be large enough for `with_capacity` to overflow.
+        let mut compressed: Vec<Centroid> = Vec::with_capacity(
+            self.max_size
+                .min(self.centroids.len() + sorted_values.len()),
+        );
 
         let mut k_limit: u64 = 1;
         let mut q_limit_times_count =
@@ -405,7 +411,8 @@ impl TDigest {
         }
 
         let mut result = TDigest::new(max_size);
-        let mut compressed: Vec<Centroid> = Vec::with_capacity(max_size);
+        // See `merge_sorted_f64`: never allocate more than the input size.
+        let mut compressed: Vec<Centroid> = Vec::with_capacity(max_size.min(n_centroids));
 
         let mut k_limit = 1;
         let mut q_limit_times_count = Self::k_to_q(k_limit, max_size) * count;
@@ -797,6 +804,21 @@ mod tests {
         assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
         assert_error_bounds!(t, quantile = 0.5, want = 500_000.0);
         assert_state_roundtrip!(t);
+    }
+
+    #[test]
+    fn test_huge_max_size_does_not_preallocate() {
+        // `max_size` is user supplied (the `centroids` argument of
+        // `approx_percentile_cont`). Allocating `Vec::with_capacity(max_size)`
+        // for a value this large used to panic with "capacity overflow".
+        let t = TDigest::new(usize::MAX);
+        let t = t.merge_unsorted_f64(vec![1.0, 2.0, 3.0]);
+        assert_eq!(t.count(), 3.0);
+        assert_eq!(t.estimate_quantile(0.5), 2.0);
+
+        let merged = TDigest::merge_digests([&t, &t]);
+        assert_eq!(merged.count(), 6.0);
+        assert_eq!(merged.estimate_quantile(0.5), 2.0);
     }
 
     #[test]
