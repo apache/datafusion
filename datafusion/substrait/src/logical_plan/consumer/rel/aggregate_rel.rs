@@ -17,8 +17,11 @@
 
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
-use datafusion::common::{DFSchemaRef, not_impl_err};
-use datafusion::logical_expr::{Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder};
+use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
+use datafusion::logical_expr::builder::project;
+use datafusion::logical_expr::{
+    Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+};
 use substrait::proto::AggregateRel;
 use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::aggregate_rel::Grouping;
@@ -122,10 +125,49 @@ pub async fn from_aggregate_rel(
             .map(|e| name_tracker.get_uniquely_named_expr(e))
             .collect::<Result<Vec<Expr>, _>>()?;
 
-        input.aggregate(group_exprs, aggr_exprs)?.build()
+        let plan = input.aggregate(group_exprs, aggr_exprs)?.build()?;
+        if agg.groupings.len() > 1 {
+            reorder_grouping_set_output(plan, agg.measures.len())
+        } else {
+            Ok(plan)
+        }
     } else {
         not_impl_err!("Aggregate without an input is not valid")
     }
+}
+
+/// Reorders DataFusion's `[groups, grouping_id, measures]` aggregate schema to
+/// Substrait's direct output order of `[groups, measures, grouping_id]`.
+fn reorder_grouping_set_output(
+    plan: LogicalPlan,
+    measure_count: usize,
+) -> datafusion::common::Result<LogicalPlan> {
+    let exprs: Vec<Expr> = {
+        let schema = plan.schema();
+        let Some(grouping_id_index) =
+            schema.index_of_column_by_name(None, Aggregate::INTERNAL_GROUPING_ID)
+        else {
+            return internal_err!(
+                "Grouping set aggregate schema is missing {}",
+                Aggregate::INTERNAL_GROUPING_ID
+            );
+        };
+        if grouping_id_index + measure_count + 1 != schema.fields().len() {
+            return internal_err!(
+                "Grouping set aggregate schema has {} fields after {}, expected {} measures",
+                schema.fields().len() - grouping_id_index - 1,
+                Aggregate::INTERNAL_GROUPING_ID,
+                measure_count
+            );
+        }
+
+        (0..grouping_id_index)
+            .chain(grouping_id_index + 1..schema.fields().len())
+            .chain(std::iter::once(grouping_id_index))
+            .map(|index| Expr::Column(Column::from(schema.qualified_field(index))))
+            .collect()
+    };
+    project(plan, exprs)
 }
 
 #[expect(deprecated)]
