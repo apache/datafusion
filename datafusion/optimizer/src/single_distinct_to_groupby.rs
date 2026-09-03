@@ -81,10 +81,12 @@ use datafusion_expr::{
 /// empty input the inner group by produces no rows at all, and a `sum` of no
 /// rows is NULL where `count` is 0.
 ///
-/// That `count` is allowed only when the distinct argument has no specialized
-/// `GroupsAccumulator` of its own, so that the rewrite is taking the distinct
-/// aggregate off `GroupsAccumulatorAdapter` rather than only adding an inner
-/// group by. See `rewrite_pays_for_count` for the measurements behind that.
+/// That `count` is allowed only when the distinct aggregate reports that it has
+/// no specialized `GroupsAccumulator` for its argument types, so that the
+/// rewrite is taking the distinct aggregate off `GroupsAccumulatorAdapter`
+/// rather than only adding an inner group by. A function that does not report
+/// on this at all keeps the previous behaviour and is left alone. See
+/// `rewrite_pays_for_count` for the measurements behind that.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -190,6 +192,19 @@ fn is_single_distinct_agg(
 /// Q22, whose `count(DISTINCT "UserID")` is over an `Int64`, measured a 132%
 /// increase in peak memory pool reservation when the rewrite applied to it.
 ///
+/// `Some(false)` is the only answer that buys anything. `Some(true)` says the
+/// call never reaches the adapter. `None` says the function does not answer the
+/// question from the argument types, which is the default and so the answer for
+/// almost every function. Silence is not evidence, and reading it as `Some(false)`
+/// would open this path to every such function: `sum(DISTINCT int_col)` beside a
+/// `count(*)` measured 3.15x the peak memory once rewritten, over 4,000,000 rows
+/// in 2,000 groups.
+///
+/// The predicate is a proxy, not the true discriminator. What decides the
+/// outcome is the cost per distinct value on each side, which this rule cannot
+/// see. The proxy is deliberately conservative in the direction that leaves a
+/// plan alone.
+///
 /// The existing tolerance of a non-distinct `sum`, `min` or `max` predates this
 /// and is left alone: narrowing it would change plans that have always been
 /// rewritten, which no measurement here calls for.
@@ -202,7 +217,7 @@ fn rewrite_pays_for_count(
             .iter()
             .map(|arg| arg.get_type(input_schema))
             .collect::<Result<Vec<_>>>()?;
-        if !func.groups_accumulator_supported_for_types(&arg_types, true) {
+        if func.groups_accumulator_supported_for_types(&arg_types, true) == Some(false) {
             return Ok(true);
         }
     }
@@ -446,7 +461,9 @@ mod tests {
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::expr::GroupingSet;
+    use datafusion_expr::function::AccumulatorArgs;
     use datafusion_expr::registry::{FunctionRegistry, MemoryFunctionRegistry};
+    use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
     use datafusion_expr::{
         lit,
         logical_plan::builder::{LogicalPlanBuilder, table_scan},
@@ -459,6 +476,65 @@ mod tests {
     fn max_distinct(expr: Expr) -> Expr {
         Expr::AggregateFunction(AggregateFunction::new_udf(
             max_udaf(),
+            vec![expr],
+            true,
+            None,
+            vec![],
+            None,
+        ))
+    }
+
+    fn sum_distinct(expr: Expr) -> Expr {
+        Expr::AggregateFunction(AggregateFunction::new_udf(
+            sum_udaf(),
+            vec![expr],
+            true,
+            None,
+            vec![],
+            None,
+        ))
+    }
+
+    /// An aggregate that leaves
+    /// [`AggregateUDFImpl::groups_accumulator_supported_for_types`] at its
+    /// default, which is what almost every function in the wild does.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct SilentUdaf {
+        signature: Signature,
+    }
+
+    impl SilentUdaf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for SilentUdaf {
+        fn name(&self) -> &str {
+            "silent"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt32)
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!("not needed for this test")
+        }
+    }
+
+    fn silent_distinct(expr: Expr) -> Expr {
+        Expr::AggregateFunction(AggregateFunction::new_udf(
+            Arc::new(AggregateUDF::from(SilentUdaf::new())),
             vec![expr],
             true,
             None,
@@ -804,6 +880,54 @@ mod tests {
           Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), sum(alias2)]] [a:UInt32, count(alias1):Int64, sum(alias2):UInt64;N]
             Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:UInt64;N]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn distinct_over_a_function_with_no_opinion_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![silent_distinct(col("b")), count(col("c"))],
+            )?
+            .build()?;
+
+        // Should not work: `silent` leaves
+        // `groups_accumulator_supported_for_types` at its default, so it
+        // reports nothing about `GroupsAccumulatorAdapter`. Silence is not
+        // evidence that the rewrite pays, and the rule must not read it as
+        // permission
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[silent(DISTINCT test.b), count(test.c)]] [a:UInt32, silent(DISTINCT test.b):UInt32;N, count(test.c):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn distinct_sum_and_count_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![sum_distinct(col("b")), count(col("c"))],
+            )?
+            .build()?;
+
+        // Should not work: `sum` reports nothing about
+        // `GroupsAccumulatorAdapter` either, and measurement says this shape
+        // costs 3.15x the peak memory once rewritten
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[sum(DISTINCT test.b), count(test.c)]] [a:UInt32, sum(DISTINCT test.b):UInt64;N, count(test.c):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
