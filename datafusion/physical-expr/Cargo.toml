@@ -103,6 +103,10 @@ name = "simplify"
 harness = false
 name = "string_concat"
 
+[[bench]]
+harness = false
+name = "dictionary_encoding"
+
 [package.metadata.cargo-machete]
 ignored = ["half"]
 

@@ -135,10 +135,5 @@ required-features = ["crypto_expressions"]
 
 [[bench]]
 harness = false
-name = "dictionary_encoding"
-required-features = ["string_expressions", "unicode_expressions"]
-
-[[bench]]
-harness = false
 name = "encoding"
 required-features = ["encoding_expressions"]

@@ -299,6 +299,14 @@ impl ScalarUDF {
         self.inner.short_circuits()
     }
 
+    /// Returns true if each output row of this function depends only on the
+    /// corresponding input row.
+    ///
+    /// See [ScalarUDFImpl::evaluates_elementwise] for more information.
+    pub fn evaluates_elementwise(&self) -> bool {
+        self.inner.evaluates_elementwise()
+    }
+
     /// Computes the output interval for a [`ScalarUDF`], given the input
     /// intervals.
     ///
@@ -843,6 +851,22 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         false
     }
 
+    /// Returns true if each output row depends only on the corresponding input
+    /// row, with no cross-row state.
+    ///
+    /// When true, a dictionary-encoded argument is unwrapped before the call:
+    /// the function is evaluated over the distinct values and the result
+    /// re-mapped through the keys, or, where that does not pay off, over the
+    /// expanded column. [`ScalarFunctionArgs::number_rows`] and the argument
+    /// fields then describe the array actually passed, not the planned batch.
+    ///
+    /// Values that no key references may still be evaluated, so a function that
+    /// can error on valid input should not opt in. Volatile functions are never
+    /// unwrapped, nor are arguments whose field carries metadata.
+    fn evaluates_elementwise(&self) -> bool {
+        false
+    }
+
     /// Determines which of the arguments passed to this function are evaluated eagerly
     /// and which may be evaluated lazily.
     ///
@@ -1128,6 +1152,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn short_circuits(&self) -> bool {
         self.inner.short_circuits()
+    }
+
+    fn evaluates_elementwise(&self) -> bool {
+        self.inner.evaluates_elementwise()
     }
 
     fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
