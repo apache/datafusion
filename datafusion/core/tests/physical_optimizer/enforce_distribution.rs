@@ -4558,6 +4558,72 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn preserve_fetch_when_reoptimizing_ordered_merge() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering =
+        [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
+    let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(SortPreservingMergeExec::new(sort_key, input).with_fetch(Some(5)));
+
+    let optimized =
+        EnsureRequirements::new().optimize(plan, &test_suite_default_config_options())?;
+    let plan = displayable(optimized.as_ref()).indent(true).to_string();
+
+    assert!(
+        plan.contains("SortPreservingMergeExec: [c@2 ASC], fetch=5"),
+        "expected the optimizer to preserve fetch:\n{plan}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn preserve_fetch_when_reoptimizing_coalesce_partitions() -> Result<()> {
+    let input = parquet_exec_multiple();
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(input).with_fetch(Some(5)));
+
+    let optimized =
+        EnsureRequirements::new().optimize(plan, &test_suite_default_config_options())?;
+
+    assert_eq!(optimized.fetch(), Some(5));
+    optimized
+        .downcast_ref::<CoalescePartitionsExec>()
+        .expect("expected CoalescePartitionsExec");
+
+    Ok(())
+}
+
+#[test]
+fn move_fetch_to_replacement_sort() -> Result<()> {
+    let schema = schema();
+    let sort_key: LexOrdering =
+        [PhysicalSortExpr::new_default(col("c", &schema)?)].into();
+    let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+    let merge: Arc<dyn ExecutionPlan> = Arc::new(
+        SortPreservingMergeExec::new(sort_key.clone(), input).with_fetch(Some(5)),
+    );
+    let plan = sort_required_exec_with_req(merge, sort_key);
+
+    let optimized = ensure_distribution_helper(plan, 10, false)?;
+    let plan = displayable(optimized.as_ref()).indent(true).to_string();
+
+    assert!(
+        plan.contains(
+            "SortExec: TopK(fetch=5), expr=[c@2 ASC], preserve_partitioning=[false]"
+        ),
+        "expected the replacement sort to preserve fetch:\n{plan}"
+    );
+    assert!(
+        !plan.contains("CoalescePartitionsExec: fetch=5"),
+        "fetch below the replacement sort would change TopK results:\n{plan}"
+    );
+
+    Ok(())
+}
+
 /// When a parent requires SinglePartition and maintains input order, order-preserving
 /// variants (e.g. SortPreservingMergeExec) should be kept so that ordering can
 /// propagate to ancestors. Replacing them with CoalescePartitionsExec would destroy
