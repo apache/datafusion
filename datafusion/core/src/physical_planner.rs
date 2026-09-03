@@ -2252,9 +2252,9 @@ enum DmlInput {
 /// - `op`: `"DELETE"` or `"UPDATE"`, used in the error message
 ///
 /// # Returns
-/// [`DmlInput::Filters`] when the provider may be called, [`DmlInput::NoRows`]
-/// when the statement matches no row, and a "not implemented" error when part of
-/// the `WHERE` clause cannot reach the provider.
+/// * [`DmlInput::Filters`] when the provider may be called
+/// * [`DmlInput::NoRows`] when the statement matches no row
+/// * a "not implemented" error when part of the `WHERE` clause cannot reach the provider.
 fn classify_dml_input(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
