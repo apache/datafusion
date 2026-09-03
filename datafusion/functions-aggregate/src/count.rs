@@ -47,7 +47,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::blocked_helpers::BlockedVecBuilder;
 use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
-use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::count_distinct::{PrimitiveDistinctCountGroupsAccumulator, PrimitiveDistinctCountBlockedGroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::Bitmap65536DistinctCountAccumulator,
     count_distinct::Bitmap65536DistinctCountAccumulatorI16,
@@ -381,14 +381,33 @@ impl AggregateUDFImpl for Count {
     }
 
     fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
-        args.exprs.len() == 1 && !args.is_distinct
+        if args.exprs.len() != 1 {
+            return false;
+        }
+        if !args.is_distinct {
+            return true;
+        }
+        matches!(
+            args.expr_fields[0].data_type(),
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+        )
     }
 
     fn create_blocked_groups_accumulator(
         &self,
         args: BlockedAccumulatorArgs,
     ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
-        Ok(Box::new(BlockedCountGroupsAccumulator::new(args.batch_size)))
+        if !args.is_distinct {
+            return Ok(Box::new(BlockedCountGroupsAccumulator::new(args.batch_size)))
+        }
+        create_distinct_count_blocked_groups_accumulator(&args)
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -493,6 +512,43 @@ fn create_distinct_count_groups_accumulator(
         >::new())),
         _ => not_impl_err!(
             "GroupsAccumulator not supported for COUNT(DISTINCT) with {}",
+            data_type
+        ),
+    }
+}
+
+#[cold]
+fn create_distinct_count_blocked_groups_accumulator(
+    args: &BlockedAccumulatorArgs,
+) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+    let data_type = args.expr_fields[0].data_type();
+    match data_type {
+        DataType::Int8 => Ok(Box::new(
+            PrimitiveDistinctCountBlockedGroupsAccumulator::<Int8Type>::new(args.batch_size),
+        )),
+        DataType::Int16 => Ok(Box::new(PrimitiveDistinctCountBlockedGroupsAccumulator::<
+            Int16Type,
+        >::new(args.batch_size))),
+        DataType::Int32 => Ok(Box::new(PrimitiveDistinctCountBlockedGroupsAccumulator::<
+            Int32Type,
+        >::new(args.batch_size))),
+        DataType::Int64 => Ok(Box::new(PrimitiveDistinctCountBlockedGroupsAccumulator::<
+            Int64Type,
+        >::new(args.batch_size))),
+        DataType::UInt8 => Ok(Box::new(PrimitiveDistinctCountBlockedGroupsAccumulator::<
+            UInt8Type,
+        >::new(args.batch_size))),
+        DataType::UInt16 => Ok(Box::new(PrimitiveDistinctCountBlockedGroupsAccumulator::<
+            UInt16Type,
+        >::new(args.batch_size))),
+        DataType::UInt32 => Ok(Box::new(PrimitiveDistinctCountBlockedGroupsAccumulator::<
+            UInt32Type,
+        >::new(args.batch_size))),
+        DataType::UInt64 => Ok(Box::new(PrimitiveDistinctCountBlockedGroupsAccumulator::<
+            UInt64Type,
+        >::new(args.batch_size))),
+        _ => not_impl_err!(
+            "BlockedGroupsAccumulator not supported for COUNT(DISTINCT) with {}",
             data_type
         ),
     }

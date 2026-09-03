@@ -23,7 +23,7 @@ mod native;
 pub use bytes::BytesDistinctCountAccumulator;
 pub use bytes::BytesViewDistinctCountAccumulator;
 pub use dict::DictionaryCountAccumulator;
-pub use groups::PrimitiveDistinctCountGroupsAccumulator;
+pub use groups::{PrimitiveDistinctCountGroupsAccumulator, PrimitiveDistinctCountBlockedGroupsAccumulator};
 pub use native::Bitmap65536DistinctCountAccumulator;
 pub use native::Bitmap65536DistinctCountAccumulatorI16;
 pub use native::BoolArray256DistinctCountAccumulator;

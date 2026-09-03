@@ -471,7 +471,7 @@ pub trait GroupsAccumulator: Send + std::any::Any {
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct BlocksIndex {
   block_index: usize,
   index_in_block: usize,
@@ -603,6 +603,10 @@ impl BlocksIndex {
 
   pub fn sub_flat(self, rhs_flat: usize, batch_size: usize) -> Self {
     BlocksIndex::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(batch_size) - rhs_flat, batch_size)
+  }
+
+  pub fn sub_flat_checked(self, rhs_flat: usize, batch_size: usize) -> Option<Self> {
+    Some(BlocksIndex::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(batch_size).checked_sub(rhs_flat)?, batch_size))
   }
 
   pub fn sub_assign(&mut self, rhs: Self, batch_size: usize) {

@@ -385,7 +385,7 @@ impl<const FIXED_BLOCK_SIZING: bool, CustomBlockProvider: BlockProvider>
         adjusted_block_size_iter: Option<impl Iterator<Item = usize> + Clone>,
     ) -> <CustomBlockProvider::Block as BlockBuilder>::Output
     where
-        CustomBlockProvider::Block: BlockBuilder,
+      CustomBlockProvider::Block: BlockBuilder,
     {
         assert_eq!(FIXED_BLOCK_SIZING, adjusted_block_size_iter.is_none());
 
