@@ -523,6 +523,97 @@ async fn test_chunked_string_view_spill_can_use_workspace() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_single_batch_spill_preserves_workspace_after_limit_decreases() -> Result<()>
+{
+    let rows = 4096;
+    let batch_size = 1024;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "key",
+        DataType::Utf8View,
+        false,
+    )]));
+    let batches = [rows, rows - batch_size]
+        .into_iter()
+        .enumerate()
+        .map(|(batch_id, batch_rows)| {
+            let values: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+                (0..batch_rows).rev().map(|i| {
+                    format!("row-{:08}-{}", batch_id * rows + i, "x".repeat(87))
+                }),
+            ));
+            RecordBatch::try_new(Arc::clone(&schema), vec![values])
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let ordering: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(Column::new(
+        "key", 0,
+    )))]
+    .into();
+    let input_bytes = batches
+        .iter()
+        .map(get_reserved_bytes_for_record_batch)
+        .collect::<Result<Vec<_>>>()?;
+    let sorted_bytes = batches
+        .iter()
+        .map(|batch| {
+            Ok(sort_batch_chunked(batch, &ordering, batch_size)?
+                .iter()
+                .map(get_record_batch_memory_size)
+                .sum::<usize>())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert!(sorted_bytes[0] > input_bytes[0]);
+    assert!(sorted_bytes[1] > input_bytes[1]);
+    let workspace = sorted_bytes[0] - input_bytes[0];
+    assert!(sorted_bytes[1] - input_bytes[1] <= workspace);
+    let capacity = workspace + input_bytes[0];
+    let reduced_limit = workspace + input_bytes[1];
+    // Both spills need a workspace loan. The first sorted batch cannot be
+    // charged to the execution pool if its workspace is released and regranted.
+    assert!(reduced_limit < sorted_bytes[0]);
+
+    let pool = AdjustablePool::new(capacity);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+        .build_arc()?;
+    let mut sorter = ExternalSorter::new(
+        0,
+        Arc::clone(&schema),
+        ordering.clone(),
+        batch_size,
+        workspace,
+        0,
+        SpillCompression::Uncompressed,
+        &ExecutionPlanMetricsSet::new(),
+        Arc::clone(&runtime),
+    )?;
+    sorter.insert_batch(batches[0].clone()).await?;
+    assert_eq!(pool.reserved(), capacity);
+    assert_eq!(sorter.in_mem_batches.len(), 1);
+    assert!(!sorter.spilled_before());
+
+    pool.set_limit(reduced_limit);
+    sorter.insert_batch(batches[1].clone()).await?;
+    assert_eq!(sorter.finished_spill_files.len(), 1);
+    assert_eq!(sorter.in_mem_batches.len(), 1);
+    assert_eq!(pool.reserved(), reduced_limit);
+
+    // Finalizing the sort must spill its one remaining input using the same
+    // workspace, then merge both files within the reduced memory limit.
+    let spill_count = sorter.metrics.spill_metrics.spill_file_count.clone();
+    let stream = sorter.sort().await?;
+    drop(sorter);
+    let output: Vec<RecordBatch> = stream.try_collect().await?;
+    assert_eq!(spill_count.value(), 2);
+    assert!(output.iter().all(|batch| batch.num_rows() <= batch_size));
+    let actual = concat_batches(&schema, &output)?;
+    let expected = sort_batch(&concat_batches(&schema, &batches)?, &ordering, None)?;
+    assert_eq!(actual, expected);
+    assert_eq!(actual.num_rows(), 2 * rows - batch_size);
+    assert_released(&pool, &runtime).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_chunked_dictionary_sort_can_use_workspace_with_defaults() -> Result<()> {
     let options = ExecutionOptions::default();
     let rows = 32_768;
@@ -866,7 +957,7 @@ async fn test_final_spilled_merge_retains_workspace_between_passes() -> Result<(
 }
 
 #[tokio::test]
-async fn test_chunked_sort_returns_live_workspace_loan_on_drop() -> Result<()> {
+async fn test_single_batch_spill_returns_live_workspace_loan_on_drop() -> Result<()> {
     let options = ExecutionOptions::default();
     let rows = 4096;
     let batch_size = 1024;
@@ -920,15 +1011,13 @@ async fn test_chunked_sort_returns_live_workspace_loan_on_drop() -> Result<()> {
     sorter.insert_batch(batch).await?;
     assert_eq!(pool.reserved(), capacity);
 
-    // Match the beginning of spill preparation, retaining its workspace but
-    // assigning it no merge cursors. Call sort_batch_stream directly: the usual
-    // one-input path would release unused workspace before this stream starts.
+    // Follow spill preparation through the one-input branch, retaining the
+    // workspace but assigning it no merge cursors.
     sorter.merge_reservation.free();
     let merge_pool = Arc::clone(&sorter.merge_pool);
-    let batch = sorter.in_mem_batches.pop().expect("one buffered input");
+    assert_eq!(sorter.in_mem_batches.len(), 1);
+    let mut stream = sorter.in_mem_sort_stream(false, false)?;
     assert!(sorter.in_mem_batches.is_empty());
-    let reservation = sorter.reservation.take();
-    let mut stream = sorter.sort_batch_stream(batch, reservation)?;
     drop(sorter);
 
     let first_batch = stream

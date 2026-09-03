@@ -19,7 +19,6 @@
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
-use crate::sorts::merge_memory_pool::MergeMemoryPool;
 use crate::sorts::multi_level_merge::MultiLevelMergeBuilder;
 use crate::sorts::{
     merge::SortPreservingMergeStream,
@@ -32,7 +31,7 @@ use datafusion_common::human_readable_size;
 use datafusion_common::{Result, assert_or_internal_err, internal_err};
 use datafusion_execution::SpillFile;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool, UnboundedMemoryPool,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;

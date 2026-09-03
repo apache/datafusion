@@ -28,10 +28,9 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, internal_err, resources_err};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
 
 use crate::sorts::builder::try_grow_reservation_to_at_least;
-use crate::sorts::merge_memory_pool::MergeMemoryPool;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};

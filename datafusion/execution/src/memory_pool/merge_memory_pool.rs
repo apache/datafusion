@@ -15,20 +15,73 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Shares the sorter's reserved merge workspace without returning it to the
-//! execution pool between sorting batches and the merge's cursor reservations.
+//! Shares reserved workspace across merge reservations and temporary loans.
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use datafusion_common::{Result, resources_err};
-use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
-};
 use parking_lot::Mutex;
 
+use super::{MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation};
+
+/// Shares reserved merge workspace across child reservations and temporary loans.
+///
+/// This pool charges a single reservation to its parent [`MemoryPool`]. After
+/// acquiring workspace through a child [`MemoryReservation`], call [`Self::retain`]
+/// to keep that capacity available even when children release their reservations.
+/// Children and [`WorkspaceLoan`]s share this capacity; only usage above the
+/// existing parent reservation requires additional parent memory. Call
+/// [`Self::release_unused`] when no further merge needs the idle workspace.
+/// Live children and loans keep the pool and their reserved memory alive.
+///
+/// All parent accounting and allocation policy uses the [`MemoryConsumer`]
+/// supplied to [`Self::new`]. Child consumers are not registered with the parent,
+/// so their names and [`MemoryConsumer::can_spill`] flags do not affect the
+/// parent's accounting or fair shares. Consumers that need a separate parent
+/// allocation policy should register directly with the parent. They can borrow
+/// already-acquired workspace with [`Self::borrow`] and request any additional
+/// capacity through their own reservation.
+///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion_common::Result;
+/// # use datafusion_execution::memory_pool::{
+/// #     GreedyMemoryPool, MemoryConsumer, MemoryPool, MergeMemoryPool,
+/// # };
+/// # fn main() -> Result<()> {
+/// let parent: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100));
+/// let workspace = Arc::new(MergeMemoryPool::new(
+///     Arc::clone(&parent),
+///     MemoryConsumer::new("merge workspace"),
+/// ));
+/// let pool: Arc<dyn MemoryPool> = Arc::clone(&workspace) as _;
+/// let reservation = MemoryConsumer::new("merge children").register(&pool);
+/// reservation.try_grow(60)?;
+/// workspace.retain(60);
+/// reservation.free();
+///
+/// // Another operator can use only the space outside the retained workspace.
+/// let contender = MemoryConsumer::new("contender").register(&parent);
+/// contender.try_grow(40)?;
+/// assert_eq!(parent.reserved(), 100);
+///
+/// // Children and loans reuse that workspace without another parent grant.
+/// let cursor = reservation.new_empty();
+/// cursor.try_grow(20)?;
+/// let loan = workspace.borrow(60);
+/// assert_eq!(loan.size(), 40);
+/// workspace.release_unused();
+/// assert_eq!(parent.reserved(), 100); // Both the cursor and loan remain charged.
+/// drop(loan);
+/// assert_eq!(parent.reserved(), 60); // Only the cursor and contender remain.
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
-pub(super) struct MergeMemoryPool {
+pub struct MergeMemoryPool {
     parent: Arc<dyn MemoryPool>,
     state: Mutex<MergeMemoryState>,
 }
@@ -45,19 +98,30 @@ struct MergeMemoryState {
     retained: usize,
 }
 
-/// Temporarily lends already-reserved workspace to per-batch sorting. Any
-/// additional capacity must still be acquired by the ordinary sort consumer.
-pub(super) struct WorkspaceLoan {
+/// A temporary claim on workspace already reserved by a [`MergeMemoryPool`].
+///
+/// Created by [`MergeMemoryPool::borrow`]. The loan shares capacity with child
+/// reservations and keeps the pool alive until it is dropped. Shrinking or
+/// dropping the loan returns its bytes to the pool; the parent reservation is
+/// reduced only when those bytes are no longer retained as workspace.
+#[derive(Debug)]
+pub struct WorkspaceLoan {
     pool: Arc<MergeMemoryPool>,
     size: usize,
 }
 
 impl WorkspaceLoan {
-    pub(super) fn size(&self) -> usize {
+    /// Returns the number of bytes currently held by this loan.
+    pub fn size(&self) -> usize {
         self.size
     }
 
-    pub(super) fn shrink(&mut self, size: usize) {
+    /// Returns `size` bytes to the pool.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` exceeds [`Self::size`].
+    pub fn shrink(&mut self, size: usize) {
         self.size = self
             .size
             .checked_sub(size)
@@ -75,7 +139,11 @@ impl Drop for WorkspaceLoan {
 }
 
 impl MergeMemoryPool {
-    pub(super) fn new(parent: Arc<dyn MemoryPool>, consumer: MemoryConsumer) -> Self {
+    /// Creates a pool whose memory is charged to `consumer` in `parent`.
+    ///
+    /// Registers the consumer without reserving any memory. The consumer's
+    /// allocation policy applies to the combined usage of all children and loans.
+    pub fn new(parent: Arc<dyn MemoryPool>, consumer: MemoryConsumer) -> Self {
         let reservation = consumer.register(&parent);
         Self {
             parent,
@@ -87,17 +155,29 @@ impl MergeMemoryPool {
         }
     }
 
-    /// Retain workspace only after it has been successfully acquired.
-    pub(super) fn retain(&self, size: usize) {
+    /// Sets the amount of acquired workspace to retain when children release it.
+    ///
+    /// The workspace must first be acquired through a child reservation. This
+    /// method sets the retained floor without changing the parent reservation.
+    /// Use [`Self::release_unused`] to stop retaining idle workspace immediately.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` exceeds this pool's current reservation in the parent,
+    /// as reported by its [`MemoryPool::reserved`] method.
+    pub fn retain(&self, size: usize) {
         let mut state = self.state.lock();
         assert!(size <= state.reservation.size());
         state.retained = size;
     }
 
-    /// Lend up to `size` unused bytes without acquiring more parent memory.
-    /// Count the loan alongside merge reservations so they cannot spend the
-    /// same credit. Dropping the loan returns any outstanding bytes.
-    pub(super) fn borrow(self: &Arc<Self>, size: usize) -> WorkspaceLoan {
+    /// Lends up to `size` unused bytes without acquiring more parent memory.
+    ///
+    /// Returns a smaller loan if less workspace is available, including an empty
+    /// loan if all capacity is in use. The loan is counted alongside child
+    /// reservations so they cannot spend the same credit. Dropping it returns
+    /// any outstanding bytes.
+    pub fn borrow(self: &Arc<Self>, size: usize) -> WorkspaceLoan {
         let mut state = self.state.lock();
         let size = size.min(state.reservation.size() - state.used);
         state.used += size;
@@ -107,9 +187,11 @@ impl MergeMemoryPool {
         }
     }
 
-    /// Stop retaining idle workspace when no further spill or intermediate merge
-    /// needs it. Live child reservations and loans remain charged.
-    pub(super) fn release_unused(&self) {
+    /// Stops retaining idle workspace and returns unused capacity to the parent.
+    ///
+    /// Live child reservations and loans remain charged. Their future releases
+    /// also return memory to the parent, unless [`Self::retain`] is called again.
+    pub fn release_unused(&self) {
         let mut state = self.state.lock();
         state.retained = 0;
         state.reservation.resize(state.used);
@@ -174,7 +256,7 @@ impl MemoryPool for MergeMemoryPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_execution::memory_pool::GreedyMemoryPool;
+    use crate::memory_pool::GreedyMemoryPool;
 
     fn reservation(
         parent: &Arc<dyn MemoryPool>,
@@ -354,7 +436,7 @@ mod tests {
 
     #[test]
     fn workspace_loan_preserves_ordinary_consumer_fair_share() -> Result<()> {
-        use datafusion_execution::memory_pool::{FairSpillPool, TrackConsumersPool};
+        use crate::memory_pool::{FairSpillPool, TrackConsumersPool};
         use std::num::NonZeroUsize;
 
         let tracked = Arc::new(TrackConsumersPool::new(

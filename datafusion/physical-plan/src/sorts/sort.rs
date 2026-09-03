@@ -42,7 +42,6 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
-use crate::sorts::merge_memory_pool::MergeMemoryPool;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -68,7 +67,9 @@ use datafusion_common::{
     unwrap_or_internal_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
+};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
@@ -605,7 +606,6 @@ impl ExternalSorter {
         coalesce_runs: bool,
     ) -> Result<SendableRecordBatchStream> {
         if self.in_mem_batches.is_empty() {
-            self.merge_pool.release_unused();
             let empty_stream =
                 Box::pin(EmptyRecordBatchStream::new(Arc::clone(&self.schema)));
             return Ok(self.observe_if_output(empty_stream, is_output_stream));
@@ -623,7 +623,6 @@ impl ExternalSorter {
         // consumer of the stream.
 
         if self.in_mem_batches.len() == 1 {
-            self.merge_pool.release_unused();
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
             let sorted_stream = self.sort_batch_stream(batch, reservation)?;
@@ -632,6 +631,9 @@ impl ExternalSorter {
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
         if self.reservation.size() < self.sort_in_place_threshold_bytes {
+            // Concatenation can grow the ordinary sort reservation, which cannot
+            // borrow merge workspace. Return idle workspace to the execution pool
+            // so that growth can use it.
             self.merge_pool.release_unused();
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
