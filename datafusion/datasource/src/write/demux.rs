@@ -420,30 +420,33 @@ fn compute_partition_keys_by_row<'a>(
             }
             DataType::Date32 => {
                 let array = as_date32_array(col_array)?;
-                // ISO-8601/RFC3339 format - yyyy-mm-dd
-                let format = "%Y-%m-%d";
                 for i in 0..rb.num_rows() {
-                    let date = NaiveDate::from_num_days_from_ce_opt(
-                        EPOCH_DAYS_FROM_CE + array.value(i),
-                    )
-                    .unwrap()
-                    .format(format)
-                    .to_string();
-                    partition_values.push(Cow::from(date));
+                    let value = array.value(i);
+                    let date = EPOCH_DAYS_FROM_CE
+                        .checked_add(value)
+                        .and_then(NaiveDate::from_num_days_from_ce_opt)
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Date32 value {value} is out of range for a partition value"
+                            )
+                        })?;
+                    partition_values.push(Cow::from(format_partition_date(date)));
                 }
             }
             DataType::Date64 => {
                 let array = as_date64_array(col_array)?;
-                // ISO-8601/RFC3339 format - yyyy-mm-dd
-                let format = "%Y-%m-%d";
                 for i in 0..rb.num_rows() {
-                    let date = NaiveDate::from_num_days_from_ce_opt(
-                        EPOCH_DAYS_FROM_CE + (array.value(i) / 86_400_000) as i32,
-                    )
-                    .unwrap()
-                    .format(format)
-                    .to_string();
-                    partition_values.push(Cow::from(date));
+                    let value = array.value(i);
+                    let date = i32::try_from(value.div_euclid(86_400_000))
+                        .ok()
+                        .and_then(|days| EPOCH_DAYS_FROM_CE.checked_add(days))
+                        .and_then(NaiveDate::from_num_days_from_ce_opt)
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Date64 value {value} is out of range for a partition value"
+                            )
+                        })?;
+                    partition_values.push(Cow::from(format_partition_date(date)));
                 }
             }
             DataType::Int8 => {
@@ -538,6 +541,11 @@ fn compute_partition_keys_by_row<'a>(
     }
 
     Ok(all_partition_values)
+}
+
+/// Formats a date as ISO-8601 (`yyyy-mm-dd`) for use in a partition path.
+fn format_partition_date(date: NaiveDate) -> String {
+    date.format("%Y-%m-%d").to_string()
 }
 
 fn compute_take_arrays(

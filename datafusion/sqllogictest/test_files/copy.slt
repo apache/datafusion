@@ -52,6 +52,33 @@ select * from validate_partitioned_parquet_bar order by col1;
 ----
 2
 
+# Partition by a date column: the value is rendered as yyyy-mm-dd in the path
+query I
+COPY (values (1, date '2020-02-29'), (2, date '1969-12-31')) TO 'test_files/scratch/copy/partitioned_by_date/' STORED AS parquet PARTITIONED BY (column2)
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE partitioned_by_date STORED AS parquet
+LOCATION 'test_files/scratch/copy/partitioned_by_date/' PARTITIONED BY (column2);
+
+query IT
+SELECT * FROM partitioned_by_date ORDER BY column1
+----
+1 2020-02-29
+2 1969-12-31
+
+# Date values that cannot be represented as a calendar date used to panic
+# ("attempt to add with overflow" / unwrap on None) inside the demuxer.
+statement error DataFusion error: Execution error: Date32 value 2147483647 is out of range for a partition value
+COPY (values (arrow_cast(2147483647, 'Date32'))) TO 'test_files/scratch/copy/partitioned_by_date_err1/' STORED AS parquet PARTITIONED BY (column1)
+
+statement error DataFusion error: Execution error: Date32 value -2147483648 is out of range for a partition value
+COPY (values (arrow_cast(-2147483648, 'Date32'))) TO 'test_files/scratch/copy/partitioned_by_date_err2/' STORED AS parquet PARTITIONED BY (column1)
+
+statement error DataFusion error: Execution error: Date64 value 9223372036854775807 is out of range for a partition value
+COPY (values (arrow_cast(9223372036854775807, 'Date64'))) TO 'test_files/scratch/copy/partitioned_by_date_err3/' STORED AS parquet PARTITIONED BY (column1)
+
 # Copy to directory as partitioned files
 query I
 COPY (values (1, 'a', 'x'), (2, 'b', 'y'), (3, 'c', 'z')) TO 'test_files/scratch/copy/partitioned_table2/' STORED AS parquet PARTITIONED BY (column2, column3)
