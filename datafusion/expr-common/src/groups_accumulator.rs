@@ -18,7 +18,6 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use std::cmp::Ordering;
-use std::ops::{Sub, SubAssign};
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{assert_ne_or_internal_err, exec_err, not_impl_err, utils::split_vec_min_alloc, Result, assert_or_internal_err};
 
@@ -619,8 +618,7 @@ impl BlocksIndex {
 
 impl PartialOrd for BlocksIndex {
   fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-    self.block_index.partial_cmp(&other.block_index)
-      .map(|o| o.then(self.index_in_block.cmp(&other.index_in_block)))
+    Some(self.cmp(other))
   }
 }
 
