@@ -259,3 +259,53 @@ SELECT * FROM test_delete_false;
 
 statement ok
 DROP TABLE test_delete_false;
+
+# Test the same statements with the optimizer switched off
+# With `max_passes = 0` no rule rewrites the subquery into a semi join and no
+# rule folds an always-false predicate, so the whole WHERE clause reaches the
+# table provider. A subquery predicate is rejected there, when the provider
+# compiles it to a physical expression, so no path deletes every row.
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+statement ok
+CREATE TABLE test_delete_unopt AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE test_delete_unopt_src AS VALUES (2);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+DELETE FROM test_delete_unopt WHERE column1 IN (SELECT column1 FROM test_delete_unopt_src);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+DELETE FROM test_delete_unopt WHERE EXISTS (SELECT 1 FROM test_delete_unopt_src WHERE test_delete_unopt_src.column1 = test_delete_unopt.column1);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+DELETE FROM test_delete_unopt WHERE column1 NOT IN (SELECT column1 FROM test_delete_unopt_src);
+
+# The always-false predicate reaches the provider, which matches no row with it
+query I
+DELETE FROM test_delete_unopt WHERE false;
+----
+0
+
+query I
+DELETE FROM test_delete_unopt WHERE 1 = 2;
+----
+0
+
+query I rowsort
+SELECT * FROM test_delete_unopt;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE test_delete_unopt_src;
+
+statement ok
+DROP TABLE test_delete_unopt;
+
+statement ok
+RESET datafusion.optimizer.max_passes;
