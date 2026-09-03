@@ -1369,3 +1369,9 @@ order by g;
 ----
 1 1.5 Decimal64(11, 6)
 2 3.5 Decimal64(11, 6)
+
+# Decimals should not lose precision with trailing zeroes
+query RB
+select arrow_cast('1.2300', 'Decimal32(9, 4)'), arrow_cast(arrow_cast('1.2300', 'Decimal32(9, 4)'), 'Utf8') == '1.2300';
+----
+1.2300 true
