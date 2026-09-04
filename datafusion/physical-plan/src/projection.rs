@@ -785,7 +785,7 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
 
     if projection_index.is_empty() {
         return Ok(None);
-    };
+    }
 
     let columns_reduced = projection_index.len() < execution_plan.schema().fields().len();
 

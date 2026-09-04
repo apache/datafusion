@@ -48,7 +48,7 @@ use datafusion_execution::{
 use datafusion_expr::Operator;
 
 use crate::source::OpenArgs;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -1237,6 +1237,31 @@ impl DataSource for FileScanConfig {
     }
 }
 
+/// Separates files that require statistics reasoning from files proven empty.
+///
+/// The latter must remain in the scan even though they cannot affect ordering.
+fn partition_known_empty_files<'a>(
+    files: impl IntoIterator<Item = &'a PartitionedFile>,
+) -> (Vec<&'a PartitionedFile>, Vec<&'a PartitionedFile>) {
+    files
+        .into_iter()
+        .partition(|file| !file.statistics.as_deref().is_some_and(is_known_empty))
+}
+
+/// Appends empty files to the smallest groups without affecting their row order.
+fn append_known_empty_files(
+    file_groups: &mut [FileGroup],
+    empty_files: Vec<&PartitionedFile>,
+) {
+    for file in empty_files {
+        file_groups
+            .iter_mut()
+            .min_by_key(|group| group.len())
+            .expect("non-empty files must create at least one file group")
+            .push((*file).clone());
+    }
+}
+
 impl FileScanConfig {
     /// Returns only the output orderings that are validated against actual
     /// file group statistics.
@@ -1417,11 +1442,16 @@ impl FileScanConfig {
             return Ok(vec![]);
         }
 
+        let (files, empty_files) = partition_known_empty_files(flattened_files);
+        if files.is_empty() {
+            return Ok(file_groups.to_vec());
+        }
+
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
             None,
-            flattened_files.iter().copied(),
+            files.iter().copied(),
         )?;
 
         let indices_sorted_by_min = statistics.min_values_sorted();
@@ -1452,17 +1482,20 @@ impl FileScanConfig {
         file_groups_indices.retain(|group| !group.is_empty());
 
         // Assemble indices back into groups of PartitionedFiles
-        Ok(file_groups_indices
+        let mut file_groups = file_groups_indices
             .into_iter()
             .map(|file_group_indices| {
                 FileGroup::new(
                     file_group_indices
                         .into_iter()
-                        .map(|idx| flattened_files[idx].clone())
+                        .map(|idx| files[idx].clone())
                         .collect(),
                 )
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        append_known_empty_files(&mut file_groups, empty_files);
+        Ok(file_groups)
     }
 
     /// Attempts to do a bin-packing on files into file groups, such that any two files
@@ -1492,11 +1525,16 @@ impl FileScanConfig {
             return Ok(vec![]);
         }
 
+        let (files, empty_files) = partition_known_empty_files(flattened_files);
+        if files.is_empty() {
+            return Ok(file_groups.to_vec());
+        }
+
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
             None,
-            flattened_files.iter().copied(),
+            files.iter().copied(),
         )
         .map_err(|e| {
             e.context("construct min/max statistics for split_groups_by_statistics")
@@ -1522,15 +1560,18 @@ impl FileScanConfig {
         }
 
         // Assemble indices back into groups of PartitionedFiles
-        Ok(file_groups_indices
+        let mut file_groups = file_groups_indices
             .into_iter()
             .map(|file_group_indices| {
                 file_group_indices
                     .into_iter()
-                    .map(|idx| flattened_files[idx].clone())
-                    .collect()
+                    .map(|idx| files[idx].clone())
+                    .collect::<FileGroup>()
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        append_known_empty_files(&mut file_groups, empty_files);
+        Ok(file_groups)
     }
 
     /// Write the data_type based on file_source
@@ -2704,6 +2745,78 @@ mod tests {
     }
 
     #[test]
+    fn split_groups_by_statistics_preserves_exact_empty_files() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+        let sort_order = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("value", 0),
+        ))])
+        .unwrap();
+
+        let mixed_files = vec![FileGroup::new(vec![
+            make_file_with_stats("high", 20.0, 29.0),
+            make_exact_empty_file("empty"),
+            make_file_with_stats("low", 0.0, 9.0),
+        ])];
+        let split = FileScanConfig::split_groups_by_statistics(
+            &schema,
+            &mixed_files,
+            &sort_order,
+        )?;
+        let split_with_target =
+            FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                &schema,
+                &mixed_files,
+                &sort_order,
+                2,
+            )?;
+
+        for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
+            let mut file_names = result
+                .iter()
+                .flat_map(FileGroup::iter)
+                .map(|file| file.object_meta.location.to_string())
+                .collect::<Vec<_>>();
+            file_names.sort();
+            assert_eq!(file_names, ["empty", "high", "low"]);
+            assert!(result.iter().all(|group| !group.is_empty()));
+        }
+
+        let empty_files = vec![FileGroup::new(vec![
+            make_exact_empty_file("empty1"),
+            make_exact_empty_file("empty2"),
+        ])];
+        let split = FileScanConfig::split_groups_by_statistics(
+            &schema,
+            &empty_files,
+            &sort_order,
+        )?;
+        let split_with_target =
+            FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                &schema,
+                &empty_files,
+                &sort_order,
+                2,
+            )?;
+
+        for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
+            assert_eq!(result.len(), 1);
+            let file_names = result[0]
+                .iter()
+                .map(|file| file.object_meta.location.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(file_names, ["empty1", "empty2"]);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_partition_statistics_projection() {
         // This test verifies that partition_statistics applies projection correctly.
         // The old implementation had a bug where it returned file group statistics
@@ -3137,6 +3250,15 @@ mod tests {
                     max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
                     ..Default::default()
                 }],
+            },
+        ))
+    }
+
+    fn make_exact_empty_file(name: &str) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(0),
+                ..Default::default()
             },
         ))
     }

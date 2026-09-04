@@ -1000,16 +1000,32 @@ impl ConversionSpecifier {
                     self.format_string(string, &value.unwrap_or(false).to_string())
                 }
 
-                _ => self.format_boolean(string, value),
+                _ => self.format_boolean(string, value.as_ref()),
             },
-            ScalarValue::Int8(value) => self.format_integer(string, value, "Int8"),
-            ScalarValue::Int16(value) => self.format_integer(string, value, "Int16"),
-            ScalarValue::Int32(value) => self.format_integer(string, value, "Int32"),
-            ScalarValue::Int64(value) => self.format_integer(string, value, "Int64"),
-            ScalarValue::UInt8(value) => self.format_integer(string, value, "UInt8"),
-            ScalarValue::UInt16(value) => self.format_integer(string, value, "UInt16"),
-            ScalarValue::UInt32(value) => self.format_integer(string, value, "UInt32"),
-            ScalarValue::UInt64(value) => self.format_integer(string, value, "UInt64"),
+            ScalarValue::Int8(value) => {
+                self.format_integer(string, value.as_ref(), "Int8")
+            }
+            ScalarValue::Int16(value) => {
+                self.format_integer(string, value.as_ref(), "Int16")
+            }
+            ScalarValue::Int32(value) => {
+                self.format_integer(string, value.as_ref(), "Int32")
+            }
+            ScalarValue::Int64(value) => {
+                self.format_integer(string, value.as_ref(), "Int64")
+            }
+            ScalarValue::UInt8(value) => {
+                self.format_integer(string, value.as_ref(), "UInt8")
+            }
+            ScalarValue::UInt16(value) => {
+                self.format_integer(string, value.as_ref(), "UInt16")
+            }
+            ScalarValue::UInt32(value) => {
+                self.format_integer(string, value.as_ref(), "UInt32")
+            }
+            ScalarValue::UInt64(value) => {
+                self.format_integer(string, value.as_ref(), "UInt64")
+            }
             ScalarValue::Float16(value) => match (self.conversion_type, value) {
                 (
                     ConversionType::DecFloatLower
@@ -1183,7 +1199,7 @@ impl ConversionSpecifier {
                 (
                     ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                     Some(value),
-                ) => self.format_time(string, *value as i64 * 1000000000, &None),
+                ) => self.format_time(string, *value as i64 * 1000000000, None),
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
                     Some(value),
@@ -1201,7 +1217,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value as i64 * 1000000, &None),
+                    ) => self.format_time(string, *value as i64 * 1000000, None),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1220,7 +1236,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value * 1000, &None),
+                    ) => self.format_time(string, *value * 1000, None),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1238,7 +1254,7 @@ impl ConversionSpecifier {
                 (
                     ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                     Some(value),
-                ) => self.format_time(string, *value, &None),
+                ) => self.format_time(string, *value, None),
                 (
                     ConversionType::StringLower | ConversionType::StringUpper,
                     Some(value),
@@ -1256,7 +1272,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, value * 1000000000, zone),
+                    ) => self.format_time(string, value * 1000000000, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1275,7 +1291,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value * 1000000, zone),
+                    ) => self.format_time(string, *value * 1000000, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1295,7 +1311,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, value * 1000, zone),
+                    ) => self.format_time(string, value * 1000, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1315,7 +1331,7 @@ impl ConversionSpecifier {
                     (
                         ConversionType::TimeLower(_) | ConversionType::TimeUpper(_),
                         Some(value),
-                    ) => self.format_time(string, *value, zone),
+                    ) => self.format_time(string, *value, zone.as_ref()),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1374,13 +1390,13 @@ impl ConversionSpecifier {
     fn format_integer<T>(
         &self,
         writer: &mut String,
-        value: &Option<T>,
+        value: Option<&T>,
         type_name: &str,
     ) -> Result<()>
     where
         T: Copy + IntegerFormatValue,
     {
-        let Some(value) = *value else {
+        let Some(value) = value.copied() else {
             return if self.conversion_type.supports_integer() {
                 self.format_string(writer, "null")
             } else {
@@ -1565,7 +1581,7 @@ impl ConversionSpecifier {
                     temp = format!("{prefix}p{iexp}");
                 }
             }
-        };
+        }
 
         if self.conversion_type.is_upper() {
             temp = temp.to_ascii_uppercase();
@@ -1598,7 +1614,7 @@ impl ConversionSpecifier {
                 temp = " ".to_owned() + &temp;
             }
             writer.push_str(&temp);
-        };
+        }
         Ok(())
     }
 
@@ -1644,8 +1660,8 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_boolean(&self, writer: &mut String, value: &Option<bool>) -> Result<()> {
-        let value = value.unwrap_or(false);
+    fn format_boolean(&self, writer: &mut String, value: Option<&bool>) -> Result<()> {
+        let value = value.copied().unwrap_or(false);
 
         let formatted = match self.conversion_type {
             ConversionType::BooleanUpper => {
@@ -2094,7 +2110,7 @@ impl ConversionSpecifier {
         &self,
         writer: &mut String,
         timestamp_nanos: i64,
-        timezone: &Option<Arc<str>>,
+        timezone: Option<&Arc<str>>,
     ) -> Result<()> {
         let upper = self.conversion_type.is_upper();
         match &self.conversion_type {
@@ -2121,14 +2137,14 @@ impl ConversionSpecifier {
     fn format_date(&self, writer: &mut String, date_days: i64) -> Result<()> {
         // Convert days since epoch to timestamp in nanoseconds
         let timestamp_nanos = date_days * 24 * 60 * 60 * 1_000_000_000;
-        self.format_time(writer, timestamp_nanos, &None)
+        self.format_time(writer, timestamp_nanos, None)
     }
 
     fn format_time_component(
         &self,
         timestamp_nanos: i64,
         time_format: TimeFormat,
-        _timezone: &Option<Arc<str>>,
+        _timezone: Option<&Arc<str>>,
     ) -> Result<String> {
         // Convert nanoseconds to seconds and nanoseconds remainder
         let secs = timestamp_nanos / 1_000_000_000;

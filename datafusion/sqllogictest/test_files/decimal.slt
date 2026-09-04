@@ -1339,4 +1339,33 @@ from (
     from generate_series(1, 65536) t(v)
 ) t;
 ----
-32768.5 Decimal32(9, 4) 32768.5
+32768.5 Decimal64(13, 4) 32768.5
+
+# TPC-DS `store_returns.sr_return_amt` is Decimal32(7, 2). Its average needs
+# Decimal(11, 6), which requires Decimal64 rather than a clamped Decimal32(9, 6).
+query RT
+select avg(d), arrow_typeof(avg(d))
+from (
+    values
+        (arrow_cast(1.00, 'Decimal32(7, 2)')),
+        (arrow_cast(2.00, 'Decimal32(7, 2)'))
+) t(d);
+----
+1.5 Decimal64(11, 6)
+
+# GROUP BY selects the groups accumulator, which must produce the same widened
+# Decimal64 output type for each group.
+query IRT
+select g, avg(d), arrow_typeof(avg(d))
+from (
+    values
+        (1, arrow_cast(1.00, 'Decimal32(7, 2)')),
+        (1, arrow_cast(2.00, 'Decimal32(7, 2)')),
+        (2, arrow_cast(3.00, 'Decimal32(7, 2)')),
+        (2, arrow_cast(4.00, 'Decimal32(7, 2)'))
+) t(g, d)
+group by g
+order by g;
+----
+1 1.5 Decimal64(11, 6)
+2 3.5 Decimal64(11, 6)

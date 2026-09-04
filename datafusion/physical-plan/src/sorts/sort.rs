@@ -2128,7 +2128,7 @@ mod tests {
             match t {
                 DisplayFormatType::Default
                 | DisplayFormatType::Verbose
-                | DisplayFormatType::TreeRender => write!(f, "UnboundableExec",).unwrap(),
+                | DisplayFormatType::TreeRender => write!(f, "UnboundableExec").unwrap(),
             }
             Ok(())
         }

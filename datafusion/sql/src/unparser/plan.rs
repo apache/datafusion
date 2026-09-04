@@ -54,7 +54,7 @@ use datafusion_expr::{
     TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
-use std::{sync::Arc, vec};
+use std::{collections::HashSet, sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -164,6 +164,12 @@ impl<'a> UnparserAggScope<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DerivedInputScope<'a> {
+    alias: &'static str,
+    schema: &'a DFSchema,
+}
+
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
@@ -199,6 +205,7 @@ impl Unparser<'_> {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
         }
     }
@@ -330,7 +337,7 @@ impl Unparser<'_> {
                     .map(|e| unproject_unnest_expr(e, unnest))
                     .collect::<Result<Vec<_>>>()?;
             }
-        };
+        }
 
         // Rewrite column references that point to FLATTEN table aliases:
         // in Snowflake, FLATTEN output is accessed via .VALUE, not the
@@ -449,6 +456,102 @@ impl Unparser<'_> {
                     [input] if Self::contains_projection_before_relation(input)
                 )
             }
+        }
+    }
+
+    /// Return the alias recursion would assign when `plan` must become a
+    /// derived relation below an already rendered projection.
+    fn derived_input_alias(plan: &LogicalPlan) -> Option<&'static str> {
+        match plan {
+            LogicalPlan::Projection(_) => Some("derived_projection"),
+            LogicalPlan::Limit(_) => Some("derived_limit"),
+            LogicalPlan::Sort(_) => Some("derived_sort"),
+            LogicalPlan::Distinct(_) => Some("derived_distinct"),
+            LogicalPlan::Filter(filter) => {
+                Self::derived_input_alias(filter.input.as_ref())
+            }
+            LogicalPlan::Repartition(repartition) => {
+                Self::derived_input_alias(repartition.input.as_ref())
+            }
+            _ => None,
+        }
+    }
+
+    fn derived_input_scope<'a>(
+        plan: &'a LogicalPlan,
+        select: &SelectBuilder,
+    ) -> Option<DerivedInputScope<'a>> {
+        if select.inside_subquery_alias() {
+            return None;
+        }
+
+        if select.already_projected()
+            && find_unnest_node_within_select(plan).is_none()
+            && let Some(alias) = Self::derived_input_alias(plan)
+        {
+            return Some(DerivedInputScope {
+                alias,
+                schema: plan.schema().as_ref(),
+            });
+        }
+
+        match plan {
+            LogicalPlan::Projection(projection) => {
+                let alias = Self::derived_input_alias(projection.input.as_ref())?;
+                let qualified_projection = projection.expr.iter().any(|expr| {
+                    expr.column_refs()
+                        .iter()
+                        .any(|column| column.relation.is_some())
+                });
+                let mut input_names = HashSet::new();
+                let unique_input_names = projection
+                    .input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .all(|field| input_names.insert(field.name()));
+
+                (qualified_projection
+                    && unique_input_names
+                    && find_unnest_node_within_select(plan).is_none())
+                .then_some(DerivedInputScope {
+                    alias,
+                    schema: projection.input.schema().as_ref(),
+                })
+            }
+            LogicalPlan::Filter(filter) => {
+                Self::derived_input_scope(filter.input.as_ref(), select)
+            }
+            LogicalPlan::Limit(limit) => {
+                Self::derived_input_scope(limit.input.as_ref(), select)
+            }
+            LogicalPlan::Sort(sort) => {
+                Self::derived_input_scope(sort.input.as_ref(), select)
+            }
+            LogicalPlan::Repartition(repartition) => {
+                Self::derived_input_scope(repartition.input.as_ref(), select)
+            }
+            _ => None,
+        }
+    }
+
+    fn rebase_derived_input_expr(
+        &self,
+        expr: Expr,
+        scope: Option<DerivedInputScope<'_>>,
+    ) -> Result<Expr> {
+        let Some(scope) = scope else {
+            return Ok(expr);
+        };
+        if self.dialect.requires_derived_table_alias() {
+            let mut alias_rewriter = TableAliasRewriter {
+                table_schema: scope.schema,
+                alias_name: TableReference::bare(scope.alias),
+                rewrite_unqualified: false,
+            };
+            expr.rewrite(&mut alias_rewriter).data()
+        } else {
+            Self::strip_column_qualifiers_for_schema(expr, scope.schema)
         }
     }
 
@@ -830,6 +933,26 @@ impl Unparser<'_> {
                         columns,
                     );
                 }
+
+                if let Some(scope) = Self::derived_input_scope(plan, select) {
+                    // The input is about to enter a new SQL scope. Preserve that
+                    // boundary explicitly and make the outer expressions resolve
+                    // against the relation that will actually be visible there.
+                    let requires_alias = self.dialect.requires_derived_table_alias();
+                    let alias = requires_alias
+                        .then(|| self.new_table_alias(scope.alias.to_string(), vec![]));
+                    self.derive(p.input.as_ref(), relation, alias, false)?;
+
+                    let items = p
+                        .expr
+                        .iter()
+                        .cloned()
+                        .map(|expr| self.rebase_derived_input_expr(expr, Some(scope)))
+                        .map(|expr| self.select_item_to_sql(&expr?))
+                        .collect::<Result<Vec<_>>>()?;
+                    select.projection(items);
+                    return Ok(());
+                }
                 // For Snowflake FLATTEN: when the outer Projection has
                 // UNNEST(...) display-name columns (from SELECT * / SELECT
                 // UNNEST(...)), generate a flatten alias now so that
@@ -1073,6 +1196,7 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(cur, query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
+                let derived_input_scope = Self::derived_input_scope(plan, select);
                 let window = find_window_nodes_within_select(
                     plan,
                     None,
@@ -1089,15 +1213,23 @@ impl Unparser<'_> {
                         unprojected =
                             UnparserAggScope::new(agg).prepare(unprojected, None)?;
                     }
+                    unprojected =
+                        self.rebase_derived_input_expr(unprojected, derived_input_scope)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.qualify(Some(filter_expr));
                 } else if let Some(agg) = agg {
-                    let unprojected = UnparserAggScope::new(agg)
+                    let mut unprojected = UnparserAggScope::new(agg)
                         .prepare(filter.predicate.clone(), None)?;
+                    unprojected =
+                        self.rebase_derived_input_expr(unprojected, derived_input_scope)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
-                    let filter_expr = self.expr_to_sql(&filter.predicate)?;
+                    let predicate = self.rebase_derived_input_expr(
+                        filter.predicate.clone(),
+                        derived_input_scope,
+                    )?;
+                    let filter_expr = self.expr_to_sql(&predicate)?;
                     select.selection(Some(filter_expr));
                 }
 
@@ -1171,19 +1303,27 @@ impl Unparser<'_> {
                         fetch.to_string(),
                         false,
                     ))));
-                };
+                }
 
+                let derived_input_scope = Self::derived_input_scope(plan, select);
                 let agg = find_agg_node_within_select(plan, select.already_projected());
                 // unproject sort expressions
                 let sort_exprs: Vec<SortExpr> = sort
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        Self::unproject_sort_expr_in_scope(
+                        let sort_expr = Self::unproject_sort_expr_in_scope(
                             sort_expr.clone(),
                             agg,
                             sort.input.as_ref(),
-                        )
+                        )?;
+                        Ok(SortExpr {
+                            expr: self.rebase_derived_input_expr(
+                                sort_expr.expr,
+                                derived_input_scope,
+                            )?,
+                            ..sort_expr
+                        })
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -1355,7 +1495,7 @@ impl Unparser<'_> {
 
                 let (join_filters, where_filters) = Self::split_join_on_and_where_filters(
                     join.join_type,
-                    &join.filter,
+                    join.filter.as_ref(),
                     table_scan_filters,
                 );
                 for filter in where_filters {
@@ -1471,7 +1611,7 @@ impl Unparser<'_> {
                             select.projection(projection);
                         }
                     }
-                };
+                }
 
                 Ok(())
             }
@@ -1538,7 +1678,8 @@ impl Unparser<'_> {
                     )]);
                 }
                 let plan = unparsed_table_scan.unwrap_or_else(|| plan.clone());
-                if !columns.is_empty()
+                select.enter_subquery_alias();
+                let recursive_result = if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
                     // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
@@ -1559,10 +1700,12 @@ impl Unparser<'_> {
                         query,
                         select,
                         relation,
-                    )?;
+                    )
                 } else {
-                    self.select_to_sql_recursively(&plan, query, select, relation)?;
-                }
+                    self.select_to_sql_recursively(&plan, query, select, relation)
+                };
+                select.exit_subquery_alias();
+                recursive_result?;
 
                 relation.alias(Some(
                     self.new_table_alias(plan_alias.alias.table().to_string(), columns),
@@ -2116,7 +2259,7 @@ impl Unparser<'_> {
             // which is normally safe to unnest as a table factor.
             // However, in the future, more comprehensive checks can be added here.
             return Ok(None);
-        };
+        }
 
         let exprs = projection
             .expr
@@ -2403,7 +2546,7 @@ impl Unparser<'_> {
                     } else {
                         let project_columns = project_vec
                             .iter()
-                            .cloned()
+                            .copied()
                             .map(|i| {
                                 let schema = table_scan.source.schema();
                                 let field = schema.field(i);
@@ -2418,7 +2561,7 @@ impl Unparser<'_> {
                             })
                             .collect::<Vec<_>>();
                         builder = builder.project(project_columns)?;
-                    };
+                    }
                 }
 
                 let filter_expr: Result<Option<Expr>> = table_scan
@@ -2762,17 +2905,17 @@ impl Unparser<'_> {
     /// Returns `(on_filter, where_filters)`.
     fn split_join_on_and_where_filters(
         join_type: JoinType,
-        join_filter: &Option<Expr>,
+        join_filter: Option<&Expr>,
         table_scan_filters: Vec<Expr>,
     ) -> (Option<Expr>, Vec<Expr>) {
         if table_scan_filters.is_empty() {
-            return (join_filter.clone(), vec![]);
+            return (join_filter.cloned(), vec![]);
         }
 
         if join_type == JoinType::Inner {
             // ON and WHERE are equivalent for inner joins; prefer WHERE
             // because some dialects reject subqueries inside JOIN ON.
-            return (join_filter.clone(), table_scan_filters);
+            return (join_filter.cloned(), table_scan_filters);
         }
 
         // Outer joins: fold table-scan filters into ON to preserve semantics.

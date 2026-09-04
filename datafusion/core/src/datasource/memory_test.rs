@@ -191,7 +191,7 @@ mod tests {
                 _ => panic!("unexpected error"),
             },
             res => panic!("Scan should failed on invalid projection, got {res:?}"),
-        };
+        }
 
         Ok(())
     }

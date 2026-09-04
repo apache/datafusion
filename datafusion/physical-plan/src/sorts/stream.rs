@@ -76,7 +76,8 @@ impl FusedStreams {
             let poll_result = self.0[stream_idx].poll_next_unpin(cx);
             match &poll_result {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Ok(b))) if b.num_rows() == 0 => continue,
+                // Skip empty batches
+                Poll::Ready(Some(Ok(b))) if b.num_rows() == 0 => {}
                 Poll::Ready(Some(Ok(_))) => return poll_result,
                 Poll::Ready(None) | Poll::Ready(Some(Err(_))) => {
                     let stream_schema = self.0[stream_idx].get_ref().schema();

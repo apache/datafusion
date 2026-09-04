@@ -24,6 +24,7 @@ use arrow::array::{
     Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
 };
 use datafusion_common::Result;
+use datafusion_expr::GroupSelection;
 
 /// An implementation of [`GroupColumn`] for booleans
 ///
@@ -177,6 +178,20 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         let arr = BooleanArray::new(buffer.finish(), nulls);
 
         Arc::new(arr)
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.buffer.len())?;
+        let mut values = BooleanBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            values.append(self.buffer.get_bit(index));
+        }
+        let nulls = if NULLABLE {
+            self.nulls.build_preserving(selection)?
+        } else {
+            None
+        };
+        Ok(Arc::new(BooleanArray::new(values.finish(), nulls)))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {

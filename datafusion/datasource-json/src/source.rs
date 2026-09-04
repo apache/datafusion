@@ -602,6 +602,7 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStoreExt, PutPayload};
+    use std::fmt::Write as _;
 
     /// Helper to create a test schema
     fn test_schema() -> SchemaRef {
@@ -817,7 +818,7 @@ mod tests {
             if i > 0 {
                 json_data.push(',');
             }
-            json_data.push_str(&format!(r#"{{"id": {i}, "name": "user{i}"}}"#));
+            write!(json_data, r#"{{"id": {i}, "name": "user{i}"}}"#).ok();
         }
         json_data.push(']');
 
@@ -858,7 +859,7 @@ mod tests {
             if i > 0 {
                 json_data.push(',');
             }
-            json_data.push_str(&format!(r#"{{"id": {i}, "name": "user{i}"}}"#));
+            write!(json_data, r#"{{"id": {i}, "name": "user{i}"}}"#).ok();
         }
         json_data.push(']');
 
@@ -954,7 +955,7 @@ mod tests {
         let num_rows: usize = 20;
         let mut ndjson = String::new();
         for i in 0..num_rows {
-            ndjson.push_str(&format!("{{\"id\": {i}, \"name\": \"user{i}\"}}\n"));
+            writeln!(ndjson, "{{\"id\": {i}, \"name\": \"user{i}\"}}").ok();
         }
         let ndjson_bytes = Bytes::from(ndjson);
         let file_size = ndjson_bytes.len() as u64;
@@ -1026,7 +1027,7 @@ mod tests {
 
         let mut ndjson = String::new();
         for (id, name) in rows {
-            ndjson.push_str(&format!("{{\"id\": {id}, \"name\": \"{name}\"}}\n"));
+            writeln!(ndjson, "{{\"id\": {id}, \"name\": \"{name}\"}}").ok();
         }
         let ndjson_bytes = Bytes::from(ndjson);
         let file_size = ndjson_bytes.len() as u64;

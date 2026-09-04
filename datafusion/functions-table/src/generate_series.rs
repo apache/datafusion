@@ -623,7 +623,7 @@ impl GenerateSeriesFuncImpl {
                         other
                     );
                 }
-            };
+            }
         }
 
         let schema = Arc::new(Schema::new(vec![Field::new(

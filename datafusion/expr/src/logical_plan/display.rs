@@ -380,7 +380,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     if !full_filter.is_empty() {
                         object["Full Filters"] =
                             serde_json::Value::String(expr_vec_fmt!(full_filter));
-                    };
+                    }
                     if !partial_filter.is_empty() {
                         object["Partial Filters"] =
                             serde_json::Value::String(expr_vec_fmt!(partial_filter));
@@ -565,10 +565,10 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 );
                 if let Some(s) = skip {
                     object["Skip"] = s.to_string().into()
-                };
+                }
                 if let Some(f) = fetch {
                     object["Fetch"] = f.to_string().into()
-                };
+                }
                 object
             }
             LogicalPlan::Subquery(Subquery { .. }) => {
@@ -688,7 +688,7 @@ impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
                     .map(serde_json::Value::String)
                     .collect(),
             );
-        };
+        }
 
         self.objects.insert(id, object);
         self.parent_ids.push(id);

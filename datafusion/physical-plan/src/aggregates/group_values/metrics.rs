@@ -475,6 +475,71 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_groupby_aggregation_time_not_inflated_by_accumulator_count()
+    -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::UInt32, false),
+            Field::new("v", DataType::Float64, false),
+        ]));
+
+        const ROWS: usize = 8192;
+        let batches = (0..20)
+            .map(|_| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(UInt32Array::from(
+                            (0..ROWS).map(|r| (r % 8) as u32).collect::<Vec<_>>(),
+                        )),
+                        Arc::new(Float64Array::from(
+                            (0..ROWS).map(|r| r as f64).collect::<Vec<_>>(),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+
+        let aggregates = (0..8)
+            .map(|i| sum_aggregate(&schema, "v", &format!("SUM{i}(v)")))
+            .collect::<Result<Vec<_>>>()?;
+        let filters = vec![None; aggregates.len()];
+
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            filters,
+            input,
+            schema,
+        )?);
+
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .set_bool("datafusion.execution.enable_migration_aggregate", false),
+            ),
+        );
+        let _result =
+            collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let aggregation_time =
+            metrics.sum_by_name("aggregation_time").unwrap().as_usize();
+        let elapsed_compute = metrics.elapsed_compute().unwrap();
+        assert!(
+            aggregation_time <= elapsed_compute,
+            "aggregation_time {aggregation_time} exceeds elapsed_compute {elapsed_compute}"
+        );
+
+        Ok(())
+    }
+
     async fn assert_groupby_metrics_final_mode(
         enable_migration_aggregate: bool,
     ) -> Result<()> {

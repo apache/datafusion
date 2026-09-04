@@ -1115,14 +1115,18 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
 /// Useful for wrapping arrays in dictionary form.
 ///
 /// # Input
+/// ```text
 /// ["alice", "bob", "alice", null, "carol"]
+/// ```
 ///
 /// # Output
 /// `DictionaryArray<Int32>`
+/// ```text
 /// {
 ///   keys:   [0, 1, 2, 3, 4],
 ///   values: ["alice", "bob", "alice", null, "carol"]
 /// }
+/// ```
 pub fn dict_from_values<K: ArrowDictionaryKeyType>(
     values_array: ArrayRef,
 ) -> Result<ArrayRef> {
@@ -1754,18 +1758,24 @@ impl ScalarValue {
 
             // Struct types
             DataType::Struct(fields) => {
-                let values = fields
-                    .iter()
-                    .map(|f| ScalarValue::new_default(f.data_type()))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(ScalarValue::Struct(Arc::new(StructArray::new(
-                    fields.clone(),
-                    values
-                        .into_iter()
-                        .map(|v| v.to_array())
-                        .collect::<Result<_>>()?,
-                    None,
-                ))))
+                if fields.is_empty() {
+                    Ok(ScalarValue::Struct(Arc::new(
+                        StructArray::new_empty_fields(1, None),
+                    )))
+                } else {
+                    let values = fields
+                        .iter()
+                        .map(|f| ScalarValue::new_default(f.data_type()))
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(ScalarValue::Struct(Arc::new(StructArray::new(
+                        fields.clone(),
+                        values
+                            .into_iter()
+                            .map(|v| v.to_array())
+                            .collect::<Result<_>>()?,
+                        None,
+                    ))))
+                }
             }
 
             // Dictionary types
@@ -2861,17 +2871,14 @@ impl ScalarValue {
             ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
                 {
                     let array = scalars
-                        .map(|sv| {
-                            if let ScalarValue::$SCALAR_TY(v, _) = sv {
-                                Ok(v)
-                            } else {
-                                _exec_err!(
-                                    "Inconsistent types in ScalarValue::iter_to_array. \
-                                    Expected {:?}, got {:?}",
-                                    data_type,
-                                    sv
-                                )
-                            }
+                        .map(|sv| match sv {
+                            ScalarValue::$SCALAR_TY(v, tz) if &tz == $TZ => Ok(v),
+                            sv => _exec_err!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected {:?}, got {:?}",
+                                data_type,
+                                sv
+                            ),
                         })
                         .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array.with_timezone_opt($TZ.clone()))
@@ -3161,15 +3168,16 @@ impl ScalarValue {
             }
             DataType::FixedSizeBinary(size) => {
                 let array = scalars
-                    .map(|sv| {
-                        if let ScalarValue::FixedSizeBinary(_, v) = sv {
+                    .map(|sv| match sv {
+                        ScalarValue::FixedSizeBinary(inner_size, v)
+                            if inner_size == *size =>
+                        {
                             Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected {data_type}, got {sv:?}"
-                            )
                         }
+                        sv => _exec_err!(
+                            "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected {data_type}, got {sv:?}"
+                        ),
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
@@ -3220,10 +3228,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal32(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                ScalarValue::Decimal32(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal32(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal32Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -3238,10 +3252,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal64(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                ScalarValue::Decimal64(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal64(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal64Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -3256,10 +3276,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal128(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!("Expected ScalarValue::Null element. Received {s:?}")
+                ScalarValue::Decimal128(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal128(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal128Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -3274,12 +3300,16 @@ impl ScalarValue {
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
-                ScalarValue::Decimal256(v1, _, _) => Ok(v1),
-                s => {
-                    _internal_err!(
-                        "Expected ScalarValue::Decimal256 element. Received {s:?}"
-                    )
+                ScalarValue::Decimal256(value, inner_precision, inner_scale)
+                    if inner_precision == precision && inner_scale == scale =>
+                {
+                    Ok(value)
                 }
+                scalar => _exec_err!(
+                    "Inconsistent types in ScalarValue::iter_to_array. Expected {:?}, got {:?}",
+                    DataType::Decimal256(precision, scale),
+                    scalar
+                ),
             })
             .collect::<Result<Decimal256Array>>()?
             .with_precision_and_scale(precision, scale)?;
@@ -5035,16 +5065,22 @@ impl ScalarValue {
             DataType::BinaryView => Arc::new(array.as_binary_view().gc()),
             DataType::Struct(_) => {
                 let s = array.as_struct();
-                let columns = s
-                    .columns()
-                    .iter()
-                    .map(|c| ScalarValue::compact_view_buffers(Arc::clone(c)))
-                    .collect();
-                Arc::new(StructArray::new(
-                    s.fields().clone(),
-                    columns,
-                    s.nulls().cloned(),
-                ))
+                if s.fields().is_empty() {
+                    // Zero-field structs carry no child buffers to compact, so
+                    // return the input array unchanged.
+                    array
+                } else {
+                    let columns = s
+                        .columns()
+                        .iter()
+                        .map(|c| ScalarValue::compact_view_buffers(Arc::clone(c)))
+                        .collect();
+                    Arc::new(StructArray::new(
+                        s.fields().clone(),
+                        columns,
+                        s.nulls().cloned(),
+                    ))
+                }
             }
             DataType::List(field) => gc_list!(field, i32, ListArray),
             DataType::LargeList(field) => gc_list!(field, i64, LargeListArray),
@@ -5724,7 +5760,7 @@ impl fmt::Display for ScalarValue {
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::RunEndEncoded(_, _, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
-        };
+        }
         Ok(())
     }
 }
@@ -7660,6 +7696,43 @@ mod tests {
         let result = ScalarValue::iter_to_array(scalars).unwrap_err();
         assert!(result.to_string().contains("Inconsistent types in ScalarValue::iter_to_array. Expected Boolean, got Int32(5)"),
                 "{}", result);
+    }
+
+    #[test]
+    fn scalar_iter_to_array_mismatched_parameterized_types() {
+        use ScalarValue::*;
+
+        let cases = [
+            (
+                "decimal precision",
+                vec![Decimal128(None, 10, 2), Decimal128(None, 11, 2)],
+            ),
+            (
+                "decimal scale",
+                vec![Decimal128(None, 10, 2), Decimal128(None, 10, 3)],
+            ),
+            (
+                "timestamp timezone",
+                vec![
+                    TimestampNanosecond(None, None),
+                    TimestampNanosecond(None, Some(Arc::from("UTC"))),
+                ],
+            ),
+            (
+                "fixed-size binary width",
+                vec![FixedSizeBinary(1, None), FixedSizeBinary(2, None)],
+            ),
+        ];
+
+        for (name, scalars) in cases {
+            let error = ScalarValue::iter_to_array(scalars).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Inconsistent types in ScalarValue::iter_to_array"),
+                "{name}: unexpected error: {error}"
+            );
+        }
     }
 
     #[test]
@@ -9829,7 +9902,7 @@ mod tests {
                 let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
                 let back = timestamp2.add(intervals[idx].clone()).unwrap();
                 assert_eq!(ts1, &back);
-            };
+            }
         }
     }
 
@@ -11606,5 +11679,86 @@ mod tests {
             )))
         );
         assert_eq!(&large_list.value(0), &expected_array);
+    }
+
+    #[test]
+    fn test_compact_empty_struct() {
+        // A struct scalar wraps a single-row StructArray; use a null row to also
+        // exercise null-buffer preservation.
+        let nulls = NullBuffer::from(vec![false]);
+        let empty_struct = Arc::new(StructArray::new_empty_fields(1, Some(nulls)));
+        let mut scalar = ScalarValue::Struct(empty_struct);
+
+        // Before fix: panics inside compact_view_buffers calling StructArray::new on 0 fields
+        scalar.compact();
+
+        let ScalarValue::Struct(arr) = &scalar else {
+            panic!("expected Struct")
+        };
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr.num_columns(), 0);
+        assert_eq!(arr.null_count(), 1);
+        assert!(arr.is_null(0));
+    }
+
+    #[test]
+    fn test_compact_nested_empty_struct() {
+        // 1. List of empty structs
+        let inner_struct_field =
+            Arc::new(Field::new("item", DataType::Struct(Fields::empty()), true));
+        let inner_struct_arr =
+            Arc::new(StructArray::new_empty_fields(2, None)) as ArrayRef;
+        let list_arr = ListArray::new(
+            inner_struct_field,
+            OffsetBuffer::new(vec![0i32, 2].into()),
+            inner_struct_arr,
+            None,
+        );
+        let mut list_scalar = ScalarValue::List(Arc::new(list_arr));
+        list_scalar.compact();
+
+        let ScalarValue::List(res_list) = &list_scalar else {
+            panic!("expected List")
+        };
+        assert_eq!(res_list.len(), 1);
+        assert_eq!(res_list.values().len(), 2);
+
+        // 2. Struct containing an empty struct field
+        let empty_field = Arc::new(Field::new(
+            "empty_child",
+            DataType::Struct(Fields::empty()),
+            true,
+        ));
+        let int_field = Arc::new(Field::new("int_child", DataType::Int32, true));
+        let outer_struct = StructArray::new(
+            Fields::from(vec![Arc::clone(&empty_field), Arc::clone(&int_field)]),
+            vec![
+                Arc::new(StructArray::new_empty_fields(2, None)) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+            ],
+            None,
+        );
+        let mut outer_scalar = ScalarValue::Struct(Arc::new(outer_struct));
+        outer_scalar.compact();
+
+        let ScalarValue::Struct(res_outer) = &outer_scalar else {
+            panic!("expected Struct")
+        };
+        assert_eq!(res_outer.len(), 2);
+        let child_empty = res_outer.column(0).as_struct();
+        assert_eq!(child_empty.len(), 2);
+    }
+
+    #[test]
+    fn test_new_default_empty_struct() {
+        let empty_struct_type = DataType::Struct(Fields::empty());
+        let scalar = ScalarValue::new_default(&empty_struct_type).unwrap();
+
+        let ScalarValue::Struct(arr) = &scalar else {
+            panic!("expected Struct")
+        };
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr.null_count(), 0);
+        assert_eq!(arr.num_columns(), 0);
     }
 }
