@@ -553,6 +553,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_expr::sort_properties::SortProperties;
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct PlacementUDF {
@@ -592,6 +593,13 @@ mod tests {
         fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
             if inputs.is_empty() {
                 return internal_err!("preserves_lex_ordering requires an input");
+            }
+
+            // This test-only sentinel verifies that the new `Grouped` variant
+            // travels through the foreign path.
+            if matches!(inputs, [input] if input.sort_properties == SortProperties::Grouped)
+            {
+                return Ok(true);
             }
 
             Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
@@ -692,6 +700,8 @@ mod tests {
                 .preserves_lex_ordering(&[preserves, does_not_preserve])
                 .unwrap()
         );
+        let grouped = ExprProperties::new_unknown().with_order(SortProperties::Grouped);
+        assert!(foreign_udf.preserves_lex_ordering(&[grouped]).unwrap());
         assert!(foreign_udf.preserves_lex_ordering(&[]).is_err());
 
         let updated = foreign_udf

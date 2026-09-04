@@ -174,6 +174,9 @@ impl SortPreservingMergeExec {
         };
 
         let mut eq_properties = input.equivalence_properties().clone();
+        if input_partitions > 1 {
+            eq_properties.clear_groupings();
+        }
         eq_properties.clear_per_partition_constants();
         eq_properties.add_ordering(ordering);
         PlanProperties::new(
@@ -903,6 +906,27 @@ mod tests {
     use futures::{FutureExt, Stream, StreamExt};
     use insta::assert_snapshot;
     use tokio::time::timeout;
+
+    #[test]
+    fn merging_sorted_partitions_clears_explicit_grouping() -> Result<()> {
+        let input = test::mem_exec(2);
+        let grouping = col("i", &input.schema())?;
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::clone(&grouping))].into();
+        let input = input
+            .try_with_sort_information(vec![ordering.clone()])?
+            .try_with_grouping_information(vec![vec![grouping]])?;
+        let merge = SortPreservingMergeExec::new(ordering, Arc::new(input));
+
+        assert!(
+            merge
+                .properties()
+                .equivalence_properties()
+                .geq_class()
+                .is_empty()
+        );
+        Ok(())
+    }
 
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of
