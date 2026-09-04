@@ -67,6 +67,7 @@ pub enum FFI_SortProperties {
     Ordered(FFI_SortOptions),
     Unordered,
     Singleton,
+    Grouped,
 }
 
 impl From<&SortProperties> for FFI_SortProperties {
@@ -74,6 +75,7 @@ impl From<&SortProperties> for FFI_SortProperties {
         match value {
             SortProperties::Unordered => FFI_SortProperties::Unordered,
             SortProperties::Singleton => FFI_SortProperties::Singleton,
+            SortProperties::Grouped => FFI_SortProperties::Grouped,
             SortProperties::Ordered(o) => FFI_SortProperties::Ordered(o.into()),
         }
     }
@@ -84,6 +86,7 @@ impl From<&FFI_SortProperties> for SortProperties {
         match value {
             FFI_SortProperties::Unordered => SortProperties::Unordered,
             FFI_SortProperties::Singleton => SortProperties::Singleton,
+            FFI_SortProperties::Grouped => SortProperties::Grouped,
             FFI_SortProperties::Ordered(o) => SortProperties::Ordered(o.into()),
         }
     }
