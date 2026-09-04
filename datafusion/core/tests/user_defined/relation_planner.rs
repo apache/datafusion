@@ -450,6 +450,28 @@ mod tests {
         ");
     }
 
+    // A derived query inherits CTEs from its outer query, so a name-based
+    // relation planner still defers to the visible CTE in the nested scope.
+    #[tokio::test]
+    async fn derived_query_inherits_outer_cte() {
+        let ctx = ctx_with_numbers();
+
+        let result = execute_sql_to_string(
+            &ctx,
+            "WITH numbers AS (SELECT 42 AS number) \
+             SELECT * FROM (SELECT * FROM numbers) nested",
+        )
+        .await;
+
+        assert_snapshot!(result, @r"
+        +--------+
+        | number |
+        +--------+
+        | 42     |
+        +--------+
+        ");
+    }
+
     // Deferring a visible CTE continues through the planner chain. A later
     // planner with a deliberately reserved name can still intercept it.
     #[tokio::test]
