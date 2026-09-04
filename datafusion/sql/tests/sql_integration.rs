@@ -5813,3 +5813,13 @@ impl HigherOrderUDFImpl for MockArrayReduce {
         unreachable!()
     }
 }
+
+#[test]
+fn test_reserved_column_name() {
+    let sql = "SELECT 1 AS __common_expr_1";
+    let err = logical_plan(sql).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
+    );
+}
