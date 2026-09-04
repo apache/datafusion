@@ -89,11 +89,12 @@ impl LambdaVariable {
             protobuf::physical_expr_node::ExprType::LambdaVariable,
             "LambdaVariable",
         );
+        let protobuf::PhysicalLambdaVariableExprNode { index, field } = var;
 
         Ok(Arc::new(LambdaVariable::new(
-            var.index as usize,
+            *index as usize,
             Arc::new(
-                require_proto_field(var.field.as_ref(), "LambdaVariable", "field")?
+                require_proto_field(field.as_ref(), "LambdaVariable", "field")?
                     .try_into()?,
             ),
         )))
@@ -169,12 +170,17 @@ impl PhysicalExpr for LambdaVariable {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        // Exhaustive destructure: adding a field to `LambdaVariable` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self { index, field } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::LambdaVariable(
                 protobuf::PhysicalLambdaVariableExprNode {
-                    index: self.index() as u32,
-                    field: Some(self.field().as_ref().try_into()?),
+                    index: *index as u32,
+                    field: Some(field.as_ref().try_into()?),
                 },
             )),
         }))
@@ -187,4 +193,103 @@ pub fn lambda_variable(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalEx
     let field = Arc::clone(&schema.fields()[index]);
 
     Ok(Arc::new(LambdaVariable::new(index, field)))
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
+    use arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{self, physical_expr_node};
+
+    fn v_field() -> FieldRef {
+        Arc::new(Field::new("v", DataType::Int32, true))
+    }
+
+    #[test]
+    fn try_to_proto_encodes_lambda_variable() {
+        let var = LambdaVariable::new(3, v_field());
+        // LambdaVariable has no child exprs so the encoder is never called.
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = var
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("LambdaVariable should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let protobuf::PhysicalLambdaVariableExprNode { index, field } =
+            match node.expr_type {
+                Some(physical_expr_node::ExprType::LambdaVariable(v)) => v,
+                other => panic!("expected a LambdaVariable node, got {other:?}"),
+            };
+        assert_eq!(index, 3);
+        let field = field.expect("field should be encoded");
+        assert_eq!(field.name, "v");
+        assert!(field.nullable);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_lambda_variable_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = LambdaVariable::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a LambdaVariable"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_field() {
+        let node = protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::LambdaVariable(
+                protobuf::PhysicalLambdaVariableExprNode {
+                    index: 0,
+                    field: None,
+                },
+            )),
+        };
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = LambdaVariable::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("LambdaVariable is missing required field 'field'"))
+        );
+    }
+
+    /// `PartialEq` covers every field of `LambdaVariable`, so equality after
+    /// the roundtrip proves the encoding is lossless.
+    #[test]
+    fn lambda_variable_proto_roundtrip() {
+        let var = LambdaVariable::new(5, v_field());
+        let encoder = StubEncoder::ok();
+        let enc_ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = var
+            .try_to_proto(&enc_ctx)
+            .unwrap()
+            .expect("LambdaVariable should encode to Some(node)");
+
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = LambdaVariable::try_from_proto(&node, &dec_ctx).unwrap();
+        let decoded = decoded
+            .downcast_ref::<LambdaVariable>()
+            .expect("decoded expr should be a LambdaVariable");
+
+        assert_eq!(decoded, &var);
+    }
 }
