@@ -189,7 +189,8 @@ impl ParquetSink {
                 .session_config()
                 .options()
                 .execution
-                .objectstore_writer_buffer_size,
+                .objectstore_writer_buffer_size
+                .get(),
         );
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
@@ -336,7 +337,8 @@ impl FileSink for ParquetSink {
                         .session_config()
                         .options()
                         .execution
-                        .objectstore_writer_buffer_size,
+                        .objectstore_writer_buffer_size
+                        .get(),
                 ))
                 .build()?;
                 let ctx = ParquetFileWriteContext {

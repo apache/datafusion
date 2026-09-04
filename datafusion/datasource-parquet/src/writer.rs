@@ -53,7 +53,8 @@ pub async fn plan_to_parquet(
                 .session_config()
                 .options()
                 .execution
-                .objectstore_writer_buffer_size,
+                .objectstore_writer_buffer_size
+                .get(),
         );
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {

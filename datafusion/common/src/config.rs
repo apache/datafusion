@@ -1122,8 +1122,8 @@ config_namespace! {
         /// This affects the size of the data chunks that are uploaded to remote
         /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being
         /// written, it may be necessary to increase this size to avoid errors from
-        /// the remote end point.
-        pub objectstore_writer_buffer_size: usize, default = 10 * 1024 * 1024
+        /// the remote end point. Must be greater than 0.
+        pub objectstore_writer_buffer_size: ConfigNonZeroUsize, default = non_zero_usize_default(10 * 1024 * 1024)
 
         /// Whether to enable ANSI SQL mode.
         ///
@@ -4544,6 +4544,28 @@ mod tests {
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
     }
+    #[test]
+    fn test_objectstore_writer_buffer_size_must_be_positive() {
+        use crate::config::ConfigOptions;
+
+        let mut config = ConfigOptions::default();
+        config
+            .set(
+                "datafusion.execution.objectstore_writer_buffer_size",
+                "1024",
+            )
+            .unwrap();
+        assert_eq!(config.execution.objectstore_writer_buffer_size.get(), 1024);
+
+        // A zero-sized buffer used to be accepted and made every object store
+        // write spin forever in `WriteMultipart::put`.
+        let err = config
+            .set("datafusion.execution.objectstore_writer_buffer_size", "0")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("greater than 0"), "{err}");
+    }
+
     #[cfg(feature = "parquet")]
     #[test]
     fn test_parquet_writer_version_validation() {
