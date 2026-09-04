@@ -485,11 +485,14 @@ mod tests {
         assert_eq!(int_array.value(0), 1);
         assert_eq!(str_array.value(0), "a");
 
+        // The second row is a valid struct whose fields are NULL. A NULL
+        // field sorts after a non-NULL one (as in PostgreSQL and DuckDB), so
+        // that row is the maximum; it used to be skipped by the comparison.
         assert_eq!(max_result.len(), 1);
         let int_array = max_result.column(0).as_primitive::<Int32Type>();
         let str_array = max_result.column(1).as_string::<i32>();
-        assert_eq!(int_array.value(0), 3);
-        assert_eq!(str_array.value(0), "c");
+        assert!(int_array.is_null(0));
+        assert!(str_array.is_null(0));
     }
 
     #[test]

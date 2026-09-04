@@ -59,6 +59,7 @@ use crate::scalar::consts::{
 };
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
+use arrow::array::make_comparator;
 use arrow::array::{
     Array, ArrayData, ArrayDataBuilder, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
     AsArray, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
@@ -77,6 +78,7 @@ use arrow::array::{
     downcast_run_array, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
+use arrow::compute::SortOptions;
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
 use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
@@ -864,76 +866,43 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     Some(arr1.len().cmp(&arr2.len()))
 }
 
-fn flatten<'a>(array: &'a StructArray, columns: &mut Vec<&'a ArrayRef>) {
-    for i in 0..array.num_columns() {
-        let column = array.column(i);
-        if let Some(nested_struct) = column.as_any().downcast_ref::<StructArray>() {
-            // If it's a nested struct, recursively expand
-            flatten(nested_struct, columns);
-        } else {
-            // If it's a primitive type, add directly
-            columns.push(column);
-        }
-    }
-}
-
+/// Compares two struct arrays of the same length row by row, in the natural
+/// (lexicographic, field by field) struct order, and returns the ordering of
+/// the first row that differs.
+///
+/// Returns `None` when the arrays differ in length or type, or the struct
+/// has no natural order. A NULL field sorts after a non-NULL one, like a NULL
+/// list element in [`ScalarValue::partial_cmp`].
 pub fn partial_cmp_struct(s1: &StructArray, s2: &StructArray) -> Option<Ordering> {
-    if s1.len() != s2.len() {
-        return None;
-    }
-
-    if s1.data_type() != s2.data_type() {
-        return None;
-    }
-
-    let mut expanded_columns1 = Vec::with_capacity(s1.num_columns());
-    let mut expanded_columns2 = Vec::with_capacity(s2.num_columns());
-
-    flatten(s1, &mut expanded_columns1);
-    flatten(s2, &mut expanded_columns2);
-
-    for col_index in 0..expanded_columns1.len() {
-        let arr1 = expanded_columns1[col_index];
-        let arr2 = expanded_columns2[col_index];
-
-        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
-        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
-
-        for j in 0..lt_res.len() {
-            if lt_res.is_valid(j) && lt_res.value(j) {
-                return Some(Ordering::Less);
-            }
-            if eq_res.is_valid(j) && !eq_res.value(j) {
-                return Some(Ordering::Greater);
-            }
-        }
-    }
-    Some(Ordering::Equal)
+    partial_cmp_rows(s1, s2)
 }
 
+/// Compares two map arrays of the same length row by row: entries are
+/// compared in order, key first then value, and a map with fewer entries
+/// sorts before one with the same leading entries.
 fn partial_cmp_map(m1: &Arc<MapArray>, m2: &Arc<MapArray>) -> Option<Ordering> {
-    if m1.len() != m2.len() {
+    partial_cmp_rows(m1.as_ref(), m2.as_ref())
+}
+
+/// Row-by-row comparison of two arrays with a dynamic comparator, which
+/// supports nested types that the `lt` / `eq` kernels reject.
+fn partial_cmp_rows(a1: &dyn Array, a2: &dyn Array) -> Option<Ordering> {
+    if a1.len() != a2.len() || a1.data_type() != a2.data_type() {
         return None;
     }
-
-    if m1.data_type() != m2.data_type() {
-        return None;
-    }
-
-    for col_index in 0..m1.len() {
-        let arr1 = m1.entries().column(col_index);
-        let arr2 = m2.entries().column(col_index);
-
-        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
-        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
-
-        for j in 0..lt_res.len() {
-            if lt_res.is_valid(j) && lt_res.value(j) {
-                return Some(Ordering::Less);
-            }
-            if eq_res.is_valid(j) && !eq_res.value(j) {
-                return Some(Ordering::Greater);
-            }
+    let cmp = make_comparator(
+        a1,
+        a2,
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )
+    .ok()?;
+    for i in 0..a1.len() {
+        let ordering = cmp(i, i);
+        if ordering != Ordering::Equal {
+            return Some(ordering);
         }
     }
     Some(Ordering::Equal)
@@ -7228,6 +7197,79 @@ mod tests {
             ScalarValue::new_negative_one(&DataType::Decimal128(5, 2)).unwrap(),
             ScalarValue::Decimal128(Some(-100), 5, 2)
         );
+    }
+
+    #[test]
+    fn test_struct_and_map_partial_cmp() {
+        fn int_struct(field: &str, value: Option<i64>) -> ScalarValue {
+            ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new(field, DataType::Int64, true)),
+                Arc::new(Int64Array::from(vec![value])) as ArrayRef,
+            )])))
+        }
+        fn list_struct(values: Vec<i64>) -> ScalarValue {
+            let list: ArrayRef =
+                Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                    Some(values.into_iter().map(Some).collect::<Vec<_>>()),
+                ]));
+            ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+                Arc::new(Field::new(
+                    "l",
+                    DataType::new_list(DataType::Int64, true),
+                    true,
+                )),
+                list,
+            )])))
+        }
+
+        // A struct with a nested field used to be uncomparable.
+        assert_eq!(
+            list_struct(vec![1]).partial_cmp(&list_struct(vec![2])),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            list_struct(vec![1, 2]).partial_cmp(&list_struct(vec![1])),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            list_struct(vec![1]).partial_cmp(&list_struct(vec![1])),
+            Some(Ordering::Equal)
+        );
+
+        // A NULL field used to be skipped, making {a: NULL} equal to {a: 2}.
+        assert_eq!(
+            int_struct("a", None).partial_cmp(&int_struct("a", Some(2))),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            int_struct("a", Some(2)).partial_cmp(&int_struct("a", None)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            int_struct("a", None).partial_cmp(&int_struct("a", None)),
+            Some(Ordering::Equal)
+        );
+        // Different field names are still not comparable.
+        assert_eq!(
+            int_struct("a", Some(1)).partial_cmp(&int_struct("b", Some(1))),
+            None
+        );
+
+        // Maps used to compare their keys only.
+        let map = |value: i64| {
+            let mut builder = MapBuilder::new(
+                None,
+                StringBuilder::new(),
+                PrimitiveBuilder::<Int64Type>::new(),
+            );
+            builder.keys().append_value("k");
+            builder.values().append_value(value);
+            builder.append(true).unwrap();
+            ScalarValue::Map(Arc::new(builder.finish()))
+        };
+        assert_eq!(map(1).partial_cmp(&map(2)), Some(Ordering::Less));
+        assert_eq!(map(2).partial_cmp(&map(1)), Some(Ordering::Greater));
+        assert_eq!(map(1).partial_cmp(&map(1)), Some(Ordering::Equal));
     }
 
     #[test]
