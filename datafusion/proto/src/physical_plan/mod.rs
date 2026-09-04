@@ -90,8 +90,11 @@ use crate::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{self, proto_error};
 
+mod expr_registry;
 pub mod from_proto;
 pub mod to_proto;
+
+pub use expr_registry::PhysicalExprRegistration;
 
 const HUMAN_DISPLAY_ALIAS_PREFIX: &str = "\u{1f}datafusion_human_display_alias_v1:";
 
@@ -1622,6 +1625,13 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
 
     /// Decode a custom extension expression from `buf`.
     ///
+    /// Expressions can instead name themselves on the wire and be decoded by a
+    /// per-type decoder registered on the session — see
+    /// [`ExtensionPhysicalExpr`] and [`PhysicalExprRegistration`]. That path
+    /// resolves by name rather than by codec registration order, so two crates
+    /// claiming the same name collide at registration. This method stays the
+    /// fallback for everything unnamed or unregistered.
+    ///
     /// `inputs` holds the already-decoded children carried in the
     /// `PhysicalExtensionExprNode.inputs` field. If the codec instead embeds
     /// nested `PhysicalExprNode`s *inside* `buf`, decode them through
@@ -1634,6 +1644,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     /// cache-hits on its `expr_id` and re-shares one `Arc<dyn PhysicalExpr>`.
     ///
     /// [`parse_physical_expr`]: crate::physical_plan::from_proto::parse_physical_expr
+    /// [`ExtensionPhysicalExpr`]: datafusion_physical_expr_common::physical_expr::proto_decode::ExtensionPhysicalExpr
     fn try_decode_expr(
         &self,
         _buf: &[u8],

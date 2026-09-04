@@ -1201,6 +1201,11 @@ message PhysicalNegativeNode {
 message PhysicalExtensionExprNode {
   bytes expr = 1;
   repeated PhysicalExprNode inputs = 2;
+  // Optional type discriminator naming the extension expression, e.g.
+  // "my_crate.MyExpr". When present and registered in the session's
+  // PhysicalExprDecoderRegistry, decoding is routed to that registered
+  // decoder; otherwise it falls back to PhysicalExtensionCodec::try_decode_expr.
+  optional string expr_name = 3;
 }
 
 message PhysicalHashExprNode {

@@ -520,7 +520,29 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// constructors; both sides of the round-trip are fallible and named
     /// consistently.
     ///
+    /// # Why decoding is not a method here
+    ///
+    /// The two halves cannot be symmetric on this trait, and the reason is
+    /// structural rather than a matter of taste:
+    ///
+    /// * Encoding has a receiver, and `datafusion-proto` calls it on a
+    ///   `&dyn PhysicalExpr`, so it must be dispatched through the vtable —
+    ///   which means it must live here.
+    /// * Decoding is a *constructor*. With no `self` there is nothing to
+    ///   dispatch on, so it could only sit here as a `where Self: Sized`
+    ///   method, which is excluded from the vtable and could never be called
+    ///   through `dyn PhysicalExpr` anyway. And the wire name it needs cannot
+    ///   live here at all: an associated constant would make `PhysicalExpr`
+    ///   not dyn-compatible, breaking every `Arc<dyn PhysicalExpr>`.
+    ///
+    /// So decoders live off-trait. Built-in expressions write an inherent
+    /// `try_from_proto` and are dispatched to it by `datafusion-proto`'s
+    /// central match. A third-party expression implements
+    /// [`ExtensionPhysicalExpr`], which pairs the constructor with the name it
+    /// is registered and encoded under.
+    ///
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    /// [`ExtensionPhysicalExpr`]: proto_decode::ExtensionPhysicalExpr
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -547,9 +569,12 @@ pub mod proto_encode {
     use std::sync::Arc;
 
     use datafusion_common::Result;
-    use datafusion_proto_models::protobuf::PhysicalExprNode;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalExtensionExprNode, physical_expr_node,
+    };
 
     use super::PhysicalExpr;
+    use super::proto_decode::ExtensionPhysicalExpr;
 
     /// Encoder context handed to [`super::PhysicalExpr::try_to_proto`].
     ///
@@ -593,12 +618,69 @@ pub mod proto_encode {
                 .map(|expr| self.encode_child(expr))
                 .collect()
         }
+
+        /// Build the wrapper node for a third-party expression that decodes
+        /// through a [`PhysicalExprDecoderRegistry`] rather than through a
+        /// `PhysicalExtensionCodec`.
+        ///
+        /// `payload` is the expression's own serialized state; everything else
+        /// is taken from `expr` so it cannot disagree with the decode side:
+        ///
+        /// * the wire name is [`ExtensionPhysicalExpr::EXPR_NAME`], the key the
+        ///   registry is looked up by;
+        /// * the children are [`PhysicalExpr::children`], encoded through this
+        ///   context so recursion stays dedup-aware;
+        /// * `expr_id` is [`PhysicalExpr::expression_id`], so an expression
+        ///   that participates in deduplication keeps doing so.
+        ///
+        /// ```ignore
+        /// fn try_to_proto(
+        ///     &self,
+        ///     ctx: &PhysicalExprEncodeCtx<'_>,
+        /// ) -> Result<Option<PhysicalExprNode>> {
+        ///     let mut payload = Vec::new();
+        ///     MyExprProto { /* ... */ }.encode(&mut payload)?;
+        ///     Ok(Some(ctx.encode_extension(self, payload)?))
+        /// }
+        /// ```
+        ///
+        /// An expression that serializes its children into `payload` itself
+        /// should not use this helper, since its children would then be
+        /// written twice. Build the
+        /// [`PhysicalExtensionExprNode`] directly in that case — its fields
+        /// are public, and [`Self::encode_children_expressions`] is still
+        /// available for whichever children do belong in `inputs`.
+        ///
+        /// [`PhysicalExprDecoderRegistry`]: super::proto_decode::PhysicalExprDecoderRegistry
+        /// [`ExtensionPhysicalExpr::EXPR_NAME`]: super::proto_decode::ExtensionPhysicalExpr::EXPR_NAME
+        pub fn encode_extension<T: ExtensionPhysicalExpr>(
+            &self,
+            expr: &T,
+            payload: Vec<u8>,
+        ) -> Result<PhysicalExprNode> {
+            Ok(PhysicalExprNode {
+                expr_id: expr.expression_id(),
+                expr_type: Some(physical_expr_node::ExprType::Extension(
+                    PhysicalExtensionExprNode {
+                        expr: payload,
+                        inputs: self.encode_children_expressions(expr.children())?,
+                        expr_name: Some(T::EXPR_NAME.to_string()),
+                    },
+                )),
+            })
+        }
     }
 
     /// Internal dispatch trait. Implementors live in `datafusion-proto` and
     /// wrap the existing `PhysicalExtensionCodec` +
     /// `PhysicalProtoConverterExtension` plumbing. Expression authors should
     /// use [`PhysicalExprEncodeCtx`] instead of calling this directly.
+    ///
+    /// **Not public API.** `pub` only because the implementors live in another
+    /// crate; `#[doc(hidden)]` records that, so encoding primitives can be
+    /// added here as the serialization hooks grow without breaking downstream
+    /// code.
+    #[doc(hidden)]
     pub trait PhysicalExprEncode {
         /// Encode an expression to a protobuf node.
         fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode>;
@@ -630,10 +712,13 @@ pub mod proto_encode {
 /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
 #[cfg(feature = "proto")]
 pub mod proto_decode {
+    use std::any::{Any, type_name};
+    use std::collections::HashMap;
+    use std::collections::hash_map::Entry;
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
-    use datafusion_common::Result;
+    use datafusion_common::{Result, config_err, internal_datafusion_err};
     use datafusion_proto_models::protobuf::PhysicalExprNode;
 
     use super::PhysicalExpr;
@@ -704,12 +789,45 @@ pub mod proto_decode {
             self.schema
         }
 
+        /// The session state this decode is running under, so expressions that
+        /// need the function registry or session configuration can reach it —
+        /// the expression-side counterpart of
+        /// `ExecutionPlanDecodeCtx::task_ctx`.
+        ///
+        /// The session type is `datafusion_execution::TaskContext`, which this
+        /// crate cannot name (`datafusion-execution` depends on
+        /// `datafusion-physical-expr-common`, so the reverse edge would be a
+        /// cycle). It is therefore handed over type-erased and recovered with
+        /// a turbofish:
+        ///
+        /// ```ignore
+        /// let task_ctx = ctx.task_ctx::<TaskContext>()?;
+        /// let udf = task_ctx.udf("my_udf")?;
+        /// ```
+        ///
+        /// Errors if the driver exposes no session (some unit-test decoders)
+        /// or if `T` is not the session type it holds.
+        pub fn task_ctx<T: Any + Send + Sync>(&self) -> Result<&T> {
+            let task_ctx = self.decoder.task_ctx().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "no session is available to this PhysicalExprDecodeCtx"
+                )
+            })?;
+            task_ctx.downcast_ref::<T>().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "PhysicalExprDecodeCtx session is not a {}",
+                    type_name::<T>()
+                )
+            })
+        }
+
         /// Decode an expression node, recursing into child sub-expressions.
         ///
         /// Routes built-in `ExprType` variants through `datafusion-proto`'s
-        /// central match and forwards extension nodes to the registered codec
-        /// (today via [`PhysicalExtensionCodec::try_decode_expr`]; later via
-        /// a per-type registry — see #21835).
+        /// central match. An extension node that names itself on the wire and
+        /// is registered in the session's [`PhysicalExprDecoderRegistry`] goes
+        /// to that decoder; anything else falls back to
+        /// [`PhysicalExtensionCodec::try_decode_expr`].
         ///
         /// [`PhysicalExtensionCodec::try_decode_expr`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/physical_plan/trait.PhysicalExtensionCodec.html#method.try_decode_expr
         pub fn decode(&self, node: &PhysicalExprNode) -> Result<Arc<dyn PhysicalExpr>> {
@@ -781,9 +899,195 @@ pub mod proto_decode {
         })
     }
 
+    /// A third-party [`PhysicalExpr`] that can be decoded by name, without a
+    /// `PhysicalExtensionCodec`.
+    ///
+    /// Extension expressions reach the wire as a `PhysicalExtensionExprNode`:
+    /// an opaque payload plus the encoded children. Historically that node
+    /// carried no type discriminator, so the codec itself had to serve as one
+    /// — every composed codec tried each registered codec in turn and read a
+    /// decode error as "not mine".
+    ///
+    /// Implementing this trait names the expression on the wire instead.
+    /// Register the type in a [`PhysicalExprDecoderRegistry`] on the session
+    /// and the name routes straight to [`Self::try_from_proto`].
+    ///
+    /// The encode half is [`PhysicalExpr::try_to_proto`], via
+    /// [`PhysicalExprEncodeCtx::encode_extension`]:
+    ///
+    /// ```ignore
+    /// impl ExtensionPhysicalExpr for MyExpr {
+    ///     const EXPR_NAME: &'static str = "my_crate.MyExpr";
+    ///
+    ///     fn try_from_proto(
+    ///         node: &PhysicalExprNode,
+    ///         ctx: &PhysicalExprDecodeCtx<'_>,
+    ///     ) -> Result<Arc<dyn PhysicalExpr>> {
+    ///         let extension = expect_expr_variant!(
+    ///             node,
+    ///             physical_expr_node::ExprType::Extension,
+    ///             "Extension",
+    ///         );
+    ///         let payload = MyExprProto::decode(extension.expr.as_slice())?;
+    ///         let children = ctx.decode_children_expressions(&extension.inputs)?;
+    ///         Ok(Arc::new(MyExpr::new(payload, children)))
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// [`PhysicalExpr::try_to_proto`]: super::PhysicalExpr::try_to_proto
+    /// [`PhysicalExprEncodeCtx::encode_extension`]: super::proto_encode::PhysicalExprEncodeCtx::encode_extension
+    pub trait ExtensionPhysicalExpr: PhysicalExpr + Sized {
+        /// The name written to the wire and used as the registry key.
+        ///
+        /// Namespace it — `"my_crate.MyExpr"`, not `"MyExpr"` — so that two
+        /// independent crates registering into the same session collide at
+        /// registration time instead of silently decoding each other's nodes.
+        const EXPR_NAME: &'static str;
+
+        /// Reconstruct the expression from its proto node.
+        ///
+        /// Takes the whole [`PhysicalExprNode`] — the exact inverse of what
+        /// [`PhysicalExpr::try_to_proto`] returns — so the constructor can also
+        /// see outer-node fields such as `expr_id`. This is the same signature
+        /// the built-in expressions' inherent `try_from_proto` uses.
+        ///
+        /// [`PhysicalExpr::try_to_proto`]: super::PhysicalExpr::try_to_proto
+        fn try_from_proto(
+            node: &PhysicalExprNode,
+            ctx: &PhysicalExprDecodeCtx<'_>,
+        ) -> Result<Arc<dyn PhysicalExpr>>;
+    }
+
+    /// The decoder half of an [`ExtensionPhysicalExpr`], as stored in a
+    /// [`PhysicalExprDecoderRegistry`].
+    ///
+    /// A plain `fn` pointer: [`ExtensionPhysicalExpr::try_from_proto`] is an
+    /// associated function returning `Arc<dyn PhysicalExpr>`, so nothing about
+    /// it needs a trait object.
+    pub type PhysicalExprDecoderFn = fn(
+        &PhysicalExprNode,
+        &PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
+
+    /// Maps extension-expression names to their decoders.
+    ///
+    /// Attach one to a session and extension expressions that name themselves
+    /// on the wire decode through it instead of through a
+    /// `PhysicalExtensionCodec`. Register through `datafusion-proto`'s
+    /// `SessionConfig::with_physical_expr`, which merges into whatever registry
+    /// the config already carries:
+    ///
+    /// ```ignore
+    /// let config = SessionConfig::new().with_physical_expr::<MyExpr>()?;
+    /// ```
+    ///
+    /// Building a registry by hand and attaching it with
+    /// `SessionConfig::with_extension` also works, but it replaces any registry
+    /// already on the config — including one another library attached — so
+    /// prefer the additive form.
+    ///
+    /// Lookup is by name, so resolution does not depend on registration order
+    /// and a collision between two crates surfaces as an error at registration
+    /// rather than as a silent wrong decode.
+    ///
+    /// A name absent from the registry falls back to
+    /// `PhysicalExtensionCodec::try_decode_expr`. For nodes written before this
+    /// mechanism existed that fallback is exactly the old behavior. For an
+    /// expression that has migrated its encoding to
+    /// [`PhysicalExprEncodeCtx::encode_extension`] it is not: the payload on
+    /// the wire is then the expression's own message, and handing it to a codec
+    /// that still recognizes the expression can decode it as the old message
+    /// rather than failing. Register migrated expressions everywhere their
+    /// plans are read.
+    ///
+    /// [`PhysicalExprEncodeCtx::encode_extension`]: super::proto_encode::PhysicalExprEncodeCtx::encode_extension
+    #[derive(Debug, Clone, Default)]
+    pub struct PhysicalExprDecoderRegistry {
+        decoders: HashMap<String, PhysicalExprDecoderFn>,
+    }
+
+    impl PhysicalExprDecoderRegistry {
+        /// An empty registry.
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Register `T`, returning the registry for chaining.
+        pub fn with_expr<T: ExtensionPhysicalExpr>(mut self) -> Result<Self> {
+            self.register::<T>()?;
+            Ok(self)
+        }
+
+        /// Register `T` under its [`ExtensionPhysicalExpr::EXPR_NAME`].
+        ///
+        /// Errors if that name is already registered.
+        pub fn register<T: ExtensionPhysicalExpr>(&mut self) -> Result<()> {
+            self.register_named(T::EXPR_NAME, T::try_from_proto)
+        }
+
+        /// Register a decoder under an explicit name.
+        ///
+        /// Prefer [`Self::register`], which takes the name from the type and
+        /// so cannot disagree with what the encode side writes. This form is
+        /// for decoding names produced elsewhere — a renamed type, or a wire
+        /// name owned by another crate.
+        ///
+        /// Errors if the name is empty or already registered.
+        pub fn register_named(
+            &mut self,
+            name: impl Into<String>,
+            decoder: PhysicalExprDecoderFn,
+        ) -> Result<()> {
+            let name = name.into();
+            if name.is_empty() {
+                return config_err!(
+                    "extension PhysicalExpr decoders cannot be registered under an empty name"
+                );
+            }
+            match self.decoders.entry(name) {
+                Entry::Occupied(entry) => config_err!(
+                    "an extension PhysicalExpr decoder is already registered as '{}'",
+                    entry.key()
+                ),
+                Entry::Vacant(entry) => {
+                    entry.insert(decoder);
+                    Ok(())
+                }
+            }
+        }
+
+        /// The decoder registered under `name`, if any.
+        pub fn get(&self, name: &str) -> Option<PhysicalExprDecoderFn> {
+            self.decoders.get(name).copied()
+        }
+
+        /// The registered names, in arbitrary order.
+        pub fn names(&self) -> impl Iterator<Item = &str> {
+            self.decoders.keys().map(String::as_str)
+        }
+
+        /// The number of registered decoders.
+        pub fn len(&self) -> usize {
+            self.decoders.len()
+        }
+
+        /// Whether no decoder is registered.
+        pub fn is_empty(&self) -> bool {
+            self.decoders.is_empty()
+        }
+    }
+
     /// Internal dispatch trait. Implementors live in `datafusion-proto`.
     /// Expression authors should use [`PhysicalExprDecodeCtx`] instead of
     /// calling this directly.
+    ///
+    /// **Not public API.** `pub` only because the implementors live in another
+    /// crate; `#[doc(hidden)]` records that, so decoding primitives can be
+    /// added here as the serialization hooks grow without breaking downstream
+    /// code. New methods carry a default so downstream implementors keep
+    /// compiling.
+    #[doc(hidden)]
     pub trait PhysicalExprDecode {
         /// Decode a proto node into a concrete `PhysicalExpr`. The schema is
         /// passed alongside so implementations can support recursive children
@@ -793,6 +1097,19 @@ pub mod proto_decode {
             node: &PhysicalExprNode,
             schema: &Schema,
         ) -> Result<Arc<dyn PhysicalExpr>>;
+
+        /// The session state this decode is running under, type-erased.
+        ///
+        /// This is a `datafusion_execution::TaskContext`, but that type lives
+        /// in a crate that depends on this one, so it cannot be named here —
+        /// see [`PhysicalExprDecodeCtx::task_ctx`], which does the downcast.
+        ///
+        /// Returning `None` (the default) means the driver has no session to
+        /// offer, which is the case for the lightweight decoders used in unit
+        /// tests.
+        fn task_ctx(&self) -> Option<&(dyn Any + Send + Sync)> {
+            None
+        }
     }
 }
 

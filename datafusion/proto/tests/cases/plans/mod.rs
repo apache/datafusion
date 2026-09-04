@@ -36,6 +36,7 @@ use std::sync::Arc;
 mod aggregates;
 mod dispatch;
 mod dynamic_filters;
+mod expr_registry;
 mod exprs;
 mod filters;
 mod joins;
