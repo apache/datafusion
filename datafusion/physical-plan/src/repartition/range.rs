@@ -54,20 +54,9 @@ impl RangeRouter {
         sort_options: &[SortOptions],
         split_points: &[SplitPoint],
     ) -> Result<Self> {
-        let data_types: Option<Vec<DataType>> = if !split_points.is_empty() {
-            Some(
-                (0..sort_options.len())
-                    .map(|col_idx| split_points[0].values()[col_idx].data_type())
-                    .collect(),
-            )
-        } else {
-            None
-        };
-        Self::try_new_with_optional_data_types(
-            sort_options,
-            split_points,
-            data_types.as_deref(),
-        )
+        // Pass None so `try_new_with_optional_data_types` runs `validate_range_split_points`
+        // before indexing into split point columns, avoiding a panic on width mismatch.
+        Self::try_new_with_optional_data_types(sort_options, split_points, None)
     }
 
     /// Constructs the best router for the given sort options, split points, and target data types,
@@ -903,5 +892,17 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_router_width_mismatch_error() {
+        let split_points = vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])];
+        // 2 sort options but split point only has 1 column
+        let sort_options = vec![SortOptions::default(), SortOptions::default()];
+
+        let err = RangeRouter::try_new(&sort_options, &split_points).unwrap_err();
+        assert!(err.to_string().contains(
+            "Range partitioning split point 0 has width 1, but ordering has width 2"
+        ));
     }
 }

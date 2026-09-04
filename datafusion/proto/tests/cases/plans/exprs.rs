@@ -201,6 +201,7 @@ fn roundtrip_range_expr() -> Result<()> {
         // so their sort options stay aligned with the split-point values.
         vec![col("a", &schema)?, col("a", &schema)?],
         &range_partitioning,
+        &schema,
     )?);
     let filter_expr = binary(range_expr, Operator::Eq, lit(0u64), &schema)?;
     let plan = Arc::new(FilterExec::try_new(

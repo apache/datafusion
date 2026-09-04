@@ -698,30 +698,49 @@ impl Hash for RangeExpr {
 
 impl RangeExpr {
     /// Creates a Range expression for `on_columns` using the supplied routing
-    /// metadata.
+    /// metadata and schema.
     pub fn try_new(
         on_columns: Vec<PhysicalExprRef>,
         range_partitioning: &RangePartitioning,
+        schema: &Schema,
     ) -> Result<Self> {
         let sort_options: Vec<SortOptions> = range_partitioning
             .ordering()
             .iter()
             .map(|expr| expr.options)
             .collect();
-        Self::try_new_parts(on_columns, range_partitioning.split_points(), &sort_options)
+        Self::try_new_parts(
+            on_columns,
+            range_partitioning.split_points(),
+            &sort_options,
+            schema,
+        )
     }
 
     fn try_new_parts(
         on_columns: Vec<PhysicalExprRef>,
         split_points: &[SplitPoint],
         sort_options: &[SortOptions],
+        schema: &Schema,
     ) -> Result<Self> {
         assert_or_internal_err!(!on_columns.is_empty(), "RangeExpr requires a key");
         assert_or_internal_err!(
             on_columns.len() == sort_options.len(),
             "RangeExpr key count must match sort options"
         );
-        let router = RangeRouter::try_new(sort_options, split_points)?;
+        // Route on the key's actual types, not the split points' types: split
+        // points are not required to carry the key's exact type (`Decimal128`
+        // precision, timestamp timezone), and `RangeRouter` rejects any array
+        // whose type differs from the one it was built for.
+        let data_types = on_columns
+            .iter()
+            .map(|expr| expr.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+        let router = RangeRouter::try_new_with_data_types(
+            sort_options,
+            split_points,
+            &data_types,
+        )?;
         Ok(Self { on_columns, router })
     }
 
@@ -762,11 +781,10 @@ impl PhysicalExpr for RangeExpr {
             self.on_columns.len(),
             children.len()
         );
-        Ok(Arc::new(Self::try_new_parts(
-            children,
-            self.router.split_points(),
-            self.router.sort_options(),
-        )?))
+        Ok(Arc::new(Self {
+            on_columns: children,
+            router: self.router.clone(),
+        }))
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
@@ -869,6 +887,7 @@ impl RangeExpr {
             on_columns,
             &split_points,
             &sort_options,
+            ctx.schema(),
         )?))
     }
 }
@@ -1006,33 +1025,28 @@ impl BatchPartitioner {
 
     /// Create a new [`BatchPartitioner`] for range-based repartitioning.
     ///
-    /// # Panics
-    /// Panics if the range partitioning is invalid or cannot construct a range router.
-    /// Prefer [`Self::try_new_range_partitioner`] for fallible construction.
-    #[deprecated(since = "55.0.0", note = "Use try_new_range_partitioner instead")]
-    pub fn new_range_partitioner(
-        range_partitioning: &RangePartitioning,
-        timer: metrics::Time,
-    ) -> Self {
-        Self::try_new_range_partitioner(range_partitioning, timer)
-            .expect("valid range partitioning")
-    }
-
-    /// Create a new [`BatchPartitioner`] for range-based repartitioning.
+    /// Key data types are inferred from `schema`, and split points are coerced to match.
     ///
     /// # Parameters
     /// - `range_partitioning`: `RangePartitioning` struct used for ordering, split points, and number of partitions
+    /// - `schema`: Schema of the batches to be partitioned
     /// - `timer`: Metric used to record time spent during repartitioning.
     pub fn try_new_range_partitioner(
         range_partitioning: &RangePartitioning,
+        schema: &Schema,
         timer: metrics::Time,
     ) -> Result<Self> {
         let ordering = range_partitioning.ordering().clone();
         let num_partitions = range_partitioning.partition_count();
         let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
-        let router = Arc::new(RangeRouter::try_new(
+        let data_types = ordering
+            .iter()
+            .map(|e| e.expr.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+        let router = Arc::new(RangeRouter::try_new_with_data_types(
             &sort_options,
             range_partitioning.split_points(),
+            &data_types,
         )?);
 
         Ok(Self::new_range_partitioner_with_router(
@@ -1041,6 +1055,30 @@ impl BatchPartitioner {
             num_partitions,
             timer,
         ))
+    }
+
+    /// Create a new [`BatchPartitioner`] for range-based repartitioning.
+    ///
+    /// # Panics
+    /// Panics if the range partitioning is invalid or cannot construct a range router.
+    /// Prefer [`Self::try_new_range_partitioner`] for fallible construction with schema validation.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use try_new_range_partitioner with schema instead"
+    )]
+    pub fn new_range_partitioner(
+        range_partitioning: &RangePartitioning,
+        timer: metrics::Time,
+    ) -> Self {
+        let ordering = range_partitioning.ordering().clone();
+        let num_partitions = range_partitioning.partition_count();
+        let sort_options: Vec<SortOptions> = ordering.iter().map(|e| e.options).collect();
+        let router = Arc::new(
+            RangeRouter::try_new(&sort_options, range_partitioning.split_points())
+                .expect("valid range partitioning"),
+        );
+
+        Self::new_range_partitioner_with_router(ordering, router, num_partitions, timer)
     }
 
     /// Create a new [`BatchPartitioner`] for range-based repartitioning using a pre-constructed [`RangeRouter`].
@@ -1098,8 +1136,10 @@ impl BatchPartitioner {
                     num_input_partitions,
                 ))
             }
-            Partitioning::Range(range_repartitioning) => {
-                Self::try_new_range_partitioner(&range_repartitioning, timer)
+            Partitioning::Range(range_repartitioning) =>
+            {
+                #[expect(deprecated)]
+                Ok(Self::new_range_partitioner(&range_repartitioning, timer))
             }
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
@@ -2598,6 +2638,7 @@ mod tests {
         let expr = Arc::new(RangeExpr::try_new(
             vec![col("a", &schema)?, col("b", &schema)?],
             &range_partitioning,
+            &schema,
         )?);
         let remapped = col("a", &schema)?;
         let rewritten =
@@ -3144,6 +3185,154 @@ mod tests {
         assert_eq!(2, output_partitions.len());
         assert_eq!(1, partition_row_count(&output_partitions[0]));
         assert_eq!(1, partition_row_count(&output_partitions[1]));
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_expr_routes_decimal_with_wider_column_precision() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "k",
+            DataType::Decimal128(20, 2),
+            true,
+        )]));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("k", &schema)?,
+            SortOptions::default(),
+        )])
+        .unwrap();
+        // Split point is Decimal128(10, 2); the column is Decimal128(20, 2).
+        let range_part = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Decimal128(
+                Some(1000),
+                10,
+                2,
+            )])],
+        )?;
+
+        let expr = RangeExpr::try_new(vec![col("k", &schema)?], &range_part, &schema)?;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(
+                Decimal128Array::from(vec![Some(500i128), Some(2000i128)])
+                    .with_precision_and_scale(20, 2)?,
+            )],
+        )?;
+
+        let res = expr.evaluate(&batch)?;
+        let ColumnarValue::Array(array) = res else {
+            panic!("expected array result");
+        };
+        let partition_ids = array
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap()
+            .values();
+        assert_eq!(partition_ids, &[0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_expr_routes_compound_timestamp_key_ignoring_timezone() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "t",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("i", DataType::Int64, true),
+        ]));
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new(col("t", &schema)?, SortOptions::default()),
+            PhysicalSortExpr::new(col("i", &schema)?, SortOptions::default()),
+        ])
+        .unwrap();
+        // Split point timestamp carries no timezone; the column carries "UTC".
+        let range_part = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![
+                ScalarValue::TimestampNanosecond(Some(100), None),
+                ScalarValue::Int64(Some(0)),
+            ])],
+        )?;
+
+        let expr = RangeExpr::try_new(
+            vec![col("t", &schema)?, col("i", &schema)?],
+            &range_part,
+            &schema,
+        )?;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(
+                    TimestampNanosecondArray::from(vec![Some(50i64), Some(200)])
+                        .with_timezone("UTC"),
+                ),
+                Arc::new(Int64Array::from(vec![Some(1i64), Some(2)])),
+            ],
+        )?;
+
+        let res = expr.evaluate(&batch)?;
+        let ColumnarValue::Array(array) = res else {
+            panic!("expected array result");
+        };
+        let partition_ids = array
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap()
+            .values();
+        assert_eq!(partition_ids, &[0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn batch_partitioner_routes_decimal_with_wider_column_precision() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "k",
+            DataType::Decimal128(20, 2),
+            true,
+        )]));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("k", &schema)?,
+            SortOptions::default(),
+        )])
+        .unwrap();
+        // Split point is Decimal128(10, 2); the column is Decimal128(20, 2).
+        let range_part = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Decimal128(
+                Some(1000),
+                10,
+                2,
+            )])],
+        )?;
+
+        let mut partitioner = BatchPartitioner::try_new_range_partitioner(
+            &range_part,
+            &schema,
+            metrics::Time::default(),
+        )?;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(
+                Decimal128Array::from(vec![Some(500i128), Some(2000i128)])
+                    .with_precision_and_scale(20, 2)?,
+            )],
+        )?;
+
+        let mut partitioned_batches = vec![];
+        partitioner.partition(batch, |partition, batch| {
+            partitioned_batches.push((partition, batch.num_rows()));
+            Ok(())
+        })?;
+
+        assert_eq!(partitioned_batches, vec![(0, 1), (1, 1)]);
 
         Ok(())
     }

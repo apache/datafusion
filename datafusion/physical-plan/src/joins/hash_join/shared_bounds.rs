@@ -764,6 +764,7 @@ impl SharedBuildAccumulator {
                 Arc::new(RangeExpr::try_new(
                     self.on_right.clone(),
                     range_partitioning,
+                    &self.probe_schema,
                 )?) as Arc<dyn PhysicalExpr>
             } else {
                 // Routes probe rows with the same `hash(keys) % partition_count` expression used

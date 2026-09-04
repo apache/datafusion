@@ -143,6 +143,7 @@ fn bench_range_repartition_i64_uniform(c: &mut Criterion) {
             |b, _| {
                 let mut partitioner = BatchPartitioner::try_new_range_partitioner(
                     &range_part,
+                    &schema,
                     Time::default(),
                 )
                 .unwrap();
@@ -194,6 +195,7 @@ fn bench_range_repartition_i64_sequential(c: &mut Criterion) {
             |b, _| {
                 let mut partitioner = BatchPartitioner::try_new_range_partitioner(
                     &range_part,
+                    &schema,
                     Time::default(),
                 )
                 .unwrap();
@@ -245,6 +247,7 @@ fn bench_range_repartition_utf8_uniform(c: &mut Criterion) {
             |b, _| {
                 let mut partitioner = BatchPartitioner::try_new_range_partitioner(
                     &range_part,
+                    &schema,
                     Time::default(),
                 )
                 .unwrap();
@@ -301,6 +304,7 @@ fn bench_range_repartition_composite_i64(c: &mut Criterion) {
             |b, _| {
                 let mut partitioner = BatchPartitioner::try_new_range_partitioner(
                     &range_part,
+                    &schema,
                     Time::default(),
                 )
                 .unwrap();
@@ -346,7 +350,8 @@ fn bench_range_expr_routing_i64(c: &mut Criterion) {
             .collect();
 
         let range_part = RangePartitioning::try_new(ordering, split_points).unwrap();
-        let range_expr = RangeExpr::try_new(vec![col_expr], &range_part).unwrap();
+        let range_expr =
+            RangeExpr::try_new(vec![col_expr], &range_part, &batch.schema()).unwrap();
 
         group.bench_with_input(
             BenchmarkId::new("partitions", num_partitions),
@@ -395,6 +400,7 @@ fn bench_range_partitioner_construction(c: &mut Criterion) {
                 b.iter(|| {
                     let partitioner = BatchPartitioner::try_new_range_partitioner(
                         black_box(&range_part),
+                        black_box(&schema),
                         Time::default(),
                     )
                     .unwrap();
