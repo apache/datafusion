@@ -618,7 +618,7 @@ impl Decoder for JsonDecoder {
 
 /// Encode a [`JsonFormatFactory`]'s options as their protobuf form.
 ///
-/// The reverse direction is `From<&protobuf::JsonOptions> for JsonOptions` in
+/// The reverse direction is `TryFrom<&protobuf::JsonOptions> for JsonOptions` in
 /// `datafusion-proto-models`: `JsonOptions` is a `datafusion-common` type, so
 /// that half cannot live here.
 #[cfg(feature = "proto")]

@@ -46,6 +46,7 @@ use datafusion_common::{
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
+    utils::usize_from_wire,
 };
 
 #[derive(Debug)]
@@ -738,30 +739,23 @@ impl From<protobuf::IntervalUnit> for IntervalUnit {
     }
 }
 
-impl From<protobuf::Constraints> for Constraints {
-    fn from(constraints: protobuf::Constraints) -> Self {
-        Constraints::new_unverified(
-            constraints
-                .constraints
-                .into_iter()
-                .map(|item| item.into())
-                .collect(),
-        )
+impl TryFrom<protobuf::Constraints> for Constraints {
+    type Error = DataFusionError;
+
+    fn try_from(
+        constraints: protobuf::Constraints,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Self::try_from(&constraints)
     }
 }
 
-impl From<protobuf::Constraint> for Constraint {
-    fn from(value: protobuf::Constraint) -> Self {
-        match value.constraint_mode.unwrap() {
-            protobuf::constraint::ConstraintMode::PrimaryKey(elem) => {
-                Constraint::PrimaryKey(
-                    elem.indices.into_iter().map(|item| item as usize).collect(),
-                )
-            }
-            protobuf::constraint::ConstraintMode::Unique(elem) => Constraint::Unique(
-                elem.indices.into_iter().map(|item| item as usize).collect(),
-            ),
-        }
+impl TryFrom<protobuf::Constraint> for Constraint {
+    type Error = DataFusionError;
+
+    fn try_from(
+        value: protobuf::Constraint,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Constraint::try_from(&value)
     }
 }
 
@@ -884,20 +878,28 @@ impl From<protobuf::JoinSide> for JoinSide {
     }
 }
 
-impl From<&protobuf::Constraint> for Constraint {
-    fn from(value: &protobuf::Constraint) -> Self {
+impl TryFrom<&protobuf::Constraint> for Constraint {
+    type Error = DataFusionError;
+
+    fn try_from(
+        value: &protobuf::Constraint,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let decode_indices = |indices: &[u64]| {
+            indices
+                .iter()
+                .map(|&index| usize_from_wire(index, "Constraint", "indices"))
+                .collect::<datafusion_common::Result<Vec<_>>>()
+        };
         match &value.constraint_mode {
             Some(protobuf::constraint::ConstraintMode::PrimaryKey(elem)) => {
-                Constraint::PrimaryKey(
-                    elem.indices.iter().map(|&item| item as usize).collect(),
-                )
+                Ok(Constraint::PrimaryKey(decode_indices(&elem.indices)?))
             }
             Some(protobuf::constraint::ConstraintMode::Unique(elem)) => {
-                Constraint::Unique(
-                    elem.indices.iter().map(|&item| item as usize).collect(),
-                )
+                Ok(Constraint::Unique(decode_indices(&elem.indices)?))
             }
-            None => panic!("constraint_mode not set"),
+            None => Err(plan_datafusion_err!(
+                "Constraint: missing required field 'constraint_mode'"
+            )),
         }
     }
 }
@@ -912,8 +914,8 @@ impl TryFrom<&protobuf::Constraints> for Constraints {
             constraints
                 .constraints
                 .iter()
-                .map(|item| item.into())
-                .collect(),
+                .map(Constraint::try_from)
+                .collect::<datafusion_common::Result<Vec<_>>>()?,
         ))
     }
 }
@@ -1016,7 +1018,10 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
             compression_level: proto_opts.compression_level,
-            schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
+            schema_infer_max_rec: proto_opts
+                .schema_infer_max_rec
+                .map(|v| usize_from_wire(v, "CsvOptions", "schema_infer_max_rec"))
+                .transpose()?,
             date_format: (!proto_opts.date_format.is_empty())
                 .then(|| proto_opts.date_format.clone()),
             datetime_format: (!proto_opts.datetime_format.is_empty())
@@ -1052,6 +1057,8 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     fn try_from(
         value: &protobuf::ParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        let to_usize =
+            |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -1059,14 +1066,19 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             metadata_size_hint: value
                 .metadata_size_hint_opt
                 .map(|opt| match opt {
-                    protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
+                    protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => {
+                        to_usize(v, "metadata_size_hint")
+                    }
                 })
-                .unwrap_or(None),
+                .transpose()?,
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
-            data_pagesize_limit: value.data_pagesize_limit as usize,
-            write_batch_size: value.write_batch_size as usize,
+            data_pagesize_limit: to_usize(
+                value.data_pagesize_limit,
+                "data_pagesize_limit",
+            )?,
+            write_batch_size: to_usize(value.write_batch_size, "write_batch_size")?,
             writer_version: value.writer_version.parse().map_err(|e| {
                 DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
             })?,
@@ -1075,29 +1087,39 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             }).unwrap_or(None),
             dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             // Continuing from where we left off in the TryFrom implementation
-            dictionary_page_size_limit: value.dictionary_page_size_limit as usize,
+            dictionary_page_size_limit: to_usize(
+                value.dictionary_page_size_limit,
+                "dictionary_page_size_limit",
+            )?,
             statistics_enabled: value
                 .statistics_enabled_opt.as_ref()
                 .map(|opt| match opt {
                     protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => v.parse(),
                 })
                 .transpose()?,
-            max_row_group_size: value.max_row_group_size as usize,
-            max_in_list_size: value.max_in_list_size as usize,
+            max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
+            max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => Some(*v as usize),
+                    protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => {
+                        to_usize(*v, "column_index_truncate_length")
+                    }
                 })
-                .unwrap_or(None),
+                .transpose()?,
             statistics_truncate_length: value
                 .statistics_truncate_length_opt.as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => Some(*v as usize),
+                    protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => {
+                        to_usize(*v, "statistics_truncate_length")
+                    }
                 })
-                .unwrap_or(None),
-            data_page_row_count_limit: value.data_page_row_count_limit as usize,
+                .transpose()?,
+            data_page_row_count_limit: to_usize(
+                value.data_page_row_count_limit,
+                "data_page_row_count_limit",
+            )?,
             encoding: value
                 .encoding_opt.clone()
                 .map(|opt| match opt {
@@ -1119,8 +1141,14 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 })
                 .unwrap_or(None),
             allow_single_file_parallelism: value.allow_single_file_parallelism,
-            maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
-            maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
+            maximum_parallel_row_group_writers: to_usize(
+                value.maximum_parallel_row_group_writers,
+                "maximum_parallel_row_group_writers",
+            )?,
+            maximum_buffered_record_batches_per_stream: to_usize(
+                value.maximum_buffered_record_batches_per_stream,
+                "maximum_buffered_record_batches_per_stream",
+            )?,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
             coerce_int96: value.coerce_int96_opt.clone().map(|opt| match opt {
@@ -1131,24 +1159,34 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             }).unwrap_or(None),
             skip_arrow_metadata: value.skip_arrow_metadata,
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
-                protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => Some(v as usize),
-            }).unwrap_or(None),
-            max_row_group_bytes: value.max_row_group_bytes_opt.and_then(|opt| match opt {
-                protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => MaxRowGroupBytes::try_new(v as usize).ok(),
-            }),
-            content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::from).unwrap_or_default(),
+                protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => {
+                    to_usize(v, "max_predicate_cache_size")
+                }
+            }).transpose()?,
+            max_row_group_bytes: value.max_row_group_bytes_opt.map(|opt| match opt {
+                protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => {
+                    MaxRowGroupBytes::try_new(to_usize(v, "max_row_group_bytes")?)
+                }
+            }).transpose()?,
+            content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::try_from).transpose()?.unwrap_or_default(),
         })
     }
 }
 
-impl From<protobuf::ParquetCdcOptions> for ParquetCdcOptions {
-    fn from(value: protobuf::ParquetCdcOptions) -> Self {
-        ParquetCdcOptions {
+impl TryFrom<protobuf::ParquetCdcOptions> for ParquetCdcOptions {
+    type Error = DataFusionError;
+
+    fn try_from(
+        value: protobuf::ParquetCdcOptions,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let to_usize =
+            |value: u64, field: &str| usize_from_wire(value, "ParquetCdcOptions", field);
+        Ok(ParquetCdcOptions {
             enabled: value.enabled,
-            min_chunk_size: value.min_chunk_size as usize,
-            max_chunk_size: value.max_chunk_size as usize,
+            min_chunk_size: to_usize(value.min_chunk_size, "min_chunk_size")?,
+            max_chunk_size: to_usize(value.max_chunk_size, "max_chunk_size")?,
             norm_level: value.norm_level,
-        }
+        })
     }
 }
 
@@ -1214,9 +1252,9 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
             global: value
                 .global
                 .as_ref()
-                .map(|v| v.try_into())
-                .unwrap()
-                .unwrap(),
+                .map(ParquetOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
             column_specific_options,
             ..Default::default()
         };
@@ -1234,7 +1272,10 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
         Ok(JsonOptions {
             compression: compression.into(),
             compression_level: proto_opts.compression_level,
-            schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
+            schema_infer_max_rec: proto_opts
+                .schema_infer_max_rec
+                .map(|v| usize_from_wire(v, "JsonOptions", "schema_infer_max_rec"))
+                .transpose()?,
             newline_delimited: proto_opts.newline_delimited.unwrap_or(true),
         })
     }
@@ -1338,6 +1379,72 @@ mod tests {
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_common::parquet_config::DFParquetStatistics;
+
+    #[test]
+    fn constraint_requires_mode() {
+        let err = datafusion_common::Constraint::try_from(
+            &crate::protobuf_common::Constraint {
+                constraint_mode: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Constraint: missing required field 'constraint_mode'")
+        );
+    }
+
+    #[test]
+    fn table_parquet_options_defaults_missing_global() {
+        let recovered = TableParquetOptions::try_from(
+            &crate::protobuf_common::TableParquetOptions::default(),
+        )
+        .expect("missing global should use defaults");
+
+        assert_eq!(recovered, TableParquetOptions::default());
+    }
+
+    #[test]
+    fn table_parquet_options_checks_nested_usize_conversion() {
+        let proto = crate::protobuf_common::TableParquetOptions {
+            global: Some(crate::protobuf_common::ParquetOptions {
+                data_pagesize_limit: u64::MAX,
+                writer_version: "1.0".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let recovered = TableParquetOptions::try_from(&proto);
+
+        if usize::BITS >= u64::BITS {
+            assert_eq!(recovered.unwrap().global.data_pagesize_limit, usize::MAX);
+        } else {
+            assert_eq!(
+                recovered.unwrap_err().strip_backtrace(),
+                "Error during planning: ParquetOptions: data_pagesize_limit wire value 18446744073709551615 is out of range for usize"
+            );
+        }
+    }
+
+    #[test]
+    fn table_parquet_options_propagates_nested_conversion_error() {
+        let proto = crate::protobuf_common::TableParquetOptions {
+            global: Some(crate::protobuf_common::ParquetOptions {
+                writer_version: "1.0".to_string(),
+                max_row_group_bytes_opt: Some(
+                    crate::protobuf_common::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(0),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = TableParquetOptions::try_from(&proto).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Invalid or Unsupported Configuration: max_row_group_bytes must be greater than 0"
+        );
+    }
 
     fn parquet_options_proto_round_trip(opts: ParquetOptions) -> ParquetOptions {
         let proto: crate::protobuf_common::ParquetOptions =

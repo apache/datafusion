@@ -53,6 +53,11 @@ SELECT date_trunc('MON', '2015-03-05T09:32:05.123456'::timestamp);
 ----
 2015-03-01T00:00:00
 
+query P
+SELECT date_trunc('MONTHS', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-01T00:00:00
+
 # WEEK - truncate to Monday of the week, time zeroed
 query P
 SELECT date_trunc('WEEK', '2015-03-05T09:32:05.123456'::timestamp);
@@ -129,7 +134,7 @@ SELECT date_trunc('YEAR', NULL::timestamp);
 NULL
 
 # incorrect format
-query error DataFusion error: Execution error: Unsupported date_trunc granularity: 'test'. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
+query error DataFusion error: Execution error: Unsupported date_trunc granularity: 'test'. Supported granularities are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
 SELECT date_trunc('test', '2015-03-05T09:32:05.123456');
 
 # Timezone handling - Spark-compatible behavior

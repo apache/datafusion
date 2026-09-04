@@ -19,7 +19,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, Expr, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, TypeSignature,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 
 /// A configurable test UDF for optimizer tests.
@@ -44,7 +44,7 @@ impl PlacementTestUDF {
             // The actual types don't matter since this UDF is not intended for execution.
             signature: Signature::new(
                 TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
-                datafusion_expr::Volatility::Immutable,
+                Volatility::Immutable,
             ),
             placement: ExpressionPlacement::MoveTowardsLeafNodes,
             id: 0,
@@ -62,6 +62,13 @@ impl PlacementTestUDF {
     /// This is an arbitrary made up field to allow creating multiple distinct UDFs with the same placement.
     pub fn with_id(mut self, id: usize) -> Self {
         self.id = id;
+        self
+    }
+
+    /// Set the volatility of the UDF, so that rules which must not duplicate a
+    /// volatile computation (e.g. `random()`) can be exercised.
+    pub fn with_volatility(mut self, volatility: Volatility) -> Self {
+        self.signature.volatility = volatility;
         self
     }
 }

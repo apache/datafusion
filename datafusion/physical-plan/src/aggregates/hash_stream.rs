@@ -120,6 +120,16 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// remaining input batch is converted directly to partial aggregate state rows
 /// without inserting the rows into the grouped hash table.
 ///
+/// # Feature: Grouping Sets
+///
+/// `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded in the partial stage: every
+/// grouping set of an input batch is evaluated (with the grouping expressions
+/// that are not part of the set replaced by `NULL`, plus an internal
+/// `__grouping_id` column) and interned into the same hash table. The final
+/// stage then merges the expanded keys as a plain group by.
+///
+/// The partial aggregation skip optimization is disabled for grouping sets.
+///
 /// # Feature: Memory-limited Execution
 ///
 /// ## Partial Aggregation
