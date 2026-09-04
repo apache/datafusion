@@ -881,6 +881,11 @@ impl AggregateUDFImpl for ApproxDistinct {
 /// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
 /// `Null` fall back to the per-group [`Accumulator`] path.
 fn is_hll_groups_type(data_type: &DataType) -> bool {
+
+    if let DataType::Dictionary(_, value_type) = data_type {
+        return is_hll_groups_type(value_type);
+    }
+
     matches!(
         data_type,
         DataType::UInt32
@@ -920,7 +925,6 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _)
-            | DataType::Dictionary(_, _)
     )
 }
 
