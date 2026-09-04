@@ -17,7 +17,7 @@
 
 //! Arrow-schema coercion utilities used by the Parquet reader to make a
 //! file schema match the table schema (binary→string, regular→view,
-//! INT96→Timestamp).
+//! INT96→Timestamp, plain->Dictionary).
 //!
 //! These helpers are independent of the [`ParquetFormat`](crate::file_format::ParquetFormat)
 //! type and several have been re-exported at the crate root for use by
@@ -51,34 +51,51 @@ pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
+    apply_file_schema_type_coercions_with_rle(table_schema, file_schema, false)
+}
+
+/// Like [`apply_file_schema_type_coercions`], but also coerces compatible
+/// string/binary file fields to dictionary types already present in the table
+/// schema.
+pub(crate) fn apply_file_schema_type_coercions_with_rle(
+    table_schema: &Schema,
+    file_schema: &Schema,
+    enable_rle_to_dictionary: bool,
+) -> Option<Schema> {
     let mut needs_view_transform = false;
     let mut needs_string_transform = false;
+    let mut needs_dict_transform = false;
 
     // Create a mapping of table field names to their data types for fast lookup
     // and simultaneously check if we need any transformations
     let table_fields: HashMap<_, _> = table_schema
         .fields()
         .iter()
-        .map(|f| {
-            let dt = f.data_type();
+        .map(|field| {
+            let data_type = field.data_type();
             // Check if we need view type transformation
-            if matches!(dt, &DataType::Utf8View | &DataType::BinaryView) {
+            if matches!(data_type, &DataType::Utf8View | &DataType::BinaryView) {
                 needs_view_transform = true;
             }
             // Check if we need string type transformation
             if matches!(
-                dt,
+                data_type,
                 &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
             ) {
                 needs_string_transform = true;
             }
+            if enable_rle_to_dictionary
+                && matches!(data_type, &DataType::Dictionary(_, _))
+            {
+                needs_dict_transform = true;
+            }
 
-            (f.name(), dt)
+            (field.name(), data_type)
         })
         .collect();
 
     // Early return if no transformation needed
-    if !needs_view_transform && !needs_string_transform {
+    if !needs_view_transform && !needs_string_transform && !needs_dict_transform {
         return None;
     }
 
@@ -120,10 +137,15 @@ pub fn apply_file_schema_type_coercions(
                     (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
                         return field_with_new_type(field, DataType::BinaryView);
                     }
+                    (DataType::Dictionary(_, _), _)
+                        if enable_rle_to_dictionary
+                            && can_promote_to_dictionary_type(field_type, table_type) =>
+                    {
+                        return field_with_new_type(field, (*table_type).clone());
+                    }
                     _ => {}
                 }
             }
-
             // If no transformation is needed, keep the original field
             Arc::clone(field)
         })
@@ -133,6 +155,157 @@ pub fn apply_file_schema_type_coercions(
         transformed_fields,
         file_schema.metadata.clone(),
     ))
+}
+
+// Find the value type that can represent both sides without narrowing offsets
+// or crossing string/binary families.
+fn common_dictionary_value_type(
+    field_type: &DataType,
+    dictionary_value_type: &DataType,
+) -> Option<DataType> {
+    let field_type = match field_type {
+        DataType::Dictionary(_, field_value_type) => field_value_type.as_ref(),
+        _ => field_type,
+    };
+
+    match (field_type, dictionary_value_type) {
+        (DataType::Utf8, DataType::Utf8) => Some(DataType::Utf8),
+        (DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8 | DataType::LargeUtf8) => {
+            Some(DataType::LargeUtf8)
+        }
+        (DataType::Binary, DataType::Binary) => Some(DataType::Binary),
+        (
+            DataType::Binary | DataType::LargeBinary,
+            DataType::Binary | DataType::LargeBinary,
+        ) => Some(DataType::LargeBinary),
+        _ => None,
+    }
+}
+
+// Same family (both signed or both unsigned): return the wider member.
+// Mixed: return the smallest signed type covering the larger capacity; Int64 is the ceiling
+// because Parquet only supports signed integer dictionary key types.
+// Returns None only for non-integer key types.
+fn common_dictionary_key_type(a: &DataType, b: &DataType) -> Option<DataType> {
+    fn key_capacity(dt: &DataType) -> Option<u128> {
+        match dt {
+            DataType::Int8 => Some(1u128 << 7),
+            DataType::Int16 => Some(1u128 << 15),
+            DataType::Int32 => Some(1u128 << 31),
+            DataType::Int64 => Some(1u128 << 63),
+            DataType::UInt8 => Some(1u128 << 8),
+            DataType::UInt16 => Some(1u128 << 16),
+            DataType::UInt32 => Some(1u128 << 32),
+            DataType::UInt64 => Some(1u128 << 64),
+            _ => None,
+        }
+    }
+    fn is_signed(dt: &DataType) -> bool {
+        matches!(
+            dt,
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+        )
+    }
+    let cap_a = key_capacity(a)?;
+    let cap_b = key_capacity(b)?;
+    if is_signed(a) == is_signed(b) {
+        return Some(if cap_a >= cap_b { a.clone() } else { b.clone() });
+    }
+    let max_cap = cap_a.max(cap_b);
+    Some(match max_cap {
+        c if c <= (1u128 << 7) => DataType::Int8,
+        c if c <= (1u128 << 15) => DataType::Int16,
+        c if c <= (1u128 << 31) => DataType::Int32,
+        _ => DataType::Int64,
+    })
+}
+
+fn can_promote_to_dictionary_type(
+    file_field_type: &DataType,
+    table_dictionary_type: &DataType,
+) -> bool {
+    let DataType::Dictionary(table_key, table_value) = table_dictionary_type else {
+        return false;
+    };
+    if common_dictionary_value_type(file_field_type, table_value)
+        .is_none_or(|common| &common != table_value.as_ref())
+    {
+        return false;
+    }
+    if let DataType::Dictionary(file_key, _) = file_field_type {
+        return common_dictionary_key_type(file_key, table_key)
+            .is_some_and(|common| &common == table_key.as_ref());
+    }
+    true
+}
+
+/// Normalize per-file schemas so that a column promoted to `Dictionary` in
+/// *any* file is promoted to the same `Dictionary` type in *all* files.
+///
+/// This lets [`Schema::try_merge`] accept directories that mix dictionary and
+/// plain encodings for the same column.
+pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
+    // First pass: record the dictionary type for every column that is Dictionary in
+    // at least one schema.
+    let mut dict_types: HashMap<String, DataType> = HashMap::new();
+    for schema in &schemas {
+        for field in schema.fields() {
+            if matches!(field.data_type(), DataType::Dictionary(_, _)) {
+                dict_types
+                    .entry(field.name().clone())
+                    .or_insert_with(|| field.data_type().clone());
+            }
+        }
+    }
+    if dict_types.is_empty() {
+        return schemas;
+    }
+
+    for schema in &schemas {
+        for field in schema.fields() {
+            let Some(dict_type) = dict_types.get_mut(field.name()) else {
+                continue;
+            };
+            let DataType::Dictionary(key_type, value_type) = dict_type else {
+                continue;
+            };
+            let key_type = key_type.clone();
+            let value_type = value_type.as_ref().clone();
+            let new_key = if let DataType::Dictionary(file_key, _) = field.data_type() {
+                common_dictionary_key_type(&key_type, file_key)
+                    .map(Box::new)
+                    .unwrap_or_else(|| key_type.clone())
+            } else {
+                key_type.clone()
+            };
+            if let Some(common_type) =
+                common_dictionary_value_type(field.data_type(), &value_type)
+            {
+                *dict_type = DataType::Dictionary(new_key, Box::new(common_type));
+            }
+        }
+    }
+
+    // Only promote fields whose type family matches the dictionary value type,
+    // so schema normalization does not reinterpret binary bytes as UTF-8.
+    schemas
+        .into_iter()
+        .map(|schema| {
+            let fields: Vec<Arc<Field>> = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    if let Some(dict_type) = dict_types.get(field.name())
+                        && can_promote_to_dictionary_type(field.data_type(), dict_type)
+                    {
+                        return field_with_new_type(field, dict_type.clone());
+                    }
+                    Arc::clone(field)
+                })
+                .collect();
+            Schema::new_with_metadata(fields, schema.metadata().clone())
+        })
+        .collect()
 }
 
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
@@ -727,5 +900,283 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    fn dict(value_type: DataType) -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type))
+    }
+
+    fn one_field_schema(data_type: DataType) -> Schema {
+        Schema::new(vec![Field::new("col", data_type, true)])
+    }
+
+    #[test]
+    fn uniform_dict_schemas_respects_value_type_families() {
+        // String/binary dictionary promotion must preserve the concrete value type
+        // family so schema merging does not silently reinterpret bytes as UTF-8.
+        let cases = vec![
+            (
+                "utf8",
+                dict(DataType::Utf8),
+                DataType::Utf8,
+                dict(DataType::Utf8),
+                dict(DataType::Utf8),
+            ),
+            (
+                "large_utf8",
+                dict(DataType::LargeUtf8),
+                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "utf8_large_utf8",
+                dict(DataType::Utf8),
+                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "binary",
+                dict(DataType::Binary),
+                DataType::Binary,
+                dict(DataType::Binary),
+                dict(DataType::Binary),
+            ),
+            (
+                "large_binary",
+                dict(DataType::LargeBinary),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "binary_large_binary",
+                dict(DataType::Binary),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "binary_not_utf8",
+                dict(DataType::Utf8),
+                DataType::Binary,
+                dict(DataType::Utf8),
+                DataType::Binary,
+            ),
+            (
+                "utf8_not_binary",
+                dict(DataType::Binary),
+                DataType::Utf8,
+                dict(DataType::Binary),
+                DataType::Utf8,
+            ),
+        ];
+
+        for (name, dict_type, plain_type, expected_dict_type, expected_plain_type) in
+            cases
+        {
+            let result = uniform_dict_schemas(vec![
+                one_field_schema(dict_type.clone()),
+                one_field_schema(plain_type),
+            ]);
+
+            assert_eq!(
+                result[0].field(0).data_type(),
+                &expected_dict_type,
+                "{name}"
+            );
+            assert_eq!(
+                result[1].field(0).data_type(),
+                &expected_plain_type,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn rle_schema_coercion_respects_dictionary_value_type() {
+        // Scan-time schema coercion can only use dictionary types already chosen by
+        // schema inference, and must leave incompatible file fields unchanged.
+        let cases = vec![
+            (
+                "utf8",
+                dict(DataType::Utf8),
+                DataType::Utf8,
+                dict(DataType::Utf8),
+            ),
+            (
+                "large_utf8",
+                dict(DataType::LargeUtf8),
+                DataType::LargeUtf8,
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "large_utf8_to_utf8_dict_not_safe",
+                dict(DataType::Utf8),
+                DataType::LargeUtf8,
+                DataType::LargeUtf8,
+            ),
+            (
+                "utf8_to_large_utf8_dict",
+                dict(DataType::LargeUtf8),
+                DataType::Utf8,
+                dict(DataType::LargeUtf8),
+            ),
+            (
+                "binary",
+                dict(DataType::Binary),
+                DataType::Binary,
+                dict(DataType::Binary),
+            ),
+            (
+                "large_binary",
+                dict(DataType::LargeBinary),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "large_binary_to_binary_dict_not_safe",
+                dict(DataType::Binary),
+                DataType::LargeBinary,
+                DataType::LargeBinary,
+            ),
+            (
+                "binary_to_large_binary_dict",
+                dict(DataType::LargeBinary),
+                DataType::Binary,
+                dict(DataType::LargeBinary),
+            ),
+            (
+                "binary_not_utf8",
+                dict(DataType::Utf8),
+                DataType::Binary,
+                DataType::Binary,
+            ),
+            (
+                "utf8_not_binary",
+                dict(DataType::Binary),
+                DataType::Utf8,
+                DataType::Utf8,
+            ),
+            (
+                "binary_not_int64_dict",
+                dict(DataType::Int64),
+                DataType::Binary,
+                DataType::Binary,
+            ),
+        ];
+
+        for (name, table_type, file_type, expected_type) in cases {
+            let table_schema = one_field_schema(table_type);
+            let file_schema = one_field_schema(file_type);
+
+            let output_type = apply_file_schema_type_coercions_with_rle(
+                &table_schema,
+                &file_schema,
+                true,
+            )
+            .as_ref()
+            .map(|s| s.field(0).data_type().clone())
+            .unwrap_or_else(|| file_schema.field(0).data_type().clone());
+
+            assert_eq!(output_type, expected_type, "{name}");
+        }
+
+        let table_schema = Schema::new(vec![
+            Field::new("dict_col", dict(DataType::Utf8), true),
+            Field::new("string_col", DataType::Utf8, true),
+        ]);
+        let file_schema = Schema::new(vec![
+            Field::new("dict_col", DataType::Utf8, true),
+            Field::new("string_col", DataType::Binary, true),
+        ]);
+        let result =
+            apply_file_schema_type_coercions_with_rle(&table_schema, &file_schema, false)
+                .unwrap();
+
+        assert_eq!(result.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(result.field(1).data_type(), &DataType::Utf8);
+    }
+
+    fn dk(key: DataType) -> DataType {
+        DataType::Dictionary(Box::new(key), Box::new(DataType::Utf8))
+    }
+
+    #[test]
+    fn uniform_dict_schemas_key_type_widening() {
+        // (name, file_a, file_b, expected_a, expected_b)
+        let cases = [
+            (
+                "signed wider wins",
+                dk(DataType::Int8),
+                dk(DataType::Int32),
+                dk(DataType::Int32),
+                dk(DataType::Int32),
+            ),
+            (
+                "signed wider wins reversed",
+                dk(DataType::Int32),
+                dk(DataType::Int8),
+                dk(DataType::Int32),
+                dk(DataType::Int32),
+            ),
+            (
+                "same unsigned stays",
+                dk(DataType::UInt8),
+                dk(DataType::UInt8),
+                dk(DataType::UInt8),
+                dk(DataType::UInt8),
+            ),
+            (
+                "uint8+int32→int32",
+                dk(DataType::UInt8),
+                dk(DataType::Int32),
+                dk(DataType::Int32),
+                dk(DataType::Int32),
+            ),
+            (
+                "uint8+int8→int16",
+                dk(DataType::UInt8),
+                dk(DataType::Int8),
+                dk(DataType::Int16),
+                dk(DataType::Int16),
+            ),
+            (
+                "uint64+int64→int64",
+                dk(DataType::UInt64),
+                dk(DataType::Int64),
+                dk(DataType::Int64),
+                dk(DataType::Int64),
+            ),
+        ];
+        for (name, a, b, exp_a, exp_b) in cases {
+            let result =
+                uniform_dict_schemas(vec![one_field_schema(a), one_field_schema(b)]);
+            assert_eq!(result[0].field(0).data_type(), &exp_a, "{name}");
+            assert_eq!(result[1].field(0).data_type(), &exp_b, "{name}");
+        }
+    }
+
+    #[test]
+    fn rle_schema_coercion_rejects_key_narrowing() {
+        let coerce = |table: DataType, file: DataType| {
+            let t = one_field_schema(table);
+            let f = one_field_schema(file.clone());
+            apply_file_schema_type_coercions_with_rle(&t, &f, true)
+                .as_ref()
+                .map(|s| s.field(0).data_type().clone())
+                .unwrap_or(file)
+        };
+        // Dict(Int32) file must not be narrowed to Dict(Int8) at scan time.
+        assert_eq!(
+            coerce(dk(DataType::Int8), dk(DataType::Int32)),
+            dk(DataType::Int32)
+        );
+        // Plain Utf8 file is still promoted to a narrow-key dict (no file key to narrow from).
+        assert_eq!(
+            coerce(dk(DataType::Int8), DataType::Utf8),
+            dk(DataType::Int8)
+        );
     }
 }

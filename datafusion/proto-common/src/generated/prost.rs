@@ -864,6 +864,8 @@ pub struct ParquetOptions {
     pub max_row_group_size: u64,
     #[prost(uint64, tag = "38")]
     pub max_in_list_size: u64,
+    #[prost(bool, tag = "39")]
+    pub enable_rle_to_dictionary: bool,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "35")]

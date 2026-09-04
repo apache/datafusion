@@ -1381,6 +1381,17 @@ config_namespace! {
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
 
+        /// (reading) If true, top-level string and binary Parquet columns with
+        /// dictionary pages are inferred and scanned as
+        /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
+        /// their plain value type.
+        ///
+        /// This applies only when DataFusion infers the table schema. Tables with
+        /// a user-supplied schema are not promoted because the Parquet footer is
+        /// not read at DDL time, so dictionary pages cannot be detected per column.
+        /// See <https://github.com/apache/datafusion/issues/24112>
+        pub enable_rle_to_dictionary: bool, default = false
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 

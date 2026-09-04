@@ -360,14 +360,16 @@ impl FileFormat for ParquetFormat {
                     &object.location,
                 )
                 .await?;
-                let result = DFParquetMetadata::new(store.as_ref(), object)
+                let meta = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties)
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
-                    .fetch_schema_with_location()
-                    .await?;
+                    .with_enable_rle_to_dictionary(
+                        self.options.global.enable_rle_to_dictionary,
+                    );
+                let result = meta.fetch_schema_with_location().await?;
                 Ok::<_, DataFusionError>(result)
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
@@ -402,7 +404,12 @@ impl FileFormat for ParquetFormat {
         }
         drop(seen);
 
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
+        // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
+        let mut schemas: Vec<Schema> =
+            schemas.into_iter().map(|(_, schema)| schema).collect();
+        if self.options.global.enable_rle_to_dictionary {
+            schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
+        }
 
         let schema = if self.skip_metadata() {
             Schema::try_merge(clear_metadata(schemas))
@@ -524,7 +531,7 @@ impl FileFormat for ParquetFormat {
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {
-            source = source.with_metadata_size_hint(metadata_size_hint)
+            source = source.with_metadata_size_hint(metadata_size_hint);
         }
 
         source = self.set_source_encryption_factory(source, state)?;
@@ -738,6 +745,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             compression_opt: global_options.global.compression.map(|compression| {
                 parquet_options::CompressionOpt::Compression(compression)
             }),
+            enable_rle_to_dictionary: global_options.global.enable_rle_to_dictionary,
             dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
             }),

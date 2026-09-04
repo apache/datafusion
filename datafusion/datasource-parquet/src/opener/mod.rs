@@ -35,7 +35,7 @@ use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
     ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
-    apply_file_schema_type_coercions,
+    schema_coercion::apply_file_schema_type_coercions_with_rle,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -294,6 +294,8 @@ pub(super) struct ParquetMorselizer {
     /// lists skip container-level pruning. Sourced from
     /// `datafusion.execution.parquet.max_in_list_size`.
     pub max_in_list_size: usize,
+    /// Whether to ask arrow-rs to read promoted dictionary columns directly.
+    pub enable_rle_to_dictionary: bool,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -467,6 +469,7 @@ struct PreparedParquetOpen {
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
     max_in_list_size: usize,
+    enable_rle_to_dictionary: bool,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -874,6 +877,7 @@ impl ParquetMorselizer {
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
             max_in_list_size: self.max_in_list_size,
+            enable_rle_to_dictionary: self.enable_rle_to_dictionary,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -984,9 +988,10 @@ impl MetadataLoadedParquetOpen {
         // desired schema (for example if we want to instruct the parquet
         // reader to read strings using Utf8View instead). Update if necessary
         let mut metadata_dirty = false;
-        if let Some(merged) = apply_file_schema_type_coercions(
+        if let Some(merged) = apply_file_schema_type_coercions_with_rle(
             &prepared.logical_file_schema,
             &physical_file_schema,
+            prepared.enable_rle_to_dictionary,
         ) {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -1937,6 +1942,7 @@ mod test {
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         max_in_list_size: usize,
+        enable_rle_to_dictionary: bool,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
@@ -2148,6 +2154,7 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 max_in_list_size: MAX_IN_LIST_SIZE,
+                enable_rle_to_dictionary: false,
                 reverse_row_groups: false,
                 preserve_order: false,
             }
@@ -2220,6 +2227,11 @@ mod test {
         /// Enable page index.
         fn with_enable_page_index(mut self, enable: bool) -> Self {
             self.enable_page_index = enable;
+            self
+        }
+
+        fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
+            self.enable_rle_to_dictionary = enable;
             self
         }
 
@@ -2326,6 +2338,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 max_in_list_size: self.max_in_list_size,
+                enable_rle_to_dictionary: self.enable_rle_to_dictionary,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
@@ -4332,5 +4345,60 @@ mod test {
             let (_batches, rows) = count_batches_and_rows(stream).await;
             assert_eq!(rows, 5);
         }
+    }
+
+    async fn collect_batches(
+        morselizer: &ParquetMorselizer,
+        file: PartitionedFile,
+    ) -> Vec<RecordBatch> {
+        let mut stream = open_file(morselizer, file).await.unwrap();
+        let mut batches = Vec::new();
+        while let Some(batch) = stream.next().await {
+            batches.push(batch.unwrap());
+        }
+        batches
+    }
+
+    // Proves the opener passes a promoted binary Dictionary schema to arrow-rs.
+    #[tokio::test]
+    async fn test_rle_binary_column_promotion() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let bin_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Binary,
+            true,
+        )]));
+        let values =
+            Arc::new(arrow::array::BinaryArray::from_vec(vec![b"a", b"b", b"a"]));
+        let batch = RecordBatch::try_new(Arc::clone(&bin_schema), vec![values]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let bin_size = write_parquet_batches(
+            Arc::clone(&store),
+            "binary.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let dict_bin_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            true,
+        )]));
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&dict_bin_schema))
+            .with_enable_rle_to_dictionary(true)
+            .build();
+        let batches = collect_batches(
+            &morselizer,
+            PartitionedFile::new("binary.parquet".to_string(), bin_size as u64),
+        )
+        .await;
+        assert_eq!(
+            batches[0].schema().field(0).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary))
+        );
     }
 }
