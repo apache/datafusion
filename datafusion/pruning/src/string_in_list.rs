@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -37,6 +38,18 @@ pub(crate) enum SetMembership {
     /// domain still satisfy the predicate. An interval excludes every row only
     /// when it holds a single value that the domain contains.
     NotIn,
+}
+
+impl SetMembership {
+    fn compare_values(self, left: &[u8], right: &[u8]) -> Ordering {
+        match self {
+            // IN uses this order for interval searches.
+            Self::In => left.cmp(right),
+            // NOT IN only needs exact membership. Reject impossible lengths
+            // before comparing bytes that may have a long common prefix.
+            Self::NotIn => left.len().cmp(&right.len()).then_with(|| left.cmp(right)),
+        }
+    }
 }
 
 /// Tests an inclusive statistics interval against a sorted string domain.
@@ -69,7 +82,9 @@ impl StringInListPruningExpr {
         max: PhysicalExprRef,
         mut values: Vec<String>,
     ) -> Self {
-        values.sort_unstable();
+        values.sort_unstable_by(|left, right| {
+            membership.compare_values(left.as_bytes(), right.as_bytes())
+        });
         values.dedup();
         Self {
             membership,
@@ -82,7 +97,9 @@ impl StringInListPruningExpr {
     /// Does the sorted, deduplicated domain hold `value`?
     fn contains(&self, value: &[u8]) -> bool {
         self.values
-            .binary_search_by(|candidate| candidate.as_bytes().cmp(value))
+            .binary_search_by(|candidate| {
+                self.membership.compare_values(candidate.as_bytes(), value)
+            })
             .is_ok()
     }
 }
@@ -175,9 +192,9 @@ impl PhysicalExpr for StringInListPruningExpr {
                 .then(|| max.value(i).as_bytes());
                 if self.membership == SetMembership::NotIn {
                     return match (min, max) {
-                        // Check membership before comparing the bounds so a short
-                        // domain value can reject a long bound without scanning its
-                        // full common prefix with the other bound.
+                        // Check membership before comparing the bounds. NOT IN
+                        // ordering rejects different byte lengths first, avoiding
+                        // scans of long common prefixes.
                         (Some(min), Some(max)) if self.contains(min) => {
                             // A wider interval can hold a value outside the domain,
                             // which satisfies NOT IN. Only an interval pinned to one

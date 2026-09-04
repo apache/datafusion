@@ -25,7 +25,8 @@
 //!
 //! The main cases alternate intervals pinned to a domain member with intervals
 //! that span a sparse gap. Supplemental `NOT IN` cases measure uniform singleton
-//! containers and bounds with long common prefixes. Bloom filters are not involved.
+//! containers, long bounds, and long literals that share bounds' prefixes. Bloom
+//! filters are not involved.
 //!
 //! Run with `cargo bench -p datafusion-pruning --bench string_in_list_pruning`.
 //! The construction benchmarks reuse their input physical expressions; the
@@ -119,10 +120,12 @@ impl IntervalStatistics {
 
     fn uniform_singleton() -> Self {
         let value = value(0);
-        let min = StringViewArray::from_iter_values(std::iter::repeat_n(
-            value.as_str(),
-            CONTAINERS,
-        ));
+        Self::singleton(&value)
+    }
+
+    fn singleton(value: &str) -> Self {
+        let min =
+            StringViewArray::from_iter_values(std::iter::repeat_n(value, CONTAINERS));
         let max = min.clone();
         Self {
             min: Arc::new(min),
@@ -369,6 +372,45 @@ fn criterion_benchmark(criterion: &mut Criterion) {
             |bencher, predicate| {
                 bencher.iter(|| {
                     black_box(predicate.prune(black_box(&long_bounds)).unwrap())
+                });
+            },
+        );
+    }
+
+    // The bound and literals share a long prefix but have different lengths,
+    // so exact membership can reject the bound without comparing their bytes.
+    let prefix = "z".repeat(16 * 1024);
+    let bound = format!("{prefix}a");
+    let long_literal_bounds = IntervalStatistics::singleton(&bound);
+    let values = (0..case.size)
+        .map(|index| {
+            lit(ScalarValue::new_utf8view(format!(
+                "{prefix}domain{index:08}"
+            )))
+        })
+        .collect::<Vec<_>>();
+    let column = col("value", &case.schema).unwrap();
+    let not_in_list =
+        in_list(Arc::clone(&column), values.clone(), &true, &case.schema).unwrap();
+    let expanded_and = expanded(&column, &values, Operator::NotEq, Operator::And);
+    let not_in_list_predicate = build_predicate(&not_in_list, &case.schema, case.size);
+    let expanded_and_predicate = build_predicate(&expanded_and, &case.schema, case.size);
+    let compact = not_in_list_predicate.prune(&long_literal_bounds).unwrap();
+    assert!(compact.iter().all(|keep| *keep));
+    assert_eq!(
+        compact,
+        expanded_and_predicate.prune(&long_literal_bounds).unwrap()
+    );
+    for (name, predicate) in [
+        ("long_literal_prefix/not_in_list", &not_in_list_predicate),
+        ("long_literal_prefix/expanded_and", &expanded_and_predicate),
+    ] {
+        distributions.bench_with_input(
+            BenchmarkId::new(name, case.size),
+            predicate,
+            |bencher, predicate| {
+                bencher.iter(|| {
+                    black_box(predicate.prune(black_box(&long_literal_bounds)).unwrap())
                 });
             },
         );
