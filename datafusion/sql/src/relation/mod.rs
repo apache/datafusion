@@ -176,7 +176,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if with_ordinality {
                     return not_impl_err!(
-                        "WITH ORDINALITY is not supported by the default relation planner for named tables"
+                        "WITH ORDINALITY is not supported by the default relation planner"
                     );
                 }
                 if !partitions.is_empty() {
@@ -201,9 +201,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 if let Some(func_args) = args {
-                    // Keep this exhaustive for the same reason as the outer
-                    // TableFactor match: new table-function modifiers should
-                    // require an explicit planning decision.
+                    // Keep this exhaustive for the same reason as the
+                    // `TableFactor::Table` pattern: new table-function modifiers
+                    // should require an explicit planning decision.
                     let TableFunctionArgs { args, settings } = func_args;
                     if settings.is_some() {
                         return not_impl_err!(
@@ -337,7 +337,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 if with_ordinality {
                     return not_impl_err!(
-                        "WITH ORDINALITY is not supported by the default relation planner for table functions"
+                        "WITH ORDINALITY is not supported by the default relation planner"
                     );
                 }
                 let tbl_func_ref = self.object_name_to_table_reference(name)?;

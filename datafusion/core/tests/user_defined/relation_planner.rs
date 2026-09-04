@@ -462,9 +462,9 @@ mod tests {
     }
 
     // A planner that declines a relation must not cause the default planner to
-    // silently discard syntax that changes which rows the relation represents.
+    // silently discard syntax that changes the relation's meaning.
     #[tokio::test]
-    async fn unsupported_table_modifiers_fail_closed_after_delegation() {
+    async fn unsupported_relation_modifiers_fail_closed_after_delegation() {
         let contexts = [
             (
                 "without an extension planner",
@@ -478,14 +478,44 @@ mod tests {
         ];
         let cases = [
             (
-                "generic",
-                "SELECT * FROM real_table TABLESAMPLE SYSTEM (10 PERCENT)",
-                "TABLESAMPLE is not supported by the default relation planner",
+                "mssql",
+                "SELECT * FROM real_table WITH (NOLOCK)",
+                "Table hints are not supported by the default relation planner",
             ),
             (
                 "snowflake",
                 "SELECT * FROM real_table VERSION AS OF 1",
                 "Table version qualifiers are not supported by the default relation planner",
+            ),
+            (
+                "postgres",
+                "SELECT * FROM generate_series(1, 2) WITH ORDINALITY",
+                "WITH ORDINALITY is not supported by the default relation planner",
+            ),
+            (
+                "mysql",
+                "SELECT * FROM real_table PARTITION (p0)",
+                "Table partition selection is not supported by the default relation planner",
+            ),
+            (
+                "snowflake",
+                "SELECT * FROM real_table['items']",
+                "Table JSON paths are not supported by the default relation planner",
+            ),
+            (
+                "generic",
+                "SELECT * FROM real_table TABLESAMPLE SYSTEM (10 PERCENT)",
+                "TABLESAMPLE is not supported by the default relation planner",
+            ),
+            (
+                "mysql",
+                "SELECT * FROM real_table USE INDEX (idx)",
+                "Table index hints are not supported by the default relation planner",
+            ),
+            (
+                "clickhouse",
+                "SELECT * FROM generate_series(1, 2, SETTINGS send_chunk_header = false)",
+                "Table function SETTINGS are not supported by the default relation planner",
             ),
             (
                 "generic",
@@ -495,12 +525,7 @@ mod tests {
             (
                 "postgres",
                 "SELECT * FROM LATERAL generate_series(1, 2) WITH ORDINALITY",
-                "WITH ORDINALITY is not supported by the default relation planner for table functions",
-            ),
-            (
-                "clickhouse",
-                "SELECT * FROM executable('generate_random.py', TabSeparated, 'id UInt32', SETTINGS send_chunk_header = false)",
-                "Table function SETTINGS are not supported by the default relation planner",
+                "WITH ORDINALITY is not supported by the default relation planner",
             ),
         ];
 
