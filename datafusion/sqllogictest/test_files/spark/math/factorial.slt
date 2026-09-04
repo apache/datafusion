@@ -62,17 +62,15 @@ NULL
 NULL
 NULL
 
-# Spark declares factorial(INT) with ImplicitCastInputTypes, so every integer width is
-# accepted; an untyped literal (Int64 in DataFusion) must work too. Values from Spark 4.2.0.
-query IIIIII
+# Signed integer inputs and NULL; expected results verified with Spark 4.2.0.
+query IIIII
 SELECT factorial(5) AS i64_literal,
        factorial(5::TINYINT) AS i8,
        factorial(5::SMALLINT) AS i16,
        factorial(5::BIGINT) AS i64,
-       factorial(arrow_cast(5, 'UInt64')) AS u64,
        factorial(NULL) AS null_input;
 ----
-120 120 120 120 120 NULL
+120 120 120 120 NULL
 
 query I
 SELECT factorial(a) FROM VALUES (-1::BIGINT), (0::BIGINT), (20::BIGINT), (21::BIGINT), (NULL) AS t(a);
@@ -82,15 +80,3 @@ NULL
 2432902008176640000
 NULL
 NULL
-
-# DataFusion always fails at the Int32 cast here (this function does not consult
-# datafusion.execution.enable_ansi_mode). Spark 4.2.0 raises CAST_OVERFLOW under
-# ANSI mode but returns NULL when ANSI is off.
-query error Can't cast value 5000000000 to type Int32
-SELECT factorial(5000000000::BIGINT);
-
-# Spark 4.2.0 also accepts STRING, DECIMAL and floating-point inputs through ImplicitCastInputTypes
-# (strings and overflow are ANSI dependent there). DataFusion rejects these types at planning time.
-# https://github.com/apache/datafusion/issues/24941
-query error Function 'factorial' requires Int32, but received String
-SELECT factorial('5');

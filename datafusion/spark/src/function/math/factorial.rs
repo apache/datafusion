@@ -21,7 +21,7 @@ use arrow::array::{Array, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int32, Int64};
 use datafusion_common::cast::as_int32_array;
-use datafusion_common::types::{NativeType, logical_int32};
+use datafusion_common::types::logical_int32;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err, utils::take_function_args,
 };
@@ -48,10 +48,9 @@ impl SparkFactorial {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_implicit(
-                    TypeSignatureClass::Native(logical_int32()),
+                vec![Coercion::new_implicit_native(
+                    logical_int32(),
                     vec![TypeSignatureClass::Integer],
-                    NativeType::Int32,
                 )],
                 Volatility::Immutable,
             ),
