@@ -500,20 +500,16 @@ impl DataSink for JsonSink {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
-        // Exhaustive destructure: adding a field to `JsonSink` without
-        // deciding how it is serialized is a compile error, not a silent
-        // round-trip gap.
+        // Keep an exhaustive guard in the active hook while centralizing the
+        // field mapping in the exhaustive `TryFrom<&JsonSink>` below.
         let Self {
-            config,
-            writer_options,
+            config: _,
+            writer_options: _,
         } = self;
 
         let input = ctx.encode_child(exec.input())?;
         let sort_order = exec.encode_sort_order(ctx)?;
-        let sink = protobuf::JsonSink {
-            config: Some(config.try_into()?),
-            writer_options: Some(writer_options.try_into()?),
-        };
+        let sink = protobuf::JsonSink::try_from(self)?;
         let node = protobuf::JsonSinkExecNode {
             input: Some(Box::new(input)),
             sink: Some(sink),

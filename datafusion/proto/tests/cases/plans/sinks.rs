@@ -245,8 +245,18 @@ fn roundtrip_json_sink() -> Result<()> {
         &proto_converter,
     )?;
 
-    let roundtrip_plan = roundtrip_plan.downcast_ref::<DataSinkExec>().unwrap();
-    let json_sink = roundtrip_plan.sink().downcast_ref::<JsonSink>().unwrap();
+    let roundtrip_plan =
+        roundtrip_plan
+            .downcast_ref::<DataSinkExec>()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!("Expected DataSinkExec")
+            })?;
+    let json_sink = roundtrip_plan
+        .sink()
+        .downcast_ref::<JsonSink>()
+        .ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("Expected JsonSink")
+        })?;
     assert_eq!(json_sink.config().insert_op, InsertOp::Overwrite);
     assert!(json_sink.config().keep_partition_by_columns);
     assert_eq!(
