@@ -1347,6 +1347,10 @@ impl AggregateExec {
         // states without using group boundaries to recognize completed groups.
         if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
             group_clustering_mode = GroupClusteringMode::None;
+        } else if num_non_constant_groupby_exprs > 0
+            && input_eq_properties.grouping_satisfy(groupby_exprs.iter().cloned())?
+        {
+            group_clustering_mode = GroupClusteringMode::Full;
         }
 
         // construct a map from the input expression to the output expression of the Aggregation group by
@@ -1793,6 +1797,10 @@ impl AggregateExec {
         let mut eq_properties = input
             .equivalence_properties()
             .project(group_expr_mapping, schema);
+        // Grouping information is consumed by this aggregate. The aggregate
+        // output may have a different row layout, so do not pass explicit
+        // input grouping assertions to another aggregate.
+        eq_properties.clear_groupings();
 
         // Only the clustered paths preserve existing ordering on group keys.
         // Project the input's actual sort expressions; clustering alone does
@@ -2760,7 +2768,7 @@ impl ExecutionPlan for AggregateExec {
             metrics: _,
             // Derived at construction from the input ordering and `group_by`.
             required_input_ordering: _,
-            // Derived at construction from the input ordering and `group_by`.
+            // Derived at construction from the input properties and `group_by`.
             group_clustering_mode: _,
             // Derived at construction by `Self::compute_properties`.
             cache: _,
@@ -3676,7 +3684,7 @@ mod tests {
         Int64Array, NullArray, StringArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::{Float64Type, Int32Type, Int64Type, UInt32Type};
+    use arrow::datatypes::{Float64Type, Int32Type, Int64Type, TimeUnit, UInt32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, assert_contains, internal_err};
     use datafusion_execution::config::SessionConfig;
@@ -3689,6 +3697,7 @@ mod tests {
         Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Operator,
         Signature, Volatility,
     };
+    use datafusion_functions::datetime::date_bin;
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
@@ -3697,10 +3706,9 @@ mod tests {
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::Partitioning;
-    use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::{Literal, NotExpr, binary};
+    use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, ScalarFunctionExpr};
 
     use crate::projection::ProjectionExec;
     use crate::repartition::RepartitionExec;
@@ -6191,7 +6199,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsorted_contiguous_groups_use_final_emission() -> Result<()> {
+    async fn unsorted_contiguous_groups_use_incremental_emission() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int32, false),
             Field::new("time_bin", DataType::Int64, false),
@@ -6219,9 +6227,11 @@ mod tests {
                 ],
             )?,
         ];
+        let key = col("key", &schema)?;
+        let time_bin = col("time_bin", &schema)?;
         let group_by = PhysicalGroupBy::new_single(vec![
-            (col("key", &schema)?, "key".to_string()),
-            (col("time_bin", &schema)?, "time_bin".to_string()),
+            (Arc::clone(&key), "key".to_string()),
+            (Arc::clone(&time_bin), "time_bin".to_string()),
         ]);
         let aggr_expr = Arc::new(
             AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
@@ -6229,8 +6239,9 @@ mod tests {
                 .alias("SUM(value)")
                 .build()?,
         );
-        let input: Arc<dyn ExecutionPlan> =
-            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        let input = TestMemoryExec::try_new(&[input_batches], Arc::clone(&schema), None)?
+            .try_with_grouping_information(vec![vec![key, time_bin]])?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(input);
         assert_eq!(input.output_partitioning().partition_count(), 1);
 
         let aggregate = AggregateExec::try_new(
@@ -6244,16 +6255,21 @@ mod tests {
 
         assert_eq!(
             aggregate.group_clustering_mode(),
-            &GroupClusteringMode::None
+            &GroupClusteringMode::Full
         );
-        // This captures the behavior before #24438. When the source can declare
-        // `(key, time_bin)` group-contiguous, the corresponding case can use
-        // `EmissionType::Incremental`.
-        assert_eq!(aggregate.cache().emission_type, EmissionType::Final);
+        assert_eq!(aggregate.cache().emission_type, EmissionType::Incremental);
+        assert!(
+            aggregate
+                .cache()
+                .equivalence_properties()
+                .geq_class()
+                .is_empty()
+        );
+        assert!(aggregate.cache().output_ordering().is_none());
 
         let task_ctx = new_migrated_hash_ctx(1024);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::SingleHash(_)));
+        assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
         assert_snapshot!(batches_to_sort_string(&output), @r"
@@ -6267,6 +6283,68 @@ mod tests {
 +-----+----------+------------+
 ");
 
+        Ok(())
+    }
+
+    #[test]
+    fn grouped_date_bin_projects_to_aggregate() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("time", DataType::Timestamp(TimeUnit::Second, None), false),
+        ]));
+        let time_bin_expr = || -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(ScalarFunctionExpr::try_new(
+                date_bin(),
+                vec![
+                    lit(ScalarValue::new_interval_dt(0, 10_000)),
+                    col("time", &schema)?,
+                ],
+                &schema,
+                Arc::new(ConfigOptions::default()),
+            )?))
+        };
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_grouping_information(vec![vec![
+                col("key", &schema)?,
+                time_bin_expr()?,
+            ]])?;
+        let projection = ProjectionExec::try_new(
+            [
+                ProjectionExpr::new(col("key", &schema)?, "key"),
+                // Build this expression independently from the source
+                // assertion so the test exercises semantic expression matching.
+                ProjectionExpr::new(time_bin_expr()?, "time_bin"),
+            ],
+            Arc::new(input),
+        )?;
+
+        let projected_schema = projection.schema();
+        let key = col("key", &projected_schema)?;
+        let time_bin = col("time_bin", &projected_schema)?;
+        assert!(
+            projection
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&key), Arc::clone(&time_bin)])?
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![
+                (key, "key".to_string()),
+                (time_bin, "time_bin".to_string()),
+            ]),
+            vec![],
+            vec![],
+            Arc::new(projection),
+            projected_schema,
+        )?;
+
+        assert!(aggregate.input().output_ordering().is_none());
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Full
+        );
+        assert_eq!(aggregate.cache().emission_type, EmissionType::Incremental);
         Ok(())
     }
 
