@@ -4225,6 +4225,15 @@ pub(crate) mod tests {
                 need_produce_result_in_final(join_type),
             ));
             {
+                // Drain the delayed left stream here so `left_delay` still lands
+                // on the build side: `build_time_excludes_spill_stream_poll`
+                // injects its delay through this stream (it passes no
+                // `spill_read_delay`), and asserts the delay dominates wall time
+                // while staying out of `build_time`.
+                let mut left_stream = left_stream;
+                while let Some(batch) = left_stream.next().await {
+                    let _ = batch?;
+                }
                 let n_rows = left_batch.num_rows();
                 let visited = if need_produce_result_in_final(join_type) {
                     let mut buffer = BooleanBufferBuilder::new(n_rows);
