@@ -32,7 +32,7 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use datafusion_benchmarks::{
-    cancellation, clickbench, dict, h2o, hj, imdb, nlj, smj, sort_tpch, statistics,
+    asof, cancellation, clickbench, dict, h2o, hj, imdb, nlj, smj, sort_tpch, statistics,
     tpcds, tpch,
 };
 
@@ -45,6 +45,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Options {
+    Asof(asof::RunOpt),
     Cancellation(cancellation::RunOpt),
     Clickbench(clickbench::RunOpt),
     Dict(dict::RunOpt),
@@ -67,6 +68,7 @@ pub async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
+        Options::Asof(opt) => opt.run().await,
         Options::Cancellation(opt) => opt.run().await,
         Options::Clickbench(opt) => opt.run().await,
         Options::Dict(opt) => opt.run().await,
