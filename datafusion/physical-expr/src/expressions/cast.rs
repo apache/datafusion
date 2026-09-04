@@ -1125,13 +1125,20 @@ mod tests {
     }
 
     #[test]
-    fn invalid_cast_with_empty_field_name_uses_expression() -> Result<()> {
+    fn invalid_cast_with_empty_field_name_uses_expression() {
         let schema = Schema::new(vec![Field::new("", Utf8, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![Arc::new(StringArray::from(vec!["9.1"]))],
-        )?;
-        let expression = cast_with_options(col("", &schema)?, &schema, Int32, None)?;
+        )
+        .expect("valid record batch");
+        let expression = cast_with_options(
+            col("", &schema).expect("valid column"),
+            &schema,
+            Int32,
+            None,
+        )
+        .expect("valid cast expression");
 
         let error = expression
             .evaluate(&batch)
@@ -1143,7 +1150,6 @@ mod tests {
              caused by\n\
              Arrow error: Cast error: Cannot cast string '9.1' to value of Int32 type"
         );
-        Ok(())
     }
 
     #[test]
