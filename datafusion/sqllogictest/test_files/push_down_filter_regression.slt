@@ -393,10 +393,8 @@ statement ok
 drop table agg_dyn_two_col;
 
 # --- mixed expressions: MIN(a), MAX(a), MAX(b), MIN(c+1) ---
-# Supported aggregates (MIN(a), MAX(a), MAX(b)) should drive a filter;
-# MIN(c+1) is unsupported and must not contribute.
-# Every file shares the same per-file min(a)=1, max(a)=8 and max(b)=12 so the
-# DynamicFilter content is deterministic regardless of publish order (see #22621).
+# MIN(c+1) cannot contribute a dynamic-filter predicate. Ignoring it could prune
+# rows that still improve MIN(c+1), so the aggregate must not produce a filter.
 
 statement ok
 COPY (
@@ -415,7 +413,7 @@ CREATE EXTERNAL TABLE agg_dyn_mixed (a INT, b INT, c INT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_mixed/';
 
-# -> DynamicFilter [ a < 1 OR a > 8 OR b > 12 ] (MIN(c+1) dropped as unsupported)
+# No dynamic filter because not every aggregate has a safe predicate.
 query TT
 EXPLAIN ANALYZE SELECT MIN(a), MAX(a), MAX(b), MIN(c + 1) FROM agg_dyn_mixed;
 ----
@@ -423,7 +421,7 @@ Plan with Metrics
 01)AggregateExec: mode=Final, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
 02)--CoalescePartitionsExec, metrics=[]
 03)----AggregateExec: mode=Partial, gby=[], aggr=[min(agg_dyn_mixed.a), max(agg_dyn_mixed.a), max(agg_dyn_mixed.b), min(agg_dyn_mixed.c + Int64(1))], metrics=[]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet]]}, projection=[a, b, c], file_type=parquet, predicate=DynamicFilter [ a@0 < 1 OR a@0 > 8 OR b@1 > 12 ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 1 OR a_null_count@1 != row_count@2 AND a_max@3 > 8 OR b_null_count@5 != row_count@2 AND b_max@4 > 12, required_guarantees=[], metrics=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn_mixed/file_1.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[]
 
 statement ok
 drop table agg_dyn_mixed;

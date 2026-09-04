@@ -754,10 +754,11 @@ impl From<StreamType> for SendableRecordBatchStream {
 ///
 /// ## Enable Condition
 /// - No grouping (no `GROUP BY` clause in the sql, only a single global group to aggregate)
-/// - The aggregate expression must be `min`/`max`, and evaluate directly on columns.
-///   Note multiple aggregate expressions that satisfy this requirement are allowed,
-///   and a dynamic filter will be constructed combining all applicable expr's
-///   states. See more in the following example with dynamic filter on multiple columns.
+/// - Every aggregate expression must be `min`/`max`, and evaluate directly on a
+///   column. If any aggregate expression is unsupported, dynamic filtering is
+///   disabled for the entire [`AggregateExec`]. Multiple supported aggregate
+///   expressions are combined into one dynamic filter. See the following example
+///   with a dynamic filter on multiple columns.
 ///
 /// ## Filter Construction
 /// The filter is kept in the `DataSourceExec`, and it will gets update during execution,
@@ -777,10 +778,10 @@ struct AggrDynFilter {
     /// The current bounds for the dynamic filter, updates during the execution to
     /// tighten the bound for more effective pruning.
     ///
-    /// Each vector element is for the accumulators that support dynamic filter.
-    /// e.g. This `AggregateExec` has accumulator:
-    /// min(a), avg(a), max(b)
-    /// And this field stores [PerAccumulatorDynFilter(min(a)), PerAccumulatorDynFilter(min(b))]
+    /// Each vector element corresponds to one aggregate expression. Dynamic filtering
+    /// is enabled only when every aggregate expression is supported, so this vector
+    /// contains an entry for every accumulator. For example, `min(a), max(b)` produces
+    /// entries for `min(a)` and `max(b)`.
     supported_accumulators_info: Vec<PerAccumulatorDynFilter>,
 }
 
@@ -1852,6 +1853,11 @@ impl AggregateExec {
                     aggr_index: i,
                     shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
                 });
+            } else {
+                // An incomplete filter could prune rows that still improve an
+                // unsupported aggregate, so every aggregate must be represented.
+                // TODO: Derive safe predicates for expressions such as `min(col + literal)`.
+                return;
             }
         }
 
