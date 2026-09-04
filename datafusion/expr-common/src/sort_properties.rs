@@ -37,16 +37,24 @@ use arrow::datatypes::DataType;
 pub enum SortProperties {
     /// Use the ordinary [`SortOptions`] struct to represent ordered data:
     Ordered(SortOptions),
-    // This alternative represents unordered data:
+    /// Within each partition, all rows with the same value for this expression
+    /// form one contiguous run. The runs may occur in any order.
+    Grouped,
+    /// This alternative represents unordered data:
     #[default]
     Unordered,
-    // Singleton is used for single-valued literal numbers:
+    /// Singleton is used for single-valued literal numbers:
     Singleton,
 }
 
 impl SortProperties {
     pub fn add(&self, rhs: &Self) -> Self {
         match (self, rhs) {
+            // Addition can collapse distinct values (for example through
+            // floating-point rounding), which may join non-adjacent groups.
+            (Self::Grouped, Self::Singleton) | (Self::Singleton, Self::Grouped) => {
+                Self::Unordered
+            }
             (Self::Singleton, _) => *rhs,
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
@@ -65,6 +73,11 @@ impl SortProperties {
     pub fn sub(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Singleton, Self::Singleton) => Self::Singleton,
+            // Subtraction can collapse distinct values (for example through
+            // floating-point rounding), which may join non-adjacent groups.
+            (Self::Grouped, Self::Singleton) | (Self::Singleton, Self::Grouped) => {
+                Self::Unordered
+            }
             (Self::Singleton, Self::Ordered(rhs)) => Self::Ordered(SortOptions {
                 descending: !rhs.descending,
                 nulls_first: rhs.nulls_first,
@@ -89,6 +102,9 @@ impl SortProperties {
                 descending: !rhs.descending,
                 nulls_first: rhs.nulls_first,
             }),
+            // Comparisons can map several non-adjacent grouped values to the
+            // same boolean value, so they do not preserve grouping.
+            (Self::Grouped, Self::Singleton) => Self::Unordered,
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
                 if lhs.descending != rhs.descending
@@ -147,6 +163,7 @@ mod sort_properties_test {
     const ASC_NL: SortProperties = ordered(false, false);
     const DESC_NF: SortProperties = ordered(true, true);
     const DESC_NL: SortProperties = ordered(true, false);
+    const GROUPED: SortProperties = SortProperties::Grouped;
     const UNORDERED: SortProperties = SortProperties::Unordered;
     const SINGLETON: SortProperties = SortProperties::Singleton;
 
@@ -196,6 +213,27 @@ mod sort_properties_test {
                 SINGLETON,
                 SINGLETON,
                 SINGLETON,
+            ),
+            (
+                "add: may collapse grouped values",
+                SortProperties::add,
+                GROUPED,
+                SINGLETON,
+                UNORDERED,
+            ),
+            (
+                "sub: may collapse grouped values",
+                SortProperties::sub,
+                GROUPED,
+                SINGLETON,
+                UNORDERED,
+            ),
+            (
+                "comparison does not preserve grouping",
+                SortProperties::gt_or_gteq,
+                GROUPED,
+                SINGLETON,
+                UNORDERED,
             ),
             // `and` keeps ASC NULLS LAST / DESC NULLS FIRST, `or` keeps ASC
             // NULLS FIRST / DESC NULLS LAST. Both are commutative.
@@ -482,7 +520,7 @@ impl Neg for SortProperties {
 #[derive(Debug, Clone)]
 pub struct ExprProperties {
     /// Properties that describe the sorting behavior of the expression,
-    /// such as whether it is ordered, unordered, or a singleton value.
+    /// such as whether it is ordered, grouped, unordered, or a singleton value.
     pub sort_properties: SortProperties,
     /// A closed interval representing the range of possible values for
     /// the expression. Used to compute reliable bounds.
