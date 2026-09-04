@@ -845,6 +845,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Barrier;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, Sender};
     use std::time::Duration;
 
     fn create_test_schema() -> SchemaRef {
@@ -1822,16 +1823,24 @@ mod tests {
         Ok((spill_manager, disk_manager))
     }
 
-    /// Holds the first disk write on the pool until the test releases it.
+    /// Holds the first disk write on the pool until the test releases it, and
+    /// reports every other write so a test can wait for a second writer to
+    /// reach a file of its own instead of sleeping.
     struct WriteGate {
         taken: AtomicBool,
         entered: Barrier,
         release: Barrier,
+        other_writes: Sender<()>,
     }
 
     impl WriteGate {
         fn hold_if_first(&self) {
-            if !self.taken.swap(true, Ordering::SeqCst) {
+            if self.taken.swap(true, Ordering::SeqCst) {
+                // A write only gets here once its writer holds a file of its
+                // own: a writer that had to wait for the held writer's file
+                // lock would not reach a write of its own at all.
+                let _ = self.other_writes.send(());
+            } else {
                 self.entered.wait();
                 self.release.wait();
             }
@@ -1852,10 +1861,12 @@ mod tests {
     #[tokio::test]
     async fn test_reader_does_not_wait_on_drained_file_while_another_has_data()
     -> Result<()> {
+        let (other_writes_tx, other_writes) = mpsc::channel();
         let gate = Arc::new(WriteGate {
             taken: AtomicBool::new(false),
             entered: Barrier::new(2),
             release: Barrier::new(2),
+            other_writes: other_writes_tx,
         });
         let write_hook: WriteHook = {
             let gate = Arc::clone(&gate);
@@ -1866,7 +1877,7 @@ mod tests {
             Arc::new(|| ReadBehavior::Delay(Duration::ZERO)),
         )?;
 
-        let (writer1, mut reader) = mpsc_channel(1024 * 1024, spill_manager);
+        let (writer1, mut reader) = mpsc_channel(1024 * 1024, Arc::clone(&spill_manager));
         let writer2 = writer1.clone();
 
         // Writer 1 pushes and is held inside its first disk write, holding its
@@ -1883,12 +1894,22 @@ mod tests {
             writer2.push_batch(&create_test_batch(10, 10)).unwrap();
             writer2
         });
-        // Let writer 2 either complete (into a second file) or block on writer
-        // 1's file lock, depending on the pool implementation.
-        std::thread::sleep(Duration::from_millis(200));
+        // Wait for writer 2 to reach a write of its own, so that writer 1 is
+        // only released once the pool really holds two open files. Sleeping
+        // instead would let a loaded runner schedule writer 2 after writer 1
+        // was released, and writer 2 would then reuse writer 1's returned file:
+        // a single-file run that says nothing about the case under test.
+        other_writes
+            .recv_timeout(Duration::from_secs(30))
+            .expect("writer 2 must write to a file of its own while writer 1 is held");
         gate.release.wait();
         let writer1 = writer1.join().unwrap();
         let writer2 = writer2.join().unwrap();
+        assert_eq!(
+            spill_manager.metrics.spill_file_count.value(),
+            2,
+            "the writers must have written to two different files"
+        );
 
         // Both batches are on disk and both writers are still alive, so no file
         // is finished. The reader must yield both batches without waiting for a
