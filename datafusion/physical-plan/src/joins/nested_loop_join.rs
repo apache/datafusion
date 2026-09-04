@@ -4211,6 +4211,36 @@ pub(crate) mod tests {
             let left_spill_file = left_spill_file
                 .finish()?
                 .expect("the test left spill contains one batch");
+            // Build the chunk the coordinator would have loaded, and publish
+            // it directly so no spill read is needed for the left side.
+            let coordinator = Arc::new(FallbackCoordinator::new(
+                1,
+                need_produce_result_in_final(join_type),
+            ));
+            {
+                let n_rows = left_batch.num_rows();
+                let visited = if need_produce_result_in_final(join_type) {
+                    let mut buffer = BooleanBufferBuilder::new(n_rows);
+                    buffer.append_n(n_rows, false);
+                    buffer
+                } else {
+                    BooleanBufferBuilder::new(0)
+                };
+                let chunk = Arc::new(JoinLeftData::new(
+                    left_batch.clone(),
+                    Mutex::new(visited),
+                    AtomicUsize::new(1),
+                    MemoryConsumer::new("NestedLoopJoinFallbackChunk[test]".to_string())
+                        .register(task_ctx.memory_pool()),
+                ));
+                let mut inner = coordinator.inner.lock().await;
+                inner.left_exhausted = true;
+                inner.current = Some(CurrentChunk {
+                    chunk_index: 0,
+                    data: chunk,
+                    is_last: true,
+                });
+            }
             let active = SpillStateActive {
                 left_spill: Arc::new(LeftSpillData {
                     spill_manager: left_spill_manager,
@@ -4218,13 +4248,14 @@ pub(crate) mod tests {
                     schema: Arc::clone(&left_schema),
                 }),
                 left_schema: Some(Arc::clone(&left_schema)),
-                // The left side is read from the spill file by the
-                // coordinator, so this stands in for the single probe
-                // partition this helper drives.
-                coordinator: Arc::new(FallbackCoordinator::new(
-                    1,
-                    need_produce_result_in_final(join_type),
-                )),
+                // Preload the single left chunk into the coordinator's slot so
+                // `next_chunk` serves it from `current` without reading the
+                // spill file. That keeps this helper's premise intact: the left
+                // side is supplied directly, so the only spill read is the
+                // final right replay in `EmitGlobalRightUnmatched`, which is
+                // what `join_time_excludes_global_right_unmatched_replay_poll`
+                // counts.
+                coordinator,
                 next_chunk_index: 0,
                 task_context: Arc::clone(&task_ctx),
                 right_input: ReplayableStreamSource::new(
