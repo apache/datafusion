@@ -1383,13 +1383,16 @@ pub fn update_join_filter(
 
 /// Collapse a chain of consecutive [`ProjectionExec`]s into one. Returns
 /// `None` if nothing could be merged.
+///
+/// `outer` is not checked for a metadata override here. Its only production
+/// caller is [`ExecutionPlan::try_swapping_with_projection`] on
+/// [`ProjectionExec`], reached exclusively from
+/// [`remove_unnecessary_projections`], which already bails out on such a
+/// projection. The unified projection below is still built with `outer`'s output
+/// schema so that its metadata survives regardless.
 fn try_collapse_projection_chain(
     outer: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    if outer.overrides_metadata() {
-        return Ok(None);
-    }
-
     let mut current_exprs: Vec<ProjectionExpr> = outer.expr().to_vec();
     let mut current_input: Arc<dyn ExecutionPlan> = Arc::clone(outer.input());
     let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
