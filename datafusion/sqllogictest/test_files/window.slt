@@ -7123,3 +7123,14 @@ select count(*) over (order by x range between 1 preceding and current row) from
 statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
 select count(*) over (order by x) from (values (map(['a'], [1])), (map(['a'], [2]))) t(x)
 
+# every ORDER BY expression takes part in the peer comparison, so a map after
+# a duration is rejected as well, while two durations are fine
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Duration
+select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
+
+query ??I
+select d, e, count(*) over (order by d, e) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'))) t(d, e) order by 3
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 2
+

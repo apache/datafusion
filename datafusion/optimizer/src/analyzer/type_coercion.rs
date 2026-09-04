@@ -1163,12 +1163,20 @@ fn coerce_window_frame(
             if let Some(col_type) = current_types {
                 let target_type = match extract_window_frame_target_type(&col_type) {
                     Ok(target_type) => target_type,
-                    // A free range frame has no offsets to coerce, so an ORDER
-                    // BY type without arithmetic is fine as long as its peer
+                    // A free range frame has no offsets to coerce, so ORDER BY
+                    // types without arithmetic are fine as long as their peer
                     // comparison is sound (see `supports_free_range_frame`).
+                    // Every ORDER BY expression takes part in that comparison,
+                    // so all of them have to qualify, not just the first.
                     Err(_)
                         if window_frame.free_range()
-                            && supports_free_range_frame(&col_type) =>
+                            && expressions.iter().try_fold(true, |ok, s| {
+                                let t = s.expr.get_type(schema)?;
+                                Ok::<_, DataFusionError>(
+                                    ok && (extract_window_frame_target_type(&t).is_ok()
+                                        || supports_free_range_frame(&t)),
+                                )
+                            })? =>
                     {
                         return Ok(window_frame);
                     }
