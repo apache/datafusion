@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort,
-    Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
-    Window, expr_vec_fmt,
+    Aggregate, AsOfJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter,
+    Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition,
+    Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest,
+    Values, Window, expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;
@@ -491,6 +491,21 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Join Constraint": format!("{:?}", join_constraint),
                     "Join Keys": join_expr.join(", "),
                     "Filter": format!("{}", filter_expr)
+                })
+            }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                on,
+                match_condition,
+                join_constraint,
+                ..
+            }) => {
+                let join_expr: Vec<String> =
+                    on.iter().map(|(l, r)| format!("{l} = {r}")).collect();
+                json!({
+                    "Node Type": "AsOf Join",
+                    "Join Constraint": format!("{join_constraint:?}"),
+                    "Join Keys": join_expr.join(", "),
+                    "Match Condition": match_condition.to_string(),
                 })
             }
             LogicalPlan::Repartition(Repartition {
