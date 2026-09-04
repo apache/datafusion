@@ -2369,7 +2369,7 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        let build_metric = self.metrics.join_metrics.build_time.clone();
+        let build_metric_for_chunk = self.metrics.join_metrics.build_time.clone();
         let SpillState::Active(active) = &mut self.spill_state else {
             unreachable!(
                 "handle_buffering_left_memory_limited called without Active spill state"
@@ -2394,6 +2394,7 @@ impl NestedLoopJoinStream {
             let spill_data = Arc::clone(&active.left_spill);
             let task_context = Arc::clone(&active.task_context);
             let expected = active.next_chunk_index;
+            let build_metric = build_metric_for_chunk.clone();
             active.chunk_fetch_in_flight = Some(
                 coordinator
                     .next_chunk(expected, spill_data, task_context, build_metric)
@@ -2425,6 +2426,12 @@ impl NestedLoopJoinStream {
                 ControlFlow::Continue(())
             }
             Ok(Some((data, is_last))) => {
+                // The operator's own work on the delivered chunk: recording
+                // metrics, caching the schema and opening the right-side pass.
+                // `load_one_chunk` times the reading it does, but a chunk can
+                // also be served straight from the coordinator's slot, in which
+                // case this is the only build work there is.
+                let _build_timer = build_metric_for_chunk.timer();
                 let n_rows = data.batch().num_rows();
                 self.metrics.join_metrics.build_input_batches.add(1);
                 self.metrics.join_metrics.build_input_rows.add(n_rows);
