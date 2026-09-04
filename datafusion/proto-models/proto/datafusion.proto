@@ -1187,11 +1187,42 @@ message PhysicalCaseNode {
 message PhysicalTryCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  // Present only for an explicit target. Absent nodes retain the legacy
+  // type-only behavior, inheriting metadata from the input expression.
+  optional datafusion_common.Field target_field = 3;
 }
 
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  // Present only for an explicit target. Absent nodes retain the legacy
+  // type-only behavior, inheriting metadata and nullability from the input.
+  optional datafusion_common.Field target_field = 3;
+  // Absent means DataFusion's default cast options.
+  optional PhysicalCastOptions cast_options = 4;
+}
+
+message PhysicalCastOptions {
+  bool safe = 1;
+  PhysicalFormatOptions format_options = 2;
+}
+
+enum PhysicalDurationFormat {
+  PHYSICAL_DURATION_FORMAT_ISO8601 = 0;
+  PHYSICAL_DURATION_FORMAT_PRETTY = 1;
+}
+
+message PhysicalFormatOptions {
+  bool safe = 1;
+  string null = 2;
+  optional string date_format = 3;
+  optional string datetime_format = 4;
+  optional string timestamp_format = 5;
+  optional string timestamp_tz_format = 6;
+  optional string time_format = 7;
+  PhysicalDurationFormat duration_format = 8;
+  bool types_info = 9;
+  bool quoted_strings = 10;
 }
 
 message PhysicalNegativeNode {
