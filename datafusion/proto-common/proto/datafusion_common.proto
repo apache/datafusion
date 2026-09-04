@@ -431,6 +431,7 @@ enum CompressionTypeVariant {
 
 message JsonWriterOptions {
   CompressionTypeVariant compression = 1;
+  optional uint32 compression_level = 2;
 }
 
 

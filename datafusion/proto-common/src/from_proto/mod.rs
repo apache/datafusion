@@ -995,8 +995,19 @@ impl TryFrom<&protobuf::JsonWriterOptions> for JsonWriterOptions {
     fn try_from(
         opts: &protobuf::JsonWriterOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        let compression: CompressionTypeVariant = opts.compression().into();
-        Ok(JsonWriterOptions::new(compression))
+        // Exhaustive destructure: new wire fields must be explicitly restored.
+        let protobuf::JsonWriterOptions {
+            compression,
+            compression_level,
+        } = opts;
+        let compression: CompressionTypeVariant =
+            protobuf::CompressionTypeVariant::try_from(*compression)
+                .unwrap_or_default()
+                .into();
+        Ok(JsonWriterOptions {
+            compression,
+            compression_level: *compression_level,
+        })
     }
 }
 

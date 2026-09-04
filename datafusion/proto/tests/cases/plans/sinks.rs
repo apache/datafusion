@@ -27,10 +27,12 @@ use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileGroup, FileOutputMode, FileSinkConfig};
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileOutputMode, FileSink, FileSinkConfig,
+};
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::execution::TaskContext;
-use datafusion::physical_expr::PhysicalSortRequirement;
+use datafusion::physical_expr::{LexRequirement, PhysicalSortRequirement};
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::proto::ExecutionPlanEncodeCtx;
@@ -218,9 +220,9 @@ fn roundtrip_json_sink() -> Result<()> {
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
-        JsonWriterOptions::new(CompressionTypeVariant::UNCOMPRESSED),
+        JsonWriterOptions::new_with_level(CompressionTypeVariant::ZSTD, 7),
     ));
-    let sort_order = [PhysicalSortRequirement::new(
+    let sort_order: LexRequirement = [PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
@@ -229,11 +231,35 @@ fn roundtrip_json_sink() -> Result<()> {
     )]
     .into();
 
-    roundtrip_test(Arc::new(DataSinkExec::new(
-        input,
-        data_sink,
-        Some(sort_order),
-    )))
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtrip_plan = roundtrip_test_and_return(
+        Arc::new(DataSinkExec::new(
+            input,
+            data_sink,
+            Some(sort_order.clone()),
+        )),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+
+    let roundtrip_plan = roundtrip_plan.downcast_ref::<DataSinkExec>().unwrap();
+    let json_sink = roundtrip_plan.sink().downcast_ref::<JsonSink>().unwrap();
+    assert_eq!(json_sink.config().insert_op, InsertOp::Overwrite);
+    assert!(json_sink.config().keep_partition_by_columns);
+    assert_eq!(
+        json_sink.config().file_output_mode,
+        FileOutputMode::SingleFile
+    );
+    assert_eq!(
+        json_sink.writer_options().compression,
+        CompressionTypeVariant::ZSTD
+    );
+    assert_eq!(json_sink.writer_options().compression_level, Some(7));
+    assert_eq!(roundtrip_plan.sort_order(), &Some(sort_order));
+    Ok(())
 }
 
 #[test]
