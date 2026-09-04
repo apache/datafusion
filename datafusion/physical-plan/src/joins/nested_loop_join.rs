@@ -37,6 +37,7 @@ use crate::joins::utils::{
 };
 use crate::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
+    Time,
 };
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
@@ -1491,7 +1492,7 @@ impl FallbackCoordinator {
         expected_chunk_index: usize,
         spill_data: Arc<LeftSpillData>,
         task_context: Arc<TaskContext>,
-        build_time: metrics::Time,
+        build_time: Time,
     ) -> Result<Option<(Arc<JoinLeftData>, bool)>> {
         // `spill_data` is already resolved: every partition receives the
         // same `Arc<LeftSpillData>` from the shared `OnceAsync<LeftLoad>`,
@@ -1637,7 +1638,7 @@ impl FallbackCoordinator {
         reservation: &mut MemoryReservation,
         carryover: Option<RecordBatch>,
         left_schema: SchemaRef,
-        build_time: metrics::Time,
+        build_time: Time,
     ) -> Result<LoadOutcome> {
         // The previous chunk's bytes were moved into its `JoinLeftData`, so
         // this reservation is already back to zero; resize defensively in case
