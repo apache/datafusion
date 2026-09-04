@@ -73,6 +73,8 @@ pub struct TestMemoryExec {
     projection: Option<Vec<usize>>,
     /// Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
+    /// Complete expression tuples whose equal values are contiguous.
+    grouping_information: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     /// if partition sizes should be displayed
     show_sizes: bool,
     /// The maximum number of records to read from this plan. If `None`,
@@ -233,10 +235,12 @@ impl TestMemoryExec {
     }
 
     fn eq_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new_with_orderings(
+        let mut properties = EquivalenceProperties::new_with_orderings(
             Arc::clone(&self.projected_schema),
             self.sort_information.clone(),
-        )
+        );
+        properties.add_groupings(self.grouping_information.clone());
+        properties
     }
 
     fn statistics_inner(&self) -> Result<Statistics> {
@@ -268,6 +272,7 @@ impl TestMemoryExec {
             projected_schema,
             projection,
             sort_information: vec![],
+            grouping_information: vec![],
             show_sizes: true,
             fetch: None,
         })
@@ -359,6 +364,52 @@ impl TestMemoryExec {
         }
 
         self.sort_information = sort_information;
+        self.cache = Arc::new(self.compute_properties());
+        Ok(self)
+    }
+
+    /// Adds grouping information to this source.
+    pub fn try_with_grouping_information(
+        mut self,
+        mut grouping_information: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<Self> {
+        // All grouping expressions must refer to the original schema.
+        let fields = self.schema.fields();
+        let ambiguous_column = grouping_information
+            .iter()
+            .flatten()
+            .flat_map(collect_columns)
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the TestMemoryExec",
+            ambiguous_column.as_ref().unwrap()
+        );
+
+        if let Some(projection) = &self.projection {
+            let base_schema = self.original_schema();
+            let proj_exprs = projection.iter().map(|idx| {
+                let name = base_schema.field(*idx).name();
+                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+            });
+            let projection_mapping =
+                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
+            let mut base_eqp = EquivalenceProperties::new(base_schema);
+            base_eqp.add_groupings(grouping_information);
+            grouping_information = base_eqp
+                .project(&projection_mapping, Arc::clone(&self.projected_schema))
+                .geq_class()
+                .iter()
+                .cloned()
+                .collect();
+        }
+
+        self.grouping_information = grouping_information;
         self.cache = Arc::new(self.compute_properties());
         Ok(self)
     }
