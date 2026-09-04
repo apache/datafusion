@@ -941,7 +941,7 @@ impl CsvSink {
 
 /// Encode a [`CsvFormatFactory`]'s options as their protobuf form.
 ///
-/// The reverse direction is `From<&protobuf::CsvOptions> for CsvOptions` in
+/// The reverse direction is `TryFrom<&protobuf::CsvOptions> for CsvOptions` in
 /// `datafusion-proto-models`: `CsvOptions` is a `datafusion-common` type, so
 /// that half cannot live here.
 #[cfg(feature = "proto")]
