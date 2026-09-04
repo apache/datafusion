@@ -1832,6 +1832,61 @@ mod tests {
         Ok(())
     }
 
+    /// A projection that only overrides *schema-level* metadata must still be
+    /// recognized as overriding, so it is never handed to an operator that
+    /// re-derives its schema.
+    ///
+    /// The identity shape below does not narrow the schema, so
+    /// [`FilterExec::try_swapping_with_projection`] falls through to
+    /// [`try_embed_projection`], which rebuilds the plan from the projection
+    /// expressions alone and would drop the schema metadata. Only the
+    /// schema-level comparison in
+    /// [`ProjectionExec::compute_overrides_metadata`] catches this case: every
+    /// field's metadata matches what the expressions derive, and
+    /// [`is_projection_removable`] merely declines to remove the projection.
+    #[tokio::test]
+    async fn test_schema_level_metadata_blocks_projection_embedding() -> Result<()> {
+        let scan = test::scan_partitioned(1);
+        let predicate = binary(
+            col("i", &scan.schema())?,
+            Operator::Gt,
+            lit(ScalarValue::Int32(Some(-1))),
+            &scan.schema(),
+        )?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, scan)?);
+        let projection = identity_projection_with_metadata(
+            filter,
+            HashMap::new(),
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        )?;
+        // Field metadata alone cannot flag this projection -- the override is
+        // carried entirely by the schema-level entry.
+        let projection_exec = projection
+            .downcast_ref::<ProjectionExec>()
+            .expect("test plan should be a ProjectionExec");
+        assert!(projection_exec.overrides_metadata());
+        let expected_schema = projection.schema();
+
+        let optimized = remove_unnecessary_projections(projection)?.data;
+
+        assert!(optimized.downcast_ref::<ProjectionExec>().is_some());
+        assert_eq!(optimized.schema(), expected_schema);
+        assert_eq!(
+            optimized.schema().metadata(),
+            &HashMap::from([("schema-key".to_string(), "schema-value".to_string())])
+        );
+
+        // The projection is still evaluated, so the filter's rows survive it.
+        let batches =
+            collect(optimized.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            100
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_collect_column_indices() -> Result<()> {
         let expr = Arc::new(BinaryExpr::new(
