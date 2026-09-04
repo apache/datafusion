@@ -4192,9 +4192,6 @@ pub(crate) mod tests {
         let build_time = metrics.join_metrics.build_time.clone();
         let join_time = metrics.join_metrics.join_time.clone();
         let (left_data, right_stream, spill_state) = if memory_limited {
-            let reservation = MemoryConsumer::new("NestedLoopJoinLoad[test]".to_string())
-                .with_can_spill(true)
-                .register(task_ctx.memory_pool());
             let global_right_bitmaps_reservation =
                 MemoryConsumer::new("NestedLoopJoinGlobalRightBitmaps[test]".to_string())
                     .register(task_ctx.memory_pool());
@@ -4220,10 +4217,16 @@ pub(crate) mod tests {
                     spill_file: left_spill_file,
                     schema: Arc::clone(&left_schema),
                 }),
-                left_stream: Some(left_stream),
                 left_schema: Some(Arc::clone(&left_schema)),
-                reservation,
-                pending_batches: Vec::new(),
+                // The left side is read from the spill file by the
+                // coordinator, so this stands in for the single probe
+                // partition this helper drives.
+                coordinator: Arc::new(FallbackCoordinator::new(
+                    1,
+                    need_produce_result_in_final(join_type),
+                )),
+                next_chunk_index: 0,
+                task_context: Arc::clone(&task_ctx),
                 right_input: ReplayableStreamSource::new(
                     right_stream,
                     spill_manager,
@@ -4232,6 +4235,8 @@ pub(crate) mod tests {
                 global_right_bitmaps: Vec::new(),
                 global_right_bitmaps_reservation,
                 right_batch_index: 0,
+                chunk_fetch_in_flight: None,
+                chunk_release_in_flight: None,
             };
             (
                 OnceFut::new(async { internal_err!("unused left data was polled") }),
@@ -5647,7 +5652,7 @@ pub(crate) mod tests {
         let spill = spill_left_for_test(Arc::clone(&left), Arc::clone(&task_ctx)).await?;
 
         let (chunk, is_last) = Arc::clone(&coordinator)
-            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx))
+            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
             .await?
             .expect("the left side has rows, so a chunk must be produced");
         assert!(is_last, "the fixture fits in a single chunk");
