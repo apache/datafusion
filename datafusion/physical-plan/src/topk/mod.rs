@@ -499,7 +499,7 @@ impl TopK {
                 Some(max_row) if row.as_ref() >= max_row.row() => {}
                 // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
-                    self.heap.add(batch_entry, row, index);
+                    self.heap.add(batch_entry, row.as_ref(), index, false);
                     replacements += 1;
                 }
             }
@@ -858,6 +858,31 @@ impl TopKMetrics {
     }
 }
 
+enum TopKData {
+    Sorted(Vec<TopKRow>),
+    Raw(BinaryHeap<TopKRow>),
+}
+
+impl TopKData {
+    fn into_sorted(self) -> Vec<TopKRow> {
+        match self {
+            TopKData::Sorted(sorted) => sorted,
+            TopKData::Raw(raw) => {
+                // TODO: sort_unstable is a lot faster, but changes order slightly...
+                //       when TopKRow Ord takes batch_id and index into account,
+                //       we get the same result for both
+                //let mut vec = raw.into_vec();
+                //vec.sort_unstable();
+                //vec
+
+                // BinaryHeap::into_sorted_vec is slow,
+                // see https://github.com/rust-lang/rust/issues/115357
+                raw.into_sorted_vec()
+            }
+        }
+    }
+}
+
 /// This structure keeps at most the *smallest* k items, using the
 /// [arrow::row] format for sort keys. While it is called "topK" for
 /// values like `1, 2, 3, 4, 5` the "top 3" really means the
@@ -921,14 +946,14 @@ impl TopKHeap {
     fn add(
         &mut self,
         batch_entry: &mut RecordBatchEntry,
-        row: impl AsRef<[u8]>,
+        row: &[u8],
         index: usize,
+        store_eviction: bool,
     ) -> Option<EvictedRow> {
         let batch_id = batch_entry.id;
         batch_entry.uses += 1;
 
         assert!(self.inner.len() <= self.k);
-        let row = row.as_ref();
 
         // Reuse storage for evicted item if possible
         if self.inner.len() == self.k {
@@ -940,18 +965,21 @@ impl TopKHeap {
             // cross-batch evictions, or directly from `batch_entry` when
             // a row evicts another row from the same in-flight batch
             // (entry not yet registered in the store).
-            let evicted_batch = if prev_min.batch_id == batch_entry.id {
-                batch_entry.batch.clone()
+            let evicted_entry = if prev_min.batch_id == batch_entry.id {
+                &*batch_entry
             } else {
                 self.store
                     .get(prev_min.batch_id)
-                    .map(|entry| entry.batch.clone())
                     .expect("evicted row's batch must be present in the store")
             };
-            let evicted = EvictedRow {
-                batch: evicted_batch,
-                index: prev_min.index,
-                row_bytes: prev_min.row.clone(),
+            let evicted = if store_eviction {
+                Some(EvictedRow {
+                    batch: evicted_entry.batch.clone(),
+                    index: prev_min.index,
+                    row_bytes: prev_min.row.clone(),
+                })
+            } else {
+                None
             };
 
             // Update batch use
@@ -968,7 +996,7 @@ impl TopKHeap {
 
             self.owned_bytes += prev_min.owned_size();
 
-            Some(evicted)
+            evicted
         } else {
             let new_row = TopKRow::new(row, batch_id, index);
             self.owned_bytes += new_row.owned_size();
@@ -987,17 +1015,17 @@ impl TopKHeap {
     /// Returns the values stored in this heap, from values low to
     /// high, as a single [`RecordBatch`], and a sorted vec of the
     /// current heap's contents
-    fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, Vec<TopKRow>)> {
-        // generate sorted rows
-        let topk_rows = std::mem::take(&mut self.inner).into_sorted_vec();
-
+    fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, TopKData)> {
+        let topk_rows = TopKData::Raw(std::mem::take(&mut self.inner));
         if self.store.is_empty() {
             return Ok((None, topk_rows));
         }
+        // sort rows after check
+        let topk_rows = topk_rows.into_sorted();
 
         // Collect the batches into a vec and store the "batch_id -> array_pos" mapping, to then
         // build the `indices` vec below. This is needed since the batch ids are not continuous.
-        let mut record_batches = Vec::new();
+        let mut record_batches = Vec::with_capacity(self.store.batches.len());
         let mut batch_id_array_pos = HashMap::new();
         for (array_pos, (batch_id, batch)) in self.store.batches.iter().enumerate() {
             record_batches.push(&batch.batch);
@@ -1015,7 +1043,7 @@ impl TopKHeap {
         // them together into a single new batch
         let new_batch = interleave_record_batch(&record_batches, &indices)?;
 
-        Ok((Some(new_batch), topk_rows))
+        Ok((Some(new_batch), TopKData::Sorted(topk_rows)))
     }
 
     /// Compact this heap, rewriting all stored batches into a single
@@ -1041,10 +1069,11 @@ impl TopKHeap {
         // batches that have a high usage ratio already
 
         // Note: new batch is in the same order as inner
-        let (new_batch, mut topk_rows) = self.emit_with_state()?;
+        let (new_batch, topk_rows) = self.emit_with_state()?;
         let Some(new_batch) = new_batch else {
             return Ok(());
         };
+        let mut topk_rows = topk_rows.into_sorted();
 
         // clear all old entries in store (this invalidates all
         // store_ids in `inner`)
@@ -1081,7 +1110,7 @@ impl TopKHeap {
 /// also be primitive values)
 ///
 /// Reuses allocations to minimize runtime overhead of creating new Vecs
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct TopKRow {
     /// the value of the sort key for this row. This contains the
     /// bytes that could be stored in `OwnedRow` but uses `Vec<u8>` to
@@ -1414,7 +1443,7 @@ impl PartitionedTopK {
                 match heap.max() {
                     Some(max_row) if row.as_ref() >= max_row.row() => {}
                     None | Some(_) => {
-                        heap.add(&mut entry, row, sub_idx);
+                        heap.add(&mut entry, row.as_ref(), sub_idx, false);
                         replacements += 1;
                     }
                 }
@@ -1771,7 +1800,7 @@ impl PartitionedTopKRank {
                             batch: evicted_batch,
                             index: evicted_index,
                             row_bytes: evicted_bytes,
-                        }) = state.heap.add(entry_ref, row, sub_idx)
+                        }) = state.heap.add(entry_ref, row.as_ref(), sub_idx, true)
                         {
                             // Compare the new boundary (post-eviction heap
                             // top) against the evicted row's bytes — both

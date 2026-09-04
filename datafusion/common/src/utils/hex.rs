@@ -116,12 +116,20 @@ impl_to_hex_unsigned!(u64);
 ///
 /// Allocates only through `out`'s own growth. Callers that must bound or guard
 /// that growth should reserve capacity in `out` before calling.
-#[inline(always)]
+#[inline]
 pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
     let lookup = case.lookup();
-    for &byte in bytes {
-        out.extend_from_slice(&lookup[byte as usize]);
-    }
+    // extend implicitly reserves capacity equal to `bytes.len() * 2`
+    out.extend(bytes.iter().flat_map(|&byte| lookup[byte as usize]));
+}
+
+/// Appends the hex encoding of `bytes` to `out`.
+///
+/// See [`encode_bytes_into`].
+#[inline]
+pub fn encode_bytes_into_string(bytes: &[u8], case: HexCase, out: &mut String) {
+    // SAFETY: `encode_bytes_into` produces only ASCII hex digits, which are valid UTF-8.
+    unsafe { encode_bytes_into(bytes, case, out.as_mut_vec()) }
 }
 
 /// Writes the hex encoding of `bytes` into `out`.
@@ -143,7 +151,7 @@ pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
 /// assert_eq!(&out, b"deadbeef");
 /// # Ok::<(), datafusion_common::DataFusionError>(())
 /// ```
-#[inline(always)]
+#[inline]
 pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Result<()> {
     let expected = bytes.len() * 2;
     if out.len() != expected {
@@ -173,10 +181,9 @@ pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Res
 /// ```
 #[inline]
 pub fn encode_bytes(bytes: &[u8], case: HexCase) -> String {
-    let mut out = Vec::with_capacity(bytes.len() * 2);
-    encode_bytes_into(bytes, case, &mut out);
-    // SAFETY: `out` holds only ASCII hex digits, which are valid UTF-8.
-    unsafe { String::from_utf8_unchecked(out) }
+    let mut out = String::new();
+    encode_bytes_into_string(bytes, case, &mut out);
+    out
 }
 
 /// Writes `v` as hex into `buf` and returns the written subslice.
