@@ -4489,14 +4489,25 @@ mod tests {
         // f(CASE WHEN c2 THEN '1' ELSE '2' END)
         // --> CASE WHEN c2 THEN f('1') ELSE f('2') END
         // --> CASE WHEN c2 THEN 1 ELSE 2 END
+        let expr = parse_int(vec![case_on_c2("1", Some("2"))]);
+        let simplified = simplify(expr.clone());
         assert_eq!(
-            simplify(parse_int(vec![case_on_c2("1", Some("2"))])),
+            simplified,
             Expr::Case(Case::new(
                 None,
                 vec![(Box::new(col("c2_non_null")), Box::new(lit(1i64)))],
                 Some(Box::new(lit(2i64))),
             ))
         );
+
+        // The rewrite intentionally tightens nullability: `f` declares a
+        // nullable field, but every branch folded to a non-null literal.
+        let schema = expr_test_schema();
+        let original = expr.to_field(schema.as_ref()).unwrap().1;
+        let rewritten = simplified.to_field(schema.as_ref()).unwrap().1;
+        assert!(original.is_nullable());
+        assert!(!rewritten.is_nullable());
+        assert_eq!(original.data_type(), rewritten.data_type());
     }
 
     #[test]
