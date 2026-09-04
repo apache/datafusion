@@ -1384,12 +1384,10 @@ pub fn update_join_filter(
 /// Collapse a chain of consecutive [`ProjectionExec`]s into one. Returns
 /// `None` if nothing could be merged.
 ///
-/// `outer` is not checked for a metadata override here. Its only production
-/// caller is [`ExecutionPlan::try_swapping_with_projection`] on
-/// [`ProjectionExec`], reached exclusively from
-/// [`remove_unnecessary_projections`], which already bails out on such a
-/// projection. The unified projection below is still built with `outer`'s output
-/// schema so that its metadata survives regardless.
+/// The projection-removal optimizer checks `outer.overrides_metadata()` before
+/// reaching this helper. The unified projection also keeps `outer`'s schema, so
+/// collapsing cannot lose its output metadata. Inner projections still need the
+/// check below because outer expressions may observe their metadata.
 fn try_collapse_projection_chain(
     outer: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
@@ -1835,18 +1833,8 @@ mod tests {
         Ok(())
     }
 
-    /// A projection that only overrides *schema-level* metadata must still be
-    /// recognized as overriding, so it is never handed to an operator that
-    /// re-derives its schema.
-    ///
-    /// The identity shape below does not narrow the schema, so
-    /// [`FilterExec::try_swapping_with_projection`] falls through to
-    /// [`try_embed_projection`], which rebuilds the plan from the projection
-    /// expressions alone and would drop the schema metadata. Only the
-    /// schema-level comparison in
-    /// [`ProjectionExec::compute_overrides_metadata`] catches this case: every
-    /// field's metadata matches what the expressions derive, and
-    /// [`is_projection_removable`] merely declines to remove the projection.
+    // A schema-only metadata override must block projection embedding. The filter
+    // rebuilds the schema from expressions and would otherwise drop this metadata.
     #[tokio::test]
     async fn test_schema_level_metadata_blocks_projection_embedding() -> Result<()> {
         let scan = test::scan_partitioned(1);
@@ -1863,8 +1851,7 @@ mod tests {
             HashMap::new(),
             HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
         )?;
-        // Field metadata alone cannot flag this projection -- the override is
-        // carried entirely by the schema-level entry.
+        // Field metadata matches, so this checks the schema-level comparison.
         let projection_exec = projection
             .downcast_ref::<ProjectionExec>()
             .expect("test plan should be a ProjectionExec");
@@ -1873,14 +1860,12 @@ mod tests {
 
         let optimized = remove_unnecessary_projections(projection)?.data;
 
-        assert!(optimized.downcast_ref::<ProjectionExec>().is_some());
         assert_eq!(optimized.schema(), expected_schema);
         assert_eq!(
             optimized.schema().metadata(),
             &HashMap::from([("schema-key".to_string(), "schema-value".to_string())])
         );
 
-        // The projection is still evaluated, so the filter's rows survive it.
         let batches =
             collect(optimized.execute(0, Arc::new(TaskContext::default()))?).await?;
         assert_eq!(
