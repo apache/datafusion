@@ -467,6 +467,28 @@ repeated indices.</p>
 <code class="docutils literal notranslate"><span class="pre">selection.validate_num_groups(self.len())?</span></code> before reading, and return rows in
 <code class="docutils literal notranslate"><span class="pre">selection.iter()</span></code> order without changing the builder state.</p>
 </section>
+<section id="datafusion-proto-common-option-and-constraint-conversions-are-fallible">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible<a class="headerlink" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible" title="Link to this heading">#</a></h3>
+<p>Protobuf conversions for <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code>, <code class="docutils literal notranslate"><span class="pre">JsonOptions</span></code>, <code class="docutils literal notranslate"><span class="pre">ParquetCdcOptions</span></code>,
+<code class="docutils literal notranslate"><span class="pre">Constraint</span></code>, and <code class="docutils literal notranslate"><span class="pre">Constraints</span></code> now reject integer values that do not fit
+<code class="docutils literal notranslate"><span class="pre">usize</span></code>. Their infallible <code class="docutils literal notranslate"><span class="pre">From</span></code> implementations have been replaced with
+<code class="docutils literal notranslate"><span class="pre">TryFrom</span></code>. The existing <code class="docutils literal notranslate"><span class="pre">TryFrom</span></code> conversions for <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code> and
+<code class="docutils literal notranslate"><span class="pre">TableParquetOptions</span></code> now also validate all <code class="docutils literal notranslate"><span class="pre">usize</span></code>-backed fields. A constraint
+without a <code class="docutils literal notranslate"><span class="pre">constraint_mode</span></code> returns an error instead of panicking.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">csv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvOptions</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">proto_csv</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">cdc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetCdcOptions</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">proto_cdc</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">constraints</span><span class="p">:</span><span class="w"> </span><span class="nc">Constraints</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">proto_constraints</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">csv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvOptions</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">proto_csv</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">cdc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetCdcOptions</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="n">proto_cdc</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">constraints</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Constraints</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="n">proto_constraints</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24170">issue #24170</a> for details.</p>
+</section>
 <section id="datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> config flag is deprecated and
@@ -596,6 +618,7 @@ to be updated to account for the new generic API.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defaultstatisticsprovider-is-deprecated"><code class="docutils literal notranslate"><span class="pre">DefaultStatisticsProvider</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statisticsregistry-compute-and-compute-base-are-deprecated"><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated</a></li>
