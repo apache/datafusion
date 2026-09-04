@@ -179,7 +179,7 @@ unsafe extern "C" fn release_fn_wrapper(planner: &mut FFI_QueryPlanner) {
     unsafe {
         debug_assert!(!planner.private_data.is_null());
         let private_data =
-            Box::from_raw(planner.private_data as *mut QueryPlannerPrivateData);
+            Box::from_raw(planner.private_data.cast::<QueryPlannerPrivateData>());
         drop(private_data);
         planner.private_data = std::ptr::null_mut();
     }
@@ -190,7 +190,8 @@ unsafe extern "C" fn clone_fn_wrapper(planner: &FFI_QueryPlanner) -> FFI_QueryPl
 
     let private_data = Box::into_raw(Box::new(QueryPlannerPrivateData {
         planner: old_planner,
-    })) as *mut c_void;
+    }))
+    .cast::<c_void>();
 
     FFI_QueryPlanner {
         create_physical_plan: create_physical_plan_fn_wrapper,
@@ -271,7 +272,7 @@ impl FFI_QueryPlanner {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

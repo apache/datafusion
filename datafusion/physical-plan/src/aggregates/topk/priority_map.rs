@@ -105,7 +105,7 @@ impl PriorityMap {
             self.heap.insert(row_idx, map_idx, map);
             self.map.update_heap_idx(map);
             return Ok(());
-        };
+        }
 
         // this is a value for an existing group
         map.clear();

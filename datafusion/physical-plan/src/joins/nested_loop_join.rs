@@ -1078,6 +1078,7 @@ async fn collect_left_input(
 
     while let Some(batch) = stream.next().await {
         let batch = batch?;
+        let build_timer = metrics.build_time.timer();
         let batch_size = batch.get_array_memory_size();
         match reservation.try_grow(batch_size) {
             Ok(()) => {
@@ -1087,6 +1088,9 @@ async fn collect_left_input(
                 batches.push(batch);
             }
             Err(e) if is_spillable_oom(&e, spill_manager.as_ref()) => {
+                // Do not keep the operator timer running while the spill path
+                // drains the child stream.
+                build_timer.done();
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
                 let spilled = spill_left_input(
                     spill_manager,
@@ -1109,6 +1113,10 @@ async fn collect_left_input(
         }
     }
 
+    // Only time the build-side materialization performed by this operator, not
+    // polling the child stream above.
+    let build_timer = metrics.build_time.timer();
+
     let merged_batch = concat_batches(&schema, &batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
@@ -1118,6 +1126,9 @@ async fn collect_left_input(
         match reservation.try_grow(buffer_size) {
             Ok(()) => {}
             Err(e) if is_spillable_oom(&e, spill_manager.as_ref()) => {
+                // `spill_left_input` owns its timing and polls the input stream
+                // outside that timer.
+                build_timer.done();
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
                 drop(batches);
                 let spilled = spill_left_input(
@@ -1198,6 +1209,7 @@ async fn spill_left_input(
     metrics: BuildProbeJoinMetrics,
     reservation: &MemoryReservation,
 ) -> Result<Option<LeftSpillData>> {
+    let build_timer = metrics.build_time.timer();
     let mut spill_file =
         spill_manager.create_in_progress_file("NestedLoopJoin left spill")?;
 
@@ -1217,9 +1229,11 @@ async fn spill_left_input(
             spill_file.append_batch(&batch)?;
         }
     }
+    build_timer.done();
 
     while let Some(batch) = stream.next().await {
         let batch = batch?;
+        let _build_timer = metrics.build_time.timer();
         if batch.num_rows() > 0 {
             metrics.build_input_batches.add(1);
             metrics.build_input_rows.add(batch.num_rows());
@@ -1227,6 +1241,7 @@ async fn spill_left_input(
         }
     }
 
+    let _build_timer = metrics.build_time.timer();
     Ok(spill_file.finish()?.map(|file| LeftSpillData {
         spill_manager,
         spill_file: file,
@@ -1384,9 +1399,9 @@ pub(crate) struct NestedLoopJoinStream {
     pub(crate) left_data: OnceFut<LeftLoad>,
     /// Projection to construct the output schema from the left and right tables.
     /// Example:
-    /// - output_schema: ['a', 'c']
-    /// - left_schema: ['a', 'b']
-    /// - right_schema: ['c']
+    /// - output_schema: `['a', 'c']`
+    /// - left_schema: `['a', 'b']`
+    /// - right_schema: `['c']`
     ///
     /// The column indices would be [(left, 0), (right, 0)] -- taking the left
     /// 0th column and right 0th column can construct the output schema.
@@ -1524,15 +1539,9 @@ impl Stream for NestedLoopJoinStream {
                 // side batch, before start joining.
                 NLJState::BufferingLeft => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    // inside `collect_left_input` (the routine to buffer build
-                    // -side batches), related metrics except build time will be
-                    // updated.
-                    // stop on drop
-                    let build_metric = self.metrics.join_metrics.build_time.clone();
-                    let _build_timer = build_metric.timer();
 
                     match self.handle_buffering_left(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => return poll,
                     }
                 }
@@ -1562,12 +1571,9 @@ impl Stream for NestedLoopJoinStream {
                 // handling (e.g., in cases like left join).
                 NLJState::FetchingRight => {
                     debug!("[NLJState] Entering: {:?}", self.state);
-                    // stop on drop
-                    let join_metric = self.metrics.join_metrics.join_time.clone();
-                    let _join_timer = join_metric.timer();
 
                     match self.handle_fetching_right(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => return poll,
                     }
                 }
@@ -1594,7 +1600,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_probe_right() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1615,7 +1621,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_right_unmatched() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1637,7 +1643,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_probe_end() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1667,7 +1673,7 @@ impl Stream for NestedLoopJoinStream {
                     let _join_timer = join_metric.timer();
 
                     match self.handle_emit_left_unmatched() {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1682,11 +1688,8 @@ impl Stream for NestedLoopJoinStream {
                 NLJState::EmitGlobalRightUnmatched => {
                     debug!("[NLJState] Entering: {:?}", self.state);
 
-                    let join_metric = self.metrics.join_metrics.join_time.clone();
-                    let _join_timer = join_metric.timer();
-
                     match self.handle_emit_global_right_unmatched(cx) {
-                        ControlFlow::Continue(()) => continue,
+                        ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
@@ -1879,6 +1882,7 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        let build_metric = self.metrics.join_metrics.build_time.clone();
         let SpillState::Active(active) = &mut self.spill_state else {
             unreachable!(
                 "handle_buffering_left_memory_limited called without Active spill state"
@@ -1889,6 +1893,7 @@ impl NestedLoopJoinStream {
         // stream was consumed, open a fresh stream over the left spill file.
         if active.left_stream.is_none() {
             let spill_data = Arc::clone(&active.left_spill);
+            let _build_timer = build_metric.timer();
             match spill_data
                 .spill_manager
                 .read_spill_as_stream(Arc::clone(&spill_data.spill_file), None)
@@ -1914,6 +1919,7 @@ impl NestedLoopJoinStream {
         loop {
             match left_stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(batch))) => {
+                    let _build_timer = build_metric.timer();
                     if batch.num_rows() == 0 {
                         continue;
                     }
@@ -1953,6 +1959,8 @@ impl NestedLoopJoinStream {
                 }
             }
         }
+
+        let _build_timer = build_metric.timer();
 
         // If the left stream is fully exhausted, release its resources so the
         // upstream pipeline can be torn down before we move on to probing.
@@ -2046,47 +2054,52 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        match self
+        let result = match self
             .right_data
             .as_mut()
             .expect("right_data must be present while fetching right")
             .poll_next_unpin(cx)
         {
-            Poll::Ready(result) => match result {
-                Some(Ok(right_batch)) => {
-                    // Update metrics
-                    let right_batch_rows = right_batch.num_rows();
-                    self.metrics.join_metrics.input_rows.add(right_batch_rows);
-                    self.metrics.join_metrics.input_batches.add(1);
+            Poll::Ready(result) => result,
+            Poll::Pending => return ControlFlow::Break(Poll::Pending),
+        };
 
-                    // Skip the empty batch
-                    if right_batch_rows == 0 {
-                        return ControlFlow::Continue(());
-                    }
+        let join_metric = self.metrics.join_metrics.join_time.clone();
+        let _join_timer = join_metric.timer();
 
-                    self.current_right_batch = Some(right_batch);
+        match result {
+            Some(Ok(right_batch)) => {
+                // Update metrics
+                let right_batch_rows = right_batch.num_rows();
+                self.metrics.join_metrics.input_rows.add(right_batch_rows);
+                self.metrics.join_metrics.input_batches.add(1);
 
-                    // Prepare right bitmap
-                    if self.should_track_unmatched_right {
-                        let zeroed_buf = BooleanBuffer::new_unset(right_batch_rows);
-                        self.current_right_batch_matched =
-                            Some(BooleanArray::new(zeroed_buf, None));
-                    }
-
-                    self.left_probe_idx = 0;
-                    self.state = NLJState::ProbeRight;
-                    ControlFlow::Continue(())
+                // Skip the empty batch
+                if right_batch_rows == 0 {
+                    return ControlFlow::Continue(());
                 }
-                Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
-                None => {
-                    // Right side exhausted: probing for the current left chunk
-                    // is finished. `ProbeEnd` reports probe completion before
-                    // emitting unmatched-left rows.
-                    self.state = NLJState::ProbeEnd;
-                    ControlFlow::Continue(())
+
+                self.current_right_batch = Some(right_batch);
+
+                // Prepare right bitmap
+                if self.should_track_unmatched_right {
+                    let zeroed_buf = BooleanBuffer::new_unset(right_batch_rows);
+                    self.current_right_batch_matched =
+                        Some(BooleanArray::new(zeroed_buf, None));
                 }
-            },
-            Poll::Pending => ControlFlow::Break(Poll::Pending),
+
+                self.left_probe_idx = 0;
+                self.state = NLJState::ProbeRight;
+                ControlFlow::Continue(())
+            }
+            Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+            None => {
+                // Right side exhausted: probing for the current left chunk
+                // is finished. `ProbeEnd` reports probe completion before
+                // emitting unmatched-left rows.
+                self.state = NLJState::ProbeEnd;
+                ControlFlow::Continue(())
+            }
         }
     }
 
@@ -2303,6 +2316,8 @@ impl NestedLoopJoinStream {
 
         // On first entry, open a new replay pass on the right input
         if self.right_data.is_none() {
+            let join_metric = self.metrics.join_metrics.join_time.clone();
+            let _join_timer = join_metric.timer();
             let SpillState::Active(ref mut active) = self.spill_state else {
                 unreachable!("EmitGlobalRightUnmatched without Active spill state");
             };
@@ -2318,13 +2333,20 @@ impl NestedLoopJoinStream {
         }
 
         // Poll the replay stream for the next right batch
-        match self
+        let result = match self
             .right_data
             .as_mut()
             .expect("right_data must be present")
             .poll_next_unpin(cx)
         {
-            Poll::Ready(Some(Ok(right_batch))) => {
+            Poll::Ready(result) => result,
+            Poll::Pending => return ControlFlow::Break(Poll::Pending),
+        };
+
+        let join_metric = self.metrics.join_metrics.join_time.clone();
+        let _join_timer = join_metric.timer();
+        match result {
+            Some(Ok(right_batch)) => {
                 if right_batch.num_rows() == 0 {
                     return ControlFlow::Continue(());
                 }
@@ -2370,8 +2392,8 @@ impl NestedLoopJoinStream {
                     Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
                 }
             }
-            Poll::Ready(Some(Err(e))) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
-            Poll::Ready(None) => {
+            Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+            None => {
                 // All right batches replayed
                 match self.output_buffer.finish_buffered_batch() {
                     Ok(()) => {
@@ -2381,7 +2403,6 @@ impl NestedLoopJoinStream {
                     Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
                 }
             }
-            Poll::Pending => ControlFlow::Break(Poll::Pending),
         }
     }
 
@@ -3378,6 +3399,9 @@ fn build_unmatched_batch(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::pin::Pin;
+    use std::time::Duration;
+
     use super::*;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test::{TestMemoryExec, assert_join_metrics};
@@ -3387,9 +3411,15 @@ pub(crate) mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
+    use bytes::Bytes;
     use datafusion_common::assert_contains;
+    use datafusion_common::instant::Instant;
     use datafusion_common::test_util::batches_to_sort_string;
+    use datafusion_execution::disk_manager::{
+        DiskManager, DiskManagerBuilder, DiskManagerMode,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_execution::spill_file::{SpillFile, SpillWriter, TempFileFactory};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
@@ -3398,6 +3428,73 @@ pub(crate) mod tests {
     use insta::allow_duplicates;
     use insta::assert_snapshot;
     use rstest::rstest;
+
+    fn delayed_stream(batch: RecordBatch, delay: Duration) -> SendableRecordBatchStream {
+        let schema = batch.schema();
+        Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::once(async move {
+                std::thread::sleep(delay);
+                Ok(batch)
+            }),
+        ))
+    }
+
+    /// Delays the first item while the spill stream is polled, making an
+    /// incorrectly scoped operator timer include the delay.
+    struct DelayedReadSpillFile {
+        inner: Arc<dyn SpillFile>,
+        delay: Duration,
+        read_count: Arc<AtomicUsize>,
+    }
+
+    impl SpillFile for DelayedReadSpillFile {
+        fn path(&self) -> Option<&std::path::Path> {
+            self.inner.path()
+        }
+
+        fn size(&self) -> Option<u64> {
+            self.inner.size()
+        }
+
+        fn read_stream(
+            &self,
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+            let delay = self.delay;
+            let read_count = Arc::clone(&self.read_count);
+            let mut delay_first_item = true;
+            let stream = self.inner.read_stream()?.map(move |item| {
+                if delay_first_item {
+                    delay_first_item = false;
+                    read_count.fetch_add(1, Ordering::Relaxed);
+                    std::thread::sleep(delay);
+                }
+                item
+            });
+            Ok(Box::pin(stream))
+        }
+
+        fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+            self.inner.open_writer()
+        }
+    }
+
+    /// Wraps local spill files so replay reads can be delayed deterministically.
+    struct DelayedReadTempFileFactory {
+        inner: Arc<DiskManager>,
+        delay: Duration,
+        read_count: Arc<AtomicUsize>,
+    }
+
+    impl TempFileFactory for DelayedReadTempFileFactory {
+        fn create_temp_file(&self, description: &str) -> Result<Arc<dyn SpillFile>> {
+            Ok(Arc::new(DelayedReadSpillFile {
+                inner: self.inner.create_tmp_file(description)?,
+                delay: self.delay,
+                read_count: Arc::clone(&self.read_count),
+            }))
+        }
+    }
 
     fn build_table(
         a: (&str, &Vec<i32>),
@@ -3552,6 +3649,246 @@ pub(crate) mod tests {
             None,
             Vec::new(),
         )
+    }
+
+    async fn run_join_with_child_poll_delays(
+        left_delay: Duration,
+        right_delay: Duration,
+        memory_limited: bool,
+    ) -> Result<(Duration, Duration, Duration)> {
+        run_join_with_poll_delays(
+            left_delay,
+            right_delay,
+            memory_limited,
+            JoinType::Inner,
+            None,
+        )
+        .await
+    }
+
+    async fn run_join_with_poll_delays(
+        left_delay: Duration,
+        right_delay: Duration,
+        memory_limited: bool,
+        join_type: JoinType,
+        spill_read_delay: Option<(Duration, Arc<AtomicUsize>)>,
+    ) -> Result<(Duration, Duration, Duration)> {
+        let left_batch =
+            build_table_i32(("a1", &vec![1]), ("b1", &vec![2]), ("c1", &vec![3]));
+        let right_batch =
+            build_table_i32(("a2", &vec![4]), ("b2", &vec![5]), ("c2", &vec![6]));
+        let left_schema = left_batch.schema();
+        let right_schema = right_batch.schema();
+
+        let left_stream = delayed_stream(left_batch.clone(), left_delay);
+        let right_stream = delayed_stream(right_batch, right_delay);
+
+        let task_ctx = if let Some((delay, read_count)) = spill_read_delay {
+            let inner = Arc::new(
+                DiskManagerBuilder::default()
+                    .with_mode(DiskManagerMode::OsTmpDirectory)
+                    .build()?,
+            );
+            let runtime = RuntimeEnvBuilder::new()
+                .with_disk_manager_builder(DiskManagerBuilder::default().with_mode(
+                    DiskManagerMode::Custom(Arc::new(DelayedReadTempFileFactory {
+                        inner,
+                        delay,
+                        read_count,
+                    })),
+                ))
+                .build_arc()?;
+            Arc::new(TaskContext::default().with_runtime(runtime))
+        } else {
+            Arc::new(TaskContext::default())
+        };
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let metrics = NestedLoopJoinMetrics::new(&metrics_set, 0);
+        let build_time = metrics.join_metrics.build_time.clone();
+        let join_time = metrics.join_metrics.join_time.clone();
+        let (left_data, right_stream, spill_state) = if memory_limited {
+            let reservation = MemoryConsumer::new("NestedLoopJoinLoad[test]".to_string())
+                .with_can_spill(true)
+                .register(task_ctx.memory_pool());
+            let global_right_bitmaps_reservation =
+                MemoryConsumer::new("NestedLoopJoinGlobalRightBitmaps[test]".to_string())
+                    .register(task_ctx.memory_pool());
+            let spill_manager = SpillManager::new(
+                task_ctx.runtime_env(),
+                metrics.spill_metrics.clone(),
+                Arc::clone(&right_schema),
+            );
+            let left_spill_manager = SpillManager::new(
+                task_ctx.runtime_env(),
+                metrics.spill_metrics.clone(),
+                Arc::clone(&left_schema),
+            );
+            let mut left_spill_file =
+                left_spill_manager.create_in_progress_file("test left spill")?;
+            left_spill_file.append_batch(&left_batch)?;
+            let left_spill_file = left_spill_file
+                .finish()?
+                .expect("the test left spill contains one batch");
+            let active = SpillStateActive {
+                left_spill: Arc::new(LeftSpillData {
+                    spill_manager: left_spill_manager,
+                    spill_file: left_spill_file,
+                    schema: Arc::clone(&left_schema),
+                }),
+                left_stream: Some(left_stream),
+                left_schema: Some(Arc::clone(&left_schema)),
+                reservation,
+                pending_batches: Vec::new(),
+                right_input: ReplayableStreamSource::new(
+                    right_stream,
+                    spill_manager,
+                    "test right spill",
+                ),
+                global_right_bitmaps: Vec::new(),
+                global_right_bitmaps_reservation,
+                right_batch_index: 0,
+            };
+            (
+                OnceFut::new(async { internal_err!("unused left data was polled") }),
+                Box::pin(crate::EmptyRecordBatchStream::new(Arc::clone(
+                    &right_schema,
+                ))) as SendableRecordBatchStream,
+                SpillState::Active(Box::new(active)),
+            )
+        } else {
+            let reservation = MemoryConsumer::new("NestedLoopJoinLoad[test]".to_string())
+                .register(task_ctx.memory_pool());
+            (
+                OnceFut::new(collect_left_input(
+                    left_stream,
+                    metrics.join_metrics.clone(),
+                    reservation,
+                    false,
+                    1,
+                    None,
+                )),
+                right_stream,
+                SpillState::Disabled,
+            )
+        };
+        let (output_schema, column_indices) =
+            build_join_schema(&left_schema, &right_schema, &join_type);
+        let stream = NestedLoopJoinStream::new(
+            Arc::new(output_schema),
+            None,
+            join_type,
+            right_stream,
+            left_data,
+            column_indices,
+            metrics,
+            1024,
+            spill_state,
+        );
+
+        let start = Instant::now();
+        let batches = common::collect(Box::pin(stream)).await?;
+        let wall_time = start.elapsed();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+
+        Ok((
+            Duration::from_nanos(build_time.value() as u64),
+            Duration::from_nanos(join_time.value() as u64),
+            wall_time,
+        ))
+    }
+
+    async fn check_child_poll_time_excluded<F, Fut>(mut run: F) -> Result<()>
+    where
+        F: FnMut(Duration) -> Fut,
+        Fut: Future<Output = Result<(Duration, Duration)>>,
+    {
+        // Escalating the delay filters out fixed-size scheduler preemption without
+        // masking the bug: an incorrectly scoped timer grows with every delay.
+        let mut delay = Duration::from_millis(50);
+        for attempt in 0..3 {
+            let (operator_time, wall_time) = run(delay).await?;
+            assert!(
+                !operator_time.is_zero(),
+                "operator work should still be timed"
+            );
+            assert!(
+                wall_time >= delay,
+                "child poll delay should dominate wall time: {wall_time:?} < {delay:?}"
+            );
+            if operator_time < delay {
+                return Ok(());
+            }
+            assert!(
+                attempt < 2,
+                "operator time ({operator_time:?}) included the child poll delay ({delay:?})"
+            );
+            delay *= 4;
+        }
+        unreachable!()
+    }
+
+    #[tokio::test]
+    async fn build_time_excludes_left_child_poll() -> Result<()> {
+        check_child_poll_time_excluded(|delay| async move {
+            let (build_time, _, wall_time) =
+                run_join_with_child_poll_delays(delay, Duration::ZERO, false).await?;
+            Ok((build_time, wall_time))
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn join_time_excludes_right_child_poll() -> Result<()> {
+        check_child_poll_time_excluded(|delay| async move {
+            let (_, join_time, wall_time) =
+                run_join_with_child_poll_delays(Duration::ZERO, delay, false).await?;
+            Ok((join_time, wall_time))
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn build_time_excludes_spill_stream_poll() -> Result<()> {
+        check_child_poll_time_excluded(|delay| async move {
+            let (build_time, _, wall_time) =
+                run_join_with_child_poll_delays(delay, Duration::ZERO, true).await?;
+            Ok((build_time, wall_time))
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn join_time_excludes_replayable_input_poll() -> Result<()> {
+        check_child_poll_time_excluded(|delay| async move {
+            let (_, join_time, wall_time) =
+                run_join_with_child_poll_delays(Duration::ZERO, delay, true).await?;
+            Ok((join_time, wall_time))
+        })
+        .await
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn join_time_excludes_global_right_unmatched_replay_poll() -> Result<()> {
+        check_child_poll_time_excluded(|delay| async move {
+            let read_count = Arc::new(AtomicUsize::new(0));
+            // The only left chunk is supplied directly, so the sole spill read
+            // is the final right replay in EmitGlobalRightUnmatched.
+            let (_, join_time, wall_time) = run_join_with_poll_delays(
+                Duration::ZERO,
+                Duration::ZERO,
+                true,
+                JoinType::Right,
+                Some((delay, Arc::clone(&read_count))),
+            )
+            .await?;
+            assert_eq!(
+                read_count.load(Ordering::Relaxed),
+                1,
+                "EmitGlobalRightUnmatched should replay the right spill exactly once"
+            );
+            Ok((join_time, wall_time))
+        })
+        .await
     }
 
     fn prepare_join_filter() -> JoinFilter {

@@ -202,9 +202,9 @@ impl FFI_TableProvider {
         unsafe { &(*private_data).provider }
     }
 
-    fn runtime(&self) -> &Option<Handle> {
+    fn runtime(&self) -> Option<&Handle> {
         let private_data = self.private_data as *const ProviderPrivateData;
-        unsafe { &(*private_data).runtime }
+        unsafe { (*private_data).runtime.as_ref() }
     }
 }
 
@@ -292,7 +292,7 @@ unsafe extern "C" fn scan_fn_wrapper(
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.logical_codec.task_ctx_provider).try_into();
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let internal_provider = Arc::clone(provider.inner());
 
@@ -335,7 +335,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let internal_provider = Arc::clone(provider.inner());
     let input = input.clone();
 
@@ -373,7 +373,7 @@ unsafe extern "C" fn delete_from_fn_wrapper(
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.logical_codec.task_ctx_provider).try_into();
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let internal_provider = Arc::clone(provider.inner());
 
@@ -411,7 +411,7 @@ unsafe extern "C" fn update_fn_wrapper(
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
     let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
         (&provider.logical_codec.task_ctx_provider).try_into();
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let internal_provider = Arc::clone(provider.inner());
 
@@ -473,7 +473,7 @@ unsafe extern "C" fn truncate_fn_wrapper(
     provider: &FFI_TableProvider,
     session: FFI_SessionRef,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let internal_provider = Arc::clone(provider.inner());
 
     async move {
@@ -499,20 +499,21 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
     unsafe {
         debug_assert!(!provider.private_data.is_null());
         let private_data =
-            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+            Box::from_raw(provider.private_data.cast::<ProviderPrivateData>());
         drop(private_data);
         provider.private_data = std::ptr::null_mut();
     }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
-    let runtime = provider.runtime().clone();
+    let runtime = provider.runtime().cloned();
     let old_provider = Arc::clone(provider.inner());
 
     let private_data = Box::into_raw(Box::new(ProviderPrivateData {
         provider: old_provider,
         runtime,
-    })) as *mut c_void;
+    }))
+    .cast::<c_void>();
 
     FFI_TableProvider {
         schema: schema_fn_wrapper,
@@ -601,7 +602,7 @@ impl FFI_TableProvider {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
             delete_from: delete_from_fn_wrapper,
             update: update_fn_wrapper,

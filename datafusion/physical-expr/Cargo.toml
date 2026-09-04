@@ -51,6 +51,7 @@ proto = [
 
 [dependencies]
 arrow = { workspace = true }
+arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
@@ -104,3 +105,7 @@ name = "string_concat"
 
 [package.metadata.cargo-machete]
 ignored = ["half"]
+
+[[bench]]
+harness = false
+name = "equivalence_properties"

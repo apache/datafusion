@@ -110,18 +110,26 @@ impl ScalarUDFImpl for FindInSetFunc {
                     | ScalarValue::LargeUtf8(str_list),
                 ),
             ) => {
-                let res = match (string, str_list) {
-                    (Some(string), Some(str_list)) => {
-                        let position = str_list
+                let position = match (string, str_list) {
+                    (Some(string), Some(str_list)) => Some(
+                        str_list
                             .split(',')
                             .position(|s| s == string)
-                            .map_or(0, |idx| idx + 1);
-
-                        Some(position as i32)
-                    }
+                            .map_or(0, |idx| idx + 1),
+                    ),
                     _ => None,
                 };
-                Ok(ColumnarValue::Scalar(ScalarValue::from(res)))
+                // match the type promised by `return_type`
+                let res = match return_field.data_type() {
+                    DataType::Int32 => ScalarValue::Int32(position.map(|p| p as i32)),
+                    DataType::Int64 => ScalarValue::Int64(position.map(|p| p as i64)),
+                    other => {
+                        return exec_err!(
+                            "Unsupported return type {other:?} for function find_in_set"
+                        );
+                    }
+                };
+                Ok(ColumnarValue::Scalar(res))
             }
 
             // `string` is an array, `str_list` is scalar

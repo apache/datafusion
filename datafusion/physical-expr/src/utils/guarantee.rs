@@ -525,7 +525,7 @@ fn find_common_columns<'a>(
         if termset_cols.len() != termset.len() {
             return Vec::new();
         }
-        common_cols = common_cols.intersection(&termset_cols).cloned().collect();
+        common_cols = common_cols.intersection(&termset_cols).copied().collect();
     }
 
     common_cols.into_iter().collect()

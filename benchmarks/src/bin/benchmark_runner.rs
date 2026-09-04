@@ -40,6 +40,7 @@ use datafusion_common_runtime::SpawnedTask;
 use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::Path;
 
@@ -333,12 +334,14 @@ fn format_suite_list(suites: &[SuiteMetadata]) -> String {
         } else {
             "queries "
         };
-        output.push_str(&format!(
-            "  {:<24} {} {query_word}{}\n",
+        writeln!(
+            output,
+            "  {:<24} {} {query_word}{}",
             suite.name(),
             suite.benchmark_count(),
             suite.description()
-        ));
+        )
+        .ok();
     }
     output.trim_end().to_string()
 }

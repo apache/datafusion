@@ -53,10 +53,10 @@ fn print_allocator_stats() {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut peak_rss,
+                &raw mut peak_rss,
                 std::ptr::null_mut(),
-                &mut peak_commit,
-                &mut page_faults,
+                &raw mut peak_commit,
+                &raw mut page_faults,
             );
         }
 

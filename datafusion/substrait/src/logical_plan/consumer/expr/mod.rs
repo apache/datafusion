@@ -239,7 +239,7 @@ mod tests {
                 assert_eq!(window_function.params.order_by.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
-        };
+        }
 
         Ok(())
     }
@@ -266,7 +266,7 @@ mod tests {
                 assert_eq!(window_function.params.args.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
-        };
+        }
 
         Ok(())
     }
