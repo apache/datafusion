@@ -1738,4 +1738,6 @@ message PhysicalScalarSubqueryExprNode {
   datafusion_common.ArrowType data_type = 1;
   bool nullable = 2;
   uint32 index = 3;
+  // Serialized separately from data_type to keep older wire formats valid.
+  map<string, string> metadata = 4;
 }
