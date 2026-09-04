@@ -38,9 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install HawkEye
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
         with:
-          tool: hawkeye@6.2.0
+          tool: hawkeye@7.0.0
       - name: Run license header check
         run: ci/scripts/license_header.sh
 
@@ -66,7 +66,7 @@ jobs:
           source ci/scripts/utils/tool_versions.sh
           echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
       - name: Install lychee
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
         with:
           tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Run markdown link check
@@ -91,7 +91,7 @@ jobs:
       # it may cause checks to fail more often.
       # We can upgrade it manually once a while.
       - name: Install typos
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
         with:
           tool: typos@1.37.0
       - name: Run typos check

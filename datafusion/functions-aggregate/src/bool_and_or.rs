@@ -97,9 +97,9 @@ make_udaf_expr_and_func!(
     sql_example = r#"```sql
 > SELECT bool_and(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)       |
+| bool_and(column_name)      |
 +----------------------------+
-| true                        |
+| true                       |
 +----------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The")
@@ -226,9 +226,9 @@ impl Accumulator for BoolAndAccumulator {
     sql_example = r#"```sql
 > SELECT bool_and(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)       |
+| bool_and(column_name)      |
 +----------------------------+
-| true                        |
+| true                       |
 +----------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The")

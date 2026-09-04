@@ -22,6 +22,7 @@ use arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -302,53 +303,47 @@ where
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128
 pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
+    match scale.cmp(&0) {
+        Ordering::Less => Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
-    } else {
-        match i128::from(10).checked_pow(scale as u32) {
+        )),
+        Ordering::Equal => Ok(value),
+        Ordering::Greater => match i128::from(10).checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
             ))),
-        }
+        },
     }
 }
 
 pub fn decimal32_to_i32(value: i32, scale: i8) -> Result<i32, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
+    match scale.cmp(&0) {
+        Ordering::Less => Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
-    } else {
-        match 10_i32.checked_pow(scale as u32) {
+        )),
+        Ordering::Equal => Ok(value),
+        Ordering::Greater => match 10_i32.checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
             ))),
-        }
+        },
     }
 }
 
 pub fn decimal64_to_i64(value: i64, scale: i8) -> Result<i64, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
+    match scale.cmp(&0) {
+        Ordering::Less => Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
-    } else {
-        match i64::from(10).checked_pow(scale as u32) {
+        )),
+        Ordering::Equal => Ok(value),
+        Ordering::Greater => match i64::from(10).checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
             ))),
-        }
+        },
     }
 }
 

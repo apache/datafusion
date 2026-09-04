@@ -98,7 +98,7 @@ fn random_from_to_stride(
         }
     };
 
-    let stride = stride_choices.choose(rng).cloned().unwrap_or(None);
+    let stride = stride_choices.choose(rng).copied().unwrap_or(None);
 
     if from.is_none() || to.is_none() || stride.is_none_or(|s| s > 0) {
         (from, to, stride)

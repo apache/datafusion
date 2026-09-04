@@ -59,7 +59,7 @@ SELECT id FROM test_data WHERE floor(int_val) = 100;
 
 # Decimal128: floor(x) = 100 matches values in [100.00, 101.00)
 query I rowsort
-SELECT id FROM test_data WHERE floor(decimal_val) = arrow_cast(100, 'Decimal128(10,2)');
+SELECT id FROM test_data WHERE floor(decimal_val) = arrow_cast(100, 'Decimal128(9,0)');
 ----
 1
 2
@@ -303,6 +303,16 @@ logical_plan
 # Config reset
 statement ok
 RESET datafusion.explain.logical_plan_only;
+
+## Test zero-scale interval for negative scale
+query I rowsort
+SELECT id FROM (VALUES
+    (1, arrow_cast(5000, 'Decimal128(10,-3)')),
+    (2, arrow_cast(6000, 'Decimal128(10,-3)'))
+) AS t(id, val)
+WHERE floor(val) = arrow_cast(5000, 'Decimal128(10,-3)');
+----
+1
 
 ##########
 ## Cleanup

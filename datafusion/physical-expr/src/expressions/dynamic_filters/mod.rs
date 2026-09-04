@@ -30,7 +30,7 @@ use datafusion_common::{
 };
 
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::DynHash;
+use datafusion_expr_common::dyn_eq::DynHash;
 
 mod tracker;
 pub use tracker::{DynamicFilterTracker, DynamicFilterTracking};

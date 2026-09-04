@@ -2145,6 +2145,83 @@ true
 true
 
 #####################
+# Section: leaf expression extraction does not duplicate volatile expressions
+#
+# Regression test for #24678. `extract_leaf_expressions` / `push_down_leaf_projections`
+# build an extraction projection by *merging* into the input projection, which
+# inlines the definition of every column the extracted expression references.
+# When that definition is volatile the inlined copy is an independent
+# evaluation, so `random()` is drawn twice and the extracted value no longer
+# matches the struct it was derived from.
+#
+# Before the fix the plan below read
+#   Projection: named_struct(Utf8("a"), random()) AS s, random() AS field
+# and `field` differed from `s['a']` on every row. This is the same invariant
+# `FileScanConfig::try_swapping_with_projection` already enforces for the
+# physical pushdown path (#23220).
+#####################
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# `random()` must appear once; `field` reads the struct materialized below it.
+query TT
+EXPLAIN SELECT s, s['a'] AS field
+FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 3));
+----
+logical_plan
+01)Projection: s, get_field(s, Utf8("a")) AS field
+02)--Projection: named_struct(Utf8("a"), random()) AS s
+03)----TableScan: generate_series() projection=[]
+
+# Same for an extraction out of a Filter: the predicate must test the struct
+# that is returned, not a second draw.
+query TT
+EXPLAIN SELECT s
+FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 3))
+WHERE s['a'] > 0.5;
+----
+logical_plan
+01)Filter: get_field(s, Utf8("a")) > Float64(0.5)
+02)--Projection: named_struct(Utf8("a"), random()) AS s
+03)----TableScan: generate_series() projection=[]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# Every row's `field` is the `a` field of that row's own struct.
+query B
+SELECT bool_and(field = s['a'])
+FROM (
+  SELECT s, s['a'] AS field
+  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
+);
+----
+true
+
+# Same invariant when the extraction is routed into one side of a join.
+query B
+SELECT bool_and(field = s['a'])
+FROM (
+  SELECT l.s, l.s['a'] AS field
+  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000)) AS l
+  INNER JOIN (SELECT 1 AS k) AS r ON true
+);
+----
+true
+
+# Every surviving row satisfies the predicate it was filtered on.
+query B
+SELECT bool_and(s['a'] > 0.5)
+FROM (
+  SELECT s
+  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
+  WHERE s['a'] > 0.5
+);
+----
+true
+
+#####################
 # Section: expensive expressions are not re-inlined by projection pushdown
 #
 # A repeated expensive expression (e.g. `power(a, 2)`) is extracted by CSE into
@@ -2183,3 +2260,74 @@ physical_plan
 # Reset the config changed above (the SLT runner expects target_partitions = 4).
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+#####################
+# Section: extraction aliases inside a subquery advance the alias generator
+#
+# Regression test for `advance_generator_past_existing` in
+# `extract_leaf_expressions.rs`.
+#
+# `ExtractLeafExpressions` names the columns it extracts
+# `__datafusion_extracted_N`, handing out N from a shared `AliasGenerator`. That
+# prefix is reserved for the optimizer, but nothing stops a user from writing it,
+# so before extracting the rule scans the plan for existing
+# `__datafusion_extracted_N` aliases and bumps the generator past the highest one.
+#
+# The bug: that scan used `apply`, which walks plan nodes but does *not* descend
+# into subquery plans held inside expressions, while the extraction itself uses
+# `transform_down_with_subqueries` and *does* rewrite inside subqueries. So an
+# alias living only inside a subquery was invisible to the scan, and extraction
+# then minted the very same name next to it.
+#
+# Each ingredient below is load-bearing:
+#
+# * The `IN (<subquery>)` sits in the SELECT list, not in a WHERE clause, so
+#   `decorrelate_predicate_subquery` (which runs earlier) leaves it alone and it
+#   is still a subquery expression by the time extraction runs. A subquery in
+#   WHERE would be flattened into the main plan, where the old scan could see it.
+# * The alias inside the subquery is literally `__datafusion_extracted_1`. Rename
+#   it to anything outside the reserved prefix and there is nothing to collide
+#   with -- the query then passes with or without the fix and guards nothing.
+# * The inner `WHERE s['value'] > 120` is what forces extraction to *generate* an
+#   alias inside that same subquery. Without a leaf expression there, the
+#   generator is never called where the collision would happen.
+#
+# Without the fix, extraction reuses `__datafusion_extracted_1` and planning
+# aborts with: Optimizer rule 'push_down_leaf_projections' failed Schema error:
+# Schema contains duplicate unqualified field name __datafusion_extracted_1.
+# With the fix, the generator starts at 2, as the plan below shows.
+#
+# This is `EXPLAIN` under `logical_plan_only` rather than an executed query
+# because a surviving `InSubquery` expression has no physical plan; the logical
+# plan is both the observable result and exactly what regressed.
+#####################
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN
+SELECT
+    id,
+    id IN (
+        SELECT id
+        FROM (
+            SELECT id, s['label'] AS __datafusion_extracted_1
+            FROM simple_struct
+            WHERE s['value'] > 120
+        )
+        WHERE __datafusion_extracted_1 <> 'delta'
+    ) AS has_matching_label
+FROM simple_struct;
+----
+logical_plan
+01)Projection: simple_struct.id, simple_struct.id IN (<subquery>) AS has_matching_label
+02)--Subquery:
+03)----Projection: simple_struct.id
+04)------Filter: __datafusion_extracted_2 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
+05)--------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, simple_struct.id, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
+06)----------TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(120)]
+07)--TableScan: simple_struct projection=[id]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;

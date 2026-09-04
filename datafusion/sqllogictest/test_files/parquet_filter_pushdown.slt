@@ -891,6 +891,119 @@ statement ok
 DROP TABLE t_struct_filter;
 
 ##########
+# Filters on struct fields, with pushdown enabled, where the declared table
+# schema differs from the physical file schema and the scan therefore has to
+# adapt the struct column.
+#
+# See https://github.com/apache/datafusion/issues/24109.
+##########
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (
+  SELECT
+    column1 as id,
+    named_struct('x', arrow_cast(column2, 'Int32')) as s
+  FROM VALUES (1, 100), (2, 200), (3, 300)
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet'
+STORED AS PARQUET;
+
+# `x` is stored as Int32 in the file but declared as BIGINT here, which forces
+# the scan to adapt the struct column.
+statement ok
+CREATE EXTERNAL TABLE t_struct_schema_cast (id BIGINT, s STRUCT<x BIGINT>)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet';
+
+query II
+SELECT id, s['x'] FROM t_struct_schema_cast WHERE s['x'] = 200;
+----
+2 200
+
+# Conjunction of a struct-field filter and a primitive filter.
+query II
+SELECT id, s['x'] FROM t_struct_schema_cast WHERE s['x'] > 100 AND id > 2;
+----
+3 300
+
+# Control: the same file read through a schema that matches it exactly, so no
+# cast is inserted. This path has always worked.
+statement ok
+CREATE EXTERNAL TABLE t_struct_no_schema_cast (id BIGINT, s STRUCT<x INT>)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet';
+
+query II
+SELECT id, s['x'] FROM t_struct_no_schema_cast WHERE s['x'] = 200;
+----
+2 200
+
+query II
+SELECT id, s['x'] FROM t_struct_no_schema_cast WHERE s['x'] > 100 AND id > 2;
+----
+3 300
+
+# Declaring a field the file does not have must not disturb the fields it does
+# have.
+statement ok
+CREATE EXTERNAL TABLE t_struct_missing_field (id BIGINT, s STRUCT<x BIGINT, missing BIGINT>)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet';
+
+query II
+SELECT id, s['x'] FROM t_struct_missing_field WHERE s['x'] = 200;
+----
+2 200
+
+query II
+SELECT id, s['x'] FROM t_struct_missing_field WHERE s['x'] > 100 AND id > 2;
+----
+3 300
+
+# The absent field itself reads as null, so it matches nothing.
+query II
+SELECT id, s['x'] FROM t_struct_missing_field WHERE s['missing'] = 200;
+----
+
+# Same, for a nested field path.
+statement ok
+COPY (
+  SELECT
+    column1 as id,
+    named_struct('inner', named_struct('x', arrow_cast(column2, 'Int32'))) as s
+  FROM VALUES (1, 100), (2, 200), (3, 300)
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_nested_schema_cast.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE t_struct_nested_schema_cast (id BIGINT, s STRUCT<inner STRUCT<x BIGINT>>)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_nested_schema_cast.parquet';
+
+query II
+SELECT id, s['inner']['x'] FROM t_struct_nested_schema_cast WHERE s['inner']['x'] = 200;
+----
+2 200
+
+# Clean up
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE t_struct_schema_cast;
+
+statement ok
+DROP TABLE t_struct_no_schema_cast;
+
+statement ok
+DROP TABLE t_struct_missing_field;
+
+statement ok
+DROP TABLE t_struct_nested_schema_cast;
+
+##########
 # Regression test for https://github.com/apache/datafusion/issues/20937
 #
 # Dynamic filter pushdown fails when joining VALUES against

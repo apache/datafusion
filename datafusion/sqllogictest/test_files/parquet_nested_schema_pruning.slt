@@ -125,17 +125,13 @@ explain analyze select s from full_schema;
 ----
 Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=219<slt:ignore>]
 
-# `get_field` on a schema-narrowed struct becomes `get_field(CAST(s), 'x')`;
-# the read clips to the cast target (every field the *narrow* schema
-# declares), not further down to just `x`. The fair "nothing was clipped"
-# baseline is therefore reading every physical leaf of `s`
-# (`select s from full_schema` above), not the same `get_field` query against
-# `full_schema` -- that one needs no cast at all and takes `get_field`'s own,
-# more precise, single-leaf pushdown path.
+# Selecting a single field of `s` reads fewer bytes than selecting `s` itself
+# (above): the read clips down to `x` rather than to every field the narrow
+# schema declares.
 query TT
 explain analyze select s['x'] from narrow;
 ----
-Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=146<slt:ignore>]
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=75<slt:ignore>]
 
 # Mixed access -- the whole (narrowed) column and a subfield of it -- still
 # reads only the narrow schema's leaves.

@@ -93,6 +93,10 @@ name = "median"
 harness = false
 
 [[bench]]
+name = "nth_value"
+harness = false
+
+[[bench]]
 name = "percentile_cont"
 harness = false
 

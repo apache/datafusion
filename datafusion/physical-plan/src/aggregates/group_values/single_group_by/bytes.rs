@@ -21,7 +21,7 @@ use crate::aggregates::group_values::GroupValues;
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 
 /// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
@@ -118,6 +118,18 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         };
 
         Ok(vec![group_values])
+    }
+
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.len())?;
+        Ok(vec![self.map.keys(selection.iter())?])
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
     }
 
     fn clear_shrink(&mut self, _num_rows: usize) {

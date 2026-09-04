@@ -15,12 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, downcast_array, downcast_dictionary_array,
-    make_comparator,
-};
+use arrow::array::{Array, ArrayRef, BooleanArray, make_comparator};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::{SortOptions, take};
+use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::Result;
@@ -139,22 +136,6 @@ impl StaticFilter for ArrayStaticFilter {
                 BooleanBuffer::new_unset(v.len()),
                 Some(nulls),
             ));
-        }
-
-        // Unwrap dictionary-encoded needles when the value type matches
-        // in_array, evaluating against the dictionary values and mapping
-        // back via keys.
-        downcast_dictionary_array! {
-            v => {
-                // Only unwrap when the haystack (in_array) type matches
-                // the dictionary value type
-                if v.values().data_type() == self.in_array.data_type() {
-                    let values_contains = self.contains(v.values().as_ref(), negated)?;
-                    let result = take(&values_contains, v.keys(), None)?;
-                    return Ok(downcast_array(result.as_ref()));
-                }
-            }
-            _ => {}
         }
 
         self.find_needles_in_haystack(v, negated)

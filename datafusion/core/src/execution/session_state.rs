@@ -140,6 +140,19 @@ use uuid::Uuid;
 /// [`SessionContext`]: crate::execution::context::SessionContext
 #[derive(Clone)]
 pub struct SessionState {
+    /// The actual content of the session state. This makes copying [`SessionState`] cheap.
+    inner: Arc<SessionStateInner>,
+    /// Execution properties. This is not part of the content as it changes for every call to
+    /// [`SessionContext::state`].
+    ///
+    /// [`SessionContext::state`]: crate::execution::context::SessionContext::state
+    execution_props: ExecutionProps,
+}
+
+/// The part of the [`SessionState`] that tends to be relatively stable (i.e., doesn't change across
+/// queries). As this is a relatively large struct, we should avoid deep copies, if possible.
+#[derive(Clone)]
+struct SessionStateInner {
     /// A unique UUID that identifies the session
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
@@ -179,8 +192,6 @@ pub struct SessionState {
     config: SessionConfig,
     /// Table options
     table_options: TableOptions,
-    /// Execution properties
-    execution_props: ExecutionProps,
     /// TableProviderFactories for different file formats.
     ///
     /// Maps strings like "JSON" to an instance of  [`TableProviderFactory`]
@@ -216,7 +227,7 @@ impl PhysicalOptimizerContext for SessionState {
     }
 
     fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
-        self.statistics_registry.as_ref()
+        self.statistics_registry()
     }
 }
 
@@ -226,35 +237,35 @@ impl Debug for SessionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug_struct = f.debug_struct("SessionState");
         let ret = debug_struct
-            .field("session_id", &self.session_id)
-            .field("config", &self.config)
-            .field("runtime_env", &self.runtime_env)
-            .field("catalog_list", &self.catalog_list)
-            .field("serializer_registry", &self.serializer_registry)
-            .field("file_formats", &self.file_formats)
+            .field("session_id", &self.inner.session_id)
+            .field("config", &self.inner.config)
+            .field("runtime_env", &self.inner.runtime_env)
+            .field("catalog_list", &self.inner.catalog_list)
+            .field("serializer_registry", &self.inner.serializer_registry)
+            .field("file_formats", &self.inner.file_formats)
             .field("execution_props", &self.execution_props)
-            .field("table_options", &self.table_options)
-            .field("table_factories", &self.table_factories)
-            .field("function_factory", &self.function_factory)
-            .field("cache_factory", &self.cache_factory)
-            .field("expr_planners", &self.expr_planners);
+            .field("table_options", &self.inner.table_options)
+            .field("table_factories", &self.inner.table_factories)
+            .field("function_factory", &self.inner.function_factory)
+            .field("cache_factory", &self.inner.cache_factory)
+            .field("expr_planners", &self.inner.expr_planners);
 
         #[cfg(feature = "sql")]
-        let ret = ret.field("relation_planners", &self.relation_planners);
+        let ret = ret.field("relation_planners", &self.inner.relation_planners);
 
         #[cfg(feature = "sql")]
-        let ret = ret.field("type_planner", &self.type_planner);
+        let ret = ret.field("type_planner", &self.inner.type_planner);
 
-        ret.field("query_planners", &self.query_planner)
-            .field("analyzer", &self.analyzer)
-            .field("optimizer", &self.optimizer)
-            .field("physical_optimizers", &self.physical_optimizers)
-            .field("table_functions", &self.table_functions)
-            .field("scalar_functions", &self.scalar_functions)
-            .field("higher_order_functions", &self.higher_order_functions)
-            .field("aggregate_functions", &self.aggregate_functions)
-            .field("window_functions", &self.window_functions)
-            .field("prepared_plans", &self.prepared_plans)
+        ret.field("query_planners", &self.inner.query_planner)
+            .field("analyzer", &self.inner.analyzer)
+            .field("optimizer", &self.inner.optimizer)
+            .field("physical_optimizers", &self.inner.physical_optimizers)
+            .field("table_functions", &self.inner.table_functions)
+            .field("scalar_functions", &self.inner.scalar_functions)
+            .field("higher_order_functions", &self.inner.higher_order_functions)
+            .field("aggregate_functions", &self.inner.aggregate_functions)
+            .field("window_functions", &self.inner.window_functions)
+            .field("prepared_plans", &self.inner.prepared_plans)
             .finish()
     }
 }
@@ -315,23 +326,23 @@ impl Session for SessionState {
     }
 
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-        &self.scalar_functions
+        &self.inner.scalar_functions
     }
 
     fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
-        &self.higher_order_functions
+        &self.inner.higher_order_functions
     }
 
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
-        &self.aggregate_functions
+        &self.inner.aggregate_functions
     }
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
-        &self.window_functions
+        &self.inner.window_functions
     }
 
     fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
-        &self.extension_types
+        &self.inner.extension_types
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
@@ -393,15 +404,17 @@ impl SessionState {
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
+        if self.config().information_schema()
+            && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
             return Ok(Arc::new(
-                InformationSchemaProvider::new(Arc::clone(&self.catalog_list))
-                    .with_table_functions(self.table_functions.clone()),
+                InformationSchemaProvider::new(Arc::clone(&self.inner.catalog_list))
+                    .with_table_functions(self.inner.table_functions.clone()),
             ));
         }
 
-        self.catalog_list
+        self.inner
+            .catalog_list
             .catalog(&resolved_ref.catalog)
             .ok_or_else(|| {
                 plan_datafusion_err!(
@@ -421,7 +434,10 @@ impl SessionState {
         &mut self,
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
     ) -> &Self {
-        self.analyzer.rules.push(analyzer_rule);
+        Arc::make_mut(&mut self.inner)
+            .analyzer
+            .rules
+            .push(analyzer_rule);
         self
     }
 
@@ -432,46 +448,50 @@ impl SessionState {
         &mut self,
         optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
     ) {
-        self.optimizer.rules.push(optimizer_rule);
+        Arc::make_mut(&mut self.inner)
+            .optimizer
+            .rules
+            .push(optimizer_rule);
     }
 
     /// Removes an optimizer rule by name, returning `true` if it existed.
     pub(crate) fn remove_optimizer_rule(&mut self, name: &str) -> bool {
-        let original_len = self.optimizer.rules.len();
-        self.optimizer.rules.retain(|r| r.name() != name);
-        self.optimizer.rules.len() < original_len
+        let optimizer = &mut Arc::make_mut(&mut self.inner).optimizer;
+        let original_len = optimizer.rules.len();
+        optimizer.rules.retain(|r| r.name() != name);
+        optimizer.rules.len() < original_len
     }
 
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn set_function_factory(&mut self, function_factory: Arc<dyn FunctionFactory>) {
-        self.function_factory = Some(function_factory);
+        Arc::make_mut(&mut self.inner).function_factory = Some(function_factory);
     }
 
     /// Get the function factory
     pub fn function_factory(&self) -> Option<&Arc<dyn FunctionFactory>> {
-        self.function_factory.as_ref()
+        self.inner.function_factory.as_ref()
     }
 
     /// Register a [`CacheFactory`] for custom caching strategy
     pub fn set_cache_factory(&mut self, cache_factory: Arc<dyn CacheFactory>) {
-        self.cache_factory = Some(cache_factory);
+        Arc::make_mut(&mut self.inner).cache_factory = Some(cache_factory);
     }
 
     /// Get the cache factory
     pub fn cache_factory(&self) -> Option<&Arc<dyn CacheFactory>> {
-        self.cache_factory.as_ref()
+        self.inner.cache_factory.as_ref()
     }
 
     /// Get the table factories
     pub fn table_factories(&self) -> &HashMap<String, Arc<dyn TableProviderFactory>> {
-        &self.table_factories
+        &self.inner.table_factories
     }
 
     /// Get the table factories
     pub fn table_factories_mut(
         &mut self,
     ) -> &mut HashMap<String, Arc<dyn TableProviderFactory>> {
-        &mut self.table_factories
+        &mut Arc::make_mut(&mut self.inner).table_factories
     }
 
     /// Parse an SQL string into an DataFusion specific AST
@@ -491,7 +511,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
+        let recursion_limit = self.config().options().sql_parser.recursion_limit.get();
 
         let mut statements = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
@@ -539,7 +559,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
+        let recursion_limit = self.config().options().sql_parser.recursion_limit.get();
         let expr = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
@@ -559,8 +579,11 @@ impl SessionState {
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
-        let enable_ident_normalization =
-            self.config.options().sql_parser.enable_ident_normalization;
+        let enable_ident_normalization = self
+            .config()
+            .options()
+            .sql_parser
+            .enable_ident_normalization;
         let (table_refs, _) = datafusion_sql::resolve::resolve_table_references(
             statement,
             enable_ident_normalization,
@@ -599,7 +622,7 @@ impl SessionState {
 
     #[cfg(feature = "sql")]
     fn get_parser_options(&self) -> ParserOptions {
-        let sql_parser_options = &self.config.options().sql_parser;
+        let sql_parser_options = &self.config().options().sql_parser;
 
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
@@ -633,7 +656,7 @@ impl SessionState {
         &self,
         sql: &str,
     ) -> datafusion_common::Result<LogicalPlan> {
-        let dialect = self.config.options().sql_parser.dialect;
+        let dialect = self.config().options().sql_parser.dialect;
         let statement = self.sql_to_statement(sql, &dialect)?;
         let plan = self.statement_to_plan(statement).await?;
         Ok(plan)
@@ -648,7 +671,7 @@ impl SessionState {
         sql: &str,
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Expr> {
-        let dialect = self.config.options().sql_parser.dialect;
+        let dialect = self.config().options().sql_parser.dialect;
 
         let sql_expr = self.sql_to_expr_with_alias(sql, &dialect)?;
 
@@ -673,23 +696,23 @@ impl SessionState {
 
     /// Returns the [`Analyzer`] for this session
     pub fn analyzer(&self) -> &Analyzer {
-        &self.analyzer
+        &self.inner.analyzer
     }
 
     /// Returns the [`Optimizer`] for this session
     pub fn optimizer(&self) -> &Optimizer {
-        &self.optimizer
+        &self.inner.optimizer
     }
 
     /// Returns the [`ExprPlanner`]s for this session
     pub fn expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &self.expr_planners
+        &self.inner.expr_planners
     }
 
     #[cfg(feature = "sql")]
     /// Returns the registered relation planners in priority order.
     pub fn relation_planners(&self) -> &[Arc<dyn RelationPlanner>] {
-        &self.relation_planners
+        &self.inner.relation_planners
     }
 
     #[cfg(feature = "sql")]
@@ -700,13 +723,15 @@ impl SessionState {
         &mut self,
         planner: Arc<dyn RelationPlanner>,
     ) -> datafusion_common::Result<()> {
-        self.relation_planners.insert(0, planner);
+        Arc::make_mut(&mut self.inner)
+            .relation_planners
+            .insert(0, planner);
         Ok(())
     }
 
     /// Returns the [`QueryPlanner`] for this session
     pub fn query_planner(&self) -> &Arc<dyn QueryPlanner + Send + Sync> {
-        &self.query_planner
+        &self.inner.query_planner
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
@@ -715,7 +740,7 @@ impl SessionState {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // analyze & capture output of each rule
-            let analyzer_result = self.analyzer.execute_and_check(
+            let analyzer_result = self.inner.analyzer.execute_and_check(
                 e.plan.as_ref().clone(),
                 &self.options(),
                 |analyzed_plan, analyzer| {
@@ -749,7 +774,7 @@ impl SessionState {
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
             // optimize the child plan, capturing the output of each optimizer
-            let optimized_plan = self.optimizer.optimize(
+            let optimized_plan = self.inner.optimizer.optimize(
                 analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
@@ -779,12 +804,14 @@ impl SessionState {
                 show_statistics: e.show_statistics,
             }))
         } else {
-            let analyzed_plan = self.analyzer.execute_and_check(
+            let analyzed_plan = self.inner.analyzer.execute_and_check(
                 plan.clone(),
                 &self.options(),
                 |_, _| {},
             )?;
-            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
+            self.inner
+                .optimizer
+                .optimize(analyzed_plan, self, |_, _| {})
         }
     }
 
@@ -803,7 +830,8 @@ impl SessionState {
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
-        self.query_planner
+        self.inner
+            .query_planner
             .create_physical_plan(&logical_plan, self)
             .await
     }
@@ -840,7 +868,7 @@ impl SessionState {
         let mut expr = simplifier.coerce(expr, df_schema)?;
 
         // rewrite Exprs to functions if necessary
-        for rewrite in self.analyzer.function_rewrites() {
+        for rewrite in self.inner.analyzer.function_rewrites() {
             expr = expr
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
@@ -855,12 +883,12 @@ impl SessionState {
 
     /// Return the session ID
     pub fn session_id(&self) -> &str {
-        &self.session_id
+        &self.inner.session_id
     }
 
     /// Return the runtime env
     pub fn runtime_env(&self) -> &Arc<RuntimeEnv> {
-        &self.runtime_env
+        &self.inner.runtime_env
     }
 
     /// Return the execution properties
@@ -875,27 +903,27 @@ impl SessionState {
 
     /// Return the [`SessionConfig`]
     pub fn config(&self) -> &SessionConfig {
-        &self.config
+        &self.inner.config
     }
 
     /// Return the mutable [`SessionConfig`].
     pub fn config_mut(&mut self) -> &mut SessionConfig {
-        &mut self.config
+        &mut Arc::make_mut(&mut self.inner).config
     }
 
     /// Return the logical optimizers
     pub fn optimizers(&self) -> &[Arc<dyn OptimizerRule + Send + Sync>] {
-        &self.optimizer.rules
+        &self.inner.optimizer.rules
     }
 
     /// Return the physical optimizers
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
-        &self.physical_optimizers.rules
+        &self.inner.physical_optimizers.rules
     }
 
     /// return the configuration options
     pub fn config_options(&self) -> &Arc<ConfigOptions> {
-        self.config.options()
+        self.inner.config.options()
     }
 
     /// Returns the statistics registry if one is configured.
@@ -903,18 +931,18 @@ impl SessionState {
     /// The registry provides pluggable statistics providers for enhanced
     /// cardinality estimation (e.g., NDV overrides, histograms).
     pub fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
-        self.statistics_registry.as_ref()
+        self.inner.statistics_registry.as_ref()
     }
 
     /// Mark the start of the execution
     pub fn mark_start_execution(&mut self) {
-        let config = Arc::clone(self.config.options());
+        let config = Arc::clone(self.config().options());
         self.execution_props.mark_start_execution(config);
     }
 
     /// Return the table options
     pub fn table_options(&self) -> &TableOptions {
-        &self.table_options
+        &self.inner.table_options
     }
 
     /// return the TableOptions options with its extensions
@@ -924,13 +952,16 @@ impl SessionState {
 
     /// Returns a mutable reference to [`TableOptions`]
     pub fn table_options_mut(&mut self) -> &mut TableOptions {
-        &mut self.table_options
+        &mut Arc::make_mut(&mut self.inner).table_options
     }
 
     /// Registers a [`ConfigExtension`] as a table option extension that can be
     /// referenced from SQL statements executed against this context.
     pub fn register_table_options_extension<T: ConfigExtension>(&mut self, extension: T) {
-        self.table_options.extensions.insert(extension)
+        Arc::make_mut(&mut self.inner)
+            .table_options
+            .extensions
+            .insert(extension);
     }
 
     /// Adds or updates a [FileFormatFactory] which can be used with COPY TO or
@@ -942,7 +973,12 @@ impl SessionState {
         overwrite: bool,
     ) -> Result<(), DataFusionError> {
         let ext = file_format.get_ext().to_lowercase();
-        match (self.file_formats.entry(ext.clone()), overwrite) {
+        match (
+            Arc::make_mut(&mut self.inner)
+                .file_formats
+                .entry(ext.clone()),
+            overwrite,
+        ) {
             (Entry::Vacant(e), _) => {
                 e.insert(file_format);
             }
@@ -954,7 +990,7 @@ impl SessionState {
                     "File type already registered for extension {ext}. Set overwrite to true to replace this extension."
                 );
             }
-        };
+        }
         Ok(())
     }
 
@@ -964,7 +1000,7 @@ impl SessionState {
         &self,
         ext: &str,
     ) -> Option<Arc<dyn FileFormatFactory>> {
-        self.file_formats.get(&ext.to_lowercase()).cloned()
+        self.inner.file_formats.get(&ext.to_lowercase()).cloned()
     }
 
     /// Get a new TaskContext to run in this session
@@ -974,42 +1010,42 @@ impl SessionState {
 
     /// Return catalog list
     pub fn catalog_list(&self) -> &Arc<dyn CatalogProviderList> {
-        &self.catalog_list
+        &self.inner.catalog_list
     }
 
     /// Set the catalog list
     pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
-        self.catalog_list = catalog_list;
+        Arc::make_mut(&mut self.inner).catalog_list = catalog_list;
     }
 
     /// Return reference to scalar_functions
     pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-        &self.scalar_functions
+        &self.inner.scalar_functions
     }
 
     /// Return reference to higher_order_functions
     pub fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
-        &self.higher_order_functions
+        &self.inner.higher_order_functions
     }
 
     /// Return reference to aggregate_functions
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
-        &self.aggregate_functions
+        &self.inner.aggregate_functions
     }
 
     /// Return reference to window functions
     pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
-        &self.window_functions
+        &self.inner.window_functions
     }
 
     /// Return reference to table_functions
     pub fn table_functions(&self) -> &HashMap<String, Arc<TableFunction>> {
-        &self.table_functions
+        &self.inner.table_functions
     }
 
     /// Return [SerializerRegistry] for extensions
     pub fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry> {
-        &self.serializer_registry
+        &self.inner.serializer_registry
     }
 
     /// Return version of the cargo package that produced this query
@@ -1019,7 +1055,7 @@ impl SessionState {
 
     /// Register a user defined table function
     pub fn register_udtf(&mut self, name: &str, fun: Arc<dyn TableFunctionImpl>) {
-        self.table_functions.insert(
+        Arc::make_mut(&mut self.inner).table_functions.insert(
             name.to_owned(),
             Arc::new(TableFunction::new(name.to_owned(), fun)),
         );
@@ -1030,7 +1066,7 @@ impl SessionState {
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableFunctionImpl>>> {
-        let udtf = self.table_functions.remove(name);
+        let udtf = Arc::make_mut(&mut self.inner).table_functions.remove(name);
         Ok(udtf.map(|x| Arc::clone(x.function())))
     }
 
@@ -1041,7 +1077,7 @@ impl SessionState {
         fields: Vec<FieldRef>,
         plan: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<()> {
-        match self.prepared_plans.entry(name) {
+        match Arc::make_mut(&mut self.inner).prepared_plans.entry(name) {
             Entry::Vacant(e) => {
                 e.insert(Arc::new(PreparedPlan { fields, plan }));
                 Ok(())
@@ -1054,7 +1090,7 @@ impl SessionState {
 
     /// Get the prepared plan with the given name.
     pub(crate) fn get_prepared(&self, name: &str) -> Option<Arc<PreparedPlan>> {
-        self.prepared_plans.get(name).map(Arc::clone)
+        self.inner.prepared_plans.get(name).map(Arc::clone)
     }
 
     /// Remove the prepared plan with the given name.
@@ -1062,7 +1098,7 @@ impl SessionState {
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<()> {
-        match self.prepared_plans.remove(name) {
+        match Arc::make_mut(&mut self.inner).prepared_plans.remove(name) {
             Some(_) => Ok(()),
             None => exec_err!("Prepared statement '{}' does not exist", name),
         }
@@ -1161,15 +1197,20 @@ impl SessionStateBuilder {
     pub fn new_from_existing(existing: SessionState) -> Self {
         let default_catalog_exist = existing
             .catalog_list()
-            .catalog(&existing.config.options().catalog.default_catalog)
+            .catalog(&existing.config().options().catalog.default_catalog)
             .is_some();
         // The new `with_create_default_catalog_and_schema` should be false if the default catalog exists
         let create_default_catalog_and_schema = existing
-            .config
+            .config()
             .options()
             .catalog
             .create_default_catalog_and_schema
             && !default_catalog_exist;
+        let SessionState {
+            inner: content,
+            execution_props,
+        } = existing;
+        let existing = Arc::unwrap_or_clone(content);
         let new_config = existing
             .config
             .with_create_default_catalog_and_schema(create_default_catalog_and_schema);
@@ -1199,7 +1240,7 @@ impl SessionStateBuilder {
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
             config: Some(new_config),
             table_options: Some(existing.table_options),
-            execution_props: Some(existing.execution_props),
+            execution_props: Some(execution_props),
             table_factories: Some(existing.table_factories),
             runtime_env: Some(existing.runtime_env),
             function_factory: existing.function_factory,
@@ -1626,7 +1667,7 @@ impl SessionStateBuilder {
         let config = config.unwrap_or_default();
         let runtime_env = runtime_env.unwrap_or_else(|| Arc::new(RuntimeEnv::default()));
 
-        let mut state = SessionState {
+        let content = Arc::new(SessionStateInner {
             session_id: session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
@@ -1654,20 +1695,24 @@ impl SessionStateBuilder {
                 TableOptions::default_from_session_config(config.options())
             }),
             config,
-            execution_props: execution_props.unwrap_or_default(),
             table_factories: table_factories.unwrap_or_default(),
             runtime_env,
             function_factory,
             cache_factory,
             statistics_registry,
             prepared_plans: HashMap::new(),
+        });
+
+        let mut state = SessionState {
+            inner: content,
+            execution_props: execution_props.unwrap_or_default(),
         };
 
         if let Some(file_formats) = file_formats {
             for file_format in file_formats {
                 if let Err(e) = state.register_file_format(file_format, false) {
                     info!("Unable to register file format: {e}")
-                };
+                }
             }
         }
 
@@ -1723,36 +1768,36 @@ impl SessionStateBuilder {
         }
 
         if let Some(aggregate_functions) = aggregate_functions {
-            aggregate_functions.into_iter().for_each(|udaf| {
+            for udaf in aggregate_functions {
                 let existing_udf = state.register_udaf(udaf);
                 if let Ok(Some(existing_udf)) = existing_udf {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
-            });
+            }
         }
 
         if let Some(window_functions) = window_functions {
-            window_functions.into_iter().for_each(|udwf| {
+            for udwf in window_functions {
                 let existing_udf = state.register_udwf(udwf);
                 if let Ok(Some(existing_udf)) = existing_udf {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
-            });
+            }
         }
 
         if let Some(extension_types) = extension_types {
-            state.extension_types = extension_types;
+            Arc::make_mut(&mut state.inner).extension_types = extension_types;
         }
 
-        if state.config.create_default_catalog_and_schema() {
+        if state.config().create_default_catalog_and_schema() {
             let default_catalog = SessionStateDefaults::default_catalog(
-                &state.config,
-                &state.table_factories,
-                &state.runtime_env,
+                state.config(),
+                state.table_factories(),
+                state.runtime_env(),
             );
 
-            let existing_default_catalog = state.catalog_list.register_catalog(
-                state.config.options().catalog.default_catalog.clone(),
+            let existing_default_catalog = state.catalog_list().register_catalog(
+                state.config().options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
 
@@ -1762,23 +1807,24 @@ impl SessionStateBuilder {
         }
 
         if let Some(analyzer_rules) = analyzer_rules {
+            let analyzer = &mut Arc::make_mut(&mut state.inner).analyzer;
             for analyzer_rule in analyzer_rules {
-                state.analyzer.rules.push(analyzer_rule);
+                analyzer.rules.push(analyzer_rule);
             }
         }
 
         if let Some(optimizer_rules) = optimizer_rules {
+            let optimizer = &mut Arc::make_mut(&mut state.inner).optimizer;
             for optimizer_rule in optimizer_rules {
-                state.optimizer.rules.push(optimizer_rule);
+                optimizer.rules.push(optimizer_rule);
             }
         }
 
         if let Some(physical_optimizer_rules) = physical_optimizer_rules {
+            let physical_optimizers =
+                &mut Arc::make_mut(&mut state.inner).physical_optimizers;
             for physical_optimizer_rule in physical_optimizer_rules {
-                state
-                    .physical_optimizers
-                    .rules
-                    .push(physical_optimizer_rule);
+                physical_optimizers.rules.push(physical_optimizer_rule);
             }
         }
 
@@ -1997,7 +2043,7 @@ impl ContextProvider for SessionContextProvider<'_> {
     }
 
     fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
-        if let Some(type_planner) = &self.state.type_planner {
+        if let Some(type_planner) = &self.state.inner.type_planner {
             Some(Arc::clone(type_planner))
         } else {
             None
@@ -2024,6 +2070,7 @@ impl ContextProvider for SessionContextProvider<'_> {
 
         let tbl_func = self
             .state
+            .inner
             .table_functions
             .get(name)
             .cloned()
@@ -2131,6 +2178,7 @@ impl ContextProvider for SessionContextProvider<'_> {
         Arc<dyn datafusion_common::file_options::file_type::FileType>,
     > {
         self.state
+            .inner
             .file_formats
             .get(&ext.to_lowercase())
             .ok_or(plan_datafusion_err!(
@@ -2144,11 +2192,11 @@ impl ContextProvider for SessionContextProvider<'_> {
 
 impl FunctionRegistry for SessionState {
     fn udfs(&self) -> HashSet<String> {
-        self.scalar_functions.keys().cloned().collect()
+        self.inner.scalar_functions.keys().cloned().collect()
     }
 
     fn udf(&self, name: &str) -> datafusion_common::Result<Arc<ScalarUDF>> {
-        let result = self.scalar_functions.get(name);
+        let result = self.inner.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
             plan_datafusion_err!("There is no UDF named \"{name}\" in the registry. Use session context `register_udf` function to register a custom UDF")
@@ -2159,14 +2207,15 @@ impl FunctionRegistry for SessionState {
         &self,
         name: &str,
     ) -> datafusion_common::Result<Arc<HigherOrderUDF>> {
-        self.higher_order_functions
+        self.inner
+            .higher_order_functions
             .get(name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("Higher Order Function {name} not found"))
     }
 
     fn udaf(&self, name: &str) -> datafusion_common::Result<Arc<AggregateUDF>> {
-        let result = self.aggregate_functions.get(name);
+        let result = self.inner.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
             plan_datafusion_err!("There is no UDAF named \"{name}\" in the registry. Use session context `register_udaf` function to register a custom UDAF")
@@ -2174,7 +2223,7 @@ impl FunctionRegistry for SessionState {
     }
 
     fn udwf(&self, name: &str) -> datafusion_common::Result<Arc<WindowUDF>> {
-        let result = self.window_functions.get(name);
+        let result = self.inner.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
             plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry. Use session context `register_udwf` function to register a custom UDWF")
@@ -2185,56 +2234,56 @@ impl FunctionRegistry for SessionState {
         &mut self,
         udf: Arc<ScalarUDF>,
     ) -> datafusion_common::Result<Option<Arc<ScalarUDF>>> {
+        let scalar_functions = &mut Arc::make_mut(&mut self.inner).scalar_functions;
         udf.aliases().iter().for_each(|alias| {
-            self.scalar_functions
-                .insert(alias.clone(), Arc::clone(&udf));
+            scalar_functions.insert(alias.clone(), Arc::clone(&udf));
         });
-        Ok(self.scalar_functions.insert(udf.name().into(), udf))
+        Ok(scalar_functions.insert(udf.name().into(), udf))
     }
 
     fn register_higher_order_function(
         &mut self,
         function: Arc<HigherOrderUDF>,
     ) -> datafusion_common::Result<Option<Arc<HigherOrderUDF>>> {
+        let higher_order_functions =
+            &mut Arc::make_mut(&mut self.inner).higher_order_functions;
         function.aliases().iter().for_each(|alias| {
-            self.higher_order_functions
-                .insert(alias.clone(), Arc::clone(&function));
+            higher_order_functions.insert(alias.clone(), Arc::clone(&function));
         });
-        Ok(self
-            .higher_order_functions
-            .insert(function.name().into(), function))
+        Ok(higher_order_functions.insert(function.name().into(), function))
     }
 
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
+        let aggregate_functions = &mut Arc::make_mut(&mut self.inner).aggregate_functions;
         udaf.aliases().iter().for_each(|alias| {
-            self.aggregate_functions
-                .insert(alias.clone(), Arc::clone(&udaf));
+            aggregate_functions.insert(alias.clone(), Arc::clone(&udaf));
         });
-        Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
+        Ok(aggregate_functions.insert(udaf.name().into(), udaf))
     }
 
     fn register_udwf(
         &mut self,
         udwf: Arc<WindowUDF>,
     ) -> datafusion_common::Result<Option<Arc<WindowUDF>>> {
+        let window_functions = &mut Arc::make_mut(&mut self.inner).window_functions;
         udwf.aliases().iter().for_each(|alias| {
-            self.window_functions
-                .insert(alias.clone(), Arc::clone(&udwf));
+            window_functions.insert(alias.clone(), Arc::clone(&udwf));
         });
-        Ok(self.window_functions.insert(udwf.name().into(), udwf))
+        Ok(window_functions.insert(udwf.name().into(), udwf))
     }
 
     fn deregister_udf(
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<ScalarUDF>>> {
-        let udf = self.scalar_functions.remove(name);
+        let scalar_functions = &mut Arc::make_mut(&mut self.inner).scalar_functions;
+        let udf = scalar_functions.remove(name);
         if let Some(udf) = &udf {
             for alias in udf.aliases() {
-                self.scalar_functions.remove(alias);
+                scalar_functions.remove(alias);
             }
         }
         Ok(udf)
@@ -2244,10 +2293,12 @@ impl FunctionRegistry for SessionState {
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<HigherOrderUDF>>> {
-        let function = self.higher_order_functions.remove(name);
+        let higher_order_functions =
+            &mut Arc::make_mut(&mut self.inner).higher_order_functions;
+        let function = higher_order_functions.remove(name);
         if let Some(function) = &function {
             for alias in function.aliases() {
-                self.higher_order_functions.remove(alias);
+                higher_order_functions.remove(alias);
             }
         }
         Ok(function)
@@ -2257,10 +2308,11 @@ impl FunctionRegistry for SessionState {
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
-        let udaf = self.aggregate_functions.remove(name);
+        let aggregate_functions = &mut Arc::make_mut(&mut self.inner).aggregate_functions;
+        let udaf = aggregate_functions.remove(name);
         if let Some(udaf) = &udaf {
             for alias in udaf.aliases() {
-                self.aggregate_functions.remove(alias);
+                aggregate_functions.remove(alias);
             }
         }
         Ok(udaf)
@@ -2270,10 +2322,11 @@ impl FunctionRegistry for SessionState {
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<WindowUDF>>> {
-        let udwf = self.window_functions.remove(name);
+        let window_functions = &mut Arc::make_mut(&mut self.inner).window_functions;
+        let udwf = window_functions.remove(name);
         if let Some(udwf) = &udwf {
             for alias in udwf.aliases() {
-                self.window_functions.remove(alias);
+                window_functions.remove(alias);
             }
         }
         Ok(udwf)
@@ -2283,32 +2336,36 @@ impl FunctionRegistry for SessionState {
         &mut self,
         rewrite: Arc<dyn FunctionRewrite + Send + Sync>,
     ) -> datafusion_common::Result<()> {
-        self.analyzer.add_function_rewrite(rewrite);
+        Arc::make_mut(&mut self.inner)
+            .analyzer
+            .add_function_rewrite(rewrite);
         Ok(())
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-        self.expr_planners.clone()
+        self.inner.expr_planners.clone()
     }
 
     fn register_expr_planner(
         &mut self,
         expr_planner: Arc<dyn ExprPlanner>,
     ) -> datafusion_common::Result<()> {
-        self.expr_planners.push(expr_planner);
+        Arc::make_mut(&mut self.inner)
+            .expr_planners
+            .push(expr_planner);
         Ok(())
     }
 
     fn higher_order_function_names(&self) -> HashSet<String> {
-        self.higher_order_functions.keys().cloned().collect()
+        self.inner.higher_order_functions.keys().cloned().collect()
     }
 
     fn udafs(&self) -> HashSet<String> {
-        self.aggregate_functions.keys().cloned().collect()
+        self.inner.aggregate_functions.keys().cloned().collect()
     }
 
     fn udwfs(&self) -> HashSet<String> {
-        self.window_functions.keys().cloned().collect()
+        self.inner.window_functions.keys().cloned().collect()
     }
 }
 
@@ -2328,7 +2385,7 @@ impl OptimizerConfig for SessionState {
     }
 
     fn options(&self) -> Arc<ConfigOptions> {
-        Arc::clone(self.config.options())
+        Arc::clone(self.config().options())
     }
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
@@ -2342,13 +2399,13 @@ impl From<&SessionState> for TaskContext {
         let task_id = None;
         TaskContext::new(
             task_id,
-            state.session_id.clone(),
-            state.config.clone(),
-            state.scalar_functions.clone(),
-            state.higher_order_functions.clone(),
-            state.aggregate_functions.clone(),
-            state.window_functions.clone(),
-            Arc::clone(&state.runtime_env),
+            state.inner.session_id.clone(),
+            state.inner.config.clone(),
+            state.inner.scalar_functions.clone(),
+            state.inner.higher_order_functions.clone(),
+            state.inner.aggregate_functions.clone(),
+            state.inner.window_functions.clone(),
+            Arc::clone(&state.inner.runtime_env),
         )
     }
 }
@@ -2474,7 +2531,7 @@ mod tests {
             let sql = "[1,2,3]";
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
             let df_schema = DFSchema::try_from(schema)?;
-            let dialect = state.config.options().sql_parser.dialect;
+            let dialect = state.config().options().sql_parser.dialect;
             let sql_expr = state.sql_to_expr(sql, &dialect)?;
 
             let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
@@ -2503,7 +2560,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let df_schema = DFSchema::try_from(schema).unwrap();
-        let dialect = state.config.options().sql_parser.dialect;
+        let dialect = state.config().options().sql_parser.dialect;
         let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
 
         for sql in ["[1,2,3]", "a > 10", "SUM(a)"] {
@@ -2544,13 +2601,13 @@ mod tests {
             .register_table("employee".to_string(), Arc::new(table))?;
 
         let default_catalog = session_state
-            .config
+            .config()
             .options()
             .catalog
             .default_catalog
             .clone();
         let default_schema = session_state
-            .config
+            .config()
             .options()
             .catalog
             .default_schema

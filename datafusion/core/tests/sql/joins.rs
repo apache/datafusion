@@ -39,8 +39,7 @@ async fn join_change_in_planner() -> Result<()> {
     ]));
     // Specify the ordering:
     let file_sort_order = vec![
-        [col("a1")]
-            .into_iter()
+        std::iter::once(col("a1"))
             .map(|e| {
                 let ascending = true;
                 let nulls_first = false;
@@ -98,8 +97,7 @@ async fn join_no_order_on_filter() -> Result<()> {
     ]));
     // Specify the ordering:
     let file_sort_order = vec![
-        [col("a1")]
-            .into_iter()
+        std::iter::once(col("a1"))
             .map(|e| {
                 let ascending = true;
                 let nulls_first = false;
@@ -225,7 +223,7 @@ async fn join_using_uppercase_column() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let file_path = tmp_dir.path().join("uppercase-column.csv");
     let mut file = File::create(file_path.clone())?;
-    file.write_all("0".as_bytes())?;
+    file.write_all(b"0")?;
     drop(file);
 
     let ctx = SessionContext::new();

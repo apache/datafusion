@@ -108,7 +108,7 @@ pub fn reverse_row_selection(
     let mut reversed_selectors = Vec::new();
     for &rg_idx in row_groups_to_scan.iter().rev() {
         if let Some(selectors) = rg_selections.get(&rg_idx) {
-            reversed_selectors.extend(selectors.iter().cloned());
+            reversed_selectors.extend(selectors.iter().copied());
         } else {
             // No specific selection for this row group means select all rows in it
             if let Some((_, start, end)) =
@@ -407,12 +407,11 @@ mod tests {
 
     #[test]
     fn test_prepared_access_plan_reverse_empty_selection() {
-        // Test: all rows are skipped
+        // Test: all rows are skipped. After `strip_empty_row_groups`, every row
+        // group's selection is empty, so the whole plan strips to nothing.
         let metadata = create_test_metadata(vec![100, 100, 100]);
 
         let mut access_plan = ParquetAccessPlan::new_all(3);
-
-        // Skip all rows in all row groups
         for i in 0..3 {
             access_plan
                 .scan_selection(i, RowSelection::from(vec![RowSelector::skip(100)]));
@@ -422,22 +421,24 @@ mod tests {
         let prepared_plan = access_plan
             .prepare(rg_metadata)
             .expect("Failed to create PreparedAccessPlan");
+        assert!(
+            prepared_plan.row_group_indexes.is_empty(),
+            "all-empty selections must be stripped to an empty plan",
+        );
+        assert!(prepared_plan.row_selection.is_none());
 
+        // All row groups are empty after pruning, so they are stripped and the
+        // prepared plan is empty (rather than carrying a selection that skips
+        // every row).
+        assert!(prepared_plan.row_group_indexes.is_empty());
+        assert!(prepared_plan.row_selection.is_none());
+
+        // Reversing an empty plan stays empty.
         let reversed_plan = prepared_plan
             .reverse(&metadata)
             .expect("Failed to reverse PreparedAccessPlan");
-
-        // Should still skip all rows
-        let total_selected: usize = reversed_plan
-            .row_selection
-            .as_ref()
-            .unwrap()
-            .iter()
-            .filter(|s| !s.skip)
-            .map(|s| s.row_count)
-            .sum();
-
-        assert_eq!(total_selected, 0);
+        assert!(reversed_plan.row_group_indexes.is_empty());
+        assert!(reversed_plan.row_selection.is_none());
     }
 
     #[test]

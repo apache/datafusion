@@ -42,6 +42,25 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 | ----------- | ----------------------------------------------------------------- |
 | selectivity | Selectivity of the filter, calculated as output_rows / input_rows |
 
+### HashJoinExec
+
+`HashJoinExec` also exposes the common `BaselineMetrics`. Its
+`elapsed_compute` metric is the sum of the build-side collection time and the
+subsequent join processing time.
+
+| Metric                  | Description                                                                                               |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- |
+| build_time              | Total time spent collecting and building the build side of the join.                                      |
+| build_input_batches     | Number of input batches consumed from the build side.                                                     |
+| build_input_rows        | Number of input rows consumed from the build side.                                                        |
+| build_mem_used          | Peak tracked memory used by the build side, in bytes.                                                     |
+| join_time               | Total time spent processing the join after build-side collection.                                         |
+| input_batches           | Number of input batches consumed from the probe side.                                                     |
+| input_rows              | Number of input rows consumed from the probe side.                                                        |
+| probe_hit_rate          | Fraction of probe-side rows with a build-side join-key match before applying any join filter.             |
+| avg_fanout              | Average number of build-side join-key matches per matched probe-side row before applying any join filter. |
+| array_map_created_count | Number of times `HashJoinExec` created an `ArrayMap` for perfect hash join lookup execution.              |
+
 ## TODO
 
 Add metrics for the remaining operators

@@ -171,9 +171,8 @@ fn compute_array_length(
     dimension: Option<i64>,
 ) -> Result<Option<u64>> {
     let mut current_dimension: i64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
+    let Some(mut value) = arr else {
+        return Ok(None);
     };
     let dimension = match dimension {
         Some(value) => {

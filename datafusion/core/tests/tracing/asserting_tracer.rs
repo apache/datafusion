@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
-use std::ops::Deref;
 use std::sync::{Arc, LazyLock};
 
 use datafusion_common::{HashMap, HashSet};
@@ -28,7 +27,7 @@ use tokio::sync::{Mutex, MutexGuard};
 /// Initializes the global join set tracer with the asserting tracer.
 /// Call this function before spawning any tasks that should be traced.
 pub fn init_asserting_tracer() {
-    set_join_set_tracer(ASSERTING_TRACER.deref())
+    set_join_set_tracer(&*ASSERTING_TRACER)
         .expect("Failed to initialize asserting tracer");
 }
 

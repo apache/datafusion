@@ -66,6 +66,7 @@ github:
           - "cargo check datafusion-proto features"
           - "cargo check datafusion features"
           - "cargo check datafusion-functions features"
+          - "cargo check datafusion-spark features"
           - "cargo test (amd64)"
           - "cargo test datafusion-cli (amd64)"
           - "cargo examples (amd64)"

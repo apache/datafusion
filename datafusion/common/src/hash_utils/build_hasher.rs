@@ -193,9 +193,9 @@ fn hash_null_with_hasher<S: BuildHasher>(
 
     let null_hash = hash_builder.hash_one(1);
     if multi_col {
-        hashes_buffer.iter_mut().for_each(|hash| {
+        for hash in hashes_buffer {
             *hash = combine_hashes(null_hash, *hash);
-        })
+        }
     } else {
         hashes_buffer.fill(null_hash);
     }

@@ -376,7 +376,7 @@ impl PlannerContext {
         match self.outer_from_schema.as_mut() {
             Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
             None => self.outer_from_schema = Some(Arc::clone(schema)),
-        };
+        }
         Ok(())
     }
 
@@ -715,14 +715,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::Int32)
             }
             SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
-            SQLDataType::TinyIntUnsigned(_) => Ok(DataType::UInt8),
-            SQLDataType::SmallIntUnsigned(_) | SQLDataType::Int2Unsigned(_) => {
+            SQLDataType::TinyIntUnsigned(_) | SQLDataType::UTinyInt => Ok(DataType::UInt8),
+            SQLDataType::SmallIntUnsigned(_)
+            | SQLDataType::Int2Unsigned(_)
+            | SQLDataType::USmallInt => {
                 Ok(DataType::UInt16)
             }
             SQLDataType::IntUnsigned(_)
             | SQLDataType::IntegerUnsigned(_)
             | SQLDataType::Int4Unsigned(_) => Ok(DataType::UInt32),
-            SQLDataType::Varchar(length) => {
+            SQLDataType::Varchar(length)
+            | SQLDataType::Nvarchar(length)
+            | SQLDataType::CharacterVarying(length)
+            | SQLDataType::CharVarying(length) => {
                 match (length, self.options.support_varchar_with_length) {
                     (Some(_), false) => plan_err!(
                         "does not support Varchar with length, \
@@ -737,11 +742,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-            SQLDataType::BigIntUnsigned(_) | SQLDataType::Int8Unsigned(_) => {
+            SQLDataType::BigIntUnsigned(_)
+            | SQLDataType::Int8Unsigned(_)
+            | SQLDataType::UBigInt => {
                 Ok(DataType::UInt64)
             }
-            SQLDataType::Float(_) => Ok(DataType::Float32),
-            SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
+            SQLDataType::Float(_)
+            | SQLDataType::Real
+            | SQLDataType::Float4 => Ok(DataType::Float32),
             SQLDataType::Double(ExactNumberInfo::None)
             | SQLDataType::DoublePrecision
             | SQLDataType::Float8 => Ok(DataType::Float64),
@@ -804,7 +812,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 make_decimal_type(precision, scale.map(|s| s as u64))
             }
-            SQLDataType::Bytea => Ok(DataType::Binary),
+            SQLDataType::Bytea
+            | SQLDataType::Blob(None)
+            | SQLDataType::Binary(None)
+            | SQLDataType::Varbinary(None)
+            | SQLDataType::Bytes(None) => Ok(DataType::Binary),
             SQLDataType::Interval { fields, precision } => {
                 if fields.is_some() || precision.is_some() {
                     return not_impl_err!("Unsupported SQL type {sql_type}");
@@ -836,7 +848,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let entries = DataType::Struct(Fields::from([key_field, value_field]));
                 Ok(DataType::Map(Arc::new(Field::new("entries", entries, false)), false))
             }
-            SQLDataType::Nvarchar(_)
             | SQLDataType::JSON
             | SQLDataType::Uuid
             | SQLDataType::Binary(_)
@@ -851,8 +862,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::MediumInt(_)
             | SQLDataType::MediumIntUnsigned(_)
             | SQLDataType::Character(_)
-            | SQLDataType::CharacterVarying(_)
-            | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
             | SQLDataType::Timestamp(_, _)
@@ -901,11 +910,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::AnyType
             | SQLDataType::Table(_)
             | SQLDataType::VarBit(_)
-            | SQLDataType::UTinyInt
-            | SQLDataType::USmallInt
             | SQLDataType::HugeInt
             | SQLDataType::UHugeInt
-            | SQLDataType::UBigInt
             | SQLDataType::TimestampNtz{..}
             | SQLDataType::NamedTable { .. }
             | SQLDataType::TsVector

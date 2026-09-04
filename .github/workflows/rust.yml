@@ -15,8 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# For some actions, we use Runs-On to run them on ASF infrastructure: https://datafusion.apache.org/contributor-guide/#ci-runners
-
+# # CI runners
+#
+# Some actions use Runs-On to run on ASF infrastructure:
+# https://datafusion.apache.org/contributor-guide/#ci-runners
+#
+# # `cargo xtask`
+#
+# Individual CI commands are implemented with `cargo xtask` to make them easier
+# to reproduce locally.
+#
+# See `xtask/README.md` for details about DataFusion's `xtask` tooling.
+#
+# It is being rolled out incrementally across all workflows.
+# Track progress at https://github.com/apache/datafusion/issues/24487.
+#
 name: Rust
 
 concurrency:
@@ -63,11 +76,8 @@ jobs:
           shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
           save-if: ${{ github.ref_name == 'main' }}
       - name: Prepare cargo build
-        run: |
-          # Adding `--locked` here to assert that the `Cargo.lock` file is up to
-          # date with the manifest. When this fails, please make sure to commit
-          # the changes to `Cargo.lock` after building with the updated manifest.
-          cargo check --profile ci --workspace --all-targets --features integration-tests --locked
+        # `--locked` asserts that Cargo.lock is up to date with the manifest.
+        run: cargo xtask ci step check workspace
 
   # Check datafusion-common features
   #
@@ -86,12 +96,12 @@ jobs:
         with:
           rust-version: stable
       - name: Check datafusion-common (default features)
-        run: cargo check --profile ci --all-targets -p datafusion-common
+        run: cargo xtask ci step check datafusion-common default
       #
       # Note: Only check libraries (not --all-targets) to cover end user APIs
       #
       - name: Check datafusion-common (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-common
+        run: cargo xtask ci step check datafusion-common no-default
         # Note: don't check other feature flags as datafusion-common is not typically used standalone
 
   # Check datafusion-substrait features
@@ -116,20 +126,20 @@ jobs:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
       - name: Check datafusion-substrait (default features)
-        run: cargo check --profile ci --all-targets -p datafusion-substrait
+        run: cargo xtask ci step check datafusion-substrait default
         #
         # Note: Only check libraries (not --all-targets) to cover end user APIs
         #
       - name: Check datafusion-substrait (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-substrait
+        run: cargo xtask ci step check datafusion-substrait no-default
       - name: Check datafusion-substrait (physical)
-        run: cargo check --profile ci --no-default-features -p datafusion-substrait --features=physical
+        run: cargo xtask ci step check datafusion-substrait physical
       - name: Install cmake
         run: |
           # note the builder setup runs apt-get update / installs protobuf compiler
           apt-get install -y cmake
       - name: Check datafusion-substrait (protoc)
-        run: cargo check --profile ci --no-default-features -p datafusion-substrait --features=protoc
+        run: cargo xtask ci step check datafusion-substrait protoc
 
   # Check datafusion-proto features
   #
@@ -149,18 +159,18 @@ jobs:
         with:
           rust-version: stable
       - name: Check datafusion-proto (default features)
-        run: cargo check --profile ci --all-targets -p datafusion-proto
+        run: cargo xtask ci step check datafusion-proto default
       #
       # Note: Only check libraries (not --all-targets) to cover end user APIs
       #
       - name: Check datafusion-proto (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-proto
+        run: cargo xtask ci step check datafusion-proto no-default
       - name: Check datafusion-proto (json)
-        run: cargo check --profile ci  --no-default-features -p datafusion-proto --features=json
+        run: cargo xtask ci step check datafusion-proto json
       - name: Check datafusion-proto (parquet)
-        run: cargo check --profile ci --no-default-features -p datafusion-proto --features=parquet
+        run: cargo xtask ci step check datafusion-proto parquet
       - name: Check datafusion-proto (avro)
-        run: cargo check --profile ci --no-default-features -p datafusion-proto --features=avro
+        run: cargo xtask ci step check datafusion-proto avro
 
   # Check datafusion-ffi features
   #
@@ -180,7 +190,7 @@ jobs:
         with:
           rust-version: stable
       - name: Check datafusion-ffi (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-ffi
+        run: cargo xtask ci step check datafusion-ffi no-default
 
 
   # Check datafusion crate features
@@ -206,48 +216,48 @@ jobs:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
       - name: Check datafusion (default features)
-        run: cargo check --profile ci --all-targets -p datafusion
+        run: cargo xtask ci step check datafusion default
       #
       # Note: Only check libraries (not --all-targets) to cover end user APIs
       #
       - name: Check datafusion (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion
+        run: cargo xtask ci step check datafusion no-default
       - name: Check datafusion (nested_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=nested_expressions
+        run: cargo xtask ci step check datafusion nested_expressions
       - name: Check datafusion (array_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=array_expressions
+        run: cargo xtask ci step check datafusion array_expressions
       - name: Check datafusion (avro)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=avro
+        run: cargo xtask ci step check datafusion avro
       - name: Check datafusion (backtrace)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=backtrace
+        run: cargo xtask ci step check datafusion backtrace
       - name: Check datafusion (compression)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=compression
+        run: cargo xtask ci step check datafusion compression
       - name: Check datafusion (crypto_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=crypto_expressions
+        run: cargo xtask ci step check datafusion crypto_expressions
       - name: Check datafusion (datetime_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=datetime_expressions
+        run: cargo xtask ci step check datafusion datetime_expressions
       - name: Check datafusion (encoding_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=encoding_expressions
+        run: cargo xtask ci step check datafusion encoding_expressions
       - name: Check datafusion (force_hash_collisions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=force_hash_collisions
+        run: cargo xtask ci step check datafusion force_hash_collisions
       - name: Check datafusion (math_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=math_expressions
+        run: cargo xtask ci step check datafusion math_expressions
       - name: Check datafusion (parquet)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=parquet
+        run: cargo xtask ci step check datafusion parquet
       - name: Check datafusion (regex_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=regex_expressions
+        run: cargo xtask ci step check datafusion regex_expressions
       - name: Check datafusion (recursive_protection)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=recursive_protection
+        run: cargo xtask ci step check datafusion recursive_protection
       - name: Check datafusion (serde)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=serde
+        run: cargo xtask ci step check datafusion serde
       - name: Check datafusion (sql)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=sql
+        run: cargo xtask ci step check datafusion sql
       - name: Check datafusion (string_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
+        run: cargo xtask ci step check datafusion string_expressions
       - name: Check datafusion (unicode_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=unicode_expressions
+        run: cargo xtask ci step check datafusion unicode_expressions
       - name: Check parquet encryption (parquet_encryption)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=parquet_encryption
+        run: cargo xtask ci step check datafusion parquet_encryption
 
   # Check datafusion-functions crate features
   #
@@ -266,26 +276,53 @@ jobs:
         with:
           rust-version: stable
       - name: Check datafusion-functions (default features)
-        run: cargo check --profile ci --all-targets -p datafusion-functions
+        run: cargo xtask ci step check datafusion-functions default
       #
       # Note: Only check libraries (not --all-targets) to cover end user APIs
       #
       - name: Check datafusion-functions (no-default-features)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions
+        run: cargo xtask ci step check datafusion-functions no-default
       - name: Check datafusion-functions (crypto_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=crypto_expressions
+        run: cargo xtask ci step check datafusion-functions crypto_expressions
       - name: Check datafusion-functions (datetime_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=datetime_expressions
+        run: cargo xtask ci step check datafusion-functions datetime_expressions
       - name: Check datafusion-functions (encoding_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=encoding_expressions
+        run: cargo xtask ci step check datafusion-functions encoding_expressions
       - name: Check datafusion-functions (math_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=math_expressions
+        run: cargo xtask ci step check datafusion-functions math_expressions
       - name: Check datafusion-functions (regex_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=regex_expressions
+        run: cargo xtask ci step check datafusion-functions regex_expressions
       - name: Check datafusion-functions (string_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=string_expressions
+        run: cargo xtask ci step check datafusion-functions string_expressions
       - name: Check datafusion-functions (unicode_expressions)
-        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=unicode_expressions
+        run: cargo xtask ci step check datafusion-functions unicode_expressions
+
+  # Check datafusion-spark crate features
+  #
+  # Ensure via `cargo check` that the crate can be built with a
+  # subset of the features packages enabled.
+  # See https://github.com/apache/datafusion/issues/24474
+  linux-cargo-check-datafusion-spark:
+    name: cargo check datafusion-spark features
+    needs: linux-build-lib
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Check datafusion-spark (default features)
+        run: cargo check --profile ci --all-targets -p datafusion-spark
+      #
+      # Note: Only check libraries (not --all-targets) to cover end user APIs
+      #
+      - name: Check datafusion-spark (no-default-features)
+        run: cargo check --profile ci --no-default-features -p datafusion-spark
+      - name: Check datafusion-spark (core)
+        run: cargo check --profile ci --no-default-features -p datafusion-spark --features=core
 
   # Library and integration tests
   linux-test:
@@ -309,7 +346,7 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
         with:
           tool: cargo-llvm-cov
       - name: Rust Dependency Cache
@@ -320,19 +357,7 @@ jobs:
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
-        run: |
-          cargo llvm-cov \
-            --profile ci \
-            --exclude datafusion-examples \
-            --exclude ffi_example_table_provider \
-            --exclude datafusion-cli \
-            --workspace \
-            --lib \
-            --tests \
-            --bins \
-            --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
-            --codecov \
-            --output-path target/codecov.json
+        run: cargo xtask ci step test workspace
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -378,7 +403,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
           TEST_STORAGE_INTEGRATION: 1
           AWS_ALLOW_HTTP: true
-        run: cargo test --features backtrace --profile ci -p datafusion-cli  --lib --tests --bins
+        run: cargo xtask ci step test cli
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -431,7 +456,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run doctests
-        run: cargo test --profile ci --doc --features avro,json
+        run: cargo xtask ci step test doctest
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -466,7 +491,7 @@ jobs:
               sudo apt-get update -qq
               sudo apt-get install -y -qq clang
           - name: Setup wasm-pack
-            uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+            uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
             with:
               tool: wasm-pack
       - name: Run tests with headless mode
@@ -505,11 +530,8 @@ jobs:
               mv *.tbl ../datafusion/sqllogictest/test_files/tpch/data
       - name: Verify that benchmark queries return expected results
         run: |
-          # increase stack size to fix stack overflow
-          export RUST_MIN_STACK=20971520
-          export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
-          cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption,substrait --profile ci --package datafusion-sqllogictest --test sqllogictests
+          cargo xtask ci step test benchmark-plan
+          cargo xtask ci step test benchmark-sqllogic
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -544,9 +566,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run sqllogictest
-        run: |
-          cd datafusion/sqllogictest
-          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --features backtrace --profile ci --features=postgres --test sqllogictests
+        run: cargo xtask ci step test postgres
         env:
           # use postgres for the host here because we have specified a container for the job
           POSTGRES_HOST: postgres
@@ -573,7 +593,7 @@ jobs:
         #  command cannot be run for all the .slt files. Run it for just one that works (limit.slt)
         #  until most of the tickets in https://github.com/apache/datafusion/issues/16248 are addressed
         #  and this command can be run without filters.
-        run: cargo test -p datafusion-sqllogictest --test sqllogictests --features substrait -- --substrait-round-trip limit.slt
+        run: cargo xtask ci step test substrait
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -611,7 +631,7 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run datafusion-ffi tests
         shell: bash
-        run: cargo test --profile ci -p datafusion-ffi --lib --tests --features integration-tests
+        run: cargo xtask ci step test ffi
 
   vendor:
     name: Verify Vendored Code
@@ -697,7 +717,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
         with:
           tool: taplo-cli@0.9
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
@@ -782,7 +802,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026  # v2.85.11
+        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
         with:
           tool: cargo-msrv
 

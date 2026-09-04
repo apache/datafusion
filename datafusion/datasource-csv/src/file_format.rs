@@ -41,6 +41,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
+    ensure_unique_field_names,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -397,12 +398,24 @@ impl FileFormat for CsvFormat {
                     )
                 })?;
             records_to_read -= records_read;
-            schemas.push(schema);
+            schemas.push((&object.location, schema));
             if records_to_read == 0 {
                 break;
             }
         }
 
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing CSV file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
+
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
     }
@@ -752,7 +765,7 @@ impl DisplayAs for CsvSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CsvSink(file_groups=",)?;
+                write!(f, "CsvSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -928,7 +941,7 @@ impl CsvSink {
 
 /// Encode a [`CsvFormatFactory`]'s options as their protobuf form.
 ///
-/// The reverse direction is `From<&protobuf::CsvOptions> for CsvOptions` in
+/// The reverse direction is `TryFrom<&protobuf::CsvOptions> for CsvOptions` in
 /// `datafusion-proto-models`: `CsvOptions` is a `datafusion-common` type, so
 /// that half cannot live here.
 #[cfg(feature = "proto")]

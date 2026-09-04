@@ -25,13 +25,14 @@ use std::time::Duration;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_common::display::GraphvizBuilder;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
 use crate::metrics::{MetricCategory, MetricType, MetricValue};
 use crate::render_tree::RenderTree;
 
+use crate::operator_statistics::StatisticsRegistry;
 use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
@@ -122,6 +123,7 @@ pub struct DisplayableExecutionPlan<'a> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// If schema should be displayed. See [`Self::set_show_schema`]
     show_schema: bool,
     /// Which metric categories should be included when rendering
@@ -155,43 +157,31 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            show_metrics: ShowMetrics::None,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            metric_names: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::None)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows aggregated
     /// metrics
     pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
-        Self {
-            inner,
-            show_metrics: ShowMetrics::Aggregated,
-            show_statistics: false,
-            show_schema: false,
-            metric_types: Self::default_metric_types(),
-            metric_categories: None,
-            metric_names: None,
-            tree_maximum_render_width: 240,
-            summary: None,
-        }
+        Self::with_show_metrics(inner, ShowMetrics::Aggregated)
     }
 
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows all low
     /// level metrics
     pub fn with_full_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+        Self::with_show_metrics(inner, ShowMetrics::Full)
+    }
+
+    fn with_show_metrics(
+        inner: &'a dyn ExecutionPlan,
+        show_metrics: ShowMetrics,
+    ) -> Self {
         Self {
             inner,
-            show_metrics: ShowMetrics::Full,
+            registry: StatisticsRegistry::new(),
+            show_metrics,
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
@@ -214,6 +204,12 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Enable display of statistics
     pub fn set_show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
+        self
+    }
+
+    /// Set the [`StatisticsRegistry`] consulted when computing displayed statistics.
+    pub fn set_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.registry = registry;
         self
     }
 
@@ -294,6 +290,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
@@ -307,6 +304,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
@@ -320,6 +318,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
@@ -343,6 +342,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
             metric_names: Option<Vec<String>>,
@@ -356,6 +356,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     t,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
                     metric_names: self.metric_names.as_deref(),
@@ -376,6 +377,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
             metric_names: self.metric_names.clone(),
@@ -484,6 +486,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
             show_statistics: bool,
+            registry: StatisticsRegistry,
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
@@ -498,6 +501,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
+                    registry: self.registry.clone(),
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
@@ -512,25 +516,11 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
+            registry: self.registry.clone(),
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
             metric_names: self.metric_names.clone(),
-        }
-    }
-
-    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
-    pub fn to_stringified(
-        &self,
-        verbose: bool,
-        plan_type: PlanType,
-        explain_format: DisplayFormatType,
-    ) -> StringifiedPlan {
-        match (&explain_format, &plan_type) {
-            (DisplayFormatType::TreeRender, PlanType::FinalPhysicalPlan) => {
-                StringifiedPlan::new(plan_type, self.tree_render().to_string())
-            }
-            _ => StringifiedPlan::new(plan_type, self.indent(verbose).to_string()),
         }
     }
 }
@@ -568,6 +558,7 @@ struct IndentVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// If schema should be displayed
     show_schema: bool,
     /// Which metric types should be rendered
@@ -619,7 +610,7 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = StatisticsContext::new()
+            let stats = StatisticsContext::new_with_registry(self.registry.clone())
                 .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
@@ -650,6 +641,7 @@ struct GraphvizVisitor<'a, 'b> {
     show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
+    registry: StatisticsRegistry,
     /// Which metric types should be rendered
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category
@@ -725,7 +717,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = StatisticsContext::new()
+            let stats = StatisticsContext::new_with_registry(self.registry.clone())
                 .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
@@ -1352,7 +1344,7 @@ impl TreeRenderVisitor<'_, '_> {
         } else {
             let total_spaces = max_render_width - render_width;
             let half_spaces = total_spaces / 2;
-            let extra_left_space = if total_spaces.is_multiple_of(2) { 0 } else { 1 };
+            let extra_left_space = usize::from(!total_spaces.is_multiple_of(2));
             format!(
                 "{}{}{}",
                 " ".repeat(half_spaces + extra_left_space),

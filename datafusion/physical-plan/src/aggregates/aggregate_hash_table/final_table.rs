@@ -22,6 +22,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, FinalMarker, HashAggregateAccumulator};
 
@@ -58,7 +59,10 @@ impl AggregateHashTable<FinalMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::evaluate_to_columns)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::evaluate_to_columns,
+            AccumulatorPhase::Evaluate,
+        )
     }
 
     /// Final aggregation consumes partial aggregate states and merges them into
@@ -67,7 +71,11 @@ impl AggregateHashTable<FinalMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(batch, HashAggregateAccumulator::merge_batch)
+        self.aggregate_batch_inner(
+            batch,
+            HashAggregateAccumulator::merge_batch,
+            AccumulatorPhase::Merge,
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {

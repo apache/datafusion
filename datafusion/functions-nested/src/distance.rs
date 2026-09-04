@@ -174,14 +174,8 @@ fn compute_array_distance(
     arr1: Option<ArrayRef>,
     arr2: Option<ArrayRef>,
 ) -> Result<Option<f64>> {
-    let value1 = match arr1 {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    let value2 = match arr2 {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
+    let Some(value1) = arr1 else { return Ok(None) };
+    let Some(value2) = arr2 else { return Ok(None) };
 
     // Check for NULL values inside the arrays
     if value1.null_count() != 0 || value2.null_count() != 0 {

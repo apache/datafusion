@@ -53,6 +53,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
+use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
@@ -109,6 +110,67 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             .build();
 
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let plan = ctx
+        .sql("SELECT id FROM alltypes_plain ORDER BY id DESC NULLS LAST LIMIT 5")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let before = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(
+        before.contains("sort_order_for_reorder=[id@0 DESC NULLS LAST]")
+            && before.contains("reverse_row_groups=true"),
+        "expected sort pushdown in plan:\n{before}"
+    );
+
+    let roundtripped = roundtrip_test_and_return(
+        plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let after = displayable(roundtripped.as_ref()).indent(true).to_string();
+    pretty_assertions::assert_eq!(before, after);
+    Ok(())
+}
+
+#[test]
+fn file_scan_rejects_zero_batch_size() -> Result<()> {
+    let schema = Arc::new(Schema::empty());
+    let scan_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        Arc::new(ParquetSource::new(schema)),
+    )
+    .build();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let mut node = PhysicalPlanNode::try_from_physical_plan(
+        DataSourceExec::from_data_source(scan_config),
+        &codec,
+    )?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+        node.physical_plan_type.as_mut()
+    else {
+        return internal_err!("Expected ParquetScan node");
+    };
+    scan.base_conf
+        .as_mut()
+        .expect("Parquet scan has a base config")
+        .batch_size = Some(0);
+
+    let ctx = SessionContext::new();
+    let err = node
+        .try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)
+        .expect_err("zero file scan batch size must fail");
+    assert!(
+        err.to_string()
+            .contains("FileScanConfig: batch_size must be greater than 0"),
+        "unexpected error: {err}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -280,18 +342,119 @@ fn arrow_scan_without_format_field_decodes_as_file_format() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_json_scan() -> Result<()> {
+fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let file_source = Arc::new(JsonSource::new(TableSchema::from(&file_schema)));
+    let file_source = Arc::new(
+        JsonSource::new(TableSchema::from(&file_schema)).with_newline_delimited(false),
+    );
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.json".to_string(),
+                "/path/to/file.json.gz".to_string(),
                 1024,
             )])])
+            .with_file_compression_type(FileCompressionType::GZIP)
             .build();
-    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+    let roundtripped = roundtrip_test_and_return(
+        Arc::clone(&plan),
+        &ctx,
+        &codec,
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let file_scan = roundtripped
+        .downcast_ref::<DataSourceExec>()
+        .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+        .ok_or_else(|| internal_datafusion_err!("Expected FileScanConfig"))?;
+    let json_source = file_scan
+        .file_source()
+        .downcast_ref::<JsonSource>()
+        .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
+    assert!(!json_source.is_newline_delimited());
+    assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+
+    // Payloads written before these fields existed must keep their historical
+    // defaults: newline-delimited JSON without compression.
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    match node.physical_plan_type.as_mut() {
+        Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) => {
+            scan.newline_delimited = None;
+            scan.base_conf
+                .as_mut()
+                .expect("JSON scan has a base config")
+                .file_compression_type = None;
+        }
+        other => return internal_err!("Expected JsonScan node, got {other:?}"),
+    }
+    let decoded = node.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
+    let file_scan = decoded
+        .downcast_ref::<DataSourceExec>()
+        .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+        .ok_or_else(|| internal_datafusion_err!("Expected FileScanConfig"))?;
+    let json_source = file_scan
+        .file_source()
+        .downcast_ref::<JsonSource>()
+        .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
+    assert!(json_source.is_newline_delimited());
+    assert_eq!(
+        file_scan.file_compression_type,
+        FileCompressionType::UNCOMPRESSED
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_compressed_json_array_scan_executes() -> Result<()> {
+    use datafusion::prelude::JsonReadOptions;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    let tmp_dir = tempfile::TempDir::new()?;
+    let path = tmp_dir.path().join("array.json.gz");
+    let file = std::fs::File::create(&path)?;
+    let mut encoder = GzEncoder::new(file, Compression::default());
+    encoder.write_all(br#"[{"a": 1, "b": "hello"}, {"a": 2, "b": "world"}]"#)?;
+    encoder.finish()?;
+
+    let ctx = SessionContext::new();
+    let options = JsonReadOptions::default()
+        .newline_delimited(false)
+        .file_compression_type(FileCompressionType::GZIP)
+        .file_extension(".json.gz");
+    ctx.register_json("test_table", path.to_string_lossy(), options)
+        .await?;
+
+    let initial_plan = ctx
+        .sql("SELECT a, b FROM test_table ORDER BY a")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let roundtripped = roundtrip_test_and_return(
+        initial_plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let batches =
+        datafusion::physical_plan::collect(roundtripped, ctx.task_ctx()).await?;
+
+    datafusion::assert_batches_eq!(
+        &[
+            "+---+-------+",
+            "| a | b     |",
+            "+---+-------+",
+            "| 1 | hello |",
+            "| 2 | world |",
+            "+---+-------+",
+        ],
+        &batches
+    );
+    Ok(())
 }
 
 #[cfg(feature = "avro")]
@@ -326,6 +489,7 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
             quote: b'\'',
             escape: Some(b'\\'),
             comment: Some(b'#'),
+            terminator: Some(0xff),
             newlines_in_values: Some(true),
             truncated_rows: Some(true),
             ..Default::default()
@@ -334,16 +498,19 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.csv".to_string(),
+                "/path/to/file.csv.gz".to_string(),
                 1024,
             )])])
+            .with_file_compression_type(FileCompressionType::GZIP)
             .build();
 
     let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
     let roundtripped = roundtrip_test_and_return(
-        DataSourceExec::from_data_source(scan_config),
+        Arc::clone(&plan),
         &ctx,
-        &DefaultPhysicalExtensionCodec {},
+        &codec,
         &DefaultPhysicalProtoConverter {},
     )?;
     let data_source = roundtripped
@@ -363,8 +530,28 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     assert_eq!(csv_source.quote(), b'\'');
     assert_eq!(csv_source.escape(), Some(b'\\'));
     assert_eq!(csv_source.comment(), Some(b'#'));
+    assert_eq!(csv_source.terminator(), Some(0xff));
     assert!(csv_source.newlines_in_values());
     assert!(csv_source.truncate_rows());
+    assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+
+    for invalid_terminator in [vec![], vec![b'\r', b'\n']] {
+        let mut node =
+            PhysicalPlanNode::try_from_physical_plan(Arc::clone(&plan), &codec)?;
+        match node.physical_plan_type.as_mut() {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::CsvScan(scan)) => {
+                scan.terminator = Some(invalid_terminator);
+            }
+            other => return internal_err!("Expected CsvScan node, got {other:?}"),
+        }
+        let err = node
+            .try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)
+            .expect_err("invalid terminator length must fail");
+        assert!(
+            err.to_string().contains("expected exactly one byte"),
+            "unexpected error: {err}"
+        );
+    }
     Ok(())
 }
 
@@ -504,7 +691,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             inputs: &[Arc<dyn PhysicalExpr>],
             _ctx: &PhysicalExprDecodeCtx<'_>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
-            if buf == "CustomPredicateExpr".as_bytes() {
+            if buf == b"CustomPredicateExpr" {
                 Ok(Arc::new(CustomPredicateExpr {
                     inner: inputs[0].clone(),
                 }))
@@ -520,7 +707,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _ctx: &PhysicalExprEncodeCtx<'_>,
         ) -> Result<()> {
             if node.downcast_ref::<CustomPredicateExpr>().is_some() {
-                buf.extend_from_slice("CustomPredicateExpr".as_bytes());
+                buf.extend_from_slice(b"CustomPredicateExpr");
                 Ok(())
             } else {
                 internal_err!("Not supported")

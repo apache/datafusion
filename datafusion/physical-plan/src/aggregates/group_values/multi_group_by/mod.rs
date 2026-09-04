@@ -34,7 +34,7 @@ use crate::aggregates::group_values::multi_group_by::{
     fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
 };
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, new_empty_array};
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
@@ -50,7 +50,7 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use datafusion_physical_expr::binary_map::OutputType;
 
 use hashbrown::hash_table::HashTable;
@@ -108,6 +108,10 @@ pub trait GroupColumn: Send + Sync {
 
     /// Builds a new array from all of the stored rows
     fn build(self: Box<Self>) -> ArrayRef;
+
+    /// Builds a new array from selected stored rows without changing this
+    /// column. Rows are returned in selection order.
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef>;
 
     /// Builds a new array from the first `n` stored rows, shifting the
     /// remaining rows to the start of the builder
@@ -1298,6 +1302,30 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         Ok(output)
     }
 
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        selection.validate_num_groups(self.len())?;
+        if self.group_values.is_empty() {
+            return Ok(self
+                .schema
+                .fields()
+                .iter()
+                .map(|field| new_empty_array(field.data_type()))
+                .collect());
+        }
+
+        self.group_values
+            .iter()
+            .map(|column| column.values_preserving(selection))
+            .collect()
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         // Reset to a fresh column-builder vector. The schema was validated
         // in `try_new`, so rebuilding cannot fail unless something else
@@ -1346,12 +1374,15 @@ mod tests {
     use arrow::array::{
         Array, ArrayRef, DurationMicrosecondArray, FixedSizeBinaryArray, Float16Array,
         Int32Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
-        StringViewArray,
+        StringViewArray, UInt32Array,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
+    use arrow::{
+        compute::{concat_batches, take},
+        util::pretty::pretty_format_batches,
+    };
     use datafusion_common::utils::proxy::HashTableAllocExt;
-    use datafusion_expr::EmitTo;
+    use datafusion_expr::{EmitTo, GroupSelection};
 
     use crate::aggregates::group_values::{
         GroupValues, multi_group_by::GroupValuesColumn,
@@ -2068,6 +2099,39 @@ mod tests {
     }
 
     #[test]
+    fn test_preserving_selected_vectorized_group_values() {
+        let data_set = VectorizedTestDataSet::new();
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+        data_set.load_to_group_values(&mut group_values);
+
+        let selection = [16, 0, 4, 0];
+        let group_selection =
+            GroupSelection::try_from_indices(&selection, group_values.len()).unwrap();
+        let actual = group_values.values_preserving(group_selection).unwrap();
+        let indices = UInt32Array::from_iter_values(selection.map(|index| index as u32));
+        let mut destructive_group_values =
+            GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
+        data_set.load_to_group_values(&mut destructive_group_values);
+        let all = destructive_group_values.emit(EmitTo::All).unwrap();
+        let expected = all
+            .iter()
+            .map(|column| take(column.as_ref(), &indices, None).unwrap())
+            .collect::<Vec<_>>();
+        let expected = RecordBatch::try_new(data_set.schema(), expected).unwrap();
+        let actual = RecordBatch::try_new(data_set.schema(), actual).unwrap();
+        assert_eq!(actual, expected);
+
+        // A repeated preserving read returns the same rows and leaves all groups.
+        let repeated = group_values.values_preserving(group_selection).unwrap();
+        assert_eq!(
+            RecordBatch::try_new(data_set.schema(), repeated).unwrap(),
+            expected
+        );
+        assert_eq!(group_values.len(), data_set.expected_batch.num_rows());
+    }
+
+    #[test]
     fn test_emit_first_n_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
         let mut group_values =
@@ -2100,7 +2164,7 @@ mod tests {
 
                 num_remaining_rows -= num_emit;
             }
-            assert!(num_remaining_rows == 0);
+            assert_eq!(num_remaining_rows, 0);
 
             let actual_batch = concat_batches(&schema, &actual_sub_batches).unwrap();
             check_result(&actual_batch, &data_set.expected_batch);

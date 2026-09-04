@@ -81,7 +81,7 @@ impl ParseUrl {
     /// * `Err(DataFusionError)` - If the URL is malformed and cannot be parsed
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         let url: std::result::Result<Url, ParseError> = Url::parse(value);
-        if let Err(ParseError::RelativeUrlWithoutBase) = url {
+        if url == Err(ParseError::RelativeUrlWithoutBase) {
             return if !value.contains("://") {
                 // Schemeless URLs are treated as relative URIs (like java.net.URI).
                 // Manually parse path, query, and fragment components.
@@ -112,7 +112,7 @@ impl ParseUrl {
                     "The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"
                 ))
             };
-        };
+        }
         url.map_err(|e| exec_datafusion_err!("{e:?}"))
             .map(|url| match part {
                 "HOST" => url.host_str().map(String::from),

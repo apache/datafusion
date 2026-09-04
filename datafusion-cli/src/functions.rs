@@ -283,16 +283,16 @@ fn convert_parquet_statistics(
             val.max_opt().map(|v| v.to_string()),
         ),
         (Statistics::ByteArray(val), ConvertedType::UTF8) => (
-            byte_array_to_string(val.min_opt()),
-            byte_array_to_string(val.max_opt()),
+            val.min_opt().map(byte_array_to_string),
+            val.max_opt().map(byte_array_to_string),
         ),
         (Statistics::ByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
             val.max_opt().map(|v| v.to_string()),
         ),
         (Statistics::FixedLenByteArray(val), ConvertedType::UTF8) => (
-            fixed_len_byte_array_to_string(val.min_opt()),
-            fixed_len_byte_array_to_string(val.max_opt()),
+            val.min_opt().map(fixed_len_byte_array_to_string),
+            val.max_opt().map(fixed_len_byte_array_to_string),
         ),
         (Statistics::FixedLenByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
@@ -302,21 +302,17 @@ fn convert_parquet_statistics(
 }
 
 /// Convert to a string if it has utf8 encoding, otherwise print bytes directly
-fn byte_array_to_string(val: Option<&ByteArray>) -> Option<String> {
-    val.map(|v| {
-        v.as_utf8()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_e| v.to_string())
-    })
+fn byte_array_to_string(val: &ByteArray) -> String {
+    val.as_utf8()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_e| val.to_string())
 }
 
 /// Convert to a string if it has utf8 encoding, otherwise print bytes directly
-fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<String> {
-    val.map(|v| {
-        v.as_utf8()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_e| v.to_string())
-    })
+fn fixed_len_byte_array_to_string(val: &FixedLenByteArray) -> String {
+    val.as_utf8()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_e| val.to_string())
 }
 
 #[derive(Debug)]
@@ -420,7 +416,7 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                     stats_distinct_count_arr.push(None);
                     stats_min_value_arr.push(None);
                     stats_max_value_arr.push(None);
-                };
+                }
                 compression_arr.push(format!("{:?}", column.compression()));
                 // need to collect into Vec to format
                 let encodings: Vec<_> = column.encodings().collect();

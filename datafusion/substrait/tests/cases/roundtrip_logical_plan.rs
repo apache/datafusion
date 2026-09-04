@@ -344,10 +344,59 @@ async fn aggregate_multiple_keys() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_sets() -> Result<()> {
-    roundtrip(
-        "SELECT a, c, d, avg(b) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+    let ctx = create_context().await?;
+    let proto = roundtrip_with_ctx(
+        "SELECT a, c, d, avg(b), sum(e) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+        ctx.clone(),
     )
-    .await
+    .await?;
+
+    let Some(plan_rel::RelType::Root(root)) = &proto.relations[0].rel_type else {
+        panic!("expected root relation");
+    };
+    let Some(RelType::Project(project)) = &root.input.as_ref().unwrap().rel_type else {
+        panic!("expected project relation");
+    };
+    let Some(RelType::Aggregate(aggregate)) = &project.input.as_ref().unwrap().rel_type
+    else {
+        panic!("expected aggregate relation");
+    };
+
+    assert_eq!(aggregate.grouping_expressions.len(), 3);
+    assert_eq!(aggregate.groupings[0].expression_references, [0, 1]);
+    assert_eq!(aggregate.groupings[1].expression_references, [0]);
+    assert_eq!(aggregate.groupings[2].expression_references, [2]);
+    assert!(aggregate.groupings[3].expression_references.is_empty());
+    let output_mapping = match aggregate
+        .common
+        .as_ref()
+        .and_then(|common| common.emit_kind.as_ref())
+    {
+        Some(substrait::proto::rel_common::EmitKind::Emit(emit)) => &emit.output_mapping,
+        _ => panic!("expected aggregate output mapping"),
+    };
+    assert_eq!(output_mapping, &[0, 1, 2, 5, 3, 4]);
+
+    let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    let results = DataFrame::new(ctx.state(), plan).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------+-------+-------------+-------------+",
+            "| a | c          | d     | avg(data.b) | sum(data.e) |",
+            "+---+------------+-------+-------------+-------------+",
+            "|   |            |       | 3.250000    | 6442450943  |",
+            "|   |            | false | 2.000000    | 4294967295  |",
+            "|   |            | true  | 4.500000    | 2147483648  |",
+            "| 1 |            |       | 2.000000    | 4294967295  |",
+            "| 1 | 2020-01-01 |       | 2.000000    | 4294967295  |",
+            "| 3 |            |       | 4.500000    | 2147483648  |",
+            "| 3 | 2020-01-01 |       | 4.500000    | 2147483648  |",
+            "+---+------------+-------+-------------+-------------+",
+        ],
+        &results
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -611,7 +660,7 @@ async fn roundtrip_inlist_2() -> Result<()> {
 #[tokio::test]
 // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
 async fn roundtrip_inlist_3() -> Result<()> {
-    let inlist = (0..THRESHOLD_INLINE_INLIST + 1)
+    let inlist = (0..=THRESHOLD_INLINE_INLIST)
         .map(|i| format!("'{i}'"))
         .collect::<Vec<_>>()
         .join(", ");
@@ -748,6 +797,207 @@ async fn roundtrip_not_exists_substrait() -> Result<()> {
     let proto = to_substrait_plan(&plan, &ctx.state())?;
     let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
     assert_exists_predicate(&roundtrip_plan, true);
+    Ok(())
+}
+
+/// `(steps_out, field index)` of every `OuterReference` field reference in the
+/// plan, collected by walking its JSON serialization.
+fn outer_references(plan: &Plan) -> Vec<(u32, u32)> {
+    fn walk(value: &serde_json::Value, out: &mut Vec<(u32, u32)>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                // A FieldReference serializes its root type and direct reference
+                // as sibling keys, e.g.:
+                //   { "directReference": { "structField": { "field": 3 } },
+                //     "outerReference":  { "stepsOut": 1 } }
+                // proto3 JSON omits zero-valued fields, hence the unwrap_or(0)s.
+                if let Some(outer) = map.get("outerReference") {
+                    let steps =
+                        outer.get("stepsOut").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let field = map
+                        .get("directReference")
+                        .and_then(|d| d.get("structField"))
+                        .and_then(|s| s.get("field"))
+                        .and_then(|f| f.as_u64())
+                        .unwrap_or(0);
+                    out.push((steps as u32, field as u32));
+                }
+                map.values().for_each(|v| walk(v, out));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut refs = vec![];
+    walk(
+        &serde_json::to_value(plan).expect("Plan serializes to JSON"),
+        &mut refs,
+    );
+    refs.sort_unstable(); // key order in the JSON walk isn't proto field order
+    refs
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_exists() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT b FROM data WHERE EXISTS (SELECT 1 FROM data2 WHERE data2.a = data.a)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: data2.a = outer_ref(data.a)
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_in_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT b FROM data WHERE a IN (SELECT data2.a FROM data2 WHERE data2.d = data.d)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 3)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: data.a IN (<subquery>)
+        Subquery:
+          Projection: data2.a
+            Filter: data2.d = outer_ref(data.d)
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_scalar_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a FROM data WHERE a < (SELECT sum(data2.a) FROM data2 WHERE data2.a = data.a)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.a
+      Filter: data.a < (<subquery>)
+        Subquery:
+          Projection: sum(data2.a)
+            Aggregate: groupBy=[[]], aggr=[[sum(data2.a)]]
+              Filter: data2.a = outer_ref(data.a)
+                TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_nested_correlated_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    // The innermost subquery references `data.a` from the outermost query,
+    // two subquery boundaries out.
+    let plan = ctx
+        .sql(
+            "SELECT b FROM data WHERE EXISTS (\
+               SELECT 1 FROM data2 WHERE data2.a = data.a AND EXISTS (\
+                 SELECT 1 FROM book WHERE book.isbn = data.a))",
+        )
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0), (2, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: data2.a = outer_ref(data.a) AND EXISTS (<subquery>)
+              Subquery:
+                Projection: Int64(1)
+                  Filter: book.isbn = outer_ref(data.a)
+                    TableScan: book
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_subquery_shadowed_outer_column() -> Result<()> {
+    let ctx = create_context().await?;
+    // Both the outermost query and the middle subquery scan `data`, so the
+    // qualified name `data.a` is present in two enclosing scopes when the
+    // innermost subquery references it. Following SQL scoping rules (and
+    // SqlToRel's own resolution), the reference binds to the *nearest*
+    // enclosing scope: the producer must emit steps_out = 1, not 2.
+    let plan = ctx
+        .sql(
+            "SELECT b FROM data WHERE EXISTS (\
+               SELECT 1 FROM data WHERE EXISTS (\
+                 SELECT 1 FROM book WHERE book.isbn = data.a))",
+        )
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: EXISTS (<subquery>)
+              Subquery:
+                Projection: Int64(1)
+                  Filter: book.isbn = outer_ref(data.a)
+                    TableScan: book
+              TableScan: data
+        TableScan: data
+    "
+            );
     Ok(())
 }
 
@@ -1387,6 +1637,45 @@ async fn window_with_rows() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_distinct() -> Result<()> {
+    roundtrip(
+        "SELECT count(DISTINCT a) OVER (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM data;",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn unsupported_window_semantics_are_rejected() -> Result<()> {
+    let ctx = create_context().await?;
+    for (sql, expected_error) in [
+        (
+            "SELECT first_value(a) IGNORE NULLS OVER (ORDER BY a) FROM data;",
+            "IGNORE NULLS",
+        ),
+        (
+            "SELECT first_value(a) RESPECT NULLS OVER (ORDER BY a) FROM data;",
+            "RESPECT NULLS",
+        ),
+        (
+            "SELECT sum(a) FILTER (WHERE a > 0) OVER (PARTITION BY d) FROM data;",
+            "FILTER",
+        ),
+        (
+            "SELECT count(*) OVER (ORDER BY c RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) FROM data;",
+            "Unsupported Substrait window frame offset",
+        ),
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state()).unwrap_err();
+        assert!(
+            err.to_string().contains(expected_error),
+            "expected error containing '{expected_error}', got '{err}'"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn qualified_schema_table_reference() -> Result<()> {
     roundtrip("SELECT * FROM public.data;").await
 }
@@ -1477,6 +1766,10 @@ async fn roundtrip_literal_named_struct() -> Result<()> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The braces are part of the expected struct output, not format args"
+)]
 async fn roundtrip_literal_renamed_struct() -> Result<()> {
     // This test aims to hit a case where the struct column itself has the expected name, but its
     // inner field needs to be renamed.
@@ -1679,7 +1972,7 @@ async fn new_test_grammar() -> Result<()> {
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
     let ctx = create_context().await?;
-    let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
+    let validation_bytes = b"MockUserDefinedLogicalPlan".to_vec();
     let ext_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(MockUserDefinedLogicalPlan {
             validation_bytes,
@@ -2118,9 +2411,8 @@ impl HigherOrderUDFImpl for ArrayTransform {
             unreachable!()
         };
 
-        let field = match list.data_type() {
-            DataType::List(field) => field,
-            _ => unreachable!(),
+        let DataType::List(field) = list.data_type() else {
+            unreachable!()
         };
 
         Ok(LambdaParametersProgress::Complete(vec![vec![
@@ -2197,10 +2489,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::Set(set)) => {
             for input in &set.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2209,10 +2498,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::ExtensionMulti(ext)) => {
             for input in &ext.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2228,15 +2514,9 @@ fn verify_post_join_filter_value(proto: &Plan) -> Result<()> {
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
-                plan_rel::RelType::Rel(rel) => match check_post_join_filters(rel) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                },
+                plan_rel::RelType::Rel(rel) => check_post_join_filters(rel)?,
                 plan_rel::RelType::Root(root) => {
-                    match check_post_join_filters(root.input.as_ref().unwrap()) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    check_post_join_filters(root.input.as_ref().unwrap())?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),
@@ -2269,19 +2549,10 @@ fn assert_read_filter_count(proto: &Plan, expected_filter_count: u32) -> Result<
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
                 plan_rel::RelType::Rel(rel) => {
-                    match count_read_filters(rel, &mut filter_count) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(rel, &mut filter_count)?
                 }
                 plan_rel::RelType::Root(root) => {
-                    match count_read_filters(
-                        root.input.as_ref().unwrap(),
-                        &mut filter_count,
-                    ) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(root.input.as_ref().unwrap(), &mut filter_count)?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),

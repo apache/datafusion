@@ -401,8 +401,8 @@ async fn count_distinct_dictionary_all_null_values() -> Result<()> {
 /// Test COUNT(DISTINCT) with mixed null and non-null dictionary values
 #[tokio::test]
 async fn count_distinct_dictionary_mixed_values() -> Result<()> {
-    let n: usize = 6;
-    let num = Arc::new(Int32Array::from_iter(0..n as i32)) as ArrayRef;
+    let n: i32 = 6;
+    let num = Arc::new(Int32Array::from_iter(0..n)) as ArrayRef;
 
     // Dictionary values array with nulls and non-nulls
     let dict_values = StringArray::from(vec![None, Some("abc"), Some("def"), None]);

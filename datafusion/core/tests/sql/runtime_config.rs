@@ -368,7 +368,7 @@ async fn test_list_files_cache_ttl() {
     };
 
     update_limit(&ctx, "1m").await;
-    assert_eq!(get_limit(&ctx), Duration::from_secs(60));
+    assert_eq!(get_limit(&ctx), Duration::from_mins(1));
 
     update_limit(&ctx, "30s").await;
     assert_eq!(get_limit(&ctx), Duration::from_secs(30));

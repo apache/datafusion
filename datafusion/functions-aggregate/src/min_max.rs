@@ -84,7 +84,7 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     sql_example = r#"```sql
 > SELECT max(column_name) FROM table_name;
 +----------------------+
-| max(column_name)      |
+| max(column_name)     |
 +----------------------+
 | 150                  |
 +----------------------+
@@ -130,6 +130,17 @@ macro_rules! primitive_max_accumulator {
             .with_starting_value($NATIVE::MIN),
         ))
     }};
+    ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident, total, $BITS:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
+                if new.total_cmp(cur) == Ordering::Greater {
+                    *cur = new
+                }
+            })
+            // Use the total-order minimum so negative NaNs replace the sentinel.
+            .with_starting_value($NATIVE::from_bits($BITS::MAX)),
+        ))
+    }};
 }
 
 /// Creates a [`PrimitiveGroupsAccumulator`] for computing `MIN`
@@ -151,6 +162,17 @@ macro_rules! primitive_min_accumulator {
             })
             // Initialize each accumulator to $NATIVE::MAX
             .with_starting_value($NATIVE::MAX),
+        ))
+    }};
+    ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident, total, $BITS:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
+                if new.total_cmp(cur) == Ordering::Less {
+                    *cur = new
+                }
+            })
+            // Use the total-order maximum so positive NaNs replace the sentinel.
+            .with_starting_value($NATIVE::from_bits($BITS::MAX >> 1)),
         ))
     }};
 }
@@ -272,13 +294,13 @@ impl AggregateUDFImpl for Max {
             UInt32 => primitive_max_accumulator!(data_type, u32, UInt32Type),
             UInt64 => primitive_max_accumulator!(data_type, u64, UInt64Type),
             Float16 => {
-                primitive_max_accumulator!(data_type, f16, Float16Type)
+                primitive_max_accumulator!(data_type, f16, Float16Type, total, u16)
             }
             Float32 => {
-                primitive_max_accumulator!(data_type, f32, Float32Type)
+                primitive_max_accumulator!(data_type, f32, Float32Type, total, u32)
             }
             Float64 => {
-                primitive_max_accumulator!(data_type, f64, Float64Type)
+                primitive_max_accumulator!(data_type, f64, Float64Type, total, u64)
             }
             Date32 => primitive_max_accumulator!(data_type, i32, Date32Type),
             Date64 => primitive_max_accumulator!(data_type, i64, Date64Type),
@@ -456,7 +478,7 @@ impl Accumulator for SlidingMaxAccumulator {
     sql_example = r#"```sql
 > SELECT min(column_name) FROM table_name;
 +----------------------+
-| min(column_name)      |
+| min(column_name)     |
 +----------------------+
 | 12                   |
 +----------------------+
@@ -566,13 +588,13 @@ impl AggregateUDFImpl for Min {
             UInt32 => primitive_min_accumulator!(data_type, u32, UInt32Type),
             UInt64 => primitive_min_accumulator!(data_type, u64, UInt64Type),
             Float16 => {
-                primitive_min_accumulator!(data_type, f16, Float16Type)
+                primitive_min_accumulator!(data_type, f16, Float16Type, total, u16)
             }
             Float32 => {
-                primitive_min_accumulator!(data_type, f32, Float32Type)
+                primitive_min_accumulator!(data_type, f32, Float32Type, total, u32)
             }
             Float64 => {
-                primitive_min_accumulator!(data_type, f64, Float64Type)
+                primitive_min_accumulator!(data_type, f64, Float64Type, total, u64)
             }
             Date32 => primitive_min_accumulator!(data_type, i32, Date32Type),
             Date64 => primitive_min_accumulator!(data_type, i64, Date64Type),
@@ -1014,7 +1036,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            Array, DictionaryArray, Float32Array, Int8Array, Int32Array,
+            Array, AsArray, DictionaryArray, Float32Array, Int8Array, Int32Array,
             IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
             PrimitiveArray, StringArray,
         },
@@ -1023,7 +1045,64 @@ mod tests {
             IntervalUnit, IntervalYearMonthType,
         },
     };
+    use datafusion_expr::EmitTo;
     use std::sync::Arc;
+
+    #[test]
+    fn grouped_float_min_max_total_order() -> Result<()> {
+        fn grouped_float32_min() -> Result<Box<dyn GroupsAccumulator>> {
+            let data_type = &DataType::Float32;
+            primitive_min_accumulator!(data_type, f32, Float32Type, total, u32)
+        }
+
+        fn grouped_float32_max() -> Result<Box<dyn GroupsAccumulator>> {
+            let data_type = &DataType::Float32;
+            primitive_max_accumulator!(data_type, f32, Float32Type, total, u32)
+        }
+
+        fn evaluate_grouped_float32(
+            mut accumulator: Box<dyn GroupsAccumulator>,
+            values: Vec<f32>,
+        ) -> f32 {
+            let group_indices = vec![0; values.len()];
+            let values = Arc::new(Float32Array::from(values)) as ArrayRef;
+            accumulator
+                .update_batch(&[values], &group_indices, None, 1)
+                .unwrap();
+            accumulator
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_primitive::<Float32Type>()
+                .value(0)
+        }
+
+        let positive_nan = f32::NAN;
+        let negative_nan = f32::from_bits(f32::NAN.to_bits() | (1 << 31));
+
+        let min_cases = [
+            (vec![positive_nan, 1.0], 1.0),
+            (vec![1.0, negative_nan], negative_nan),
+            (vec![0.0, -0.0], -0.0),
+            (vec![positive_nan], positive_nan),
+        ];
+        for (values, expected) in min_cases {
+            let actual = evaluate_grouped_float32(grouped_float32_min()?, values);
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+
+        let max_cases = [
+            (vec![positive_nan, 1.0], positive_nan),
+            (vec![1.0, negative_nan], 1.0),
+            (vec![-0.0, 0.0], 0.0),
+            (vec![negative_nan], negative_nan),
+        ];
+        for (values, expected) in max_cases {
+            let actual = evaluate_grouped_float32(grouped_float32_max()?, values);
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn interval_min_max() {
@@ -1175,7 +1254,7 @@ mod tests {
         let mut res = Vec::with_capacity(len);
         for i in 0..len {
             let start = i.saturating_sub(n_sliding_window);
-            expected.push(*data[start..i + 1].iter().min().unwrap());
+            expected.push(*data[start..=i].iter().min().unwrap());
 
             moving_min.push(data[i]);
             if i > n_sliding_window {
@@ -1194,7 +1273,7 @@ mod tests {
         let mut res = Vec::with_capacity(len);
         for i in 0..len {
             let start = i.saturating_sub(n_sliding_window);
-            expected.push(*data[start..i + 1].iter().max().unwrap());
+            expected.push(*data[start..=i].iter().max().unwrap());
 
             moving_max.push(data[i]);
             if i > n_sliding_window {
