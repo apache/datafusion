@@ -2763,6 +2763,10 @@ async fn collect_left_input(
         memory_counter: _,
     } = state;
 
+    // Only time hash-table construction, not the `try_fold` above (that's the
+    // child's own compute).
+    let _build_timer = metrics.build_time.timer();
+
     // Compute bounds
     let mut bounds = match bounds_accumulators {
         Some(accumulators) if num_rows > 0 => {
