@@ -46,6 +46,28 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
     Arc::new(source)
 }
 
+/// Returns `true` when pushing `projection` into `source` would leave the
+/// source's output exactly as it is: one column per output field, in order,
+/// under the name that field already has.
+///
+/// Callers of [`FileSource::try_pushdown_projection`] skip such projections:
+/// storing one makes every consumer of [`FileSource::projection`] do work
+/// proportional to the table's width, which dominates scan construction for
+/// very wide tables.
+pub fn projection_is_no_op(
+    source: &dyn FileSource,
+    projection: &ProjectionExprs,
+) -> bool {
+    match source.projection() {
+        // A projected source's output fields are its projection's aliases.
+        Some(existing) => projection.is_identity_over_names(
+            existing.as_ref().iter().map(|expr| expr.alias.as_str()),
+        ),
+        // An unprojected source's output is its table schema.
+        None => projection.is_identity(source.table_schema().table_schema()),
+    }
+}
+
 /// File format specific behaviors for [`DataSource`]
 ///
 /// # Schema information
@@ -116,6 +138,11 @@ pub trait FileSource: Any + Send + Sync {
 
     /// Return the projection that will be applied to the output stream on top
     /// of [`Self::table_schema`].
+    ///
+    /// `None` means the output *is* [`Self::table_schema`]: every field, in
+    /// order, under its own name. Callers of [`Self::try_pushdown_projection`]
+    /// use [`projection_is_no_op`] to avoid storing a projection that changes
+    /// nothing, so consumers can skip projection work when this is `None`.
     ///
     /// Note you can use [`ProjectionExprs::project_schema`] on the table
     /// schema to get the effective output schema of this source.

@@ -287,6 +287,11 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_wide_scan"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "parquet_struct_shared_prefix_pushdown"
 required-features = ["parquet"]
 
