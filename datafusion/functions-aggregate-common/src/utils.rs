@@ -97,10 +97,9 @@ impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
 /// For example, the precision is 3, the max of value is `999` and the min
 /// value is `-999`
 pub struct DecimalAverager<T: DecimalType> {
-    /// scale factor for sum values (10^sum_scale)
-    sum_mul: T::Native,
-    /// scale factor for target (10^target_scale)
-    target_mul: T::Native,
+    /// scale factor to convert sum values to the target scale
+    /// (10^(target_scale - sum_scale))
+    scale_mul: T::Native,
     /// the output precision
     target_precision: u8,
     /// the output scale
@@ -120,31 +119,27 @@ impl<T: DecimalType> DecimalAverager<T> {
         target_precision: u8,
         target_scale: i8,
     ) -> Result<Self> {
-        let sum_mul = T::Native::from_usize(10_usize)
-            .map(|b| b.pow_wrapping(sum_scale as u32))
-            .ok_or_else(|| {
-                internal_datafusion_err!("Failed to compute sum_mul in DecimalAverager")
-            })?;
-
-        let target_mul = T::Native::from_usize(10_usize)
-            .map(|b| b.pow_wrapping(target_scale as u32))
-            .ok_or_else(|| {
-                internal_datafusion_err!(
-                    "Failed to compute target_mul in DecimalAverager"
-                )
-            })?;
-
-        if target_mul >= sum_mul {
-            Ok(Self {
-                sum_mul,
-                target_mul,
-                target_precision,
-                target_scale,
-            })
-        } else {
+        // The sum is converted to the target scale by multiplying with
+        // 10^(target_scale - sum_scale). Work with the scale difference
+        // directly: computing 10^sum_scale and 10^target_scale separately
+        // wraps to 0 for a negative scale (`scale as u32` is huge), which
+        // then divides by zero in `avg`.
+        let scale_diff = i32::from(target_scale) - i32::from(sum_scale);
+        if scale_diff < 0 {
             // can't convert the lit decimal to the returned data type
-            exec_err!("Arithmetic Overflow in AvgAccumulator")
+            return exec_err!("Arithmetic Overflow in AvgAccumulator");
         }
+        let scale_mul = T::Native::from_usize(10_usize)
+            .map(|b| b.pow_wrapping(scale_diff as u32))
+            .ok_or_else(|| {
+                internal_datafusion_err!("Failed to compute scale_mul in DecimalAverager")
+            })?;
+
+        Ok(Self {
+            scale_mul,
+            target_precision,
+            target_scale,
+        })
     }
 
     /// Returns the `sum`/`count` as a i128/i256 Decimal128/Decimal256 with
@@ -155,7 +150,7 @@ impl<T: DecimalType> DecimalAverager<T> {
     /// * count: total count, stored as a i128/i256 (*NOT* a Decimal128/Decimal256 value)
     #[inline(always)]
     pub fn avg(&self, sum: T::Native, count: T::Native) -> Result<T::Native> {
-        if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
+        if let Ok(value) = sum.mul_checked(self.scale_mul) {
             let new_value = value.div_wrapping(count);
 
             let validate = T::validate_decimal_precision(
